@@ -210,6 +210,8 @@ OUT_OF_SCOPE = {
         "`.perry_gcmap` section format, not the object header",
     ("crates/perry-codegen/src/gc_map.rs", "GC_MAP_LABEL"):
         "`.perry_gcmap` section format, not the object header",
+    ("crates/perry-codegen/src/gc_map.rs", "GC_REC_LABEL"):
+        "`.perry_gcrec` section format (v8 records), not the object header",
 }
 
 # Prefixes that make a codegen `const` look like a header restatement. A new

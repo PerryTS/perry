@@ -36,6 +36,12 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
+/// v8: each blob is a DIRECTORY (header + one entry per function) in this
+/// section, and its records (instruction offsets + varint stream) live in a
+/// records section the directory names by a link-time self-relative offset.
+/// Building the index reads directories only, so the records stay out of
+/// memory until a walk names one of their frames.
+///
 /// v6 (#11508): function fields are i32 offsets from their blob's first byte
 /// instead of absolute addresses, so the section needs no load-time fixups.
 ///
@@ -56,7 +62,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// after a move. Version mismatch still fails closed (the parser returns
 /// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 7;
+const GC_MAP_VERSION: u8 = 8;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
@@ -104,8 +110,8 @@ struct StackMapRecord {
 
 /// The map, as the root scan reads it.
 ///
-/// `functions` is the whole index in the default configuration: one 32-byte
-/// entry per function that has records, sorted by address — 2.3 MB for
+/// `functions` is the whole index in the default configuration: one 24-byte
+/// entry per function that has records, sorted by address — 1.7 MB for
 /// claude-code, replacing the ~117 MB of materialised records v4 built. A
 /// frame's live set is decoded from the section when a walker asks for it,
 /// which for a `cc --help` run is 74 records out of 2,078,970.
@@ -121,9 +127,11 @@ struct StackMapIndex {
     /// on whether it has an oracle to check itself against, and a test can
     /// build one without racing a process-wide `OnceLock`.
     mode: IndexMode,
-    /// The loaded sections, indexed by `FunctionEntry::section`. Held so a
-    /// function's bytes are reachable without storing a pointer per function.
+    /// The loaded map (directory) sections, one per image.
     sections: Vec<&'static [u8]>,
+    /// One records blob per directory, indexed by `FunctionEntry::blob`. Held
+    /// so a function's records are reachable without a pointer per function.
+    records: Vec<&'static [u8]>,
     /// Sorted by address. Duplicates are kept, not deduplicated: two entries
     /// can share a relocated address and each brings its own records.
     functions: Vec<lazy::FunctionEntry>,
@@ -877,21 +885,33 @@ fn build_index_from_sections(
     // fourth gate-failure mode (the gate runs, its subject never did), so
     // fail loudly instead. In practice this can only mean a binary whose
     // compiler and runtime disagree about the map format.
-    let mut functions = Vec::new();
+    // Sized exactly before the build: the table lives for the process, and a
+    // doubling Vec would leave up to half of it (and the copies it made on the
+    // way) resident for nothing.
+    let mut capacity = 0usize;
+    for section in &sections {
+        capacity = capacity.saturating_add(
+            decode::directory_function_count(section)
+                .unwrap_or_else(|| undecodable_section(section.len())),
+        );
+    }
+    let mut functions = Vec::with_capacity(capacity);
+    let mut records = Vec::new();
     for (index, section) in sections.iter().enumerate() {
-        let section_index = u16::try_from(index).unwrap_or_else(|_| {
-            panic!("perry: {} loaded images carry a GC map section; the index addresses them with a u16", sections.len())
-        });
         let origin = origins[index];
-        if lazy::parse_function_table(section_index, section, origin, &mut functions).is_none() {
+        if lazy::parse_function_table(section, origin, &mut functions, &mut records).is_none() {
             undecodable_section(section.len());
         }
     }
     // Sorted by address, duplicates KEPT. `match_records` resolves the whole
     // run of equal addresses: two object files can emit a map for the same
     // symbol, or the linker can fold identical code, and each entry brings its
-    // own records. Deduplicating would drop one set silently.
-    crate::cold_sort::sort_by_u64_key(&mut functions, |entry| entry.address as u64);
+    // own records. Deduplicating would drop one set silently. The directories
+    // usually arrive in address order already; checking costs one pass and
+    // saves the sort's scratch.
+    if !functions.is_sorted_by_key(|entry: &lazy::FunctionEntry| entry.address) {
+        crate::cold_sort::sort_by_u64_key(&mut functions, |entry| entry.address as u64);
+    }
 
     let eager = match mode {
         IndexMode::Lazy => None,
@@ -900,6 +920,7 @@ fn build_index_from_sections(
     StackMapIndex {
         mode,
         sections,
+        records,
         functions,
         eager,
     }
