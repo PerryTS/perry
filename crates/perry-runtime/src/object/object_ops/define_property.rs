@@ -386,7 +386,11 @@ pub extern "C" fn js_object_define_property(
         //   3. Accessor + data fields can't be mixed.
         //   4. Present `get`/`set` must be callable.
         let target_is_class_ref = super::super::class_ref_id(obj_value).is_some();
-        if !target_is_class_ref && !value_is_object_like(obj_value) {
+        let target = crate::value::JSValue::from_bits(obj_value.to_bits());
+        let target_is_handle = !receiver_plain_object
+            && target.is_pointer()
+            && crate::value::addr_class::is_small_handle(target.as_pointer::<u8>() as usize);
+        if !target_is_class_ref && (target_is_handle || !value_is_object_like(obj_value)) {
             // A native HANDLE target (a pointer-tagged registry id — a zlib
             // stream, a fetch Request/Response/Headers/Blob, a crypto hash, an
             // http ServerResponse, a timer) is not a heap `ObjectHeader`, so it
@@ -395,7 +399,9 @@ pub extern "C" fn js_object_define_property(
             // everyday code (Next.js `patchSetHeaderWithCookieSupport` marks
             // `res` with a Symbol; libraries add non-enumerable metadata all the
             // time). Route the define to the handle's own-property storage
-            // instead of throwing — see `define_property_on_handle`.
+            // instead of throwing — see `define_property_on_handle`. Test the
+            // entire handle band explicitly: on Linux, the broad object-like
+            // pointer window also admits fetch-band ids above 0x10000.
             //
             // #6363: the band test here was a hand-typed `p < 0x10000` — one zero
             // short of `HANDLE_BAND_MAX` (0x100000), so only the LOW common

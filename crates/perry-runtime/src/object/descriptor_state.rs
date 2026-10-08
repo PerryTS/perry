@@ -52,6 +52,8 @@ pub(crate) use holder_edit::HolderEdit;
 #[cfg(test)]
 mod native_owner_tests;
 #[cfg(test)]
+mod holder_route_tests;
+#[cfg(test)]
 mod tests;
 
 /// Accessor values loaded from the holder's ordinary property slot.
