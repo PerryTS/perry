@@ -2289,8 +2289,8 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
                 method_slot,
             )
         },
-        0,
-        "the same method name must retire guards across the class hierarchy",
+        1,
+        "unrelated holder mutation must not retire this receiver layout proof",
     );
 }
 

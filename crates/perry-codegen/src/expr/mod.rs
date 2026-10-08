@@ -1819,7 +1819,6 @@ pub(crate) struct VersionedIndexedMethodFact {
     pub this_slot: String,
     pub expected_class_id: String,
     pub expected_shape_id: String,
-    pub method_guard_slot: String,
 }
 
 #[derive(Clone, Debug)]

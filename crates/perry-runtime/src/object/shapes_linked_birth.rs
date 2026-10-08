@@ -30,10 +30,24 @@ pub(crate) unsafe fn stamp_linked_final_shape(
     proto_bits: u64,
     lane: impl Fn(u32) -> bool,
 ) -> bool {
+    stamp_linked_final_shape_requested(obj, keys, count, proto_id, proto_bits, lane, None)
+}
+
+/// The declaration's private holder identity has already been marked.
+/// Requested ids are validated against the complete shape facts.
+pub(crate) unsafe fn stamp_linked_final_shape_requested(
+    obj: *mut crate::object::ObjectHeader,
+    keys: *mut ArrayHeader,
+    count: u32,
+    proto_id: u64,
+    proto_bits: u64,
+    lane: impl Fn(u32) -> bool,
+    requested: Option<u32>,
+) -> bool {
     if obj.is_null()
         || keys.is_null()
         || count == 0
-        || !(*obj).meta.is_null()
+        || (requested.is_none() && !(*obj).meta.is_null())
         || !shape_word_is_writable(obj)
     {
         return false;
@@ -66,11 +80,15 @@ pub(crate) unsafe fn stamp_linked_final_shape(
     // The identity's word names the prototype before any shape names the
     // identity, as in `transition_object_shape_prototype`.
     shapes_prototype::write_identity_word(proto_id, proto_bits);
-    let Ok(id) = shape_descriptor_intern_with_special(
+    let Ok(id) = shape_descriptor_intern_with_special_mode(
         keys,
         count,
         count,
-        0,
+        if requested.is_some() {
+            (1u64 << 63) | u64::from((*obj).class_id)
+        } else {
+            0
+        },
         store_kind::mint_kind(birth.object_kind, obj),
         0,
         proto_id,
@@ -79,11 +97,78 @@ pub(crate) unsafe fn stamp_linked_final_shape(
         &infos,
         // The receiver's private brands carry over (#11791).
         birth.brands(),
-        None,
+        requested,
+        true,
     ) else {
         return false;
     };
+    if !(*obj).meta.is_null() {
+        let meta = (*obj).meta;
+        (*meta).prototype = proto_bits;
+        // GC_STORE_AUDIT(BARRIERED): the meta may have promoted while the
+        // holder was marked. Its prototype slot must be rewritten by minors.
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            std::ptr::addr_of_mut!((*meta).prototype) as usize,
+            proto_bits,
+        );
+    }
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     true
+}
+
+/// A declaration holder's static parent identity answers through the existing
+/// class-function link (or the realm's Object prototype). Verify that its
+/// physical link still names that object before projecting the identity.
+/// Mutation mints a different identity when the link changes.
+pub(crate) unsafe fn declaration_parent_identity(
+    obj: *const crate::object::ObjectHeader,
+    recorded: u64,
+) -> Option<u64> {
+    let record = &*ShapeSlab::agent_record(object_shape_stamp(obj));
+    if record.semantic_generation >> 32 != 0x8000_0000 {
+        return None;
+    }
+    let pid = record.proto_id;
+    let parent = if pid == PROTO_ID_DEFAULT {
+        crate::array::object_prototype_addr_if_resolved() as *const crate::object::ObjectHeader
+    } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
+        crate::object::class_decl_prototype_object(pid as u32)
+    } else {
+        return None;
+    };
+    if !parent.is_null() && crate::value::js_nanbox_pointer(parent as i64).to_bits() == recorded {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+/// The reserved declaration identity carries complete keys, rather than an
+/// out-of-shape descriptor epoch. It admits the same positional reads as zero.
+#[inline]
+pub(crate) fn complete_layout_generation(generation: u64) -> bool {
+    generation == 0 || generation >> 32 == 0x8000_0000
+}
+
+/// Hash-based mutation epochs must never enter the declaration namespace.
+#[inline]
+pub(crate) fn mutation_generation(hash: u64) -> u64 {
+    let generation = hash | (1u64 << 63);
+    if generation >> 32 == 0x8000_0000 {
+        generation ^ (1u64 << 32)
+    } else {
+        generation
+    }
+}
+
+/// A static declaration birth still has every key its declaration supplied.
+/// A key deletion leaves that reserved birth id; an Any value write need not.
+#[inline]
+pub(crate) unsafe fn pristine_declaration_holder(obj: *const crate::object::ObjectHeader) -> bool {
+    let id = object_shape_stamp(obj);
+    is_static_shape_id(id)
+        && (*ShapeSlab::agent_record(id)).semantic_generation
+            == ((1u64 << 63) | u64::from((*obj).class_id))
 }

@@ -20,7 +20,7 @@
 //! The direct call at a class site needs: the receiver's class is the declared
 //! class, nothing on the receiver shadows the method, and the class's
 //! prototype chain still resolves the name to the compiled body. The emitted
-//! code re-checks the last part on every call (the prototype guard bytes) and
+//! code re-checks the last part on every call (the holder ShapeIds) and
 //! the GC header (object kind, not forwarded, no descriptor entries). The
 //! first two are facts of the word:
 //!
@@ -65,13 +65,6 @@ unsafe fn learn_absent_method_word(
     let Ok(name) = std::str::from_utf8(method) else {
         return;
     };
-    // A word is only consulted after the prototype guard bytes pass, so a
-    // site whose name is retired would learn for nothing on every miss.
-    if crate::object::class_registry::class_prototype_fast_guard_invalidated_for_method(
-        crate::object::class_registry::class_prototype_method_guard_slot(name),
-    ) {
-        return;
-    }
     // Names whose dispatch depends on per-object state the key list does not
     // pin (symbol-keyed disposal hooks, iterator helpers).
     if super::method_name_is_fast_dispatch_ineligible(name) {
@@ -106,10 +99,10 @@ unsafe fn learn_absent_method_word(
 /// [`super::js_native_call_method_by_id`] does, with the site's chain memo
 /// slot (`method_site::chain_memo`), the word that follows the learned one
 /// in the site's record. A miss edge the site takes on every call (its
-/// prototype guard bytes are set) answers a repeat from the memo.
+/// holder proof declined) answers a repeat from the memo.
 ///
 /// `site` is the record's address, tagged with bit 0 when the compiled code
-/// says no word could be consulted (its prototype guard bytes are set): then
+/// says no word could be consulted (its holder proof declined): then
 /// nothing is learned. A null `site` dispatches only.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_native_call_method_by_id_learn(

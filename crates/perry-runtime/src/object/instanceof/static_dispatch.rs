@@ -7,7 +7,7 @@
 use super::*;
 
 /// Heap-backed builtins whose reserved ids otherwise dispatch by native brand.
-fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
+pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
     Some(match class_id {
         crate::native_class_ids::EVENT_TARGET => "EventTarget",
         crate::native_class_ids::EVENT => "Event",
@@ -102,6 +102,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // string-keyed interning probe — off the path entirely in the (dominant)
     // case where no class in the program declares any static Symbol member.
     if crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
+        // Both lookups are Leaf: symbol interning uses native allocations,
+        // and the static-symbol read cannot collect. The call owns its args;
+        // a completed hook returns immediately, so no value crosses it here.
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
@@ -120,6 +123,25 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if instanceof_lhs_is_primitive(value) {
         return false_val;
     }
+    // User classes have no native-brand arm. The ancestry reader owns any
+    // handles it needs; its immediate CLASS and terminal DEFAULT proofs are
+    // Leaf, so do not wrap every ordinary check in a second handle scope.
+    if class_id < 0xFFFF0000 {
+        let addr = value_addr(value);
+        if unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            return if unsafe {
+                shape_ancestry::class_shape_reaches(addr as *const ObjectHeader, class_id, true)
+            } {
+                true_val
+            } else {
+                false_val
+            };
+        }
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted_value = scope.root_nanbox_f64(value);
     // #11256: Object.create(Builtin.prototype) has no native brand, but is
     // still an instance of Builtin. Ordinary objects may store their chain
     // through a synthetic class id rather than per-object prototype metadata.
@@ -134,6 +156,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         } else {
             recorded_prototype_instanceof_builtin(value, name)
         };
+        value = rooted_value.get_nanbox_f64();
         if matches == Some(true) {
             return true_val;
         }
@@ -148,9 +171,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
 
     // Subclass-of-built-in: see `subclass_of_builtin_reaches`.
-    if subclass_of_builtin_reaches(value, class_id) {
+    if class_id >= 0xFFFF0000 && subclass_of_builtin_reaches(value, class_id) {
         return true_val;
     }
+    value = rooted_value.get_nanbox_f64();
     // Temporal reference types (`d instanceof Temporal.Duration`, …). A Temporal
     // value is a NaN-boxed pointer to a brand-tagged cell, not an ObjectHeader
     // with a class chain, so probe the cell's brand kind directly. Keep the band
@@ -181,7 +205,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             && crate::object::prototype_chain::object_static_prototype(addr).is_some()
         {
             let function = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
-            if ordinary_has_instance_prototype_walk(value, function) {
+            if ordinary_has_instance_prototype_walk(rooted_value.get_nanbox_f64(), function) {
                 return true_val;
             }
         }
@@ -344,7 +368,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         let addr = value_addr(value);
         if addr != 0 && super::prototype_chain::object_static_prototype(addr).is_some() {
             let constructor = super::class_constructor_ref_value(class_id);
-            return if ordinary_has_instance_prototype_walk(value, constructor) {
+            return if ordinary_has_instance_prototype_walk(
+                rooted_value.get_nanbox_f64(),
+                constructor,
+            ) {
                 true_val
             } else {
                 false_val
@@ -844,9 +871,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             super::relinked_object_chain_answer(obj_ptr, value, obj_class_id, class_id)
         {
             return if answer { true_val } else { false_val };
-        }
-        if class_chain_reaches(obj_class_id, class_id) {
-            return true_val;
         }
 
         false_val

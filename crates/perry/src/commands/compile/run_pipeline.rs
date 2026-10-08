@@ -5859,7 +5859,9 @@ pub fn run_with_parse_cache(
     let mut class_final_shapes: BTreeMap<u32, Vec<(perry_codegen::BirthShape, u32)>> =
         BTreeMap::new();
     for (shape, &id) in &static_shape_ids {
-        if let perry_codegen::BirthProto::Class(cid) = shape.proto {
+        if let perry_codegen::BirthProto::Class(cid)
+        | perry_codegen::BirthProto::Prototype(cid, _) = shape.proto
+        {
             if shape.is_completed() {
                 class_final_shapes
                     .entry(cid)

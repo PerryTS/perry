@@ -545,7 +545,7 @@ pub(crate) fn emit_method_site(
     // holder's word pins ITS shape, and that shape's lane names the body the
     // entry's code is. The holder slot is loaded as the callee environment.
     ctx.current_block = icf_idx;
-    let icf_holder = {
+    let (icf_holder, icf_word) = {
         let blk = ctx.block();
         let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
         let holder = blk.load(I64, &hp);
@@ -555,10 +555,10 @@ pub(crate) fn emit_method_site(
         let saved = blk.load(I64, &wp);
         let valid = blk.icmp_eq(I64, &word, &saved);
         blk.cond_br(&valid, &icf_hit_l, &miss_l);
-        holder
+        (holder, word)
     };
     ctx.current_block = icf_hit_idx;
-    let (icf_handle, icf_func, icf_end) = {
+    let (icf_handle, icf_func, _) = {
         let blk = ctx.block();
         let holder_ptr = blk.inttoptr(I64, &icf_holder);
         let base = blk.gep(crate::types::I8, &holder_ptr, &[(I64, &header.to_string())]);
@@ -570,9 +570,39 @@ pub(crate) fn emit_method_site(
         let fp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
         let f = blk.load(I64, &fp);
         let end = blk.label.clone();
-        blk.br(&cf_call_l);
         (h, f, end)
     };
+    let mut inherited_lane_hits = Vec::new();
+    if lanes.iter().any(|lane| !lane.own) {
+        for lane in lanes.iter().filter(|lane| !lane.own) {
+            let direct = ctx.new_block("msite.inherited_static");
+            let next = ctx.new_block("msite.inherited_next");
+            let dl = ctx.block_label(direct);
+            let nl = ctx.block_label(next);
+            let p = ctx.block().icmp_eq(I64, &icf_word, &lane.word.to_string());
+            ctx.block().cond_br(&p, &dl, &nl);
+            ctx.current_block = direct;
+            let mut args: Vec<_> = lowered_args.iter().take(lane.arity).cloned().collect();
+            args.resize(
+                lane.arity,
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            );
+            let bits = ctx.block().bitcast_double_to_i64(recv_box);
+            let value = crate::expr::body_call::emit_js_body_call(
+                ctx.block(),
+                crate::expr::body_call::JsBody::Symbol(&lane.body),
+                &icf_handle,
+                &bits,
+                &args,
+            );
+            let end = ctx.block().label.clone();
+            ctx.block().br(&merge_l);
+            inherited_lane_hits.push((value, end));
+            ctx.current_block = next;
+        }
+    }
+    let icf_end = ctx.block().label.clone();
+    ctx.block().br(&cf_call_l);
     // own spill: meta -> spill buffer -> element, bounds-checked.
     ctx.current_block = spill_idx;
     let meta = {
@@ -815,7 +845,12 @@ pub(crate) fn emit_method_site(
         (&native_value, &native_end),
         (&miss_value, &miss_end),
     ];
-    incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
+    incoming.extend(
+        lane_hits
+            .iter()
+            .chain(inherited_lane_hits.iter())
+            .map(|(v, l)| (v.as_str(), l.as_str())),
+    );
     incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     ctx.block().phi(DOUBLE, &incoming)
 }

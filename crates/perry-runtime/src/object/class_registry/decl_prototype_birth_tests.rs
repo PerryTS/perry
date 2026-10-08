@@ -208,23 +208,20 @@ fn a_general_prototype_birth_keeps_guards_until_ordinary_mutation() {
         register_method(cid, b"a", Some(a));
         register_method(cid, b"old", None);
     }
-    let guard = class_prototype_method_guard_slot("a");
-    assert!(!class_prototype_fast_guard_invalidated_for_method(guard));
     let before = born_final_builds();
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(object_of(class_decl_prototype_value(cid)));
     assert_eq!(born_final_builds(), before, "the general path built it");
-    assert!(
-        !class_prototype_fast_guard_invalidated_for_method(guard),
-        "installing declared facts must preserve direct-call guards"
-    );
+    let pristine =
+        proto.with_const_ptr(|p| unsafe { crate::object::shapes::object_shape_stamp(p) });
     let key = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
     proto.with_mut_ptr::<ObjectHeader, _>(|p| {
         crate::object::js_object_set_field_by_name(p, key, 3.0)
     });
-    assert!(
-        class_prototype_fast_guard_invalidated_for_method(guard),
-        "an ordinary overwrite must retire the guard"
+    assert_ne!(
+        pristine,
+        proto.with_const_ptr(|p| unsafe { crate::object::shapes::object_shape_stamp(p) }),
+        "the holder shape must retire on an ordinary overwrite"
     );
 }
 
@@ -247,4 +244,50 @@ fn the_reverse_lookup_answers_only_the_linked_object() {
         class_id_for_decl_prototype_object(proto as usize),
         Some(cid)
     );
+}
+
+#[test]
+fn static_declaration_holders_state_their_real_parent_identity() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let (base, child) = (0x6E4B, 0x6E4C);
+    register(base, b"StaticParentBase");
+    register(child, b"StaticParentChild");
+    crate::object::js_register_class_parent(child, base);
+    // Complete holder content, including its private declaration identity.
+    super::registration::js_register_class_prototype_shape(
+        base,
+        crate::object::shapes::SHAPE_ID_BASE + 991,
+    );
+    super::registration::js_register_class_prototype_shape(
+        child,
+        crate::object::shapes::SHAPE_ID_BASE + 992,
+    );
+    let p = object_of(class_decl_prototype_value(child));
+    let b = class_decl_prototype_object(base);
+    for obj in [p, b] {
+        unsafe {
+            let descriptor = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+            assert_eq!(
+                crate::object::shapes::object_proto_id(obj),
+                descriptor.proto_id
+            );
+        }
+    }
+    let other = crate::object::js_object_alloc(0, 0);
+    crate::object::js_object_set_prototype_of(
+        crate::value::js_nanbox_pointer(p as i64),
+        crate::value::js_nanbox_pointer(other as i64),
+    );
+    unsafe {
+        let descriptor = crate::object::shapes::object_shape_descriptor(p).unwrap();
+        assert_ne!(
+            descriptor.proto_id,
+            crate::object::shapes::PROTO_ID_CLASS | u64::from(base)
+        );
+        assert_eq!(
+            crate::object::shapes::object_proto_id(p),
+            descriptor.proto_id
+        );
+    }
 }

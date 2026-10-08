@@ -253,23 +253,14 @@ unsafe fn hop_admitted(addr: usize) -> bool {
 /// (plain or MIXED with its class), or the realm's `%Object.prototype%`.
 #[inline]
 unsafe fn pinned_next(hop: *const ObjectHeader) -> Option<*const ObjectHeader> {
-    use crate::object::shapes::{
-        shape_proto_id, PROTO_ID_CLASS, PROTO_ID_DEFAULT, PROTO_ID_MIXED, PROTO_ID_NULL,
-        PROTO_ID_UNIQUE,
-    };
-    let pid = shape_proto_id(crate::object::shapes::object_shape_stamp(hop))?;
-    let (stated, word) = super::read_holder::stated_link(hop);
-    if stated != pid {
-        return None;
-    }
+    use crate::object::shapes::{PROTO_ID_DEFAULT, PROTO_ID_NULL};
+    let (pid, word) = super::read_holder::admitted_link(hop)?;
     let next = if pid == PROTO_ID_DEFAULT {
         crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
     } else if pid == PROTO_ID_NULL {
         return None;
-    } else if pid < PROTO_ID_CLASS || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-        super::read_holder::next_from_word(hop, word)
     } else {
-        return None;
+        super::read_holder::next_from_word(hop, word)
     };
     (!next.is_null() && next != hop).then_some(next)
 }

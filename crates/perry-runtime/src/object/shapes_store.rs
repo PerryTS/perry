@@ -451,7 +451,7 @@ impl ShapeRecord {
     #[inline]
     pub(super) fn positional_by_facts(&self) -> bool {
         self.object_kind().is_ordinary_layout()
-            && self.semantic_generation == 0
+            && super::complete_layout_generation(self.semantic_generation)
             && self.hole_count == 0
             && self.keys != 0
             && self.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0

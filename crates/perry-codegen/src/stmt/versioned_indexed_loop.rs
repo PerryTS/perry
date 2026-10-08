@@ -393,17 +393,11 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
         live_handles.insert(array.local_id, array_handle);
     }
 
-    let all_invalidated =
-        ctx.block()
-            .load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-    let all_methods_ok = ctx.block().icmp_eq(I8, &all_invalidated, "0");
-    let method_slot_ptr = ctx.block().gep(
-        I8,
-        "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-        &[(I64, &fact.method.method_guard_slot)],
+    let holder_ok = crate::lower_call::holder_shape_guard::method_guard(
+        ctx,
+        &fact.method.class_name,
+        &fact.method.method_name,
     );
-    let method_invalidated = ctx.block().load_atomic_acquire(I8, &method_slot_ptr, 1);
-    let method_ok = ctx.block().icmp_eq(I8, &method_invalidated, "0");
     let this_box = ctx.block().load(DOUBLE, &fact.method.this_slot);
     let this_bits = ctx.block().bitcast_double_to_i64(&this_box);
     let this_handle = ctx
@@ -428,8 +422,7 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
         &expected_class_shape,
         &[],
     );
-    pass = ctx.block().and(I1, &pass, &all_methods_ok);
-    pass = ctx.block().and(I1, &pass, &method_ok);
+    pass = ctx.block().and(I1, &pass, &holder_ok);
     pass = ctx.block().and(I1, &pass, &gc_ok);
     pass = ctx.block().and(I1, &pass, &class_shape_ok);
     ctx.block()
@@ -569,20 +562,23 @@ pub(super) fn lower(
         .clone();
     let expected_shape_id =
         crate::typed_shape::class_shape_id_operand(ctx, &candidate.class_name, &keys_global);
-    let key_idx = ctx.strings.intern(&candidate.method_name);
-    let method_guard_slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
     let this_slot = ctx
         .this_stack
         .last()
         .expect("matched method body has this storage")
         .clone();
     let this_box = ctx.block().load(DOUBLE, &this_slot);
+    let holder_ok = crate::lower_call::holder_shape_guard::method_guard(
+        ctx,
+        &candidate.class_name,
+        &candidate.method_name,
+    );
     crate::lower_call::emit_inline_direct_method_shape_guard(
         ctx,
         &this_box,
         &expected_class_id,
         &expected_shape_id,
-        &method_guard_slot,
+        &holder_ok,
         &fast_pre_label,
         &slow_pre_label,
         true,
@@ -595,7 +591,6 @@ pub(super) fn lower(
         this_slot,
         expected_class_id,
         expected_shape_id,
-        method_guard_slot,
     };
     if let (Some(target), Some(callback_pre_idx)) = (versioned_callback_target, callback_pre_idx) {
         let callback_pre_label = ctx.block_label(callback_pre_idx);

@@ -606,14 +606,6 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// overflow slots fill in sequence.
 #[inline]
 pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if unsafe { spill_capable_owner(obj_ptr) } {
-        unsafe {
-            super::slot_store::note_prototype_field_store(
-                obj_ptr as *mut ObjectHeader,
-                field_index,
-            );
-        }
-    }
     if object_spill_enabled()
         && field_index < SPILL_MAX_FIELD_INDEX
         && unsafe { spill_capable_owner(obj_ptr) }

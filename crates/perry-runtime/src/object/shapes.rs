@@ -49,7 +49,10 @@ pub(crate) use shapes_last_key_rollback::{
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
 mod shapes_prototype;
-pub(crate) use shapes_linked_birth::stamp_linked_final_shape;
+pub(crate) use shapes_linked_birth::{
+    complete_layout_generation, declaration_parent_identity, mutation_generation,
+    pristine_declaration_holder, stamp_linked_final_shape, stamp_linked_final_shape_requested,
+};
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
@@ -276,6 +279,12 @@ pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
     #[inline]
+    pub(crate) fn proto_id(self) -> u64 {
+        // A live slab record; the identity is immutable.
+        unsafe { (*self.0.as_ptr()).proto_id }
+    }
+
+    #[inline]
     pub(crate) fn weak_collection_brand(self) -> Option<u32> {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).weak_collection_brand() }
@@ -483,7 +492,7 @@ impl ShapeRecordRef {
     ) -> Option<usize> {
         let r = &*self.0.as_ptr();
         if !r.object_kind().is_ordinary_layout()
-            || r.semantic_generation != 0
+            || !complete_layout_generation(r.semantic_generation)
             || r.hole_count != 0
             || r.keys == 0
         {
@@ -2126,7 +2135,10 @@ fn shape_descriptor_mint_fresh(
                 .iter()
                 .all(|&b| b & crate::object::field_get_set::PRIVATE_FRESH_EVALUATION_BRAND == 0)
             && !object_kind.is_exotic()
-            && semantic_generation == 0
+            && (semantic_generation == 0
+                // A declared holder's stable identity is its compiled class
+                // id in the deterministic namespace, not a mutation epoch.
+                || semantic_generation >> 32 == 0x8000_0000)
             && !super::field_rep::has_deprecated(rep)
             && table.slab().record_ptr(id).is_none()
     });
@@ -2884,7 +2896,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
         return -1;
     };
     if !descriptor.object_kind.is_ordinary_layout()
-        || descriptor.semantic_generation != 0
+        || !complete_layout_generation(descriptor.semantic_generation)
         || descriptor.hole_count != 0
         || descriptor.live_inline_slot_count != descriptor.logical_key_count
     {
@@ -4143,7 +4155,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
     x ^= x >> 27;
     x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
     x ^= x >> 31;
-    let generation = x | (1 << 63);
+    let generation = mutation_generation(x);
     let id = publish_shape_result(shape_descriptor_ensure_with_holes(
         current.keys as usize as *mut ArrayHeader,
         current.logical_key_count,
@@ -4907,6 +4919,9 @@ pub(crate) unsafe fn object_proto_id_for(
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     if recorded != 0 {
+        if let Some(pid) = shapes_linked_birth::declaration_parent_identity(obj, recorded) {
+            return pid;
+        }
         // A compiled class instance linked to its own class's declaration
         // prototype (runtime wiring of a native-base subclass instance) has
         // exactly the prototype its class implies: the class identity, so it

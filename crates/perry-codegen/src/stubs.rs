@@ -341,6 +341,7 @@ mod tests {
             constfn: Vec::new(),
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         };
         let ll = static_shape_seed_ll(&[(0x1000_0042, shape)]);
         assert!(ll.contains("c\"\\75\\00\\76\\00\""), "{ll}");
@@ -356,6 +357,7 @@ mod tests {
             constfn: Vec::new(),
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         };
         let ll = static_shape_seed_ll(&[(0x1000_0043, f64_lanes)]);
         assert!(ll.contains("call i32 @js_shape_seed_plain(i32 268435523, ptr @perry_static_seed_keys_0, i32 4, i32 2, i32 2, i64 5)"), "{ll}");
@@ -373,6 +375,7 @@ mod tests {
                     constfn: Vec::new(),
                     private: Vec::new(),
                     brands: Vec::new(),
+                    attrs: Vec::new(),
                 },
             )],
             None,
@@ -396,6 +399,7 @@ mod tests {
             }],
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         };
         let ll = static_shape_seed_ll_impl(&[(0x1000_0044, shape)], true);
         assert!(ll.contains("@perry_static_seed_constfn_0 = private constant [1 x { i32, ptr }] [{ i32, ptr } { i32 0, ptr @perry_closure_m__method$info }]"), "{ll}");
@@ -422,6 +426,7 @@ mod tests {
             }],
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         };
         let _ = static_shape_seed_ll(&[(0x1000_0044, shape)]);
     }

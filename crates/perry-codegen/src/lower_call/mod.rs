@@ -81,6 +81,7 @@ pub(crate) use func_ref::{
     guarded_path_type,
 };
 mod direct_method_guard;
+pub(crate) mod holder_shape_guard;
 mod jsx;
 pub(crate) mod lookup_first;
 #[cfg(test)]

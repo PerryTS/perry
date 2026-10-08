@@ -143,6 +143,7 @@ pub(crate) fn private_final(
         constfn: Vec::new(),
         private,
         brands,
+        attrs: Vec::new(),
     })
 }
 

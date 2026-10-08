@@ -23,6 +23,12 @@ use super::*;
 /// The inline bump allocator now handles most object allocation directly;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
+    module.declare_function("perry_class_value_dir_cell", PTR, &[]);
+    module.declare_function(
+        "js_register_class_prototype_shape",
+        crate::types::VOID,
+        &[I32, I32],
+    );
     module.declare_function(
         "js_literal_shape_initialize",
         VOID,
@@ -33,16 +39,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // site trusts its cached ShapeId only while its template's bit is clear.
     // perry-runtime: `ic_miss::private_guard_fast::PERRY_PRIVATE_TEMPLATE_EVALUATED`.
     module.add_external_global("PERRY_PRIVATE_TEMPLATE_EVALUATED", "[1024 x i64]");
-    // Sticky runtime flag (i8, 0 = valid) for class-prototype method guards.
-    // Direct-method lowering reads it with acquire ordering before touching a
-    // receiver header; prototype mutation stores 1 with release ordering.
-    module.add_external_global("PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", I8);
-    // Per-method sticky invalidation table indexed by low FNV-1a bits. A
-    // collision is conservative: it only disables another direct guard.
-    module.add_external_global(
-        "PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-        "[65536 x i8]",
-    );
     // #7834/#7873: process-global count of threads with per-object records.
     // `0` proves both per-object side tables are empty everywhere, so a
     // construction site can skip `js_gc_forget_object_layout` outright.

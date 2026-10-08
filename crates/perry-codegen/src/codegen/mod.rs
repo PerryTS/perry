@@ -257,7 +257,8 @@ pub(crate) mod static_constfn;
 pub(crate) mod static_constfn_class;
 pub(crate) mod static_fields;
 pub(crate) mod static_private_class;
-mod static_shape_ids;
+pub(crate) mod static_prototype;
+pub(crate) mod static_shape_ids;
 pub use static_shape_ids::{
     assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
     BirthProto, BirthShape, ConstFnBirth, DefinedClassShape, ModuleBirth, ProgramClassShapeIds,
@@ -2537,6 +2538,7 @@ fn compile_module_impl(
                 &class_ids,
             );
             births.extend(class_finals);
+            births.extend(static_prototype::collect(hir, &module_prefix, &class_ids));
             let widths = hir
                 .classes
                 .iter()
