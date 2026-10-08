@@ -334,15 +334,18 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     };
 
     // A bound concise/object-literal method reads `this` from its baked capture
-    // slot, not only the `this` parameter — rebind it to the bound receiver so
-    // the bound `this` is honored (arrows/non-captures_this targets are
-    // returned as-is).
-    let target = rebind_explicit_this(target, bound_this);
-    super::value_call::native_call_value_this(
+    // slot, not only the `this` parameter — the forwarder rebinds it to the
+    // bound receiver (the receiver itself was bound by `bind`).
+    let call_args = if call_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(call_ptr, call_len)
+    };
+    super::explicit_this::call_with_explicit_this(
         target,
-        crate::closure::JsThis::from_f64(bound_this),
-        call_ptr,
-        call_len,
+        bound_this,
+        call_args,
+        super::explicit_this::ReceiverBinding::AsGiven,
     )
 }
 
@@ -365,29 +368,41 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
     // A class ref (#5515) is an INT32-tagged class id but is the constructor
     // OBJECT, not a primitive — `f.call(C)` binds `this` to C, so leave it
     // unchanged rather than boxing it as a Number alongside undefined/null/ptr.
+    // A Symbol is POINTER_TAG'd but is a primitive: a sloppy callee sees it
+    // boxed like any other.
     if jv.is_undefined()
         || jv.is_null()
-        || jv.is_pointer()
+        || (jv.is_pointer() && unsafe { crate::symbol::js_is_symbol(this_arg) } == 0)
         || crate::object::class_ref_id(this_arg).is_some()
     {
         return this_arg;
     }
+    if !callee_boxes_primitive_this(target) {
+        return this_arg;
+    }
+    crate::object::js_object_coerce(this_arg)
+}
+
+/// Whether calling `target` with a primitive `this` boxes it
+/// (OrdinaryCallBindThis of a sloppy user function). Strict code and
+/// built-ins observe the primitive itself.
+pub(crate) fn callee_boxes_primitive_this(target: f64) -> bool {
     let tj = crate::value::JSValue::from_bits(target.to_bits());
     if !tj.is_pointer() {
-        return this_arg;
+        return false;
     }
     let mut closure = tj.as_pointer::<ClosureHeader>();
     // Look through bound-function wrappers to the ultimate target — the
     // bound `this` is what reaches it, so its strictness decides.
     for _ in 0..8 {
         if closure.is_null() || !is_closure_ptr(closure as usize) {
-            return this_arg;
+            return false;
         }
         if std::ptr::eq(unsafe { (*closure).code() }, BOUND_FUNCTION_FUNC_PTR) {
             let inner = js_closure_get_capture_f64(closure, 0);
             let ij = crate::value::JSValue::from_bits(inner.to_bits());
             if !ij.is_pointer() {
-                return this_arg;
+                return false;
             }
             closure = ij.as_pointer::<ClosureHeader>();
             continue;
@@ -395,8 +410,11 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
         break;
     }
     let Some(info) = crate::closure::closure_info(closure) else {
-        return this_arg;
+        return false;
     };
+    if info.flags & crate::codegen_abi::FN_BUILTIN != 0 {
+        return false;
+    }
     const PERMANENT_COMPILED: u32 =
         crate::codegen_abi::FN_PERMANENT_IMAGE | crate::codegen_abi::FN_COMPILED_BODY;
     let image_kind = info.flags & (PERMANENT_COMPILED | crate::codegen_abi::FN_NON_STRICT_ORDINARY);
@@ -404,15 +422,11 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
         // Every permanent compiled user body carries its exact kind in the
         // info record. Synthetic bodies deliberately leave the ordinary bit
         // clear, so neither case needs a registry probe.
-        if image_kind & crate::codegen_abi::FN_NON_STRICT_ORDINARY == 0 {
-            return this_arg;
-        }
-    } else if !crate::builtins::function_is_non_strict_ordinary_for_ptr(info.code as usize) {
-        // Runtime-created functions and unloadable images retain the owning
-        // compatibility registry because their image metadata is not permanent.
-        return this_arg;
+        return image_kind & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0;
     }
-    crate::object::js_object_coerce(this_arg)
+    // Runtime-created functions and unloadable images retain the owning
+    // compatibility registry because their image metadata is not permanent.
+    crate::builtins::function_is_non_strict_ordinary_for_ptr(info.code as usize)
 }
 
 /// `call`/`apply`/`bind`/`Reflect.apply` supply an EXPLICIT `this`. A concise /
@@ -674,16 +688,32 @@ pub unsafe extern "C" fn js_function_bind(
     // copying minor.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_h = scope.root_nanbox_f64(target_value);
-
-    let bound_this = if args_len >= 1 && !args_ptr.is_null() {
-        let arg0 = *args_ptr;
-        target_h
-            .across_nanbox(|| coerce_call_this(target_h.get_nanbox_f64(), arg0))
-            .0
+    // The arguments (`thisArg, ...boundArgs`) are read after steps below that
+    // can collect (receiver boxing, the `name` getter, the bound-arguments
+    // array), and the caller's buffer is plain memory the collector never
+    // rewrites: hold them in handles from the start. The common
+    // `bind(thisArg)` has no partial arguments, so no list is allocated.
+    let args = if args_len == 0 || args_ptr.is_null() {
+        &[][..]
     } else {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let this_arg_h = args
+        .first()
+        .map(|this_arg| scope.root_nanbox_f64(*this_arg));
+    let partial_handles = if args.len() > 1 {
+        scope.root_nanbox_f64_slice(&args[1..])
+    } else {
+        Vec::new()
+    };
+
+    let bound_this = match &this_arg_h {
+        // `coerce_call_this` reads the receiver before it allocates.
+        Some(this_arg) => coerce_call_this(target_h.get_nanbox_f64(), this_arg.get_nanbox_f64()),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
     };
     let this_h = scope.root_nanbox_f64(bound_this);
+    crate::gc::collection_point("function_bind.coerced");
 
     // Spec step 12-13: `Get(Target, "name")` must run now, synchronously — a
     // target whose `name` getter throws must fail `bind()` itself (Test262
@@ -729,17 +759,16 @@ pub unsafe extern "C" fn js_function_bind(
         name_hint
     };
     let name_h = scope.root_nanbox_f64(name_hint);
+    crate::gc::collection_point("function_bind.named");
 
-    let bound_arg_count = args_len.saturating_sub(1);
+    let bound_arg_count = partial_handles.len();
 
-    // Build the partial-args array (NaN-boxed values copied as-is).
+    // Build the partial-args array (NaN-boxed values copied as-is) from the
+    // rooted arguments: the array allocation can collect too.
     let bound_args_arr: *mut crate::array::ArrayHeader = if bound_arg_count > 0 {
-        let arr = crate::array::js_array_alloc(bound_arg_count as u32);
-        let mut cur = arr;
-        for i in 0..bound_arg_count {
-            cur = crate::array::js_array_push_f64(cur, *args_ptr.add(1 + i));
-        }
-        cur
+        let array = crate::closure::build_rest_array_rooted(&partial_handles, false);
+        JSValue::from_bits(array.to_bits()).as_pointer::<crate::array::ArrayHeader>()
+            as *mut crate::array::ArrayHeader
     } else {
         std::ptr::null_mut()
     };

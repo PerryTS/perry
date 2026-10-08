@@ -355,6 +355,14 @@ pub const FN_REST_MASK: u32 =
 /// The native type of an [`FN_REST_NATIVE_ARGS`] body: the callee, the
 /// receiver, and the call's `len` arguments at `args` (null when `len` is 0),
 /// valid for the duration of the call.
+///
+/// The buffer is the caller's own argument storage (a stack buffer, a
+/// register spill, a `Vec`), never GC-heap array storage, so the collector
+/// neither scans nor rewrites it: the values in it are current only until the
+/// body's first operation that can collect. A body that needs them after such
+/// an operation roots them first (`RuntimeHandleScope::root_nanbox_f64_slice`).
+/// The body must not keep the pointer, store it anywhere, or let it escape the
+/// call.
 pub type JsNativeArgsBody<C> = unsafe extern "C" fn(*const C, JsThis, *const f64, usize) -> f64;
 /// `length` is valid.
 pub const FN_HAS_LENGTH: u32 = 1 << 3;

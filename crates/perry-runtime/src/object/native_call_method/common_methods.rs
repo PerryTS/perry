@@ -425,90 +425,17 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
-                // Constructor-export alias shims only recognize the native
-                // bound-method representation. The callee's own body record
-                // decides this once, before any shim probes its captures.
-                // An unknown body keeps the conservative dispatch path.
-                let construction_alias =
-                    crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
-                        .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
-                    crate::closure::coerce_call_this(object, *args_ptr)
+                    *args_ptr
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                let rest_ptr = if args_len > 1 && !args_ptr.is_null() {
-                    args_ptr.add(1)
+                let rest = if args_len > 1 && !args_ptr.is_null() {
+                    std::slice::from_raw_parts(args_ptr.add(1), args_len - 1)
                 } else {
-                    std::ptr::null()
+                    &[]
                 };
-                let rest_len = args_len.saturating_sub(1);
-                if construction_alias {
-                    // #10454: `Readable.call(this, opts)` (util.inherits' classic
-                    // explicit-this construction) must mutate `this` in place via
-                    // the same subclass-init shim `super()` uses, not run the
-                    // ordinary call below — see
-                    // `maybe_run_stream_subclass_init_via_this`'s doc comment.
-                    if let Some(result) =
-                        super::native_this_alias::maybe_run_stream_subclass_init_via_this(
-                            object, this_arg, rest_ptr, rest_len,
-                        )
-                    {
-                        return Some(result);
-                    }
-                    // #10454: `http.ServerResponse.call(this, req)` reached
-                    // through an aliased heritage — see
-                    // `maybe_construct_http_class_with_this`'s doc comment.
-                    if let Some(result) =
-                        super::native_this_alias::maybe_construct_http_class_with_this(
-                            object, this_arg, rest_ptr, rest_len,
-                        )
-                    {
-                        return Some(result);
-                    }
-                }
-                // The callee and the explicit `this` both cross the
-                // invocation — a moving
-                // collection inside the callee relocates them (#8082: the
-                // forced gate faulted reading the stale callee closure in
-                // `maybe_alias_explicit_this_construction` after the call).
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let callee_h = scope.root_nanbox_f64(object);
-                let this_h = scope.root_nanbox_f64(this_arg);
-                // Static bound-method value (`C.m.call(x)`): arm the one-shot
-                // static-`this` override so the method body sees `x` instead
-                // of the lexical class-ref (static private brand checks).
-                let static_target = super::native_module::is_static_bound_method_value(object);
-                if static_target {
-                    super::static_this_arm(this_arg);
-                }
-                // A concise/object-literal method reads `this` from a baked
-                // capture slot, not the `this` argument; rebind to the explicit
-                // `.call(thisArg)` receiver (no-op for arrows / plain fns).
-                let call_target = crate::closure::rebind_explicit_this(
-                    callee_h.get_nanbox_f64(),
-                    this_h.get_nanbox_f64(),
-                );
-                let result = crate::closure::native_call_value_this(
-                    call_target,
-                    crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
-                    rest_ptr,
-                    rest_len,
-                );
-                if static_target {
-                    super::static_this_disarm();
-                }
-                // #4973: `http.Server.call(this, handler)` — the inherits
-                // pattern. Alias the explicit `this` object to the handle the
-                // native class export constructed.
-                if construction_alias {
-                    super::native_this_alias::maybe_alias_explicit_this_construction(
-                        callee_h.get_nanbox_f64(),
-                        this_h.get_nanbox_f64(),
-                        result,
-                    );
-                }
-                return Some(result);
+                return Some(call_function_with_explicit_this(object, this_arg, rest));
             }
             // #3662: `Function.prototype.call.call(x, …)` on a non-callable
             // `this` throws a `TypeError`; ambiguous pointers fall through.
@@ -539,15 +466,8 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
-                // Constructor-export alias shims only recognize the native
-                // bound-method representation. The callee's own body record
-                // decides this once, before any shim probes its captures.
-                // An unknown body keeps the conservative dispatch path.
-                let construction_alias =
-                    crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
-                        .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
-                    crate::closure::coerce_call_this(object, *args_ptr)
+                    *args_ptr
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
@@ -556,134 +476,8 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                let args_arr_jsval = JSValue::from_bits(args_arr_val.to_bits());
-                // The argArray may arrive NaN-boxed (POINTER_TAG) or as a
-                // legacy RAW i64 pointer bit-cast to f64 (a function's
-                // synthetic `arguments` array local) — top 16 bits zero.
-                let args_arr_bits = args_arr_val.to_bits();
-                let arr_raw: usize = if args_arr_jsval.is_pointer() {
-                    // A Symbol is POINTER_TAG'd but is a primitive, not an
-                    // Object — Type(argArray) is not Object, so reject it
-                    // below rather than treating its payload as an array
-                    // pointer (test262 apply/argarray-not-object `Symbol()`).
-                    if crate::symbol::js_is_symbol(args_arr_val) != 0 {
-                        0
-                    } else {
-                        (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-                    }
-                } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
-                    args_arr_bits as usize
-                } else {
-                    0
-                };
-                // Spec CreateListFromArrayLike: a non-nullish, non-object
-                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'` /
-                // `Symbol()`) is a TypeError. null/undefined mean "no
-                // arguments".
-                if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
-                    throw_type_error_message(b"CreateListFromArrayLike called on non-object");
-                }
-                // IsArray follows proxy targets; their handles must never be
-                // interpreted as ArrayHeader pointers, even for wrapped arrays.
-                let buf: Vec<f64> = if crate::proxy::js_proxy_is_proxy(args_arr_val) == 1 {
-                    generic_array_like_to_vec(args_arr_val)
-                } else if arr_raw != 0 {
-                    if let Some(values) = crate::object::arguments_object_to_vec(
-                        arr_raw as *const crate::object::ObjectHeader,
-                    ) {
-                        values
-                    } else {
-                        let is_array = JSValue::from_bits(
-                            crate::array::js_array_is_array(args_arr_val).to_bits(),
-                        );
-                        if is_array.is_bool() && is_array.as_bool() {
-                            let arr_ptr = arr_raw as *const crate::array::ArrayHeader;
-                            let n = crate::array::js_array_length(arr_ptr) as usize;
-                            (0..n)
-                                .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
-                                .collect()
-                        } else {
-                            // #5846: a plain array-like object or Proxy (not a
-                            // real Array, not an arguments object) —
-                            // `arr_raw` is NOT a genuine `ArrayHeader*` here,
-                            // so reading it as one is a type-confusion bug.
-                            // Fall through to the generic `Get("length")` +
-                            // indexed-`Get` walk, which also correctly
-                            // propagates a throwing `length`/indexed trap
-                            // (test262 apply/get-index-abrupt).
-                            generic_array_like_to_vec(args_arr_val)
-                        }
-                    }
-                } else {
-                    Vec::new()
-                };
-                let (call_args_ptr, call_args_len) = if buf.is_empty() {
-                    (std::ptr::null::<f64>(), 0_usize)
-                } else {
-                    (buf.as_ptr(), buf.len())
-                };
-                if construction_alias {
-                    // #10454: `Readable.apply(this, [opts])` twin of the `call`
-                    // arm's stream-subclass-init hook above.
-                    if let Some(result) =
-                        super::native_this_alias::maybe_run_stream_subclass_init_via_this(
-                            object,
-                            this_arg,
-                            call_args_ptr,
-                            call_args_len,
-                        )
-                    {
-                        return Some(result);
-                    }
-                    // #10454: `http.ServerResponse.apply(this, [req])` twin of
-                    // the `call` arm's hook above.
-                    if let Some(result) =
-                        super::native_this_alias::maybe_construct_http_class_with_this(
-                            object,
-                            this_arg,
-                            call_args_ptr,
-                            call_args_len,
-                        )
-                    {
-                        return Some(result);
-                    }
-                }
-                // Same rooting discipline as the `call` arm (#8082): callee
-                // and explicit `this` cross the invocation and must survive a moving collection inside it.
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let callee_h = scope.root_nanbox_f64(object);
-                let this_h = scope.root_nanbox_f64(this_arg);
-                // Static bound-method value — see the matching `call` arm.
-                let static_target = super::native_module::is_static_bound_method_value(object);
-                if static_target {
-                    super::static_this_arm(this_arg);
-                }
-                // Rebind a concise/object-literal method's baked `this` slot to
-                // the explicit `.apply(thisArg)` receiver (no-op for arrows /
-                // plain fns) — see the matching `call` arm.
-                let apply_target = crate::closure::rebind_explicit_this(
-                    callee_h.get_nanbox_f64(),
-                    this_h.get_nanbox_f64(),
-                );
-                let result = crate::closure::native_call_value_this(
-                    apply_target,
-                    crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
-                    call_args_ptr,
-                    call_args_len,
-                );
-                if static_target {
-                    super::static_this_disarm();
-                }
-                // #4973: `http.Server.apply(this, args)` — same inherits
-                // pattern as the `call` arm above.
-                if construction_alias {
-                    super::native_this_alias::maybe_alias_explicit_this_construction(
-                        callee_h.get_nanbox_f64(),
-                        this_h.get_nanbox_f64(),
-                        result,
-                    );
-                }
-                return Some(result);
+                let (object, this_arg, args) = apply_argument_list(object, this_arg, args_arr_val);
+                return Some(call_function_with_explicit_this(object, this_arg, &args));
             }
             // #3662: `Function.prototype.apply.call(x, …)` on a non-callable
             // `this` throws a `TypeError`; ambiguous pointers fall through.
@@ -694,6 +488,192 @@ pub(crate) unsafe fn dispatch_function_proto_method(
         _ => {}
     }
     None
+}
+
+/// `CreateListFromArrayLike(argArray)` for `apply`, returning the callee and
+/// receiver re-read after it: the generic walk runs `length` / index getters
+/// and Proxy traps, which can collect, so the two are held in handles across
+/// that walk only. A real Array or an `arguments` object runs no user code.
+unsafe fn apply_argument_list(
+    callee: f64,
+    receiver: f64,
+    args_arr_val: f64,
+) -> (f64, f64, Vec<f64>) {
+    let mut callee = callee;
+    let mut receiver = receiver;
+    fn rooted(callee: &mut f64, receiver: &mut f64, gather: impl FnOnce() -> Vec<f64>) -> Vec<f64> {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let callee_h = scope.root_nanbox_f64(*callee);
+        let receiver_h = scope.root_nanbox_f64(*receiver);
+        let values = gather();
+        *callee = callee_h.get_nanbox_f64();
+        *receiver = receiver_h.get_nanbox_f64();
+        values
+    }
+    let args_arr_jsval = JSValue::from_bits(args_arr_val.to_bits());
+    // The argArray may arrive NaN-boxed (POINTER_TAG) or as a
+    // legacy RAW i64 pointer bit-cast to f64 (a function's
+    // synthetic `arguments` array local) — top 16 bits zero.
+    let args_arr_bits = args_arr_val.to_bits();
+    let arr_raw: usize = if args_arr_jsval.is_pointer() {
+        // A Symbol is POINTER_TAG'd but is a primitive, not an
+        // Object — Type(argArray) is not Object, so reject it
+        // below rather than treating its payload as an array
+        // pointer (test262 apply/argarray-not-object `Symbol()`).
+        if crate::symbol::js_is_symbol(args_arr_val) != 0 {
+            0
+        } else {
+            (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        }
+    } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
+        args_arr_bits as usize
+    } else {
+        0
+    };
+    // Spec CreateListFromArrayLike: a non-nullish, non-object
+    // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'` /
+    // `Symbol()`) is a TypeError. null/undefined mean "no
+    // arguments".
+    if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
+        throw_type_error_message(b"CreateListFromArrayLike called on non-object");
+    }
+    // IsArray follows proxy targets; their handles must never be
+    // interpreted as ArrayHeader pointers, even for wrapped arrays.
+    let buf: Vec<f64> = if crate::proxy::js_proxy_is_proxy(args_arr_val) == 1 {
+        rooted(&mut callee, &mut receiver, || {
+            generic_array_like_to_vec(args_arr_val)
+        })
+    } else if arr_raw != 0 {
+        if let Some(values) =
+            crate::object::arguments_object_to_vec(arr_raw as *const crate::object::ObjectHeader)
+        {
+            values
+        } else {
+            let is_array =
+                JSValue::from_bits(crate::array::js_array_is_array(args_arr_val).to_bits());
+            if is_array.is_bool() && is_array.as_bool() {
+                let arr_ptr = arr_raw as *const crate::array::ArrayHeader;
+                let n = crate::array::js_array_length(arr_ptr) as usize;
+                (0..n)
+                    .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
+                    .collect()
+            } else {
+                // #5846: a plain array-like object or Proxy (not a
+                // real Array, not an arguments object) —
+                // `arr_raw` is NOT a genuine `ArrayHeader*` here,
+                // so reading it as one is a type-confusion bug.
+                // Fall through to the generic `Get("length")` +
+                // indexed-`Get` walk, which also correctly
+                // propagates a throwing `length`/indexed trap
+                // (test262 apply/get-index-abrupt).
+                rooted(&mut callee, &mut receiver, || {
+                    generic_array_like_to_vec(args_arr_val)
+                })
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    (callee, receiver, buf)
+}
+
+/// `Function.prototype.call` / `apply` on a function: the one body both
+/// intrinsics (as methods and as values) run once the argument list is in
+/// hand. The explicit receiver is bound and a `this`-capturing method rebound
+/// by the shared forwarder; the native construction aliases run first.
+unsafe fn call_function_with_explicit_this(object: f64, this_arg: f64, args: &[f64]) -> f64 {
+    let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    // Constructor-export alias shims only recognize the native bound-method
+    // representation. The callee's own body record decides this once, before
+    // any shim probes its captures. An unknown body keeps the conservative
+    // dispatch path.
+    let construction_alias =
+        crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
+            .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
+    // Static bound-method value (`C.m.call(x)`): arm the one-shot static-`this`
+    // override so the method body sees `x` instead of the lexical class-ref
+    // (static private brand checks). Only a bound-method body can be one.
+    let static_target =
+        construction_alias && super::native_module::is_static_bound_method_value(object);
+    crate::closure::forward_with_explicit_this(
+        object,
+        this_arg,
+        args,
+        crate::closure::ReceiverBinding::Coerce,
+        |call| {
+            let (args_ptr, args_len) = if call.args.is_empty() {
+                (std::ptr::null::<f64>(), 0_usize)
+            } else {
+                (call.args.as_ptr(), call.args.len())
+            };
+            if construction_alias {
+                // #10454: `Readable.call(this, opts)` (util.inherits' classic
+                // explicit-this construction) must mutate `this` in place via
+                // the same subclass-init shim `super()` uses, not run the
+                // ordinary call below — see
+                // `maybe_run_stream_subclass_init_via_this`'s doc comment.
+                if let Some(result) =
+                    super::native_this_alias::maybe_run_stream_subclass_init_via_this(
+                        call.target,
+                        call.this,
+                        args_ptr,
+                        args_len,
+                    )
+                {
+                    return result;
+                }
+                // #10454: `http.ServerResponse.call(this, req)` reached
+                // through an aliased heritage — see
+                // `maybe_construct_http_class_with_this`'s doc comment.
+                if let Some(result) = super::native_this_alias::maybe_construct_http_class_with_this(
+                    call.target,
+                    call.this,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return result;
+                }
+            }
+            if static_target {
+                super::static_this_arm(call.this);
+            }
+            if !construction_alias {
+                let result = crate::closure::native_call_value_this(
+                    call.target,
+                    crate::closure::JsThis::from_f64(call.this),
+                    args_ptr,
+                    args_len,
+                );
+                if static_target {
+                    super::static_this_disarm();
+                }
+                return result;
+            }
+            // #4973: `http.Server.call(this, handler)` — the inherits pattern
+            // aliases the explicit `this` object to the handle the native class
+            // export constructed, so the callee and the receiver cross the
+            // invocation, and a moving collection inside it relocates them
+            // (#8082).
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let callee_h = scope.root_nanbox_f64(call.target);
+            let this_h = scope.root_nanbox_f64(call.this);
+            let result = crate::closure::native_call_value_this(
+                call.target,
+                crate::closure::JsThis::from_f64(call.this),
+                args_ptr,
+                args_len,
+            );
+            if static_target {
+                super::static_this_disarm();
+            }
+            super::native_this_alias::maybe_alias_explicit_this_construction(
+                callee_h.get_nanbox_f64(),
+                this_h.get_nanbox_f64(),
+                result,
+            );
+            result
+        },
+    )
 }
 
 /// An ordinary object (GC_TYPE_OBJECT) that is not an Array subclass

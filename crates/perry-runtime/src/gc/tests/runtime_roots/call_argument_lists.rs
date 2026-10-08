@@ -98,7 +98,7 @@ extern "C" fn record_rest_and_arguments_after_16(
 /// "value is not a function" out of a unit test instead of failing an
 /// assertion. Two minors under a pinned promotion age tenure it into the
 /// non-moving old generation.
-fn tenured_closure(
+pub(super) fn tenured_closure(
     info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
 ) -> *mut crate::closure::ClosureHeader {
@@ -171,7 +171,7 @@ fn reflect_apply_roots_receiver_and_arguments_across_the_rebind_allocation() {
     ]));
     let first_original = (array_element(list.get_nanbox_f64(), 0) & POINTER_MASK) as usize;
 
-    crate::gc::arm_collection_point("reflect.apply.rebind");
+    crate::gc::arm_collection_point("explicit_this.coerced");
     let before = crate::gc::copying_minor_cycles();
     crate::proxy::js_reflect_apply(
         callee.get_nanbox_f64(),
