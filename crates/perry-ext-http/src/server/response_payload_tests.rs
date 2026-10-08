@@ -200,8 +200,12 @@ extern "C" fn finish_collects(
     c: *const perry_runtime::closure::ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    let owner = perry_runtime::closure::js_closure_get_capture_f64(c, 0);
-    assert!(unsafe { state((owner.to_bits() & PTR_MASK) as i64) }.is_none());
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_runtime::closure::js_closure_get_capture_f64(c, 0));
+    let handle = || (owner.get().to_bits() & PTR_MASK) as i64;
+    assert!(unsafe { state(handle()) }.is_none());
+    let count = get(handle(), "listenerCalls");
+    set(handle(), "listenerCalls", count + 1.0);
     gc::js_gc_collect();
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -213,6 +217,11 @@ fn end_releases_before_reentrant_listeners_collect() {
     let mut data = ResponseState::new();
     data.standalone = true;
     let response = scope.root_nanbox_f64(value(unsafe { alloc(data) }));
+    set(
+        (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
+        "listenerCalls",
+        0.0,
+    );
     for event in ["once:finish", "once:close"] {
         let cb = perry_runtime::closure::js_closure_alloc(
             perry_runtime::fn_info!(finish_collects, 0),
@@ -233,4 +242,12 @@ fn end_releases_before_reentrant_listeners_collect() {
         f64::from_bits(TAG_UNDEFINED),
     );
     assert!(unsafe { state((response.get_nanbox_f64().to_bits() & PTR_MASK) as i64) }.is_none());
+    assert_eq!(
+        get(
+            (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
+            "listenerCalls"
+        ),
+        2.0,
+        "both listeners must run, including the snapshot crossing the first collection"
+    );
 }
