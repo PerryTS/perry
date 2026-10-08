@@ -38,6 +38,7 @@ pub(super) unsafe fn prime_function(
         // The shape's implicit own data keys are not bag slots. They cannot
         // be skipped merely because the explicit key list lacks this key.
         if shape.implicit_own_keys().contains(&name) {
+            refuse(19);
             return;
         }
         // The shape pins both absence and the intrinsic prototype serial.
@@ -153,6 +154,20 @@ mod tests {
                 own_hit.0,
                 crate::value::js_nanbox_pointer(own as i64).to_bits()
             );
+        }
+    }
+    #[test]
+    fn function_implicit_own_key_refusal_is_counted() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let f = crate::closure::js_closure_alloc(crate::fn_info!(target, 1), 0);
+            let before = SITE_REFUSED[19].load(Ordering::Relaxed);
+            let mut slot: MethodSiteSlot = std::ptr::null_mut();
+            prime_function(&mut slot, f as usize, b"name", 0);
+            assert!(slot.is_null());
+            assert_eq!(SITE_REFUSED[19].load(Ordering::Relaxed), before + 1);
+            assert_eq!(refusal_name(19), "function_implicit_own_key");
         }
     }
 }
