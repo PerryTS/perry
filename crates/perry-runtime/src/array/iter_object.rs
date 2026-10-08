@@ -33,12 +33,6 @@ use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFI
 /// runtime-defined classes.
 pub const ARRAY_ITERATOR_CLASS_ID: u32 = 0xFFFF_0006;
 
-/// Field holding the recycled `{value, done}` the fused `for…of` driver
-/// mutates in place — one result object per ITERATOR instead of one per
-/// element. Same index and same contract as the Map/Set iterator's, and the
-/// same routine emits both (`iter_result::emit_iter_result_cached`).
-const ITER_RESULT_CACHE_FIELD: u32 = 5;
-
 /// Iterator kind tags — matches the i32 stored in field 2.
 const KIND_VALUES: i32 = 0;
 const KIND_KEYS: i32 = 1;
@@ -67,12 +61,8 @@ unsafe fn alloc_iterator_backing(backing: f64, kind: i32) -> f64 {
     // The iterator allocation and the lazy prototype bootstrap can both
     // collect. Keep the incoming backing and the new iterator relocatable.
     let backing_h = scope.root_nanbox_f64(backing);
-    // Six fields, not three: 3 and 4 are the `node:sqlite` epoch pair and 5 is
-    // the recycled `{value, done}` the fused `for…of` driver mutates in place
-    // (see `ITER_RESULT_CACHE_FIELD`). Reserving them at construction keeps the
-    // cache out of the per-iterator shape transition that growing into field 5
-    // would otherwise cost, and matches the Map/Set iterator's layout.
-    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 6));
+    // Fields 3/4 hold the sqlite statement epoch pair.
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 5));
     // Field 0: backing array (NaN-boxed pointer so the GC scanner keeps it).
     obj_h.with_mut_ptr(|obj| {
         js_object_set_field(
@@ -88,11 +78,6 @@ unsafe fn alloc_iterator_backing(backing: f64, kind: i32) -> f64 {
     // Fields 3/4: the `node:sqlite` epoch pair, unused by every other kind.
     obj_h.with_mut_ptr(|obj| js_object_set_field(obj, 3, JSValue::undefined()));
     obj_h.with_mut_ptr(|obj| js_object_set_field(obj, 4, JSValue::undefined()));
-    // Field 5: the recycled fused-driver result. Manual `.next()` never reads
-    // or writes it, so a caller that retains a result still sees fresh objects.
-    obj_h.with_mut_ptr(|obj| {
-        js_object_set_field(obj, ITER_RESULT_CACHE_FIELD, JSValue::undefined())
-    });
     // Link `[[Prototype]]` to the shared `%ArrayIteratorPrototype%` singleton so
     // `Object.getPrototypeOf(it)` and the inherited `.next` read resolve.
     obj_h
@@ -607,22 +592,25 @@ pub unsafe fn dispatch_array_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_array_iterator_method_inner(iter_obj, method_name, true, false)
+    dispatch_array_iterator_method_inner(
+        iter_obj,
+        method_name,
+        true,
+        crate::iter_result::IterResultTarget::Object,
+    )
 }
 
-/// The FUSED `for…of` advance (`js_for_of_next`): same algorithm, but the
-/// `{value, done}` is the iterator's own recycled one rather than a fresh
-/// allocation per element. Only the compiler's `for…of` desugar reaches this,
-/// and its result local is a temporary the loop body cannot name — see
-/// [`crate::iter_result::emit_iter_result_cached`]. The override probe still
-/// runs first, so a patched own `next` wins exactly as on the manual path.
-pub(crate) unsafe fn dispatch_array_iterator_method_emit(
+/// Compiled consumers use the same advance with a native result sink.
+pub(crate) unsafe fn dispatch_array_iterator_step(
     iter_obj: *mut ObjectHeader,
-    method_name: &str,
-    emit_cached: bool,
-    honor_override: bool,
-) -> f64 {
-    dispatch_array_iterator_method_inner(iter_obj, method_name, honor_override, emit_cached)
+    out: *mut crate::iter_result::IteratorStep,
+) {
+    dispatch_array_iterator_method_inner(
+        iter_obj,
+        "next",
+        false,
+        crate::iter_result::IterResultTarget::Step(out),
+    );
 }
 
 /// Builtin advance only — the canonical prototype thunk's entry (#9019):
@@ -634,14 +622,19 @@ pub(crate) unsafe fn dispatch_array_iterator_method_builtin(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_array_iterator_method_inner(iter_obj, method_name, false, false)
+    dispatch_array_iterator_method_inner(
+        iter_obj,
+        method_name,
+        false,
+        crate::iter_result::IterResultTarget::Object,
+    )
 }
 
 unsafe fn dispatch_array_iterator_method_inner(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
     honor_override: bool,
-    emit_cached: bool,
+    target: crate::iter_result::IterResultTarget,
 ) -> f64 {
     // #7475: the raw `iter_obj` parameter is not a GC root, and this function
     // allocates in several places — `js_object_set_field` (shape transition /
@@ -673,11 +666,8 @@ unsafe fn dispatch_array_iterator_method_inner(
             let backing_f64 = f64::from_bits(backing_field.bits());
             // Iterators clear their backing array at exhaustion.
             if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
-                return crate::iter_result::emit_iter_result_cached(
-                    &scope,
-                    &iter_h,
-                    ITER_RESULT_CACHE_FIELD,
-                    emit_cached,
+                return crate::iter_result::emit_iter_result(
+                    target,
                     result_order,
                     done_value(),
                     true,
@@ -700,11 +690,8 @@ unsafe fn dispatch_array_iterator_method_inner(
 
             if idx >= len {
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                return crate::iter_result::emit_iter_result_cached(
-                    &scope,
-                    &iter_h,
-                    ITER_RESULT_CACHE_FIELD,
-                    emit_cached,
+                return crate::iter_result::emit_iter_result(
+                    target,
                     result_order,
                     done_value(),
                     true,
@@ -749,11 +736,8 @@ unsafe fn dispatch_array_iterator_method_inner(
                 _ => JSValue::undefined(),
             };
             let value_h = scope.root_nanbox_u64(value.bits());
-            crate::iter_result::emit_iter_result_cached(
-                &scope,
-                &iter_h,
-                ITER_RESULT_CACHE_FIELD,
-                emit_cached,
+            crate::iter_result::emit_iter_result(
+                target,
                 result_order,
                 JSValue::from_bits(value_h.get_nanbox_u64()),
                 false,

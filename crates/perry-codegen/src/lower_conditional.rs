@@ -168,6 +168,65 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
     )
 }
 
+/// A test consumer needs only truthiness. Logical operands retain JavaScript
+/// evaluation order, with an i1 phi rather than a boxed operand-value phi.
+pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
+        return Ok(bit);
+    }
+    if let Expr::Logical {
+        op: LogicalOp::And | LogicalOp::Or,
+        left,
+        right,
+    } = expr
+    {
+        let l = lower_test(ctx, left)?;
+        let pred = ctx.block().label.clone();
+        let rhs = ctx.new_block("test.right");
+        let merge = ctx.new_block("test.merge");
+        let rhs_label = ctx.block_label(rhs);
+        let merge_label = ctx.block_label(merge);
+        let is_and = matches!(
+            expr,
+            Expr::Logical {
+                op: LogicalOp::And,
+                ..
+            }
+        );
+        if is_and {
+            ctx.block().cond_br(&l, &rhs_label, &merge_label);
+        } else {
+            ctx.block().cond_br(&l, &merge_label, &rhs_label);
+        }
+        ctx.current_block = rhs;
+        let r = lower_test(ctx, right)?;
+        let r_pred = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        ctx.current_block = merge;
+        return Ok(ctx.block().phi(
+            I1,
+            &[
+                (if is_and { "false" } else { "true" }, &pred),
+                (&r, &r_pred),
+            ],
+        ));
+    }
+    if let Expr::Unary {
+        op: perry_hir::UnaryOp::Not,
+        operand,
+    }
+    | Expr::BooleanCoerce(operand) = expr
+    {
+        let bit = lower_test(ctx, operand)?;
+        return Ok(if matches!(expr, Expr::Unary { .. }) {
+            ctx.block().xor(I1, &bit, "true")
+        } else {
+            bit
+        });
+    }
+    Ok(lower_expr_with_truthy(ctx, expr)?.1)
+}
+
 /// Lower one expression once and return both its ordinary boxed value and its
 /// JavaScript truthiness as native `i1`.
 ///
@@ -220,7 +279,7 @@ pub(crate) fn lower_conditional(
     let saved_guarded_proof = branch_proofs
         .as_ref()
         .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
-    let (_cond, cond_bool) = lower_expr_with_truthy(ctx, condition)?;
+    let cond_bool = lower_test(ctx, condition)?;
 
     let then_idx = ctx.new_block("ternary.then");
     let else_idx = ctx.new_block("ternary.else");

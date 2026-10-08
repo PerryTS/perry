@@ -155,13 +155,6 @@
       "why": "Primitive-method fallback histogram, written only when gc_diag_enabled() (PERRY_GC_DIAG) and printed at exit"
     },
     {
-      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
-      "name": "LAYOUT_SLOT_MASKS",
-      "verdict": "removed_elsewhere",
-      "site": "crates/perry-runtime/src/gc/layout_tables.rs::slot_masks_remove",
-      "why": "Per-object masks are removed through the hot-TLS raw pointer (hot_layout_slot_masks), which the name walk cannot follow; also pruned per GC"
-    },
-    {
       "file": "crates/perry-runtime/src/module_require.rs",
       "name": "CANONICAL_MODULE_DIRS",
       "verdict": "bounded_by_program",

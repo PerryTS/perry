@@ -23,6 +23,7 @@ pub mod module_const_fold;
 pub mod prop_cse;
 mod source_spans;
 pub mod state_desugar;
+mod suspending_iife;
 pub mod unroll;
 
 // Re-export main transformation functions

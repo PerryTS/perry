@@ -149,9 +149,9 @@ pub(crate) struct HotTls {
     pub(crate) birth_extra_flags: *mut u8,
     pub(crate) incremental_mark_valid_ptrs: *mut u8,
     pub(crate) incremental_mark_minor_only: *mut u8,
-    // gc/layout.rs
-    pub(crate) layout_slot_masks: *mut u8,
-    pub(crate) per_object_layouts_nonempty: *mut u8,
+    // Keep subsequent codegen-visible offsets until the S3 ABI update. These
+    // inert words contain no pointers, owner keys or layout records.
+    _retired_layout_abi_padding: [usize; 2],
     // object/spill.rs
     pub(crate) learned_inline_fields: *mut u8,
     // gc/roots/temp_roots.rs
@@ -250,8 +250,7 @@ impl HotTls {
         birth_extra_flags: std::ptr::null_mut(),
         incremental_mark_valid_ptrs: std::ptr::null_mut(),
         incremental_mark_minor_only: std::ptr::null_mut(),
-        layout_slot_masks: std::ptr::null_mut(),
-        per_object_layouts_nonempty: std::ptr::null_mut(),
+        _retired_layout_abi_padding: [0; 2],
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
         dirty_old_pages: [const { Cell::new(usize::MAX) }; 16],
@@ -304,8 +303,6 @@ fn fill(slots: *mut HotTls) {
         (*slots).birth_extra_flags = crate::gc::birth_extra_flags_hot_addr();
         (*slots).incremental_mark_valid_ptrs = crate::gc::incremental_mark_valid_ptrs_hot_addr();
         (*slots).incremental_mark_minor_only = crate::gc::incremental_mark_minor_only_hot_addr();
-        (*slots).layout_slot_masks = crate::gc::layout_slot_masks_hot_addr();
-        (*slots).per_object_layouts_nonempty = crate::gc::per_object_layouts_nonempty_hot_addr();
         (*slots).learned_inline_fields = crate::object::learned_inline_fields_hot_addr();
         (*slots)
             .runtime_handle_stack
@@ -1138,16 +1135,6 @@ mod tests {
             "incremental_mark_minor_only"
         );
         assert_eq!(
-            hot.layout_slot_masks,
-            crate::gc::layout_slot_masks_hot_addr(),
-            "layout_slot_masks"
-        );
-        assert_eq!(
-            hot.per_object_layouts_nonempty,
-            crate::gc::per_object_layouts_nonempty_hot_addr(),
-            "per_object_layouts_nonempty"
-        );
-        assert_eq!(
             hot.learned_inline_fields,
             crate::object::learned_inline_fields_hot_addr(),
             "learned_inline_fields"
@@ -1184,11 +1171,6 @@ mod tests {
             (
                 "incremental_mark_minor_only",
                 hot.incremental_mark_minor_only,
-            ),
-            ("layout_slot_masks", hot.layout_slot_masks),
-            (
-                "per_object_layouts_nonempty",
-                hot.per_object_layouts_nonempty,
             ),
             ("learned_inline_fields", hot.learned_inline_fields),
             ("temp_roots", hot.temp_roots),

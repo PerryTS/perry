@@ -1,0 +1,3064 @@
+{
+  "schema_version": 1,
+  "purpose": "Frozen source contracts for the Actions consolidation plan. This file is not the live event routing catalog.",
+  "baseline_commit": "5423c426f4066c666aa3311672aef270ff69f3ae",
+  "snapshot_date": "2026-10-07",
+  "source_workflow_count": 38,
+  "target_entrypoint_count": 10,
+  "yaml_note": "Ruby Psych resolves bare on to boolean true; events were explicitly recovered from either key. Job metadata preserves the currently invalid release matrix for comparison, not reuse.",
+  "categories": {
+    "ci": {
+      "entrypoint": "test.yml",
+      "name": "CI",
+      "files": [
+        "test.yml",
+        "coverage.yml",
+        "security-audit.yml",
+        "zizmor.yml",
+        "native-result-ledger.yml",
+        "npm-launcher.yml"
+      ]
+    },
+    "gc": {
+      "entrypoint": "gc.yml",
+      "name": "GC",
+      "files": [
+        "gc-ratchet.yml",
+        "gc-moving-witnesses.yml",
+        "gc-native-roots.yml",
+        "gc-root-dominance.yml",
+        "gc-parse-churn-gate.yml",
+        "gc-ptr-shape-off-witness.yml"
+      ]
+    },
+    "compiler-runtime": {
+      "entrypoint": "compiler-runtime.yml",
+      "name": "Compiler and Runtime",
+      "files": [
+        "llvm-inprocess.yml",
+        "cc-parity.yml",
+        "eh-transport.yml",
+        "ext-link.yml"
+      ]
+    },
+    "compatibility": {
+      "entrypoint": "compatibility.yml",
+      "name": "Compatibility",
+      "files": [
+        "node-compat-matrix.yml",
+        "node-suite-guard.yml",
+        "node-core-subset.yml",
+        "feature-matrix.yml",
+        "wasi-check.yml",
+        "npm-package-sweep.yml"
+      ]
+    },
+    "integration": {
+      "entrypoint": "integration.yml",
+      "name": "Integration",
+      "files": [
+        "container-tests.yml",
+        "simctl-tests.yml",
+        "next-app-route.yml",
+        "auto-opt-app-patterns.yml"
+      ]
+    },
+    "performance": {
+      "entrypoint": "performance.yml",
+      "name": "Performance",
+      "files": [
+        "benchmark.yml",
+        "tak-performance.yml",
+        "tls-budget.yml"
+      ]
+    },
+    "documentation": {
+      "entrypoint": "documentation.yml",
+      "name": "Documentation",
+      "files": [
+        "docs-check.yml",
+        "docs.yml"
+      ]
+    },
+    "release-packages": {
+      "entrypoint": "release-packages.yml",
+      "name": "Release / Packages",
+      "files": [
+        "release-packages.yml"
+      ]
+    },
+    "release-hono-server": {
+      "entrypoint": "release-hono-server.yml",
+      "name": "Release / Hono Server",
+      "files": [
+        "release-hono-server.yml"
+      ]
+    },
+    "maintenance": {
+      "entrypoint": "maintenance.yml",
+      "name": "Maintenance",
+      "files": [
+        "ci-queue-reaper.yml",
+        "gate-freshness.yml",
+        "gate-failure-watch.yml",
+        "soak-autofix.yml",
+        "npm-publish-freshness.yml"
+      ]
+    }
+  },
+  "orphan_registrations": [
+    "diag-8117.yml",
+    "hang-lab.yml",
+    "llvm-inprocess-feasibility.yml",
+    "probe-10058.yml",
+    "probe-fetch.yml",
+    "probe-h2hang.yml",
+    "zlib-debug.yml"
+  ],
+  "platform_registrations": [
+    "Copilot",
+    "Dependabot Updates",
+    "Dependency Graph",
+    "pages-build-deployment"
+  ],
+  "workflows": [
+    {
+      "file": "auto-opt-app-patterns.yml",
+      "path": ".github/workflows/auto-opt-app-patterns.yml",
+      "category": "integration",
+      "sha256": "68faa358a2e97489334c3a7329a5ed92f4b23983728629ab3098a1a9fc9b44be",
+      "name": "Auto-Optimize App Patterns",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "22 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "auto-opt-app-patterns-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "auto-opt-app-patterns": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "benchmark.yml",
+      "path": ".github/workflows/benchmark.yml",
+      "category": "performance",
+      "sha256": "c5843585bb7215168d1d9c7388030cf443a9dcdd4c5553c267366901bd54476c",
+      "name": "Regression Check",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "release": {
+          "types": [
+            "published"
+          ]
+        },
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "0 3 * * *"
+          }
+        ]
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "bench-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0",
+        "IS_RELEASE": "${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}"
+      },
+      "defaults": null,
+      "secret_references": [
+        "GITHUB_TOKEN"
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "performance": {
+          "runs-on": "macos-14",
+          "timeout-minutes": 100,
+          "outputs": {
+            "status": "${{ steps.compare.outputs.status }}"
+          }
+        },
+        "binary-size": {
+          "runs-on": "macos-14"
+        },
+        "compile-time": {
+          "runs-on": "macos-14"
+        },
+        "update-baseline": {
+          "if": "github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_UPDATE_BASELINE == 'true'",
+          "runs-on": "macos-14",
+          "needs": "performance",
+          "permissions": {
+            "contents": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "cc-parity.yml",
+      "path": ".github/workflows/cc-parity.yml",
+      "category": "compiler-runtime",
+      "sha256": "586b353c97a65df13816344a93b20d77ad91aa1b354b71da7395648e2500468c",
+      "name": "cc-parity",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "cc-parity-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "changes": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-cc-parity')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          },
+          "outputs": {
+            "relevant": "${{ steps.filter.outputs.relevant }}"
+          }
+        },
+        "cc-parity": {
+          "needs": "changes",
+          "if": "needs.changes.outputs.relevant == 'true'",
+          "runs-on": "macos-15-intel",
+          "timeout-minutes": 90,
+          "env": {
+            "CARGO_BUILD_JOBS": "4",
+            "CARGO_INCREMENTAL": "0"
+          }
+        }
+      }
+    },
+    {
+      "file": "ci-queue-reaper.yml",
+      "path": ".github/workflows/ci-queue-reaper.yml",
+      "category": "maintenance",
+      "sha256": "3d6f931377103c5e0cbe07c2e68918de15b05be492a9397aceb63322baa63bec",
+      "name": "CI Queue Reaper",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "13,43 * * * *"
+          }
+        ],
+        "workflow_dispatch": {
+          "inputs": {
+            "apply": {
+              "description": "Actually cancel (unchecked = dry run)",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "permissions": {
+      },
+      "concurrency": {
+        "group": "ci-queue-reaper-${{ github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "reap": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "read",
+            "actions": "write",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "container-tests.yml",
+      "path": ".github/workflows/container-tests.yml",
+      "category": "integration",
+      "sha256": "99154b77fdb0079d9e34050859437641757abc9775ac28f8fce89f571ea88b27",
+      "name": "Container Tests",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "pull_request": {
+          "branches": [
+            "main"
+          ],
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ],
+          "paths": [
+            "crates/perry-container-compose/**",
+            "crates/perry-container-e2e/**",
+            "crates/perry-stdlib/src/container/**",
+            "crates/perry-stdlib/tests/container_*",
+            "crates/perry-hir/src/lower.rs",
+            "crates/perry-hir/src/ir.rs",
+            "crates/perry-codegen/src/lower_call.rs",
+            "tests/e2e/**",
+            "types/perry/{container,compose,workloads}/**",
+            ".github/workflows/container-tests.yml"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "30 3 * * *"
+          }
+        ],
+        "workflow_dispatch": {
+          "inputs": {
+            "run_e2e": {
+              "description": "Run e2e tests (Layer D)",
+              "required": false,
+              "default": "false",
+              "type": "choice",
+              "options": [
+                "true",
+                "false"
+              ]
+            },
+            "run_fuzz": {
+              "description": "Run fuzz tests (Layer E)",
+              "required": false,
+              "default": "false",
+              "type": "choice",
+              "options": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        }
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "container-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": true
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "PERRY_NO_INSTALL_PROMPT": "1",
+        "PERRY_NO_DEFAULT_SIGINT_CLEANUP": "1"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+        "run_e2e",
+        "run_fuzz"
+      ],
+      "jobs": {
+        "hermetic": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "name": "Hermetic Tests (Layer A + B)",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "os": [
+                "macos-14",
+                "ubuntu-24.04"
+              ]
+            }
+          },
+          "runs-on": "${{ matrix.os }}"
+        },
+        "integration-macos-apple": {
+          "name": "Layer C — Integration (macOS / apple/container)",
+          "runs-on": "macos-14",
+          "if": "(github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))"
+        },
+        "integration-linux-podman": {
+          "name": "Layer C — Integration (Linux / podman)",
+          "runs-on": "ubuntu-24.04",
+          "if": "(github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))"
+        },
+        "e2e-linux": {
+          "name": "Layer D — E2E (Linux / docker)",
+          "runs-on": "ubuntu-24.04",
+          "if": "startsWith(github.ref, 'refs/tags/v') ||\ngithub.event.inputs.run_e2e == 'true'\n"
+        },
+        "fuzz": {
+          "name": "Layer E — Fuzz (libfuzzer)",
+          "runs-on": "ubuntu-24.04",
+          "if": "github.event_name == 'schedule' ||\ngithub.event.inputs.run_fuzz == 'true'\n",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "target": [
+                "compose_yaml_parse",
+                "env_interpolation",
+                "compose_spec_json_round_trip"
+              ]
+            }
+          }
+        },
+        "container-tests-gate": {
+          "name": "Container Tests Gate",
+          "runs-on": "ubuntu-24.04",
+          "needs": [
+            "hermetic"
+          ],
+          "if": "(always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))"
+        }
+      }
+    },
+    {
+      "file": "coverage.yml",
+      "path": ".github/workflows/coverage.yml",
+      "category": "ci",
+      "sha256": "4f61db513b715538561fdbd77b5e5fdca2f4dc6e88c8804c0cb02520d3b3de77",
+      "name": "Coverage",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "0 4 * * 1"
+          }
+        ],
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "coverage-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": true
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "llvm-cov": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90
+        }
+      }
+    },
+    {
+      "file": "docs-check.yml",
+      "path": ".github/workflows/docs-check.yml",
+      "category": "documentation",
+      "sha256": "146397faf8caa263cc7fc6d46e93bc46b605f78b255628fb63689939744b9b88",
+      "name": "Docs checks",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "paths": [
+            "README.md",
+            "docs/**",
+            "scripts/check_docs.py",
+            "crates/perry-doc-tests/**",
+            ".github/workflows/docs-check.yml",
+            ".github/workflows/docs.yml"
+          ]
+        },
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "README.md",
+            "docs/**",
+            "scripts/check_docs.py",
+            "crates/perry-doc-tests/**",
+            ".github/workflows/docs-check.yml",
+            ".github/workflows/docs.yml"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "23 5 * * 1"
+          }
+        ],
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": null,
+      "env": {
+        "MDBOOK_VERSION": "v0.5.4"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "build-and-validation": {
+          "runs-on": "ubuntu-latest"
+        },
+        "external-links": {
+          "if": "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+          "runs-on": "ubuntu-latest"
+        }
+      }
+    },
+    {
+      "file": "docs.yml",
+      "path": ".github/workflows/docs.yml",
+      "category": "documentation",
+      "sha256": "7de0c055002ca4bc5f7b22b7f30d1a1b414b9f109632ee132d6b5907bc48580f",
+      "name": "Deploy Docs",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read",
+        "pages": "write",
+        "id-token": "write"
+      },
+      "concurrency": {
+        "group": "pages",
+        "cancel-in-progress": true
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+        "GITHUB_TOKEN"
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "deploy": {
+          "runs-on": "ubuntu-24.04",
+          "environment": {
+            "name": "github-pages",
+            "url": "${{ steps.deployment.outputs.page_url }}"
+          }
+        }
+      }
+    },
+    {
+      "file": "eh-transport.yml",
+      "path": ".github/workflows/eh-transport.yml",
+      "category": "compiler-runtime",
+      "sha256": "cb234a2013a282d06832484dea0ce03a5313456cf53cddd64cbb70966f6f8e28",
+      "name": "eh-transport",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "32 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "eh-transport-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "changes": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          },
+          "outputs": {
+            "relevant": "${{ steps.filter.outputs.relevant }}"
+          }
+        },
+        "eh-transport": {
+          "needs": "changes",
+          "if": "needs.changes.outputs.relevant == 'true'",
+          "runs-on": "macos-15",
+          "timeout-minutes": 60
+        }
+      }
+    },
+    {
+      "file": "ext-link.yml",
+      "path": ".github/workflows/ext-link.yml",
+      "category": "compiler-runtime",
+      "sha256": "f6b9fb607bb3c4303cecac4fb2d38a0aee49495350a9b1a0e4825d953f8ea95c",
+      "name": "ext-link",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "52 4 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "ext-link-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "ext-link": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 120,
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "8G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        }
+      }
+    },
+    {
+      "file": "feature-matrix.yml",
+      "path": ".github/workflows/feature-matrix.yml",
+      "category": "compatibility",
+      "sha256": "e3cd8694f523d854e0d9e2ffd5cda4c5c76c5e69c2210f36688a1e3804768c18",
+      "name": "TypeScript Feature Matrix",
+      "run_name": null,
+      "events": {
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "43 4 * * *"
+          }
+        ]
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "feature-matrix-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "feature-matrix": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 60
+        }
+      }
+    },
+    {
+      "file": "gate-failure-watch.yml",
+      "path": ".github/workflows/gate-failure-watch.yml",
+      "category": "maintenance",
+      "sha256": "88621d40c13e67d347476929c2ec2c17e27a5ec0d4d35cc611aa1579461d1723",
+      "name": "Scheduled Gate Failure Watch",
+      "run_name": null,
+      "events": {
+        "workflow_run": {
+          "workflows": [
+            "Auto-Optimize App Patterns",
+            "CI",
+            "Gate Freshness",
+            "GC Moving Witnesses",
+            "gc-native-roots",
+            "GC Parse-Churn Layout Gate",
+            "GC Ptr<Shape> OFF-arm witness",
+            "GC Ratchet",
+            "GC Root Dominance",
+            "TLS Budget",
+            "eh-transport",
+            "llvm-inprocess"
+          ],
+          "types": [
+            "completed"
+          ]
+        },
+        "pull_request": {
+          "paths": [
+            ".github/workflows/*.yml",
+            "scripts/gate_failure_watch.json",
+            "scripts/gate_failure_watch.py",
+            "scripts/gate_freshness.json"
+          ]
+        }
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "scheduled-gate-failure-watch-${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "validate": {
+          "if": "github.event_name == 'pull_request'",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "permissions": {
+            "contents": "read"
+          }
+        },
+        "observe": {
+          "if": "github.event_name == 'workflow_run' && (\n  github.event.workflow_run.event == 'schedule' ||\n  (\n    (github.event.workflow_run.event == 'workflow_dispatch' ||\n     github.event.workflow_run.event == 'repository_dispatch') &&\n    github.event.workflow_run.head_branch == 'main'\n  ) ||\n  (\n    github.event.workflow_run.event == 'push' &&\n    (github.event.workflow_run.head_branch == 'main' ||\n     startsWith(github.event.workflow_run.head_branch, 'v'))\n  )\n)",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "permissions": {
+            "actions": "read",
+            "contents": "read",
+            "issues": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "gate-freshness.yml",
+      "path": ".github/workflows/gate-freshness.yml",
+      "category": "maintenance",
+      "sha256": "ac2afcbaddaa6d619bbd5d091a6234fbbcded3c7675d48db7525513a13add6bc",
+      "name": "Gate Freshness",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "5 */2 * * *"
+          }
+        ],
+        "pull_request": {
+          "paths": [
+            "scripts/check_gate_freshness.py",
+            "scripts/gate_freshness.json",
+            ".github/workflows/gate-freshness.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gate-freshness-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "gate-freshness": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "read",
+            "actions": "read",
+            "issues": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "gc-moving-witnesses.yml",
+      "path": ".github/workflows/gc-moving-witnesses.yml",
+      "category": "gc",
+      "sha256": "f3f3c57a30c8b53790d6e00cae672f2e359ae72a95d307c03844c4340fa69134",
+      "name": "GC Moving Witnesses",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "12 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gc-moving-witnesses-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "PERRY_DISABLE_BUILD_CACHE": "1"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "gc-moving-witnesses": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "gc-native-roots.yml",
+      "path": ".github/workflows/gc-native-roots.yml",
+      "category": "gc",
+      "sha256": "b7ca6c5655836780e80fdb11b2ff54a056b61eac080025cd457c9175058b152f",
+      "name": "gc-native-roots",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "37 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "gc-native-roots-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "native-roots-rs4gc": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "include": [
+                {
+                  "os": "macos-14",
+                  "arch": "aarch64",
+                  "format": "Mach-O"
+                },
+                {
+                  "os": "ubuntu-latest",
+                  "arch": "x86-64",
+                  "format": "ELF"
+                },
+                {
+                  "os": "windows-latest",
+                  "arch": "x86-64",
+                  "format": "PE"
+                },
+                {
+                  "os": "ubuntu-24.04-arm",
+                  "arch": "aarch64",
+                  "format": "ELF"
+                }
+              ]
+            }
+          },
+          "runs-on": "${{ matrix.os }}",
+          "defaults": {
+            "run": {
+              "shell": "bash"
+            }
+          },
+          "timeout-minutes": 120
+        },
+        "gc-native-roots-complete": {
+          "needs": [
+            "native-roots-rs4gc"
+          ],
+          "if": "(always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5
+        }
+      }
+    },
+    {
+      "file": "gc-parse-churn-gate.yml",
+      "path": ".github/workflows/gc-parse-churn-gate.yml",
+      "category": "gc",
+      "sha256": "a57bc5211845faba56d7ec25ebf816523c2977f81d32b16ef65b6e12ca7c17e1",
+      "name": "GC Parse-Churn Layout Gate",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "57 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gc-parse-churn-gate-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "self-test-checker": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10
+        },
+        "gc-parse-churn-gate": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "gc-ptr-shape-off-witness.yml",
+      "path": ".github/workflows/gc-ptr-shape-off-witness.yml",
+      "category": "gc",
+      "sha256": "09bdd28e9701a96e71630d1a4cde2d33ce9faaa3301120ce73901227addc3ecf",
+      "name": "GC Ptr<Shape> OFF-arm witness",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "47 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gc-ptr-shape-off-witness-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "gc-ptr-shape-off-witness": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "gc-ratchet.yml",
+      "path": ".github/workflows/gc-ratchet.yml",
+      "category": "gc",
+      "sha256": "5b97257289c638c84a3c36c3e7bf2a3730268e3717758876f682a225f215074b",
+      "name": "GC Ratchet",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "7 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gc-ratchet-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "gc-ratchet": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "macos-14",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        },
+        "report-main-result": {
+          "needs": "gc-ratchet",
+          "if": "always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.gc-ratchet.result == 'failure' || needs.gc-ratchet.result == 'success')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "concurrency": {
+            "group": "gc-ratchet-main-alert",
+            "cancel-in-progress": false
+          },
+          "permissions": {
+            "contents": "read",
+            "actions": "read",
+            "issues": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "gc-root-dominance.yml",
+      "path": ".github/workflows/gc-root-dominance.yml",
+      "category": "gc",
+      "sha256": "47fafeed23e07d2b8b80d226b85624453f6d1fa63a5765e43c10888d1d541480",
+      "name": "GC Root Dominance",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "17 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "gc-root-dominance-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "gc-root-dominance": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "macos-14",
+          "timeout-minutes": 90
+        },
+        "gc-root-dominance-statepoints": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "macos-14",
+          "timeout-minutes": 90
+        }
+      }
+    },
+    {
+      "file": "llvm-inprocess.yml",
+      "path": ".github/workflows/llvm-inprocess.yml",
+      "category": "compiler-runtime",
+      "sha256": "22254f5887d7bc09306182db900fb6fa3703d7baba51254dce84ddc35f9c2903",
+      "name": "llvm-inprocess",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "42 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "llvm-inprocess-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "changes": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          },
+          "outputs": {
+            "relevant": "${{ steps.filter.outputs.relevant }}"
+          }
+        },
+        "native-backend": {
+          "needs": "changes",
+          "if": "needs.changes.outputs.relevant == 'true'",
+          "runs-on": "macos-15",
+          "timeout-minutes": 90
+        },
+        "llvm-inprocess-complete": {
+          "needs": [
+            "changes",
+            "native-backend"
+          ],
+          "if": "(always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5
+        }
+      }
+    },
+    {
+      "file": "native-result-ledger.yml",
+      "path": ".github/workflows/native-result-ledger.yml",
+      "category": "ci",
+      "sha256": "89126747dfd73989157662f3d80c0c76966015e191439058f44df844e94ab7aa",
+      "name": "Native Result Ledger",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "paths": [
+            "crates/perry-codegen/src/lower_call/native_table/**",
+            "scripts/native_result_ledger.py",
+            "scripts/native_result_ledger.tsv",
+            ".github/workflows/native-result-ledger.yml"
+          ]
+        },
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            "crates/perry-codegen/src/lower_call/native_table/**",
+            "scripts/native_result_ledger.py",
+            "scripts/native_result_ledger.tsv",
+            ".github/workflows/native-result-ledger.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "native-result-ledger-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "check": {
+          "runs-on": "ubuntu-latest"
+        }
+      }
+    },
+    {
+      "file": "next-app-route.yml",
+      "path": ".github/workflows/next-app-route.yml",
+      "category": "integration",
+      "sha256": "593b395aff62ed936e1657949c13cf483c95d59b50690eedc7e770861f84ca0e",
+      "name": "Next App Route dylib",
+      "run_name": null,
+      "events": {
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "17 3 * * *"
+          }
+        ]
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "next-app-route-${{ github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "next-app-route": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 180,
+          "env": {
+            "CARGO_INCREMENTAL": "0",
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "true",
+            "SCCACHE_CACHE_SIZE": "4G"
+          }
+        }
+      }
+    },
+    {
+      "file": "node-compat-matrix.yml",
+      "path": ".github/workflows/node-compat-matrix.yml",
+      "category": "compatibility",
+      "sha256": "90c25308086ab48d2920596a70d21ab83b8976c96251e8835049c76afaa2a29f",
+      "name": "Node Compat Matrix Guard",
+      "run_name": null,
+      "events": {
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "57 4 * * *"
+          }
+        ],
+        "merge_group": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "node-compat-matrix-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "RUSTC_WRAPPER": "sccache",
+        "SCCACHE_GHA_ENABLED": "true",
+        "SCCACHE_CACHE_SIZE": "2G",
+        "CARGO_INCREMENTAL": "0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "node-compat-matrix": {
+          "runs-on": "macos-14",
+          "timeout-minutes": 120
+        }
+      }
+    },
+    {
+      "file": "node-core-subset.yml",
+      "path": ".github/workflows/node-core-subset.yml",
+      "category": "compatibility",
+      "sha256": "bd70db1f7d2c71443a95104154bf8fca92c13abf4e23f241b7654f9a706a336b",
+      "name": "Node Core Subset Radar",
+      "run_name": null,
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "apis": {
+              "description": "Optional space-separated API list, e.g. 'path url buffer'",
+              "required": false,
+              "default": ""
+            },
+            "max_per_api": {
+              "description": "Maximum upstream Node tests to sample per API; 0 means no cap",
+              "required": false,
+              "default": "25"
+            }
+          }
+        },
+        "schedule": [
+          {
+            "cron": "17 3 * * *"
+          }
+        ]
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "node-core-subset-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "NODE_CORE_SHARDS": "6",
+        "NODE_CORE_TIME_BUDGET": "2400"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "radar": {
+          "name": "radar (shard ${{ matrix.shard }})",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 75,
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "shard": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6
+              ]
+            }
+          },
+          "env": {
+            "NODE_CORE_APIS": "${{ github.event_name == 'workflow_dispatch' && inputs.apis || '' }}",
+            "NODE_CORE_MAX_PER_API": "${{ github.event_name == 'workflow_dispatch' && inputs.max_per_api || '25' }}",
+            "PYTHONUNBUFFERED": "1"
+          }
+        },
+        "report": {
+          "name": "merge + publish",
+          "needs": "radar",
+          "if": "always()",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10
+        }
+      }
+    },
+    {
+      "file": "node-suite-guard.yml",
+      "path": ".github/workflows/node-suite-guard.yml",
+      "category": "compatibility",
+      "sha256": "4abb97130403c57bbef7b9dc6cdb752d762f79acce52a5506c5361d99825d3ab",
+      "name": "Node Suite Regression Guard",
+      "run_name": null,
+      "events": {
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "37 4 * * *"
+          }
+        ],
+        "merge_group": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "node-suite-guard-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "RUSTC_WRAPPER": "sccache",
+        "SCCACHE_GHA_ENABLED": "true",
+        "SCCACHE_CACHE_SIZE": "2G",
+        "CARGO_INCREMENTAL": "0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "node-suite-guard": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 120
+        }
+      }
+    },
+    {
+      "file": "npm-launcher.yml",
+      "path": ".github/workflows/npm-launcher.yml",
+      "category": "ci",
+      "sha256": "08a4b7e932b2b3aab627b61d1597650ec2b43db1df44ea422b5d6c80baba362d",
+      "name": "npm launcher",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "paths": [
+            "npm/**",
+            "packaging/install.sh",
+            ".github/workflows/npm-launcher.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": null,
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "detect-self-test": {
+          "name": "Platform resolution self-test",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5
+        },
+        "ubuntu-2204": {
+          "if": "github.event_name == 'workflow_dispatch'",
+          "name": "Ubuntu 22.04 native glibc end-to-end",
+          "runs-on": "ubuntu-22.04",
+          "timeout-minutes": 20
+        }
+      }
+    },
+    {
+      "file": "npm-package-sweep.yml",
+      "path": ".github/workflows/npm-package-sweep.yml",
+      "category": "compatibility",
+      "sha256": "f549459573b55c0bf79069406c6eeddc8199d26ac6d1115ee3ccc7772af19a49",
+      "name": "NPM Package Sweep",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "25 5 * * *"
+          }
+        ],
+        "workflow_dispatch": {
+          "inputs": {
+            "packages": {
+              "description": "Optional comma-separated package specs. Empty uses packages.json.",
+              "type": "string",
+              "default": ""
+            },
+            "limit": {
+              "description": "Maximum packages to sweep. Use 0 for all selected packages.",
+              "type": "number",
+              "default": 6
+            },
+            "strict": {
+              "description": "Fail the workflow if any package fails.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "npm-package-sweep-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+        "limit",
+        "packages",
+        "strict"
+      ],
+      "jobs": {
+        "compile-packages-sweep": {
+          "name": "compilePackages sweep",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90
+        }
+      }
+    },
+    {
+      "file": "npm-publish-freshness.yml",
+      "path": ".github/workflows/npm-publish-freshness.yml",
+      "category": "maintenance",
+      "sha256": "2a1503f3141f39af27271ce654fc254c0fdb07a4cdcb447a0b344218dffa9e0c",
+      "name": "npm publish freshness",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "20 7 * * *"
+          }
+        ],
+        "pull_request": {
+          "paths": [
+            "scripts/check_npm_publish_freshness.py",
+            "scripts/npm_publish_freshness.json",
+            ".github/workflows/npm-publish-freshness.yml",
+            "npm/**"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "npm-publish-freshness-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "validate": {
+          "if": "github.event_name == 'pull_request'",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "read"
+          }
+        },
+        "reject-nonmain-dispatch": {
+          "if": "github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 2,
+          "permissions": {
+            "contents": "read"
+          }
+        },
+        "npm-publish-freshness": {
+          "if": "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "read",
+            "issues": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "release-hono-server.yml",
+      "path": ".github/workflows/release-hono-server.yml",
+      "category": "release-hono-server",
+      "sha256": "0913c9742361ae12d4c76b3834b06731cb3df87a39ca4901fd09635fe2f270a8",
+      "name": "Release @perryts/hono-server",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "hono-server-v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read",
+        "id-token": "write"
+      },
+      "concurrency": null,
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "publish": {
+          "runs-on": "ubuntu-latest",
+          "defaults": {
+            "run": {
+              "working-directory": "packages/hono-perry-server"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "release-packages.yml",
+      "path": ".github/workflows/release-packages.yml",
+      "category": "release-packages",
+      "sha256": "133c8538ee0c29d4b69cbed09aaef7132f1dbf88740ad3558849ccc39c056ea8",
+      "name": "Release Packages",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "37 6 * * *"
+          }
+        ],
+        "release": {
+          "types": [
+            "published"
+          ]
+        },
+        "workflow_dispatch": {
+          "inputs": {
+            "cut_release": {
+              "description": "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release.",
+              "type": "boolean",
+              "default": false
+            },
+            "nightly": {
+              "description": "Build this exact commit and publish its host/cross archives as a GitHub prerelease. Does not run stable release gates or publish to npm.",
+              "type": "boolean",
+              "default": false
+            },
+            "candidate_sha": {
+              "description": "Required with cut_release: exact pushed candidate SHA. Prevents a moved branch from publishing or being tagged.",
+              "type": "string",
+              "default": ""
+            },
+            "dist_tag": {
+              "description": "npm dist-tag for a cut release (normally latest).",
+              "type": "string",
+              "default": "latest"
+            },
+            "socket_scan": {
+              "description": "Run the optional Socket tarball scan before npm publication.",
+              "type": "boolean",
+              "default": false
+            },
+            "existing_tag": {
+              "description": "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback.",
+              "type": "string",
+              "default": ""
+            },
+            "publish_npm": {
+              "description": "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "permissions": {
+        "contents": "write",
+        "actions": "write"
+      },
+      "concurrency": {
+        "group": "release-packages-${{ github.event.release.tag_name || inputs.existing_tag || ((inputs.cut_release || inputs.nightly) && inputs.candidate_sha) || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": {
+        "PERRY_RELEASE_STRIP_INSTRUMENTS": "1"
+      },
+      "defaults": null,
+      "secret_references": [
+        "APT_GPG_KEY_ID",
+        "APT_GPG_PRIVATE_KEY",
+        "APT_REPO_TOKEN",
+        "GITHUB_TOKEN",
+        "HOMEBREW_TAP_TOKEN",
+        "HUB_ADMIN_SECRET",
+        "PERRY_CLI_UPDATE_SIGNING_KEY",
+        "SOCKET_API_TOKEN",
+        "WINDOWS_CODE_SIGNING_PFX_BASE64",
+        "WINDOWS_CODE_SIGNING_PFX_PASSWORD",
+        "WINGET_PAT"
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "preflight": {
+          "runs-on": "ubuntu-latest",
+          "outputs": {
+            "mode": "${{ steps.resolve.outputs.mode }}",
+            "tag": "${{ steps.resolve.outputs.tag }}",
+            "version": "${{ steps.resolve.outputs.version }}",
+            "checkout-ref": "${{ steps.resolve.outputs.checkout-ref }}"
+          }
+        },
+        "await-tests": {
+          "needs": "preflight",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 120
+        },
+        "prime-macos-x86_64-cache": {
+          "needs": [
+            "preflight"
+          ],
+          "runs-on": "macos-15-intel",
+          "timeout-minutes": 330,
+          "continue-on-error": true
+        },
+        "build": {
+          "needs": [
+            "preflight",
+            "await-tests",
+            "prime-macos-x86_64-cache"
+          ],
+          "if": "${{ !cancelled() && needs.preflight.result == 'success' && needs.await-tests.result == 'success' }}",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": [
+              {
+                "uses": "./.github/actions/perry-mbx-cache",
+                "with": {
+                  "cache-generation": "perry-release-x86_64-apple-darwin",
+                  "save-on-workflow-dispatch": true
+                },
+                "include": [
+                  {
+                    "os": "macos-14",
+                    "target": "aarch64-apple-darwin",
+                    "artifact": "perry-macos-aarch64",
+                    "old_glibc_image": ""
+                  },
+                  {
+                    "os": "macos-15-intel",
+                    "target": "x86_64-apple-darwin",
+                    "artifact": "perry-macos-x86_64",
+                    "old_glibc_image": ""
+                  },
+                  {
+                    "os": "ubuntu-24.04",
+                    "target": "x86_64-unknown-linux-gnu",
+                    "artifact": "perry-linux-x86_64",
+                    "old_glibc_image": "debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792"
+                  },
+                  {
+                    "os": "ubuntu-24.04-arm",
+                    "target": "aarch64-unknown-linux-gnu",
+                    "artifact": "perry-linux-aarch64",
+                    "old_glibc_image": "debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792"
+                  },
+                  {
+                    "os": "ubuntu-24.04",
+                    "target": "x86_64-unknown-linux-musl",
+                    "artifact": "perry-linux-x86_64-musl",
+                    "old_glibc_image": "",
+                    "musl_image": "alpine:edge",
+                    "musl_glibc_image": "debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792"
+                  },
+                  {
+                    "os": "ubuntu-24.04-arm",
+                    "target": "aarch64-unknown-linux-musl",
+                    "artifact": "perry-linux-aarch64-musl",
+                    "old_glibc_image": "",
+                    "musl_image": "alpine:edge",
+                    "musl_glibc_image": "debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792"
+                  },
+                  {
+                    "os": "windows-latest",
+                    "target": "x86_64-pc-windows-msvc",
+                    "artifact": "perry-windows-x86_64",
+                    "old_glibc_image": ""
+                  },
+                  {
+                    "os": "windows-11-arm",
+                    "target": "aarch64-pc-windows-msvc",
+                    "artifact": "perry-windows-aarch64",
+                    "old_glibc_image": ""
+                  }
+                ]
+              }
+            ]
+          },
+          "runs-on": "${{ matrix.os }}",
+          "env": {
+            "PERRY_CLI_UPDATE_PUBLIC_KEYS": "${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}",
+            "MACOSX_DEPLOYMENT_TARGET": "13.0"
+          }
+        },
+        "build-cross": {
+          "needs": [
+            "preflight",
+            "await-tests"
+          ],
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "include": [
+                {
+                  "os": "macos-14",
+                  "target": "aarch64-apple-darwin",
+                  "ui_crate": "perry-ui-macos",
+                  "ui_lib": "libperry_ui_macos.a"
+                },
+                {
+                  "os": "macos-15",
+                  "target": "x86_64-apple-darwin",
+                  "ui_crate": "perry-ui-macos",
+                  "ui_lib": "libperry_ui_macos.a"
+                },
+                {
+                  "os": "macos-14",
+                  "target": "aarch64-apple-ios",
+                  "ui_crate": "perry-ui-ios",
+                  "ui_lib": "libperry_ui_ios.a"
+                },
+                {
+                  "os": "macos-14",
+                  "target": "aarch64-apple-ios-sim",
+                  "ui_crate": "perry-ui-ios",
+                  "ui_lib": "libperry_ui_ios.a"
+                },
+                {
+                  "os": "ubuntu-24.04",
+                  "target": "aarch64-linux-android",
+                  "ui_crate": "perry-ui-android",
+                  "ui_lib": "libperry_ui_android.a"
+                },
+                {
+                  "os": "ubuntu-24.04",
+                  "target": "x86_64-linux-android",
+                  "ui_crate": "perry-ui-android",
+                  "ui_lib": "libperry_ui_android.a"
+                },
+                {
+                  "os": "windows-latest",
+                  "target": "x86_64-pc-windows-msvc",
+                  "ui_crate": "perry-ui-windows",
+                  "ui_lib": "perry_ui_windows.lib"
+                },
+                {
+                  "os": "windows-11-arm",
+                  "target": "aarch64-pc-windows-msvc",
+                  "ui_crate": "perry-ui-windows",
+                  "ui_lib": "perry_ui_windows.lib"
+                }
+              ]
+            }
+          },
+          "runs-on": "${{ matrix.os }}",
+          "env": {
+            "MACOSX_DEPLOYMENT_TARGET": "13.0"
+          }
+        },
+        "create-release": {
+          "needs": [
+            "preflight",
+            "build",
+            "build-cross",
+            "npm-publish"
+          ],
+          "if": "!cancelled() && needs.preflight.outputs.mode == 'cut-release' && needs.build.result == 'success' && needs.build-cross.result == 'success' && needs.npm-publish.result == 'success'\n",
+          "runs-on": "ubuntu-latest"
+        },
+        "create-nightly": {
+          "needs": [
+            "preflight",
+            "build",
+            "build-cross"
+          ],
+          "if": "!cancelled() && needs.preflight.outputs.mode == 'nightly' && needs.build.result == 'success' && needs.build-cross.result == 'success'\n",
+          "runs-on": "ubuntu-latest"
+        },
+        "publish-assets": {
+          "needs": [
+            "preflight",
+            "build",
+            "build-cross",
+            "create-release",
+            "create-nightly"
+          ],
+          "if": "!cancelled() && needs.preflight.outputs.tag != '' && needs.build.result == 'success' && contains(fromJSON('[\"success\", \"failure\"]'), needs.build-cross.result) && (\n  (needs.preflight.outputs.mode == 'cut-release' && needs.create-release.result == 'success') ||\n  (needs.preflight.outputs.mode == 'nightly' && needs.create-nightly.result == 'success') ||\n  (needs.preflight.outputs.mode != 'cut-release' && needs.preflight.outputs.mode != 'nightly')\n)\n",
+          "runs-on": "ubuntu-latest"
+        },
+        "homebrew": {
+          "needs": [
+            "preflight",
+            "publish-assets"
+          ],
+          "if": "needs.preflight.outputs.mode != 'nightly'",
+          "runs-on": "ubuntu-latest"
+        },
+        "apt": {
+          "needs": [
+            "preflight",
+            "build",
+            "create-release"
+          ],
+          "if": "!cancelled() && needs.preflight.outputs.mode != 'nightly' && needs.preflight.outputs.tag != '' && needs.build.result == 'success' && (needs.preflight.outputs.mode != 'cut-release' || needs.create-release.result == 'success')\n",
+          "runs-on": "ubuntu-latest",
+          "strategy": {
+            "matrix": {
+              "include": [
+                {
+                  "artifact": "perry-linux-x86_64",
+                  "arch": "amd64"
+                },
+                {
+                  "artifact": "perry-linux-aarch64",
+                  "arch": "arm64"
+                }
+              ]
+            }
+          }
+        },
+        "apt-repo": {
+          "needs": [
+            "preflight",
+            "apt"
+          ],
+          "if": "needs.preflight.outputs.mode != 'nightly'",
+          "runs-on": "ubuntu-latest"
+        },
+        "winget": {
+          "needs": [
+            "preflight",
+            "publish-assets"
+          ],
+          "if": "needs.preflight.outputs.mode != 'nightly'",
+          "runs-on": "windows-latest"
+        },
+        "update-workers": {
+          "needs": [
+            "preflight",
+            "publish-assets"
+          ],
+          "if": "needs.preflight.outputs.mode != 'nightly'",
+          "runs-on": "ubuntu-latest"
+        },
+        "npm-publish": {
+          "needs": [
+            "preflight",
+            "build",
+            "build-cross"
+          ],
+          "if": "!cancelled() && needs.build.result == 'success' && (\n  (needs.preflight.outputs.mode == 'cut-release' && needs.build-cross.result == 'success') ||\n  (needs.preflight.outputs.mode == 'release' && contains(fromJSON('[\"success\", \"failure\"]'), needs.build-cross.result)) ||\n  (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm && contains(fromJSON('[\"success\", \"failure\"]'), needs.build-cross.result))\n)\n",
+          "runs-on": "ubuntu-latest",
+          "permissions": {
+            "contents": "read",
+            "id-token": "write"
+          },
+          "env": {
+            "DIST_TAG": "${{ inputs.dist_tag || 'latest' }}",
+            "SOCKET_SCAN": "${{ inputs.socket_scan || false }}"
+          }
+        }
+      }
+    },
+    {
+      "file": "security-audit.yml",
+      "path": ".github/workflows/security-audit.yml",
+      "category": "ci",
+      "sha256": "f68bbe57b3b4c0197a6a6df716a9cca100c43d50be2c3f08d9af91010a74032c",
+      "name": "Security Audit",
+      "run_name": null,
+      "events": {
+        "workflow_call": null,
+        "schedule": [
+          {
+            "cron": "0 12 * * 1"
+          }
+        ],
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "security-audit-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "security-audit": {
+          "runs-on": "ubuntu-latest"
+        },
+        "soak-gate": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10
+        },
+        "config-scans": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 15
+        }
+      }
+    },
+    {
+      "file": "simctl-tests.yml",
+      "path": ".github/workflows/simctl-tests.yml",
+      "category": "integration",
+      "sha256": "8ab8af4d9cec1902389f568423da0e88c4c16b882110b2a1c0a7f13d8972914e",
+      "name": "Simulator Tests (iOS)",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": {
+          "inputs": {
+            "device": {
+              "description": "Simulator device name (default: iPhone 15)",
+              "required": false,
+              "default": "iPhone 15"
+            }
+          }
+        }
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "simctl-${{ github.ref }}",
+        "cancel-in-progress": true
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+        "device"
+      ],
+      "jobs": {
+        "simctl": {
+          "runs-on": "macos-14",
+          "timeout-minutes": 60
+        }
+      }
+    },
+    {
+      "file": "soak-autofix.yml",
+      "path": ".github/workflows/soak-autofix.yml",
+      "category": "maintenance",
+      "sha256": "b3b99393b095773206edf616381227cef762f7921ab7c9ea252e1adcbe95730c",
+      "name": "soak-autofix",
+      "run_name": null,
+      "events": {
+        "schedule": [
+          {
+            "cron": "17 0 * * *"
+          }
+        ],
+        "workflow_dispatch": null
+      },
+      "permissions": {
+      },
+      "concurrency": {
+        "group": "soak-autofix-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+        "SOAK_AUTOFIX_TOKEN"
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "autofix": {
+          "if": "github.ref == 'refs/heads/main'",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "write",
+            "pull-requests": "write"
+          }
+        }
+      }
+    },
+    {
+      "file": "tak-performance.yml",
+      "path": ".github/workflows/tak-performance.yml",
+      "category": "performance",
+      "sha256": "6ef9acd5141824cd5366b7f0cd826b2c11eb4e970c2c46044e218f6d5ec43862",
+      "name": "tak Performance Report",
+      "run_name": null,
+      "events": {
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null,
+        "schedule": [
+          {
+            "cron": "30 4 * * *"
+          }
+        ]
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "tak-performance-${{ github.run_id }}",
+        "cancel-in-progress": false
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+        "GITHUB_TOKEN"
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "report": {
+          "runs-on": "ubuntu-24.04",
+          "timeout-minutes": 90
+        },
+        "publish": {
+          "needs": "report",
+          "if": "always() && needs.report.result == 'success' && (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v'))",
+          "runs-on": "ubuntu-24.04",
+          "permissions": {
+            "contents": "write",
+            "actions": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "test.yml",
+      "path": ".github/workflows/test.yml",
+      "category": "ci",
+      "sha256": "30b64cd50803b9ff109b9dc9fed01d74eb1cd155ecce60d429251c0aaa53adf5",
+      "name": "CI",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "branches": [
+            "main"
+          ],
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "tags": [
+            "v*"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "0 4 * * *"
+          },
+          {
+            "cron": "47 */2 * * *"
+          }
+        ],
+        "workflow_dispatch": {
+          "inputs": {
+            "tier": {
+              "description": "Which tier to run (release-packages.yml dispatches `full`)",
+              "type": "choice",
+              "options": [
+                "pr",
+                "sweep",
+                "full"
+              ],
+              "default": "full"
+            },
+            "update_gap_snapshot": {
+              "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "permissions": null,
+      "concurrency": {
+        "group": "${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number)\n || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ci-main-sweep')\n || format('ci-{0}', github.run_id) }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "plan": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5,
+          "outputs": {
+            "plan": "${{ steps.plan.outputs.plan }}",
+            "tier": "${{ steps.plan.outputs.tier }}"
+          }
+        },
+        "lint": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.lint",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 30
+        },
+        "check": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.check",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90
+        },
+        "warnings": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.warnings",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "env": {
+            "RUSTFLAGS": "-D warnings",
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "cargo-test": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.cargo_test",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope == 'pr' && 30 || fromJSON(needs.plan.outputs.plan).tier == 'pr' && 180 || 120 }}",
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "cargo-test-perry": {
+          "name": "cargo-test-perry",
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.cargo_test_perry",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 120,
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "shard": "${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.shards }}"
+            }
+          },
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "e2e-scoped": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.e2e_scoped",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 360,
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "windows-build": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.windows_build",
+          "runs-on": "windows-latest",
+          "timeout-minutes": 75
+        },
+        "windows-arm64-build": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.windows_arm64_build",
+          "runs-on": "windows-11-arm",
+          "timeout-minutes": 75
+        },
+        "gc-stress-build": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.gc_stress",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 30
+        },
+        "gc-stress-shard": {
+          "name": "gc-stress matrix (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }})",
+          "needs": [
+            "plan",
+            "gc-stress-build"
+          ],
+          "if": "always() && fromJSON(needs.plan.outputs.plan).jobs.gc_stress && needs.gc-stress-build.result == 'success'",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "shard": "${{ fromJSON(needs.plan.outputs.plan).gc_stress.shards }}"
+            }
+          }
+        },
+        "gc-stress": {
+          "needs": [
+            "plan",
+            "gc-stress-build",
+            "gc-stress-shard"
+          ],
+          "if": "${{ always() && fromJSON(needs.plan.outputs.plan).jobs.gc_stress }}",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90
+        },
+        "compiler-output-regression": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.compiler_output_regression",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 45,
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "repsel-census": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.repsel_census",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 45,
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0",
+            "PERRY_NO_AUTO_OPTIMIZE": "1"
+          }
+        },
+        "native-abi-evidence-packet": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.native_abi_evidence_packet",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 90,
+          "env": {
+            "RUSTC_WRAPPER": "sccache",
+            "SCCACHE_GHA_ENABLED": "false",
+            "SCCACHE_DIR": "${{ github.workspace }}/.sccache",
+            "SCCACHE_CACHE_SIZE": "12G",
+            "CARGO_INCREMENTAL": "0"
+          }
+        },
+        "gap-suite-build": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.gap_suite && fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'",
+          "runs-on": "ubuntu-latest"
+        },
+        "gap-suite": {
+          "needs": [
+            "plan",
+            "gap-suite-build"
+          ],
+          "if": "always() && fromJSON(needs.plan.outputs.plan).jobs.gap_suite && (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "shard": "${{ fromJSON(needs.plan.outputs.plan).gap.shards }}"
+            }
+          },
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 110
+        },
+        "gc-call-effects-linux": {
+          "needs": [
+            "plan",
+            "gap-suite-build"
+          ],
+          "if": "always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects && (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 75
+        },
+        "gc-call-effects": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "include": [
+                {
+                  "target": "macos-aarch64",
+                  "os": "macos-14"
+                },
+                {
+                  "target": "windows-x86_64",
+                  "os": "ubuntu-latest"
+                }
+              ]
+            }
+          },
+          "runs-on": "${{ matrix.os }}",
+          "timeout-minutes": 75
+        },
+        "parity": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.parity",
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "shard": "${{ fromJSON(needs.plan.outputs.plan).parity.shards }}"
+            }
+          },
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 300
+        },
+        "parity-aggregate": {
+          "needs": [
+            "plan",
+            "parity"
+          ],
+          "if": "${{ !cancelled()\n    && fromJSON(needs.plan.outputs.plan).jobs.parity\n    && contains(fromJSON('[\"success\", \"failure\"]'), needs.parity.result) }}",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 15
+        },
+        "compile-smoke": {
+          "name": "compile-smoke (${{ matrix.shard }}/4)",
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.compile_smoke",
+          "strategy": {
+            "fail-fast": false,
+            "max-parallel": 2,
+            "matrix": {
+              "shard": [
+                1,
+                2,
+                3,
+                4
+              ]
+            }
+          },
+          "runs-on": "ubuntu-latest"
+        },
+        "harmonyos-smoke": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.harmonyos_smoke",
+          "runs-on": "ubuntu-latest"
+        },
+        "drizzle-mysql-smoke": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.drizzle_mysql_smoke",
+          "runs-on": "ubuntu-latest",
+          "services": {
+            "mysql": {
+              "image": "mysql:8",
+              "env": {
+                "MYSQL_ALLOW_EMPTY_PASSWORD": "yes",
+                "MYSQL_DATABASE": "perry_drizzle_test"
+              },
+              "ports": [
+                "3306:3306"
+              ],
+              "options": "--health-cmd=\"mysqladmin ping -h 127.0.0.1 -P 3306 --silent\" --health-interval=5s --health-timeout=3s --health-retries=20"
+            }
+          }
+        },
+        "ink-link-smoke": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.ink_link_smoke",
+          "runs-on": "ubuntu-latest"
+        },
+        "effect-basic-smoke": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.effect_basic_smoke",
+          "runs-on": "ubuntu-latest"
+        },
+        "doc-tests": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.doc_tests",
+          "timeout-minutes": 240,
+          "strategy": {
+            "fail-fast": false,
+            "matrix": {
+              "include": [
+                {
+                  "os": "macos-14",
+                  "ui_backend": "perry-ui-macos",
+                  "shell": "bash",
+                  "cmd_exclude_gallery": "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts",
+                  "cmd_gallery": "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts",
+                  "cmd_xcompile_blocking": "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=ios-simulator",
+                  "cmd_xcompile_advisory": "./scripts/run_doc_tests.sh --verbose --xcompile-only",
+                  "gallery_advisory": false
+                },
+                {
+                  "os": "windows-2022",
+                  "ui_backend": "perry-ui-windows",
+                  "shell": "pwsh",
+                  "cmd_exclude_gallery": "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts",
+                  "cmd_gallery": "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts",
+                  "cmd_xcompile_blocking": "./scripts/run_doc_tests.ps1 --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm",
+                  "cmd_xcompile_advisory": "./scripts/run_doc_tests.ps1 --verbose --xcompile-only",
+                  "gallery_advisory": false
+                }
+              ]
+            }
+          },
+          "runs-on": "${{ matrix.os }}",
+          "defaults": {
+            "run": {
+              "shell": "${{ matrix.shell }}"
+            }
+          }
+        },
+        "binary-size": {
+          "needs": [
+            "plan",
+            "check"
+          ],
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.binary_size",
+          "runs-on": "macos-14"
+        },
+        "security-audit": {
+          "needs": "plan",
+          "if": "fromJSON(needs.plan.outputs.plan).jobs.security_audit",
+          "uses": "./.github/workflows/security-audit.yml",
+          "permissions": {
+            "contents": "read"
+          },
+          "secrets": "inherit"
+        },
+        "gate": {
+          "name": "${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}",
+          "if": "always()",
+          "needs": [
+            "plan",
+            "lint",
+            "check",
+            "warnings",
+            "cargo-test",
+            "cargo-test-perry",
+            "e2e-scoped",
+            "windows-build",
+            "windows-arm64-build",
+            "gc-stress",
+            "compiler-output-regression",
+            "repsel-census",
+            "native-abi-evidence-packet",
+            "gap-suite",
+            "gc-call-effects-linux",
+            "gc-call-effects",
+            "parity",
+            "parity-aggregate",
+            "compile-smoke",
+            "harmonyos-smoke",
+            "drizzle-mysql-smoke",
+            "ink-link-smoke",
+            "effect-basic-smoke",
+            "doc-tests",
+            "binary-size",
+            "security-audit"
+          ],
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 5
+        }
+      }
+    },
+    {
+      "file": "tls-budget.yml",
+      "path": ".github/workflows/tls-budget.yml",
+      "category": "performance",
+      "sha256": "029961ddedfca51d742d2da28fa234308c46a982207d4face977d1028cec0255",
+      "name": "TLS Budget",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "27 */6 * * *"
+          }
+        ],
+        "push": {
+          "tags": [
+            "v*"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "tls-budget-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always",
+        "MACOSX_DEPLOYMENT_TARGET": "13.0"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "self-test-checkers": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10
+        },
+        "tls-budget": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "macos-14",
+          "timeout-minutes": 90,
+          "permissions": {
+            "contents": "read",
+            "pull-requests": "read"
+          }
+        }
+      }
+    },
+    {
+      "file": "wasi-check.yml",
+      "path": ".github/workflows/wasi-check.yml",
+      "category": "compatibility",
+      "sha256": "8f52c04570a6e46649695001fab01b16da0b9d18505f630db18ce0a85a33c251",
+      "name": "WASI Check",
+      "run_name": null,
+      "events": {
+        "pull_request": {
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened",
+            "labeled"
+          ],
+          "paths": [
+            "crates/perry-runtime/**",
+            "crates/perry-dispatch/**",
+            "crates/perry-stdlib/**",
+            "crates/perry-ext-*/**",
+            "crates/perry/**",
+            "crates/perry-codegen/Cargo.toml",
+            "test-files/test_gap_*.ts",
+            ".github/actions/setup-llvm22/**",
+            "Cargo.toml",
+            ".cargo/**",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            "scripts/wasi_check.sh",
+            "scripts/runtime_abi_check.py",
+            "scripts/wasi_ir_check.sh",
+            "scripts/wasi_toolchain.sh",
+            "scripts/wasi_build_runtime.sh",
+            "scripts/wasi_smoke.sh",
+            "scripts/wasi_smoke/**",
+            "crates/perry-codegen/src/**",
+            "crates/perry/src/commands/compile/**",
+            ".github/workflows/wasi-check.yml"
+          ]
+        },
+        "schedule": [
+          {
+            "cron": "41 2 * * *"
+          }
+        ],
+        "workflow_dispatch": null
+      },
+      "permissions": {
+        "contents": "read"
+      },
+      "concurrency": {
+        "group": "wasi-check-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": {
+        "CARGO_TERM_COLOR": "always"
+      },
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "wasi-check": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 45
+        },
+        "wasi-codegen": {
+          "if": "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')",
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 60
+        }
+      }
+    },
+    {
+      "file": "zizmor.yml",
+      "path": ".github/workflows/zizmor.yml",
+      "category": "ci",
+      "sha256": "5b92ea91101e3d48f1dfb396778bf4c354013ef632659231e56671cd33eb41e5",
+      "name": "zizmor",
+      "run_name": null,
+      "events": {
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "paths": [
+            ".github/**"
+          ]
+        },
+        "pull_request": {
+          "paths": [
+            ".github/**"
+          ]
+        }
+      },
+      "permissions": {
+      },
+      "concurrency": {
+        "group": "zizmor-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
+      },
+      "env": null,
+      "defaults": null,
+      "secret_references": [
+
+      ],
+      "event_input_references": [
+
+      ],
+      "jobs": {
+        "zizmor": {
+          "runs-on": "ubuntu-latest",
+          "timeout-minutes": 10,
+          "permissions": {
+            "contents": "read"
+          }
+        }
+      }
+    }
+  ]
+}

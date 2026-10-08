@@ -84,11 +84,15 @@ fn every_target_emits_the_same_blob_with_a_relative_function_field() {
             out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
             "the emitted blob must declare the version the runtime expects:\n{out}"
         );
-        assert_eq!(GC_MAP_VERSION, 7);
-        // 16-byte header + one 12-byte function entry + one 4-byte v5 stream
-        // offset + one 4-byte instruction offset + a 3-byte root stream, on
-        // ILP32 and LP64 alike.
-        assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 4 + 3, "{target}");
+        assert_eq!(GC_MAP_VERSION, 8);
+        // v8 directory: 32-byte header + one 20-byte function entry; records:
+        // one 4-byte instruction offset + a 3-byte root stream, on ILP32 and
+        // LP64 alike.
+        assert_eq!(stats.compact_bytes, 32 + 20 + 4 + 3, "{target}");
+        assert!(
+            out.contains("\t.long\t_perry_gc_rec-_perry_gc_map\n"),
+            "{target}: the directory names its records by a link-time offset:\n{out}"
+        );
         // Everything after the section directive is format-independent.
         let blob = &out[out.find("_perry_gc_map:").expect("label")..];
         blobs.push(blob.replace(entry, "ENTRY"));
@@ -111,10 +115,75 @@ fn the_map_section_is_read_only_where_the_format_allows() {
         elf.contains("\t.section\t.perry_gcmap,\"aR\",@progbits\n"),
         "{elf}"
     );
+    assert!(
+        elf.contains("\t.section\t.perry_gcrec,\"aR\",@progbits\n"),
+        "{elf}"
+    );
     let (coff, _) = compact_stack_map_asm(&sample_asm(), "x86_64-pc-windows-msvc")
         .expect("parses")
         .expect("rewritten");
     assert!(coff.contains("\t.section\t.pgcmap,\"dr\"\n"), "{coff}");
+    assert!(coff.contains("\t.section\t.pgcrec,\"dr\"\n"), "{coff}");
+}
+
+/// v8: the directory (what the runtime reads to build its index) and the
+/// records (what a collection reads per frame) are separate sections, so the
+/// linker gathers every module's directory into one contiguous run and the
+/// records stay untouched until a walk names them. Emitting the records
+/// inside the directory section would interleave them again — every
+/// directory page would fault in its neighbours' records.
+#[test]
+fn records_live_in_their_own_section_after_no_directory_bytes() {
+    let (out, _) = compact_stack_map_asm(&x86_64_elf_sample_asm(""), "x86_64-unknown-linux-gnu")
+        .expect("parses")
+        .expect("rewritten");
+    let rec = out.find("_perry_gc_rec:").expect("records label");
+    let dir = out.find("_perry_gc_map:").expect("directory label");
+    let rec_section = out[..rec].rfind("\t.section\t").expect("records section");
+    let dir_section = out[..dir].rfind("\t.section\t").expect("directory section");
+    assert!(
+        out[rec_section..].starts_with("\t.section\t.perry_gcrec"),
+        "{out}"
+    );
+    assert!(
+        out[dir_section..].starts_with("\t.section\t.perry_gcmap"),
+        "{out}"
+    );
+    // Nothing but directory words between the directory label and the next
+    // section switch: 8 header directives + 5 per function.
+    let tail = &out[dir..];
+    let end = tail[1..].find("\t.section").map_or(tail.len(), |i| i + 1);
+    let words = tail[..end]
+        .lines()
+        .filter(|l| {
+            l.starts_with("\t.long")
+                || l.starts_with("\t.short")
+                || l.starts_with("\t.byte")
+                || l.starts_with("\t.ascii")
+        })
+        .count();
+    assert_eq!(words, 1 + 2 + 1 + 6 + 5, "{}", &tail[..end]);
+    // The header and the one entry, as the runtime reads them.
+    let longs: Vec<&str> = tail[..end]
+        .lines()
+        .filter_map(|l| l.strip_prefix("\t.long\t"))
+        .collect();
+    assert_eq!(longs[0], "1", "function count");
+    assert_eq!(
+        longs[1], "52",
+        "directory length: 32-byte header + one 20-byte entry"
+    );
+    assert_eq!(longs[2], "_perry_gc_rec-_perry_gc_map", "records offset");
+    assert_eq!(
+        longs[4], longs[8],
+        "record total == the only function's record count"
+    );
+    assert_eq!(longs[5], "0", "reserved");
+    assert_eq!(
+        longs[9], "0",
+        "the first function's records start at record 0"
+    );
+    assert_eq!(longs[10], "0", "and at stream offset 0");
 }
 
 /// A Linux plugin is linked `cc -shared` without `-Bsymbolic`, so an exported
@@ -358,6 +427,7 @@ fn compacts_and_keeps_only_real_roots() {
     assert!(!out.contains("__LLVM_StackMaps"));
     // The dead-strip guard must survive, retargeted.
     assert!(out.contains(".no_dead_strip\t_perry_gc_map"));
+    assert!(out.contains(".no_dead_strip\t_perry_gc_rec"));
 
     // Guard the -O3 ELF shapes that broke the aarch64-linux arm. Both are
     // GNU-as symbol assignments -- zero bytes, no leading directive -- so

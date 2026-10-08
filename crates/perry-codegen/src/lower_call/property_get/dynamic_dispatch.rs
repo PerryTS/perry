@@ -12,16 +12,13 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
-#[path = "dynamic_dispatch_args.rs"]
-mod args;
 #[path = "dynamic_dispatch_collapse.rs"]
 mod collapse;
 #[path = "dispatch_receiver_class.rs"]
 mod dispatch_receiver_class;
 #[path = "dynamic_dispatch_tower.rs"]
 mod tower;
-use args::build_direct_method_args;
-use collapse::{emit_collapsed_instance_dispatch, method_dispatch_collapse_enabled};
+use collapse::method_dispatch_collapse_enabled;
 use dispatch_receiver_class::*;
 use tower::{emit_tower_pshape_call, tower_pshape_route};
 
@@ -53,6 +50,83 @@ struct TowerPshapeRoute {
     /// layout; `delete` swaps in a freshly cloned array, which is exactly what
     /// the inline compare catches.
     keys_global: String,
+}
+
+/// Build the exact direct-call ABI for one concrete method implementation.
+/// Virtual towers cannot share this vector: sibling overrides may disagree on
+/// declared arity, user rest, or the compiler-synthesized `arguments` slot.
+///
+/// #8162: `has_synthetic_arguments` and `has_rest` alone cannot size the tail.
+/// A body with BOTH a user `...rest` and an `arguments` read declares
+/// `[a, rest, arguments]` — TWO trailing array slots, bundled from different
+/// offsets over the same argument list. `has_user_rest` (false for a class
+/// this module has no HIR for, which keeps the one-slot shape those calls
+/// already had) is the bit that tells the two-slot case from synth-only.
+fn build_direct_method_args(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    user_args: &[String],
+    has_rest: bool,
+    has_synthetic_arguments: bool,
+    has_user_rest: bool,
+    arguments_length_only: bool,
+    declared_count: usize,
+    undefined_lit: &str,
+) -> Vec<String> {
+    let mut direct_args = Vec::with_capacity(declared_count + 1);
+    direct_args.push(recv_box.to_string());
+    if has_synthetic_arguments || has_rest {
+        let trailing_slots = if has_synthetic_arguments && has_user_rest {
+            2
+        } else {
+            1
+        };
+        let fixed_user = declared_count.saturating_sub(trailing_slots);
+        for index in 0..fixed_user {
+            direct_args.push(
+                user_args
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| undefined_lit.to_string()),
+            );
+        }
+        // (first bundled index, mark as arguments object), in callee param
+        // order: the user rest slot first (bundling from `fixed_user`), then
+        // the synthesized `arguments` slot (from 0 — it must reflect EVERY
+        // passed argument, and gets the marking without which the callee's
+        // `arguments` is an ordinary Array). A lone trailing slot is the rest
+        // shape unless the method synthesizes `arguments`.
+        let mut bundles: Vec<(usize, bool)> = Vec::new();
+        if has_user_rest || !has_synthetic_arguments {
+            bundles.push((fixed_user, false));
+        }
+        if has_synthetic_arguments && arguments_length_only {
+            debug_assert!(!has_user_rest);
+            direct_args.push(double_literal(user_args.len() as f64));
+        } else if has_synthetic_arguments {
+            bundles.push((0, true));
+        }
+        for (from, mark) in bundles {
+            let count = user_args.len().saturating_sub(from);
+            let capacity = (count as u32).to_string();
+            let mut bundle = ctx.block().call(I64, "js_array_alloc", &[(I32, &capacity)]);
+            for value in user_args.iter().skip(from) {
+                let block = ctx.block();
+                bundle = block.call(I64, "js_array_push_f64", &[(I64, &bundle), (DOUBLE, value)]);
+            }
+            if mark {
+                let block = ctx.block();
+                bundle = block.call(I64, "js_array_mark_arguments_object", &[(I64, &bundle)]);
+            }
+            direct_args.push(nanbox_pointer_inline(ctx.block(), &bundle));
+        }
+    } else {
+        direct_args.extend(user_args.iter().cloned());
+        while direct_args.len() < declared_count + 1 {
+            direct_args.push(undefined_lit.to_string());
+        }
+    }
+    direct_args
 }
 
 /// Interface / dynamic dispatch fallback: when the static class is unknown OR
@@ -247,16 +321,20 @@ pub(crate) fn try_lower_instance_method_call(
                 && implementors
                     .iter()
                     .all(|(_, f)| !f.starts_with("perry_static_"));
-            let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
-                || (!collapse_dynamic
-                    && impl_meta
-                        .iter()
-                        .any(|&(has_rest, has_synthetic, _, _)| has_rest || has_synthetic));
-            // The oversized-module outline dispatches by name after the
-            // arguments: a split call takes the split method site instead.
-            if split && collapse_dynamic {
+            // The oversized-module outline emits no class-id tower: every
+            // receiver takes the universal method site (fused, or split when
+            // the arguments can observe the read), whose memo is keyed on the
+            // receiver's shape alone. A class instance primes an inherited
+            // entry through its class prototype exactly as any other receiver
+            // does; a RegExp, a string or a namespace object is never demoted
+            // to by-name dispatch because some class declares the same name.
+            if collapse_dynamic {
                 return Ok(None);
             }
+            let post_args_may_collect = ctx.strings.call_location_for(call_byte_offset).is_some()
+                || impl_meta
+                    .iter()
+                    .any(|&(has_rest, has_synthetic, _, _)| has_rest || has_synthetic);
             let mut roots = crate::rooting::open_rooted_group(1 + args.len() + usize::from(split));
             let recv_collects = split
                 || post_args_may_collect
@@ -362,30 +440,6 @@ pub(crate) fn try_lower_instance_method_call(
                 }
                 None => None,
             };
-            // #5391 path 4: oversized modules full-outline the class-id switch
-            // tower. The tower emits one icmp + case block per class implementing
-            // `property` (scaling __text with implementor count) whose default arm
-            // is already `js_native_call_method`; collapse the whole switch to that
-            // same by-name runtime dispatch (which resolves the user method via its
-            // (class_id, name) vtable registry). The own-property override probe is
-            // preserved inside the collapsed helper. Skipped when any implementor is
-            // a `perry_static_*` class-object-static method, which needs
-            // `js_class_static_method_call` and is NOT reproduced by the by-name
-            // dispatcher. Mirrors the GET/SET/array-literal full-outline paths.
-            if collapse_dynamic {
-                let v = emit_collapsed_instance_dispatch(
-                    ctx,
-                    &recv_box,
-                    property,
-                    &static_user_args,
-                    call_byte_offset,
-                    /* with_override_probe */ true,
-                )?;
-                // Released below the call that reads the group, in the merge the
-                // collapse helper leaves current (`open_rooted_group`'s contract).
-                roots.release(ctx);
-                return Ok(Some(v));
-            }
             // #5437: each implementor of `property` has its OWN declared arity
             // and rest-ness. The rest-bundle (and default-param padding) MUST be
             // applied per-implementor, not once globally — otherwise a single
@@ -456,9 +510,14 @@ pub(crate) fn try_lower_instance_method_call(
                 } else {
                     Vec::new()
                 };
-            let mut shape_probe_cid: Option<String> = None;
-            let mut site_arm: Option<(String, String)> = None;
-            if !shape_probe_arms.is_empty() {
+            // The receiver probe runs for every tower, wide or not: its class
+            // id is what sends a receiver no implementor claims to the method
+            // site below (#10507), and a wide tower or a class whose layout may
+            // hold `property` must not demote those receivers to the by-name
+            // default arm.
+            let shape_probe_cid: Option<String>;
+            let site_arm: Option<(String, String)>;
+            {
                 let (cid, shape_id) = match pre_probe.take() {
                     Some(read) => read,
                     None => {
@@ -492,6 +551,10 @@ pub(crate) fn try_lower_instance_method_call(
                     );
                     let exact = blk.and(I1, &cid_ok, &shape_ok);
                     blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
+                }
+                if shape_probe_arms.is_empty() {
+                    let own_label = ctx.block_label(own_idx);
+                    ctx.block().br(&own_label);
                 }
                 ctx.current_block = own_idx;
                 // #10507: a receiver whose class id names no implementor
@@ -645,34 +708,11 @@ pub(crate) fn try_lower_instance_method_call(
             // returning a sentinel is cheaper).
             ctx.current_block = tower_idx;
             let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
-            let cid = if let Some(probed_cid) = shape_probe_cid {
-                // Reuse the class id that the shape probe already validated.
-                // Zero is intentional: it sends descriptor/prototype
-                // invalidation and every non-instance receiver to the runtime
-                // fallback instead of re-entering this hard-coded tower.
-                probed_cid
-            } else if let Some((read_cid, _)) = pre_probe.take() {
-                // #11910: the pre-argument probe already read it, under the
-                // same prototype guards.
-                read_cid
-            } else {
-                // A tower too wide for the shape probe still hard-codes the
-                // body each class id inherits along the declared `extends`
-                // chain. Prototype surgery on that name (an assignment,
-                // delete or redefinition, or a relinked class prototype)
-                // retires the arms: class id 0 matches no case and takes the
-                // runtime default, as the shape probe's miss does.
-                let raw_cid =
-                    ctx.block()
-                        .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
-                let blk = ctx.block();
-                let prototype_ok =
-                    crate::lower_call::method_override::emit_prototype_method_guard_ok(
-                        blk,
-                        &method_guard_slot_str,
-                    );
-                blk.select(I1, &prototype_ok, I32, &raw_cid, "0")
-            };
+            // Reuse the class id the receiver probe already validated. Zero is
+            // intentional: it sends descriptor/prototype invalidation and every
+            // non-instance receiver to the runtime fallback instead of
+            // re-entering this hard-coded tower.
+            let cid = shape_probe_cid.expect("the receiver probe runs for every tower");
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {
                 let case_label = ctx.block_label(case_idxs[i]);
@@ -1120,21 +1160,20 @@ pub(crate) fn try_lower_instance_method_call(
                 }
             }
             // Collapse a rest-bearing virtual dispatch HERE, before the rest
-            // arrays are materialized below — the by-name dispatch takes the raw
-            // `fallback_user_args` and does its own rest-bundling, so the bundle
-            // would be dead. (The non-rest collapse happens at the vdispatch
+            // arrays are materialized below — the method site takes the raw
+            // `fallback_user_args` (its miss does the rest-bundling), so the
+            // bundle would be dead. (The non-rest collapse happens at the vdispatch
             // site below, where there is no array to skip.)
             if (fallback_has_rest || override_meta.iter().any(|meta| meta.0))
                 && can_collapse_virtual
             {
-                let collapsed = emit_collapsed_instance_dispatch(
+                let collapsed = crate::lower_call::console_promise::emit_native_method_str_dispatch(
                     ctx,
-                    &recv_box,
                     property,
-                    &fallback_user_args,
                     call_byte_offset,
-                    /* with_override_probe */ false,
-                )?;
+                    &recv_box,
+                    &fallback_user_args,
+                );
                 roots.release(ctx);
                 return Ok(Some(collapsed));
             }
@@ -1812,23 +1851,21 @@ pub(crate) fn try_lower_instance_method_call(
                 return Ok(Some(checked));
             }
 
-            // #5391 path 4 (virtual tower): collapse the per-overriding-subclass
-            // class-id switch below to a single by-name dispatch, which resolves
-            // the same override through the runtime's (class_id, name) vtable
-            // registry. This switch — unlike the dynamic tower — has no
-            // own-property override probe, so the collapse is a bare
-            // `js_native_call_method` (with_override_probe = false) to stay
-            // behavior-identical. The rest-bearing case already collapsed above
-            // (before the rest bundling); this handles the non-rest case.
+            // #5391 path 4 (virtual tower): the oversized-module outline emits
+            // the universal method site instead of the per-overriding-subclass
+            // class-id switch below. The site's memo answers each receiver
+            // shape with its class prototype's slot (an override is just
+            // another shape's entry), and its miss is the by-name dispatch.
+            // The rest-bearing case already collapsed above (before the rest
+            // bundling); this handles the non-rest case.
             if can_collapse_virtual {
-                let collapsed = emit_collapsed_instance_dispatch(
+                let collapsed = crate::lower_call::console_promise::emit_native_method_str_dispatch(
                     ctx,
-                    &recv_box,
                     property,
-                    &fallback_user_args,
                     call_byte_offset,
-                    /* with_override_probe */ false,
-                )?;
+                    &recv_box,
+                    &fallback_user_args,
+                );
                 roots.release(ctx);
                 return Ok(Some(collapsed));
             }

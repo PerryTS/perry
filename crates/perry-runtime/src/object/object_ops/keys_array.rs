@@ -652,7 +652,6 @@ mod tests {
 
             // The canonical shape array may already own a permanent mask;
             // cloning it must not add another per-object layout record.
-            let tables_before = crate::gc::per_object_layout_table_sizes();
             let extra = crate::string::js_string_from_bytes(b"extra".as_ptr(), 5);
             ensure_key_in_keys_array(first, extra);
 
@@ -661,7 +660,6 @@ mod tests {
             assert_eq!((*cloned).length, KEY_COUNT as u32 + 1);
             assert!(own_key_present(first, extra));
             assert!(!own_key_present(sibling, extra));
-            assert_eq!(crate::gc::per_object_layout_table_sizes(), tables_before);
 
             let header =
                 (cloned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

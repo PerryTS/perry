@@ -78,11 +78,12 @@
 //! its lineage grew by one receiver's append at a time since another arrival
 //! reached it ([`take_unique_run`]).
 //!
-//! Dropping a node whose array died can ORPHAN its children: they stay
-//! adoptable and extendable, but a later walk from the root rebuilds the chain
-//! and mints one duplicate layout. That is a mint, never a wrong answer, and
-//! `fresh_keys_known_list` in the mint census is precisely its witness — which
-//! is why the census, not a perf gate, is the acceptance instrument here.
+//! A node whose array died is not dropped while a live list extends it: it
+//! stays as that list's unpublished prefix, validated by the live array
+//! ([`prune_dead_canonical_keys`]). Dropping it would orphan the live list,
+//! and the next walk from the root would publish a second array for the same
+//! keys: a second shape for one layout, and a static ShapeId (which names the
+//! one canonical list of its keys) refused by the mint of its own facts.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -426,6 +427,87 @@ impl CanonicalTable {
     /// Another arrival reached `id`: its lineage is not unique to one object.
     fn note_reached(&mut self, id: u32) {
         self.nodes[id as usize].run = 0;
+    }
+
+    /// Settle the nodes whose arrays did not survive a collection, without
+    /// breaking any live list's path from the root.
+    ///
+    /// A list's array can die while a list that extends it lives on another
+    /// backing: a fork, or a whole list published before an append published
+    /// its prefix onto a receiver's own backing. Freeing that prefix node
+    /// would cut the live list off the root, and the next walk of its keys
+    /// would publish a second array for the same ordered keys. Every keys
+    /// array is an identity fact of a shape, so the duplicate is a second
+    /// shape for one layout, and a static ShapeId, which names the one
+    /// canonical list of its keys, would then name facts no later mint of
+    /// those keys can reach.
+    ///
+    /// So a dead node that is a prefix of a live node stays, as an
+    /// unpublished witness on that live node's array: its first `len`
+    /// entries are this node's list, which is all edge validation reads.
+    /// Only a dead node with no live descendant is freed. One pass over the
+    /// node table, two flat vectors, no index.
+    fn retire_dead(&mut self, dead: &[u32]) {
+        let n = self.nodes.len();
+        let mut is_dead = vec![false; n];
+        for &id in dead {
+            if id != ROOT_NODE && (id as usize) < n && self.nodes[id as usize].addr != 0 {
+                is_dead[id as usize] = true;
+            }
+        }
+        // `witness[id]`: the array of a live list that extends dead `id`.
+        let mut witness = vec![0usize; n];
+        for id in 1..n {
+            let node = &self.nodes[id];
+            if node.addr == 0 || is_dead[id] {
+                continue;
+            }
+            let addr = node.addr;
+            let mut p = node.parent;
+            // Stop at a live ancestor (its own walk covers what is above it)
+            // or at one already witnessed (so was everything above it).
+            while p != ROOT_NODE && p != NO_NODE && is_dead[p as usize] && witness[p as usize] == 0
+            {
+                witness[p as usize] = addr;
+                p = self.nodes[p as usize].parent;
+            }
+        }
+        let mut freed = Vec::with_capacity(dead.len());
+        for &id in dead {
+            let i = id as usize;
+            if i >= n || !is_dead[i] {
+                continue;
+            }
+            if witness[i] == 0 {
+                freed.push(id);
+            } else {
+                self.rewitness(id, witness[i]);
+            }
+        }
+        self.free_nodes(&freed);
+    }
+
+    /// Keep dead node `id` as an unpublished prefix of the live array `addr`.
+    fn rewitness(&mut self, id: u32, addr: usize) {
+        let node = &mut self.nodes[id as usize];
+        if node.published {
+            self.by_addr.remove(&(node.addr, node.len));
+            CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
+            CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            node.published = false;
+        }
+        if node.backing_slots != 0 {
+            CANON_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            CANON_BACKING_SLOTS.fetch_sub(
+                u64::from(node.backing_slots),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            node.backing_slots = 0;
+        }
+        node.addr = addr;
+        if self.last_created.2 == id {
+            self.last_created = (0, 0, NO_NODE);
+        }
     }
 
     /// Retire a batch before reusing any id. Each edge bucket and collision
@@ -1389,9 +1471,10 @@ pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
     });
 }
 
-/// Post-trace death prune. A node whose array did not survive is dropped; its
-/// children are orphaned rather than followed, which costs at most one
-/// duplicate layout and never a wrong list.
+/// Post-trace death prune. A node whose array did not survive is dropped,
+/// unless a live list extends it: then it stays as that list's unpublished
+/// prefix ([`CanonicalTable::retire_dead`]), so no live list is ever cut off
+/// the root.
 #[cold]
 pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     // Snapshot first, then ask. `is_dead_owner` is a collector predicate this
@@ -1415,7 +1498,7 @@ pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
         return;
     }
     try_with_table(|t| {
-        t.free_nodes(&dead);
+        t.retire_dead(&dead);
     });
 }
 

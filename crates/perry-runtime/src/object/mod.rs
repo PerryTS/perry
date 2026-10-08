@@ -323,6 +323,7 @@ pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
     attach_iterator_prototype, call_overridden_iterator_next, iterator_prototype_for_class_id,
+    iterator_step_is_builtin, iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;

@@ -2,23 +2,111 @@
   "default_branch": "main",
   "tag_pattern": "^v[0-9]",
   "workflows": [
-    { "path": "auto-opt-app-patterns.yml", "name": "Auto-Optimize App Patterns" },
-    { "path": "eh-transport.yml", "name": "eh-transport" },
-    { "path": "gate-freshness.yml", "name": "Gate Freshness" },
-    { "path": "gc-moving-witnesses.yml", "name": "GC Moving Witnesses" },
-    { "path": "gc-native-roots.yml", "name": "gc-native-roots" },
-    { "path": "gc-parse-churn-gate.yml", "name": "GC Parse-Churn Layout Gate" },
-    { "path": "gc-ptr-shape-off-witness.yml", "name": "GC Ptr<Shape> OFF-arm witness" },
-    { "path": "gc-ratchet.yml", "name": "GC Ratchet" },
-    { "path": "gc-root-dominance.yml", "name": "GC Root Dominance" },
-    { "path": "llvm-inprocess.yml", "name": "llvm-inprocess" },
-    { "path": "test.yml", "name": "CI" },
-    { "path": "tls-budget.yml", "name": "TLS Budget" }
+    {
+      "path": "test.yml",
+      "name": "CI",
+      "subjects": [
+        {
+          "id": "core",
+          "name": "CI core gate",
+          "job_names": [
+            "pr-gate",
+            "main-gate",
+            "full-suite-gate"
+          ],
+          "path": "test.yml"
+        },
+        {
+          "id": "security-audit",
+          "name": "Security Audit",
+          "job": "security-audit",
+          "path": "security-audit.yml"
+        },
+        {
+          "id": "coverage",
+          "name": "Coverage",
+          "job": "coverage",
+          "path": "coverage.yml"
+        }
+      ]
+    },
+    {
+      "path": "gc.yml",
+      "name": "GC",
+      "subjects": [
+        {
+          "id": "gc-ratchet",
+          "name": "GC Ratchet",
+          "job": "gc-ratchet",
+          "path": "gc-ratchet.yml"
+        },
+        {
+          "id": "gc-root-dominance",
+          "name": "GC Root Dominance",
+          "job": "gc-root-dominance",
+          "path": "gc-root-dominance.yml"
+        },
+        {
+          "id": "gc-native-roots",
+          "name": "gc-native-roots",
+          "job": "gc-native-roots",
+          "path": "gc-native-roots.yml"
+        },
+        {
+          "id": "gc-moving-witnesses",
+          "name": "GC Moving Witnesses",
+          "job": "gc-moving-witnesses",
+          "path": "gc-moving-witnesses.yml"
+        },
+        {
+          "id": "gc-parse-churn-gate",
+          "name": "GC Parse-Churn Layout Gate",
+          "job": "gc-parse-churn-gate",
+          "path": "gc-parse-churn-gate.yml"
+        },
+        {
+          "id": "gc-ptr-shape-off-witness",
+          "name": "GC Ptr<Shape> OFF-arm witness",
+          "job": "gc-ptr-shape-off-witness",
+          "path": "gc-ptr-shape-off-witness.yml"
+        }
+      ]
+    },
+    {
+      "path": "compiler-runtime.yml",
+      "name": "Extended Tests",
+      "subjects": [
+        {
+          "id": "eh-transport",
+          "name": "eh-transport",
+          "job": "eh-transport",
+          "path": "eh-transport.yml"
+        },
+        {
+          "id": "llvm-inprocess",
+          "name": "llvm-inprocess",
+          "job": "llvm-inprocess",
+          "path": "llvm-inprocess.yml"
+        },
+        {
+          "id": "auto-opt-app-patterns",
+          "name": "Auto-Optimize App Patterns",
+          "job": "auto-opt-app-patterns",
+          "path": "auto-opt-app-patterns.yml"
+        },
+        {
+          "id": "tls-budget",
+          "name": "TLS Budget",
+          "job": "tls-budget",
+          "path": "tls-budget.yml"
+        }
+      ]
+    }
   ],
   "excluded": [
     {
-      "path": "npm-publish-freshness.yml",
-      "why": "This workflow already maintains its own sticky failure issue."
+      "path": "maintenance.yml",
+      "why": "Repository's gate-freshness and npm-publish-freshness subjects maintain their own sticky issues; observer validation runs offline in Repository and the observer does not subscribe to its own parent."
     }
   ]
 }

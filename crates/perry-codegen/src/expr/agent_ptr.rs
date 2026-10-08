@@ -68,6 +68,25 @@ thread_local! {
 
 pub(crate) fn set_output_is_executable(executable: bool) {
     OUTPUT_IS_EXECUTABLE.with(|c| c.set(executable));
+    PROGRAM_IS_EXECUTABLE.store(executable, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// [`OUTPUT_IS_EXECUTABLE`] for the object emitters, which run on other
+/// threads than the module's lowering. One program is one output type, so a
+/// process-wide flag is exact; it stays `false` (no assumption) until a
+/// module compile sets it.
+static PROGRAM_IS_EXECUTABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a thread-local the program itself defines can be addressed as a
+/// fixed offset from the thread pointer (the local-exec model): only in an
+/// ELF executable, whose TLS block is the static one every thread is created
+/// with. A `dlopen`ed image (a plugin, a shared library) must keep the
+/// dynamic models.
+pub(crate) fn program_tls_is_local_exec(triple: &str) -> bool {
+    let elf = (triple.contains("linux") || triple.contains("android"))
+        && (triple.starts_with("x86_64") || triple.starts_with("aarch64"));
+    elf && PROGRAM_IS_EXECUTABLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// How this compile reaches the block. `PERRY_AGENT_PTR_ACCESS=call` forces

@@ -316,29 +316,42 @@ pub(crate) fn same_value(
     )
 }
 
-/// Shared test execution over roots owned by the public entry. Both boxed
-/// calls and the raw-string entry reach the same RegExpExec/Perex engine.
-fn test_rooted(
-    receiver: &RuntimeHandle<'_>,
-    input: &RuntimeHandle<'_>,
-) -> Result<bool, EngineError> {
+/// RegExp.prototype.test's RegExpExec on a heap string. When the `exec`
+/// lookup proves the builtin without running anything, RegExpBuiltinExec runs
+/// on the two current addresses with no handle at all: nothing before the
+/// search can collect, and the search roots what it still needs only if it
+/// polls (`api::search_builtin`). Any other receiver takes the observable
+/// path, rooted, exactly as `execute` runs it.
+pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    if let Some(data) = crate::object::regex_read_sites::builtin_exec_data(receiver) {
+        return api::search_builtin(
+            // The proof read the receiver's shape: it is an object pointer.
+            (receiver.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader,
+            data,
+            input,
+            host::CaptureMode::Full,
+            &mut budget,
+            &memory,
+            &mut None,
+            &mut host::poll,
+        )
+        .map(|found| found.is_some());
+    }
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let input = scope.root_string_ptr(input);
     execute(
-        receiver,
-        input,
+        &receiver,
+        &input,
         false,
-        &mut Budget::new(api::WORK),
-        &MemoryBudget::new(api::SCRATCH_BYTES),
+        &mut budget,
+        &memory,
         &mut host::poll,
         None,
     )
     .map(|result| result.is_some())
-}
-
-pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
-    let input = scope.root_string_ptr(input);
-    test_rooted(&receiver, &input)
 }
 
 pub(crate) fn test_value(
@@ -347,9 +360,8 @@ pub(crate) fn test_value(
     argument: f64,
 ) -> Result<bool, EngineError> {
     // ToString of a heap string is the identity: it cannot throw, allocate
-    // or run user code. Reuse the raw-string entry and its two roots rather
-    // than opening a coercion trap and a second scope. RegExpExec still
-    // validates the receiver and observes exec before entering the engine.
+    // or run user code. RegExpExec still validates the receiver and observes
+    // exec before entering the engine.
     // SSO strings can allocate when materialized and retain the caught path.
     let value = crate::value::JSValue::from_bits(argument.to_bits());
     if value.is_string() {
@@ -371,6 +383,6 @@ pub(crate) fn test_value(
             crate::value::js_jsvalue_to_string_coerce(value)
         }
     })?;
-    let input = scope.root_string_ptr(input);
-    test_rooted(&receiver, &input)
+    // Nothing collects between the coercion's result and the search entry.
+    test_string(receiver.get_nanbox_f64(), input)
 }

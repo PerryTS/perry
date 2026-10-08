@@ -46,6 +46,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+import json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -622,7 +623,45 @@ def main() -> int:
         return 0
 
     problems: list[str] = []
+    try:
+        catalog = json.loads((REPO_ROOT / "scripts/actions_catalog.json").read_text())
+        gc = catalog["categories"]["gc"]
+        source_to_parent = {m["file"]: gc["entrypoint"] for m in gc["modules"]}
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        print(f"cannot load GC route catalog: {exc}", file=sys.stderr)
+        return 1
     for wf, job, _ in GATES:
+        basename = Path(wf).name
+        if basename in source_to_parent:
+            wf = str(Path(".github/workflows") / source_to_parent[basename])
+            parent_text = (REPO_ROOT / wf).read_text(encoding="utf-8")
+            module = next(m for m in gc["modules"] if m.get("file") == basename)
+            if job == "gc-stress" or job == "gc-stress-shard":
+                continue  # Existing CI core gate, not a child in the GC parent.
+            job = f"{module['id']}__{job}"
+            if not re.search(rf"^  {re.escape(job)}:\s*$", parent_text, re.M):
+                problems.append(f"{wf}: GC caller `{job}` is missing")
+                continue
+            problems.extend(check_gate(parent_text, job, wf))
+            result_body = job_body(parent_text, module["id"])
+            result_needs = _block(result_body, "needs", 4)
+            if not re.search(rf"^\s*- {re.escape(job)}\s*$", result_needs, re.M):
+                problems.append(
+                    f"{wf}: suite result `{module['id']}` does not fan in `{job}`"
+                )
+            if not any(c.get("file") == basename for c in gc["modules"]):
+                problems.append(f"{wf}: catalog does not route {basename}")
+                continue
+            # The source workflow is gone; its jobs are inline and the suite
+            # schedule lives on the category workflow. Verify the route remains.
+            from actions_plan import select
+            crons = [t["cron"] for m in gc["modules"] for t in m.get("original_events", {}).get("schedule", [])]
+            if crons and not all(
+                select("gc", "schedule", {"schedule": cron}, catalog=catalog)["plan"]
+                for cron in crons
+            ):
+                problems.append("gc.yml: invalid GC cron route")
+            continue
         path = REPO_ROOT / wf
         if not path.exists():
             problems.append(f"{wf}: missing — a GC gate workflow was deleted")

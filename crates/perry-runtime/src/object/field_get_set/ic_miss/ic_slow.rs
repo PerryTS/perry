@@ -269,7 +269,7 @@ fn ic_slow_body(
                 // before anything else this entry would re-derive. An
                 // explicit-this native alias (#11725) keeps the miss
                 // handler's order: its alias read comes first.
-                if !crate::object::native_this_alias::alias_active() {
+                if crate::object::native_this_alias::object_alias(obj).is_none() {
                     if let Some(value) =
                         crate::object::method_site::read_holder::try_cached_accessor(
                             obj, cache_slot,

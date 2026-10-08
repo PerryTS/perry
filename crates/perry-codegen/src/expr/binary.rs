@@ -1711,3 +1711,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+/// A logical expression whose operands construct Booleans can stay native
+/// even in value context; materialization happens only at the JSValue boundary.
+pub(crate) fn lower_boolean_logical_value(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+) -> Result<Option<LoweredValue>> {
+    fn boolean(expr: &Expr) -> bool {
+        match expr {
+            Expr::Bool(_)
+            | Expr::Compare { .. }
+            | Expr::Unary {
+                op: perry_hir::UnaryOp::Not,
+                ..
+            }
+            | Expr::BooleanCoerce(_) => true,
+            Expr::Logical {
+                op: LogicalOp::And | LogicalOp::Or,
+                left,
+                right,
+            } => boolean(left) && boolean(right),
+            _ => false,
+        }
+    }
+    if !boolean(expr) {
+        return Ok(None);
+    }
+    Ok(Some(LoweredValue::i1(
+        crate::lower_conditional::lower_test(ctx, expr)?,
+    )))
+}

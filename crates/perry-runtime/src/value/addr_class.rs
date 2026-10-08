@@ -390,7 +390,12 @@ pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
 /// allocation or collection safepoint. Returning a raw pointer is deliberate:
 /// some checked callers install forwarding metadata, so this gate must not
 /// manufacture a shared reference and then write through a cast of it.
-#[inline]
+///
+/// Out of line, with the allocator lookup folded into its one body: the
+/// probe sits on generic receiver paths (`has_cell_type`, own-key and
+/// expando checks, raw-word admission), and inlining its admission tail into
+/// each of them pushes those callers past LLVM's inlining budget.
+#[inline(never)]
 pub(crate) unsafe fn try_read_tracked_gc_header(
     addr: usize,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
@@ -400,8 +405,8 @@ pub(crate) unsafe fn try_read_tracked_gc_header(
 /// [`try_read_tracked_gc_header`] for a caller that only accepts one type id:
 /// the type admission is `obj_type == kind` instead of the generic known-type
 /// test, with the same allocator proof and size/arena checks. `kind` must be a
-/// known type id.
-#[inline]
+/// known type id. Out of line for the same reason.
+#[inline(never)]
 pub(crate) unsafe fn try_read_tracked_gc_header_of_type(
     addr: usize,
     kind: u8,

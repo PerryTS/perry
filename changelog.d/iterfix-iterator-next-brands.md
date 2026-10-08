@@ -1,0 +1,1 @@
+Enforce built-in iterator next receiver brands before stepping. Family-specific checks keep canonical next code pointers distinct in optimized builds, rejecting foreign next methods in calls, for-of, and destructuring.

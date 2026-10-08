@@ -13,8 +13,7 @@
 //!
 //! So every layout fact the header carries has already arrived at the
 //! destination by construction: the layout state, `GC_LAYOUT_ALL_POINTERS`,
-//! the raw-f64 / holes flags, `GC_ARRAY_ELEMENT_SHAPE` and
-//! `GC_OBJ_TYPED_LAYOUT_INTACT`. What cannot ride a header is a record keyed
+//! the raw-f64 / holes flags, `GC_ARRAY_ELEMENT_SHAPE`. What cannot ride a header is a record keyed
 //! by the object's ADDRESS, and that is all this funnel moves:
 //!
 //! * the residual static-prototype owner registry (#9304), gated by its
@@ -22,8 +21,6 @@
 //!   entry, not only the layout kinds (see below);
 //! * the element-shape proof record (#7480), gated by the header bit that is
 //!   authoritative for it;
-//! * the per-object `LAYOUT_SLOT_MASKS` entry, gated by
-//!   #7510's emptiness flag and address filter.
 //!
 //! # The prototype registry is not layout metadata
 //!
@@ -41,13 +38,11 @@
 //! Until #10362 the funnel re-derived the header half too, once per relocated
 //! object (4.2% of #10362's retained-graph run). The gates below answer the
 //! same questions from the header word and two flags the caller has already
-//! brought into cache. Charter step 5: no object carries a typed layout
-//! descriptor, so only the per-object slot mask moves.
+//! brought into cache. GC payload kinds travel in the header copy.
 
 use super::*;
-use crate::gc::layout_tables::per_object_layouts_may_hold_either;
 
-/// Move the address-keyed layout records of a relocated object.
+/// Rekey residual prototypes and element-shape proofs after relocation.
 ///
 /// # Safety
 ///
@@ -95,23 +90,8 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
 
     let reserved = (*old_header)._reserved;
     let is_array = (*old_header).obj_type == GC_TYPE_ARRAY;
-    // Two gates, both answered from words already in registers or in the one
-    // hot thread-local slot #7510 keeps them in. Each is the same question the
-    // record mover behind it asks first, hoisted so the common case — no
-    // record anywhere near either address — never leaves this function.
-    let mask_owner = matches!((*old_header).obj_type, GC_TYPE_ARRAY | GC_TYPE_CLOSURE);
-    let per_object =
-        mask_owner && per_object_layouts_may_hold_either(old_user as usize, new_user as usize);
-    let element_shape = is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
-    if per_object || element_shape {
-        transfer_address_keyed_records(old_user as usize, new_user as usize, is_array);
-    }
-
-    // The source is a dead evacuation original or a growth forwarding stub the
-    // moment we return. Drop its claim to a descriptor rather than leave the
-    // bit readable at an address whose records now belong to the destination.
-    if mask_owner {
-        header_clear_typed_layout_intact(old_header);
+    if is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0 {
+        crate::array::transfer_element_shape(old_user as usize, new_user as usize);
     }
 }
 
@@ -122,23 +102,6 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
 #[inline(never)]
 fn transfer_residual_prototype(old_user: usize, new_user: usize) {
     crate::object::prototype_chain::object_static_prototype_owner_moved(old_user, new_user);
-}
-
-/// The layout record moves themselves. Cold: on a workload holding no
-/// per-object layout record and no element-shape proof — the steady state of
-/// every monomorphic program — it is never reached.
-#[cold]
-#[inline(never)]
-unsafe fn transfer_address_keyed_records(old_user: usize, new_user: usize, is_array: bool) {
-    if is_array {
-        // #7480: the proof record is keyed by the array's address while the
-        // header bit is what a read consults. `transfer_element_shape` decides
-        // from both headers and fails closed — it clears the destination bit
-        // when no record follows the move.
-        crate::array::transfer_element_shape(old_user, new_user);
-    }
-    // Only arrays and closures retain address-keyed slot masks.
-    transfer_per_object_slot_mask(old_user, new_user);
 }
 
 /// The funnel's precondition: the destination header is the source's copy.

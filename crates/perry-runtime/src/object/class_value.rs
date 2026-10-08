@@ -163,52 +163,154 @@ pub(crate) fn boxed_class_word(bits: u64) -> f64 {
 // The function object for each class: one per agent per class id.
 // ---------------------------------------------------------------------------
 
-/// Class ids per table page (log2). Class ids are dense per program plus a few
-/// high reserved ids for built-in classes, so a two-level table keeps the
-/// lookup a pair of indexed loads without a large flat array.
+/// Class ids per table page (log2). Within each class-id band (see
+/// [`class_value_band`]) ids are dense from the band's base, so a two-level
+/// table keeps the lookup a pair of indexed loads without a large flat array.
 const CLASS_VALUE_PAGE_SHIFT: u32 = 8;
 const CLASS_VALUE_PAGE_LEN: usize = 1 << CLASS_VALUE_PAGE_SHIFT;
 
 type ClassValuePage = [*mut ClosureHeader; CLASS_VALUE_PAGE_LEN];
 
+/// One band's page directory: `len` page pointers (null or a leaked page).
+type ClassValueDir = (*mut *mut ClassValuePage, usize);
+
+/// The class-id bands, each with its own page directory. A class id is never
+/// an index by itself: it is an OFFSET from its band's base, so a directory is
+/// sized by how many ids of that band exist, never by the id's magnitude.
+/// (Indexing by the raw id made the first `0xFFFF_xxxx` builtin — fs.Stats,
+/// `0xFFFF_0070` — grow one directory to 16M pages: 128 MiB zero-filled.)
+///
+/// * band 0: compiled classes, `1..0x7FFF_FF00` — dense from 1 per program;
+/// * band 1: the runtime builtin band `0x7FFF_FF00..=0x7FFF_FFFF` (256 ids);
+/// * band 2: synthetic ids (`class X extends f`'s parent), a counter from
+///   [`SYNTHETIC_CLASS_ID_BASE`];
+/// * band 3: the reserved native-class band `0xFFFF_0000..` (at most 65,536
+///   ids, so at most 256 pages and a 2 KiB directory).
+///
+/// Anything else (`0`, the ShapeId range) is not a class id and has no slot.
+const CLASS_VALUE_BANDS: usize = 4;
+const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
+const SYNTHETIC_CLASS_ID_BASE: u32 =
+    super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
+const SYNTHETIC_CLASS_ID_END: u32 =
+    super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_END;
+
+/// The band and in-band offset of `class_id`, or `None` for a word that is
+/// not a class id. The one place a class id becomes a table position (the
+/// compiled band's offset is the id itself, which is what
+/// [`class_value_cached`]'s fast path reads).
+fn class_value_band(class_id: u32) -> Option<(usize, u32)> {
+    match class_id {
+        0 => None,
+        1..FIRST_RUNTIME_CLASS_ID => Some((0, class_id)),
+        FIRST_RUNTIME_CLASS_ID..=0x7FFF_FFFF => Some((1, class_id - FIRST_RUNTIME_CLASS_ID)),
+        SYNTHETIC_CLASS_ID_BASE..SYNTHETIC_CLASS_ID_END => {
+            Some((2, class_id - SYNTHETIC_CLASS_ID_BASE))
+        }
+        SYNTHETIC_CLASS_ID_END..=u32::MAX => Some((3, class_id - SYNTHETIC_CLASS_ID_END)),
+        _ => None,
+    }
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+const EMPTY_CLASS_VALUE_DIR: std::cell::Cell<ClassValueDir> =
+    std::cell::Cell::new((std::ptr::null_mut(), 0));
+
 crate::perry_thread_local! {
-    /// This agent's class function objects, indexed by class id: a page
-    /// directory (`pages`, `len` pages) whose pages are leaked for the agent's
-    /// life. Read without a borrow flag — the hot path is a TLS read, a bounds
-    /// check and two loads. Not a GC root: a class function object is pinned
-    /// (never moves, always a root of the pinned-object scan) and its edges
-    /// (`props`, the prototype link) are traced child slots like any other
-    /// closure's.
-    static CLASS_VALUES: std::cell::Cell<(*mut *mut ClassValuePage, usize)> =
-        const { std::cell::Cell::new((std::ptr::null_mut(), 0)) };
+    /// This agent's class function objects: per class-id band
+    /// ([`class_value_band`]) a page directory whose pages are leaked for the
+    /// agent's life. Read without a borrow flag — the hot path is a TLS read,
+    /// a bounds check and two loads. Not a GC root: a class function object
+    /// is pinned (never moves, always a root of the pinned-object scan) and
+    /// its edges (`props`, the prototype link) are traced child slots like any
+    /// other closure's.
+    static CLASS_VALUES: [std::cell::Cell<ClassValueDir>; CLASS_VALUE_BANDS] =
+        const { [EMPTY_CLASS_VALUE_DIR; CLASS_VALUE_BANDS] };
+}
+
+/// Band `band`'s directory.
+#[inline(always)]
+fn class_value_dir(band: usize) -> ClassValueDir {
+    CLASS_VALUES.with(|bands| bands[band].get())
+}
+
+/// Every band's directory (tests and resets).
+#[cfg(test)]
+fn class_value_dirs() -> [ClassValueDir; CLASS_VALUE_BANDS] {
+    CLASS_VALUES.with(|bands| std::array::from_fn(|band| bands[band].get()))
 }
 
 #[inline]
 fn class_value_cached(class_id: u32) -> Option<*mut ClosureHeader> {
+    // The compiled band's offset IS the class id, and its directory never
+    // grows past `BAND0_MAX_PAGES`, so every id of a higher band misses this
+    // bounds check: the hot path is the plain two-load lookup, and only a
+    // miss asks which band the id belongs to.
     let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
-    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
-    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    let (pages, len) = class_value_dir(0);
+    if page < len {
+        // SAFETY: `pages` holds `len` page pointers (null or a live page).
+        return unsafe { class_value_page_get(pages, page, class_id) };
+    }
+    if class_id < FIRST_RUNTIME_CLASS_ID {
+        return None;
+    }
+    class_value_cached_high(class_id)
+}
+
+/// [`class_value_cached`] for an id above the compiled band.
+#[inline(never)]
+fn class_value_cached_high(class_id: u32) -> Option<*mut ClosureHeader> {
+    let (band, offset) = class_value_band(class_id)?;
+    let page = (offset >> CLASS_VALUE_PAGE_SHIFT) as usize;
+    let (pages, len) = class_value_dir(band);
     if page >= len {
         return None;
     }
-    // SAFETY: `pages` holds `len` page pointers (null or a live leaked page).
-    unsafe {
-        let p = *pages.add(page);
-        if p.is_null() {
-            return None;
-        }
-        let c = (*p)[index];
-        (!c.is_null()).then_some(c)
-    }
+    // SAFETY: `pages` holds `len` page pointers (null or a live page).
+    unsafe { class_value_page_get(pages, page, offset) }
 }
 
-/// The table slot for `class_id`, growing the directory / minting the page.
+/// Entry `offset` of directory page `page`.
+///
+/// # Safety
+/// `page` < the directory's length; `pages` holds that many page pointers
+/// (null or a live leaked page).
+#[inline(always)]
+unsafe fn class_value_page_get(
+    pages: *mut *mut ClassValuePage,
+    page: usize,
+    offset: u32,
+) -> Option<*mut ClosureHeader> {
+    let p = *pages.add(page);
+    if p.is_null() {
+        return None;
+    }
+    let c = (*p)[offset as usize & (CLASS_VALUE_PAGE_LEN - 1)];
+    (!c.is_null()).then_some(c)
+}
+
+/// The compiled band's directory bound: one page short of the first page a
+/// runtime-band id would index, so [`class_value_cached`]'s fast bounds
+/// check rejects every id of a higher band.
+const BAND0_MAX_PAGES: usize = (FIRST_RUNTIME_CLASS_ID >> CLASS_VALUE_PAGE_SHIFT) as usize;
+
+/// The table slot for `class_id`, growing its band's directory / minting the
+/// page. `class_id` is a class id ([`class_value_band`] answers).
 fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
-    let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
-    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
-    let (mut pages, mut len) = CLASS_VALUES.with(std::cell::Cell::get);
+    let Some((band, offset)) = class_value_band(class_id) else {
+        panic!("class_value_slot: {class_id:#x} is not a class id");
+    };
+    let page = (offset >> CLASS_VALUE_PAGE_SHIFT) as usize;
+    let index = offset as usize & (CLASS_VALUE_PAGE_LEN - 1);
+    let (mut pages, mut len) = class_value_dir(band);
     if page >= len {
-        let new_len = (page + 1).next_power_of_two().max(4);
+        let mut new_len = (page + 1).next_power_of_two().max(4);
+        if band == 0 {
+            // `page` < BAND0_MAX_PAGES: a band-0 offset is below the first
+            // runtime id.
+            new_len = new_len.min(BAND0_MAX_PAGES);
+        }
         let mut dir: Vec<*mut ClassValuePage> = vec![std::ptr::null_mut(); new_len];
         if !pages.is_null() {
             // SAFETY: the old directory holds `len` entries.
@@ -219,7 +321,7 @@ fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
         }
         pages = Box::leak(dir.into_boxed_slice()).as_mut_ptr();
         len = new_len;
-        CLASS_VALUES.with(|c| c.set((pages, len)));
+        CLASS_VALUES.with(|bands| bands[band].set((pages, len)));
     }
     // SAFETY: `page < len`.
     unsafe {
@@ -272,9 +374,12 @@ pub(crate) fn is_compiled_class_id(class_id: u32) -> bool {
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    // Any class id may own one: a native class whose prototype carries
+    // registered members (fs.Stats' Date getters) keeps its prototype link
+    // here like a compiled class. Its band, not its magnitude, places it.
     debug_assert!(
-        is_compiled_class_id(class_id),
-        "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
+        class_value_band(class_id).is_some(),
+        "a class function object belongs to a class id: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();
     let payload = crate::closure::closure_payload_size(CLASS_VALUE_CAPTURES);
@@ -897,7 +1002,13 @@ pub(crate) fn class_decl_prototype_link_store(
 /// Clear every minted class's prototype link (a test resetting the registry).
 #[cfg(test)]
 pub(crate) fn test_clear_class_decl_prototype_links() {
-    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    for (pages, len) in class_value_dirs() {
+        test_clear_band_prototype_links(pages, len);
+    }
+}
+
+#[cfg(test)]
+fn test_clear_band_prototype_links(pages: *mut *mut ClassValuePage, len: usize) {
     for i in 0..len {
         // SAFETY: `pages` holds `len` page pointers (null or a live page).
         let page = unsafe { *pages.add(i) };
@@ -1437,6 +1548,47 @@ mod tests {
         assert_eq!(class_value_id(other), Some(0x6A02));
     }
 
+    /// The class-value table is sized by how many ids of a band exist, never
+    /// by an id's magnitude: one class object for the highest id of every
+    /// band (fs.Stats' reserved `0xFFFF_0070` among them, which once grew the
+    /// directory to 16M pages — 128 MiB zero-filled — on a single
+    /// `stats.mtime` read) leaves every directory at most 256 pages.
+    #[test]
+    fn class_value_directories_are_sized_by_band_offset_not_by_id() {
+        let ids = [
+            0x7FFF_FF00,
+            0x7FFF_FFFF,
+            SYNTHETIC_CLASS_ID_BASE,
+            0xFFFF_0070, // fs.Stats (`fs::stats::STATS_REGULAR_CLASS_ID`)
+            0xFFFF_0071, // bigint fs.Stats
+            crate::native_class_ids::CRYPTO_HASH,
+            u32::MAX,
+        ];
+        // Not registered: a registered id is also an INT32 class-ref word
+        // (#11414), and `u32::MAX` would turn every `int32(-1)` into a class.
+        for cid in ids {
+            let v = class_value(cid);
+            assert_eq!(class_value_id(v), Some(cid), "{cid:#x} round-trips");
+            assert_eq!(class_value(cid).to_bits(), v.to_bits(), "one object per id");
+        }
+        for (band, (_, len)) in class_value_dirs().into_iter().enumerate() {
+            assert!(
+                len <= CLASS_VALUE_PAGE_LEN,
+                "band {band}: directory of {len} pages (sized by a raw class id)"
+            );
+        }
+        // Distinct ids in distinct bands never share a slot.
+        let objs: Vec<u64> = ids.iter().map(|&c| class_value(c).to_bits()).collect();
+        let mut unique = objs.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), objs.len(), "every band id has its own object");
+        // Non-class words have no slot and are never minted.
+        assert_eq!(class_value_band(0), None);
+        assert_eq!(class_value_band(0x8000_0000), None);
+        assert!(class_value_cached(0x8000_0000).is_none());
+    }
+
     /// A static walk that reaches a BUILTIN parent (`class E extends Error`)
     /// stops there: a builtin id has no class function object, so no reader
     /// may mint one for it (minting `0xFFFF_0001` grew the class-value
@@ -1447,7 +1599,7 @@ mod tests {
         register(cid);
         crate::object::js_register_class_parent(cid, crate::error::CLASS_ID_ERROR);
         let recv = class_value(cid);
-        let (_, pages_before) = CLASS_VALUES.with(std::cell::Cell::get);
+        let pages_before = class_value_dirs().map(|(_, len)| len);
         let applied = unsafe {
             crate::object::class_registry::class_static_accessor_setter_apply(cid, "zz", recv, 1.0)
         };
@@ -1481,7 +1633,7 @@ mod tests {
             class_value_cached(crate::error::CLASS_ID_ERROR).is_none(),
             "the builtin Error id must not get a class function object"
         );
-        let (_, pages_after) = CLASS_VALUES.with(std::cell::Cell::get);
+        let pages_after = class_value_dirs().map(|(_, len)| len);
         assert_eq!(
             pages_after, pages_before,
             "the walks grew the class-value directory"

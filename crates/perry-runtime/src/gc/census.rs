@@ -626,8 +626,6 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
     rows.push(crate::symbol::symbol_registry_census());
     #[cfg(feature = "regex-engine")]
     rows.push(crate::regex::perex_cache::census());
-    let masks = super::layout_tables::per_object_layout_table_sizes();
-    rows.push(("gc.layout_slot_masks", masks, masks * 24));
     rows.push((
         "gc.external_side_live_bytes(map/set/tape)",
         0,

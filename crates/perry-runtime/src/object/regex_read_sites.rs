@@ -62,29 +62,38 @@ fn getter_is(value: f64, index: usize, function: *const u8) -> bool {
 
 #[inline]
 pub(crate) fn exec_is_builtin(value: f64) -> bool {
-    let Some(object) = object_receiver(value) else {
-        return false;
-    };
-    let hit = EXEC_READ.with(|site| unsafe {
-        if let Some(method) = site.read_leaf(object) {
-            return thunks::is_builtin_regexp_exec(method);
-        }
-        if crate::regex::regexp_data_of(value).is_none() {
-            return false;
-        }
-        matches!(site.probe(object, Key::Name(b"exec")), Some(Answer::Data(bits))
-            if thunks::is_builtin_regexp_exec(f64::from_bits(bits)))
+    builtin_exec_data(value).is_some()
+}
+
+/// `Get(R, "exec")` proven to be the builtin without running anything: the
+/// RegExp's immutable data, or `None` for any receiver that needs the
+/// observable path.
+#[inline]
+pub(crate) fn builtin_exec_data(value: f64) -> Option<*const crate::regex::RegExpData> {
+    // The brand first: the private matcher read is one shape compare, and its
+    // answer proves a live, ordinary, branded receiver, which is all the exec
+    // site's read needs to know about it. Every other value is not a RegExp
+    // and keeps the observable path.
+    let data = crate::regex::regexp_data_of(value).filter(|_| {
+        EXEC_READ.with(|site| unsafe {
+            let object = (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
+            match site.read_leaf(object) {
+                Some(method) => thunks::is_builtin_regexp_exec(method),
+                None => matches!(site.probe(object, Key::Name(b"exec")), Some(Answer::Data(bits))
+                    if thunks::is_builtin_regexp_exec(f64::from_bits(bits))),
+            }
+        })
     });
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_counters(|d| {
-            if hit {
+            if data.is_some() {
                 d.proof_exec_hit += 1;
             } else {
                 d.proof_exec_miss += 1;
             }
         });
     }
-    hit
+    data
 }
 
 pub(crate) fn test(value: f64) -> bool {
@@ -99,11 +108,6 @@ pub(crate) fn test(value: f64) -> bool {
         });
     }
     hit
-}
-
-/// Only segments-view calls need both Gets; exec callers ask for exec alone.
-pub(crate) fn test_exec(value: f64) -> bool {
-    test(value) && exec_is_builtin(value)
 }
 
 /// The eight observable Gets in the flags getter, in spec order. Every

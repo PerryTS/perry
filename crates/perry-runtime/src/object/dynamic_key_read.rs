@@ -163,7 +163,7 @@ unsafe fn own_or_absent(obj_box: u64, key_bits: u64) -> Prepass {
             // receiver, and an `undefined` read under a native-handle alias
             // is the generic entry's to resolve.
             if value.bits() == crate::value::TAG_HOLE
-                || (value.is_undefined() && super::native_this_alias::alias_active())
+                || (value.is_undefined() && super::native_this_alias::object_alias(obj).is_some())
             {
                 return Prepass::Unknown;
             }

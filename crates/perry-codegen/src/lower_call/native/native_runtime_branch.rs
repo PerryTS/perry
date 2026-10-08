@@ -18,6 +18,30 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            "iteratorNextMethod" => {
+                let iter = lower_expr(ctx, &args[0])?;
+                return Ok(ctx.block().call(DOUBLE, "js_iterator_next_method", &[(DOUBLE, &iter)]));
+            }
+            "iteratorStep" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..2])?;
+                let iter = &values[0];
+                let next = &values[1];
+                let Expr::LocalSet(value_id, output_expr) = &args[2] else {
+                    return Err(anyhow::anyhow!("iteratorStep requires a compiler-owned output binding"));
+                };
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                let out = if matches!(args.get(3), Some(Expr::Bool(false))) { "null" } else { &slot };
+                let done = ctx.block().call(
+                    I32, "js_iterator_step", &[(DOUBLE, iter), (DOUBLE, next), (crate::types::PTR, out)],
+                );
+                let value = if out == "null" { double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)) } else { ctx.block().load(DOUBLE, &slot) };
+                roots.release(ctx);
+                crate::expr::invalidate_local_write_facts(ctx, *value_id);
+                // Value can carry a heap edge. The regular local writer owns
+                // its root/barrier and also handles module and captured slots.
+                crate::expr::bind_lowered_value_to_local(ctx, *value_id, &value, output_expr)?;
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &done));
+            }
             "iteratorNextResult" => {
                 let iter = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
@@ -78,13 +102,14 @@
                 ));
             }
             "iteratorRestToArray" => {
-                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
                 let iter = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                let done = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let next = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let done = arg_values.get(2).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 let result = ctx.block().call(
                     DOUBLE,
-                    "js_iterator_rest_to_array",
-                    &[(DOUBLE, &iter), (DOUBLE, &done)],
+                    "js_iterator_step_rest_to_array",
+                    &[(DOUBLE, &iter), (DOUBLE, &next), (DOUBLE, &done)],
                 );
                 arg_group.release(ctx);
                 return Ok(result);

@@ -1632,7 +1632,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
 /// written down together, and the reason it exists is that they are not:
-/// `OBJ_FLAG_*` lives here, `GC_OBJ_TYPED_LAYOUT_INTACT` / `GC_LAYOUT_*` live
+/// `OBJ_FLAG_*` lives here, `GC_LAYOUT_*` live
 /// in `gc/layout.rs`, and a comment in this file used to claim bits 12..13
 /// were "the last free bits" while `gc/layout.rs` already owned 12, 13, 14
 /// and 15.
@@ -1680,7 +1680,7 @@ pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
 /// copies verbatim, so the invariant survives a move without a side-table
 /// walk. The *shape id* itself cannot fit here, so it lives in the
 /// address-keyed record `array::element_shape` maintains, moved on
-/// relocation by `layout_transfer` exactly like `TYPED_LAYOUTS`. The bit is
+/// relocation by `layout_transfer`. The bit is
 /// the authority: a fresh allocation's `_reserved` is zero, so a stale
 /// record left behind at a recycled address is never consulted.
 ///

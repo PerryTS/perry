@@ -1,7 +1,7 @@
 //! Ordinary RegExp births. The memo holds only a validated ShapeId; the
 //! shape carries the private matcher, lastIndex attributes and prototype.
 use super::{RegExpData, RegExpHeader};
-use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+use crate::gc::RuntimeHandleScope;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
@@ -11,29 +11,46 @@ crate::perry_thread_local! {
     static BIRTH_SHAPE: Cell<u32> = const { Cell::new(0) };
 }
 
-pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut RegExpHeader {
+/// A fresh RegExp around immutable matcher data. `data` reads the data cell's
+/// current address from wherever the caller holds it (a root, the literal
+/// site's registered word); it is read after the allocation, the only
+/// collecting action here, so no handle is needed for it.
+pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
-    let receiver = scope.root_raw_mut_ptr(crate::object::object_alloc_plain_born(2, shape));
-    let cached = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
-        crate::object::shapes::object_shape_stamp(r) == shape
-    });
-    if !cached {
-        prepare_shape(scope, &receiver);
+    let mut receiver = crate::object::object_alloc_plain_born(2, shape);
+    if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
+        receiver = prepare_shape(receiver);
     }
-    receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
-        crate::object::store_object_field_slot_layout_deferred(
-            r,
-            0,
-            data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64).to_bits()),
+    let data = js_nanbox_pointer(data() as i64).to_bits();
+    unsafe {
+        let rep = crate::object::shapes::shape_rep_by_id(
+            crate::object::shapes::object_shape_stamp(receiver),
         );
-        crate::object::store_object_field_slot_layout_deferred(r, 1, 0.0f64.to_bits());
-    });
-    receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
+        let plain = crate::object::field_rep::slot_rep(rep, 0) == crate::object::field_rep::REP_ANY
+            && crate::object::field_rep::slot_rep(rep, 1) == crate::object::field_rep::REP_ANY;
+        if plain && !crate::gc::newborn_parent_needs_barrier(receiver as usize) {
+            // The gate the emitted constructor stores use: a parent born in
+            // the nursery owes no remembered-set entry, and no incremental
+            // cycle is live to shade the child. Both lanes are `Any`, so the
+            // bits are the values' own.
+            let slots = (receiver as *mut u8).add(std::mem::size_of::<RegExpHeader>()) as *mut u64;
+            // GC_STORE_AUDIT(INIT): newborn nursery receiver, globally idle barrier.
+            slots.write(data);
+            // GC_STORE_AUDIT(INIT): newborn receiver's lastIndex, a Number.
+            slots.add(1).write(0.0f64.to_bits());
+        } else {
+            crate::object::store_object_field_slot_layout_deferred(receiver, 0, data);
+            crate::object::store_object_field_slot_layout_deferred(receiver, 1, 0.0f64.to_bits());
+        }
+    }
+    receiver
 }
 
 #[cold]
 #[inline(never)]
-fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
+fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
+    let scope = &RuntimeHandleScope::new();
+    let receiver = &scope.root_raw_mut_ptr(receiver);
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     use crate::object::key_attrs::{attr_bits_to_entry, PRIVATE_FIELD_ENTRY};
     let prototype = scope.root_raw_mut_ptr(
@@ -83,6 +100,7 @@ fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
         super::MATCHER_READ.with(|site| site.prime_birth(shape, 0, 2));
         super::LAST_INDEX_READ.with(|site| site.prime_own_inline(shape, 1, 2));
     });
+    receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
 }
 
 // Read the realm intrinsic through the same private slot machinery as matcher

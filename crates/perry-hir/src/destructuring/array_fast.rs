@@ -81,6 +81,18 @@ impl ArraySource {
         }
     }
 
+    pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
+        let method = crate::lower::iterator_next_method_call(iter_id);
+        match self {
+            Self::Iterator(_) => method,
+            Self::Guarded(plan) => Expr::Conditional {
+                condition: Box::new(Expr::LocalGet(plan.use_iter)),
+                then_expr: Box::new(method),
+                else_expr: Box::new(Expr::Undefined),
+            },
+        }
+    }
+
     /// Produce element `idx` into `value_id`. `iter_pull` is the caller's
     /// existing iterator-step sequence, used verbatim on the protocol arm.
     pub(crate) fn pull(&self, idx: usize, value_id: LocalId, iter_pull: Vec<Stmt>) -> Vec<Stmt> {

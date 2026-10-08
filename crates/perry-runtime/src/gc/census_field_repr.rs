@@ -14,8 +14,7 @@
 //! * the fork multiplier: distinct (ShapeId, per-object Number mask) pairs
 //!   over distinct ShapeIds, the growth rep-in-identity would cost if every
 //!   object kept the rep it was born with;
-//! * the objects' share of the per-object layout tables (`LAYOUT_SLOT_MASKS`,
-//!   `TYPED_LAYOUTS`) that step 5 deletes for objects.
+
 //!
 //! Only slots 0..32 are classified: the design gives a rep only to those
 //! (the same limit 4b's region word has). Everything here runs inside the
@@ -68,8 +67,6 @@ pub(super) struct FieldReprCensus {
     shapes: HashMap<u32, ShapeAcc>,
     /// (ShapeId, per-object Number mask over slots 0..32).
     forks: HashSet<(u32, u32)>,
-    mask_entries: u64,
-    mask_bytes: u64,
 }
 
 impl FieldReprCensus {
@@ -83,7 +80,7 @@ impl FieldReprCensus {
         stamp: u32,
         slots: *const u64,
         live: usize,
-        user: usize,
+        _user: usize,
     ) {
         let n = live.min(REP_SLOTS);
         let acc = self.shapes.entry(stamp).or_insert_with(|| ShapeAcc {
@@ -111,20 +108,6 @@ impl FieldReprCensus {
             }
         }
         self.forks.insert((stamp, number_mask));
-        self.note_tables(user);
-    }
-
-    fn note_tables(&mut self, user: usize) {
-        if let Ok(masks) = super::hot_tls::hot_layout_slot_masks().try_borrow() {
-            if let Some(mask) = masks.get(&user) {
-                self.mask_entries += 1;
-                self.mask_bytes += entry_bytes::<super::layout::LayoutSlotMask>()
-                    + match mask {
-                        super::layout::LayoutSlotMask::Heap(words) => words.capacity() as u64 * 8,
-                        _ => 0,
-                    };
-            }
-        }
     }
 
     /// The census section. Counts are over live objects of this collection.
@@ -183,16 +166,8 @@ impl FieldReprCensus {
             "f64_nan_inf": f64_nan_inf,
             "shape_mask_pairs": self.forks.len(),
             "fork_multiplier": fork_multiplier,
-            "object_slot_mask_entries": self.mask_entries,
-            "object_slot_mask_bytes": self.mask_bytes,
         })
     }
-}
-
-/// The resident cost of one hash-map entry keyed by an address: the key, the
-/// value, and hashbrown's control byte.
-fn entry_bytes<V>() -> u64 {
-    (std::mem::size_of::<usize>() + std::mem::size_of::<V>() + 1) as u64
 }
 
 #[cfg(test)]

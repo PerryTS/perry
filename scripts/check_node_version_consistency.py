@@ -134,13 +134,14 @@ def _workflow_pins(text: str) -> list[str]:
 
 EXEMPTIONS: tuple[Exemption, ...] = (
     Exemption(
-        path=".github/workflows/node-core-subset.yml",
+        path=".github/workflows/compiler-runtime.yml",
         value="${{ steps.node_core_version.outputs.version }}",
         major_tracks_oracle=False,
         reason=(
             "Runs Node's OWN test corpus, which must be executed by the Node line "
             "it was taken from. Derived from test-compat/node-core/pinned-version.txt "
-            "so the coupling is explicit instead of looking like drift (#6367)."
+            "so the coupling is explicit instead of looking like drift (#6367). "
+            "The Node core suite is inlined into the Extended Tests parent."
         ),
         locator=_workflow_pins,
     ),

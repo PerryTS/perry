@@ -6,6 +6,7 @@
 
 #[cfg(test)]
 mod tests {
+    use super::super::decode::{DIRECTORY_HEADER_BYTES, FUNCTION_ENTRY_BYTES};
     use super::super::*;
 
     fn push_varint(out: &mut Vec<u8>, mut value: u64) {
@@ -74,17 +75,22 @@ mod tests {
             }
         }
 
-        // v5: a `u32 stream_offset` per function sits between the function
-        // table and the instruction-offset array. One function per blob here,
-        // so its records start at 0 in the stream.
-        let total_len = 16 + 12 + 4 + offsets.len() + stream.len();
+        // v8 with the records in-line after the directory (see
+        // `lazy::test_blob_multi_at`). One function per blob here, so its
+        // records start at 0 in the stream and at record 0.
+        let directory_len = DIRECTORY_HEADER_BYTES + FUNCTION_ENTRY_BYTES;
+        let records_len = offsets.len() + stream.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(GC_MAP_MAGIC);
         bytes.push(GC_MAP_VERSION);
         bytes.push(0);
         bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&(total_len as u32).to_le_bytes());
+        bytes.extend_from_slice(&((directory_len + records_len) as u32).to_le_bytes());
+        bytes.extend_from_slice(&(directory_len as i32).to_le_bytes());
+        bytes.extend_from_slice(&(records_len as u32).to_le_bytes());
+        bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
         // v6: the function field is relative to the blob's own first byte.
         // Every test here decodes at origin 0 with this blob first, so the
         // field is the address itself; `decodes_linker_concatenated_input_sections`
@@ -92,6 +98,7 @@ mod tests {
         bytes.extend_from_slice(&i32::try_from(function).expect("fits i32").to_le_bytes());
         bytes.extend_from_slice(&32u32.to_le_bytes());
         bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&offsets);
         bytes.extend_from_slice(&stream);
@@ -168,7 +175,7 @@ mod tests {
         assert_eq!(starts, [origin - 0x3000, origin + 0x40]);
 
         let mut functions = Vec::new();
-        super::super::lazy::parse_function_table(0, &blob, origin, &mut functions)
+        super::super::lazy::parse_function_table(&blob, origin, &mut functions, &mut Vec::new())
             .expect("the lazy table agrees");
         let lazy: Vec<usize> = functions.iter().map(|f| f.address).collect();
         assert_eq!(lazy, starts);
@@ -294,7 +301,7 @@ mod tests {
             }
         }
 
-        // The function field (bytes 16..20) is left 0 here: the assembler
+        // The function field (bytes 32..36) is left 0 here: the assembler
         // and linker fill it in, exactly as they do for a compiled module.
         let map = simple(0, 0x20, -8);
         let unique = format!(
@@ -336,8 +343,8 @@ mod tests {
              .Lperry_test_entry:\n\
              \tret\n\
              \t.section\t.note.GNU-stack,\"\",%progbits\n",
-            head = byte_line(&map[..16]),
-            tail = byte_line(&map[20..]),
+            head = byte_line(&map[..32]),
+            tail = byte_line(&map[36..]),
         );
         std::fs::write(&source, asm).expect("write dylib source");
         let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
@@ -365,8 +372,8 @@ mod tests {
         assert!(
             sections
                 .iter()
-                .any(|section| section.starts_with(&map[..16])
-                    && section[20..].starts_with(&map[20..])),
+                .any(|section| section.starts_with(&map[..32])
+                    && section[36..].starts_with(&map[36..])),
             "the later-loaded shared object's GC map was not discovered"
         );
         // v6: the decoded address is the section's mapped address plus the
@@ -630,7 +637,13 @@ mod tests {
             "a map with unknown header flags must be refused"
         );
         let mut functions = Vec::new();
-        assert!(super::super::lazy::parse_function_table(0, &bytes, 0, &mut functions).is_none());
+        assert!(super::super::lazy::parse_function_table(
+            &bytes,
+            0,
+            &mut functions,
+            &mut Vec::new()
+        )
+        .is_none());
     }
 
     #[test]
@@ -659,7 +672,7 @@ mod tests {
         // there must not be rounded down to zero, or every later varint is
         // decoded from the wrong offset.
         let bytes = simple(0x1000, 0x10, -8);
-        let truncated = &bytes[..20];
+        let truncated = &bytes[..DIRECTORY_HEADER_BYTES + 8];
         assert!(parse_gc_map(truncated, 0).is_none());
     }
 
@@ -811,28 +824,112 @@ mod tests {
             (0x1000, 32, vec![(0x00, vec![(29, -8)])]),
             (0x2000, 32, vec![(0x00, vec![(29, -8)])]),
         ]);
-        let offsets_at = 16 + 2 * super::super::decode::FUNCTION_ENTRY_BYTES;
-        let mut functions = Vec::new();
-        assert!(
-            super::super::lazy::parse_function_table(0, &good, 0, &mut functions).is_some(),
-            "the unmodified blob must parse"
-        );
+        // v8: each directory entry carries its stream offset at +16.
+        let first = DIRECTORY_HEADER_BYTES + 16;
+        let second = first + FUNCTION_ENTRY_BYTES;
+        let parse = |bytes: &[u8]| {
+            super::super::lazy::parse_function_table(bytes, 0, &mut Vec::new(), &mut Vec::new())
+                .is_some()
+        };
+        assert!(parse(&good), "the unmodified blob must parse");
 
         let mut first_nonzero = good.clone();
-        first_nonzero[offsets_at] = 1;
-        let mut out = Vec::new();
+        first_nonzero[first] = 1;
         assert!(
-            super::super::lazy::parse_function_table(0, &first_nonzero, 0, &mut out).is_none(),
+            !parse(&first_nonzero),
             "the first function's records start at 0 in the stream"
         );
 
         let mut backwards = good.clone();
-        backwards[offsets_at + 4] = 0;
-        backwards[offsets_at] = 4;
-        let mut out = Vec::new();
+        backwards[second] = 0;
+        backwards[first] = 4;
         assert!(
-            super::super::lazy::parse_function_table(0, &backwards, 0, &mut out).is_none(),
+            !parse(&backwards),
             "stream offsets are emitted in stream order"
+        );
+    }
+
+    /// v8: each entry names its first record. They are a running sum in
+    /// emission order; an entry naming another function's first record would
+    /// pair this function's records with that one's instruction offsets.
+    #[test]
+    fn rejects_first_records_that_are_not_a_running_sum() {
+        let good = super::super::lazy::test_blob_multi(&[
+            (
+                0x1000,
+                32,
+                vec![(0x00, vec![(29, -8)]), (0x08, vec![(29, -8)])],
+            ),
+            (0x2000, 32, vec![(0x00, vec![(29, -8)])]),
+        ]);
+        let second_first_record = DIRECTORY_HEADER_BYTES + FUNCTION_ENTRY_BYTES + 12;
+        assert_eq!(good[second_first_record], 2);
+        let mut shifted = good.clone();
+        shifted[second_first_record] = 1;
+        assert!(super::super::lazy::parse_function_table(
+            &shifted,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .is_none());
+        assert!(parse_gc_map(&shifted, 0).is_none());
+    }
+
+    /// v8: a records blob that overlaps its own directory is a header that
+    /// lies about where the records are; both decoders refuse it.
+    #[test]
+    fn rejects_records_that_overlap_the_directory() {
+        let mut bytes = simple(0x1000, 0x10, -8);
+        bytes[16..20].copy_from_slice(&8i32.to_le_bytes());
+        assert!(parse_gc_map(&bytes, 0).is_none());
+        assert!(super::super::lazy::parse_function_table(
+            &bytes,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .is_none());
+    }
+
+    /// v8: the lazy build reads directories and nothing else. Records that
+    /// live outside the section slice the index was built from — as the
+    /// compiler emits them, in a section of their own — are still found
+    /// through the header's self-relative offset.
+    #[test]
+    fn records_outside_the_directory_section_are_found_by_offset() {
+        let inline =
+            super::super::lazy::test_blob_multi(&[(0x1000, 32, vec![(0x10, vec![(29, -8)])])]);
+        let directory_len = DIRECTORY_HEADER_BYTES + FUNCTION_ENTRY_BYTES;
+        // Lay the records out BEFORE the directory in one allocation, and hand
+        // the index only the directory: the section-split shape.
+        let records = &inline[directory_len..];
+        let mut image = Vec::new();
+        image.extend_from_slice(records);
+        while image.len() % 8 != 0 {
+            image.push(0);
+        }
+        let directory_at = image.len();
+        image.extend_from_slice(&inline[..directory_len]);
+        let records_offset = -(directory_at as i32);
+        image[directory_at + 12..directory_at + 16]
+            .copy_from_slice(&(directory_len as u32).to_le_bytes());
+        image[directory_at + 16..directory_at + 20].copy_from_slice(&records_offset.to_le_bytes());
+        let image: &'static [u8] = Box::leak(image.into_boxed_slice());
+        let section = &image[directory_at..];
+        let index = super::super::build_index_from_sections_lazy(vec![section]);
+        let matched = index.match_records(0x1010).expect("the record is found");
+        let roots: Vec<_> = index
+            .materialise(Some(&matched))
+            .into_iter()
+            .flat_map(|(_, r, _)| r)
+            .collect();
+        assert_eq!(
+            roots,
+            vec![StackMapLocation {
+                dwarf_reg: 29,
+                offset: -8
+            }]
         );
     }
 }

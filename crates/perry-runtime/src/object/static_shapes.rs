@@ -701,7 +701,6 @@ pub extern "C" fn js_shape_run_static_seed() {
 /// # Safety
 /// May collect; holds no caller object.
 pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectKeys {
-    let _immortal = crate::gc::ImmortalLayoutScope::new();
     let arr = super::alloc::build_longlived_keys_array(std::ptr::null_mut(), 0, names);
     crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     super::canonical_keys::canonicalize(

@@ -77,7 +77,7 @@ Within the **pr** tier the changed-file list narrows the plan further:
 - **core** (anything that can change the compiler, the runtime, or a test outcome)
   → the whole PR tier.
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,
-  …) → additionally the `security-audit` reusable workflow.
+  …) → additionally the inlined `security-audit` suite.
 
 Within `cargo-test`, runtime changes also select `perry-stdlib` unit tests:
 those tests exercise runtime GC, arenas, closures, promises and the event loop.
@@ -255,3 +255,32 @@ runs inside each shard (it is shard-safe by design); the threshold minimums and 
 per-module matrix trend run once in `parity-aggregate` over the merged report
 (`scripts/parity_report_merge.py`, which refuses a missing shard rather than
 shrinking the suite).
+
+
+## Workflow suite selection
+
+The **CI** Actions workflow defaults to `suite=core`, preserving the tiered `pr-gate`, `main-gate`, and `full-suite-gate`. Select `suite=coverage`, `suite=security-audit`, or another auxiliary ID to run that nested workflow independently; `suite=all` adds all auxiliary workflows to core CI. The `tier` selector continues to control core CI.
+
+The Actions sidebar has six repository workflows. GitHub also registers four independent entries for Dependabot Updates, Dependency Graph, Copilot, and Pages, making ten entries once retired workflow history is cleaned up.
+
+| Workflow | Categories and suite selection |
+| --- | --- |
+| **CI** | Required core CI and auxiliary security/coverage checks; defaults to `suite=core` |
+| **Extended Tests** (`compiler-runtime.yml`) | Compiler/runtime, compatibility, integration, and performance; choose a category such as `suite=compatibility`, one suite such as `suite=simctl-tests`, or `suite=all` |
+| **GC** | Six collector suites; choose an individual suite or `suite=all` |
+| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment |
+| **Publish to npm / GitHub Release** | Compiler packages, platform archives, and GitHub releases |
+| **Publish to npm / @perryts/hono-server** | Independent adapter package publication |
+
+All 38 original suites remain represented. Schedules select their original suites even when several categories share a parent. Category and `all` dispatches use the original suite input defaults; individual suite dispatches accept their custom inputs. Live maintenance tasks must be selected explicitly and dispatched from `main`. Documentation deployment can still be dispatched on a release tag. The release workflows retain their filenames for npm trusted publisher authorization.
+
+Job display names use lowercase. Nested suite jobs use the stable suite ID as
+their prefix, for example `docs-check / build-and-validation` and
+`docs-check / suite result`. Workflow category names retain their sidebar casing.
+Keep suite prefixes stable: freshness checks, failure monitoring, and release
+orchestration select jobs by these names. `scripts/check_actions_topology.py`
+enforces lowercase labels and suite prefixes.
+
+For example, `gh workflow run compiler-runtime.yml -f suite=performance` runs the performance category; `gh workflow run compiler-runtime.yml -f suite=benchmark` runs only the benchmark suite. Release orchestration dispatches the simulator suite on the exact candidate SHA and checks its actual job result, independently of other Extended Tests jobs.
+
+After a consolidation lands, Repository automatically deletes completed runs whose repository workflow file no longer exists. It allows queued/running jobs to finish before deleting their history and leaves GitHub's dynamic registrations alone. This removes retired entries from the sidebar as their last runs are cleaned up.

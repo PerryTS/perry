@@ -24,6 +24,7 @@
 //! new to scan: the address is kept only as a concealed identity, never read
 //! back as a pointer.
 
+#[cfg(test)]
 use crate::gc::RuntimeHandle;
 use crate::string::StringHeader;
 use perex::input::Position;
@@ -66,7 +67,7 @@ fn conceal(address: usize) -> usize {
 
 /// The identity of the string `input` currently holds, when it is non-ASCII.
 /// ASCII strings seek in constant work and need no position.
-#[inline]
+#[cfg(test)]
 pub(crate) fn identity_of(input: &RuntimeHandle<'_>) -> Option<StringIdentity> {
     input.with_const_ptr::<StringHeader, _>(|s| unsafe { identity_of_header(s) })
 }

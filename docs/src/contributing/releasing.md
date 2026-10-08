@@ -117,7 +117,7 @@ nine-package OIDC-only flow can work, then configure the Trusted Publisher
 fields above. The release pipeline intentionally refuses a partial set.
 
 ```bash
-npm run publish:release     # one Release Packages run: exact-SHA gates/builds,
+npm run publish:release     # one Publish to npm / GitHub Release run: exact-SHA gates/builds,
                             # publish + verify all 9 via OIDC, then create
                             # v0.x.y + the GitHub Release last
 # Later, once the repository/org Socket secret exists:
@@ -214,7 +214,7 @@ Rust Tier-3 toolchain requires `+nightly -Zbuild-std` — see the
 
 ## 3. What CI does on the release
 
-The `Release Packages` workflow (`.github/workflows/release-packages.yml`)
+The `Publish to npm / GitHub Release` workflow (`.github/workflows/release-packages.yml`)
 triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
 runners build:
 

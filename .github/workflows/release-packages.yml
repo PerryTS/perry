@@ -1,4 +1,4 @@
-name: Release Packages
+name: Publish to npm / GitHub Release
 
 on:
   schedule:
@@ -251,7 +251,7 @@ jobs:
     # below. Both must move together.
     # - v0.5.876: 60 → 90 (Tests had grown past 60 min wall)
     # - v0.5.883: 90 → 120 (macOS-14 runners queue 30-60+ min during
-    #   busy hours; Tests itself takes ~30 min, but Release Packages
+    #   busy hours; Tests itself takes ~30 min, but the release pipeline
     #   starts at the same time as Tests and runs out of budget before
     #   Tests gets dequeued + executes. 120 absorbs typical runner
     #   queue + Tests wall-time).
@@ -296,9 +296,8 @@ jobs:
               local sha="$1" out rid
               out=$(gh api "/repos/$REPO/actions/workflows/test.yml/runs?head_sha=$sha&per_page=20" 2>/dev/null) || return 1
               for rid in $(echo "$out" | jq -r '.workflow_runs[]|select(.status=="completed" and .conclusion=="success")|.id' 2>/dev/null); do
-                if gh api "/repos/$REPO/actions/runs/$rid/jobs?per_page=100" \
-                     --jq '.jobs[]|select(.name=="full-suite-gate" and .conclusion=="success")|.name' 2>/dev/null \
-                     | grep -q full-suite-gate; then return 0; fi
+                jobs=$(gh api --paginate "/repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null) || continue
+                if echo "$jobs" | jq -s -e '[.[].jobs[]] | any(.name=="full-suite-gate" and .conclusion=="success")' >/dev/null; then return 0; fi
               done
               return 1
             }
@@ -353,7 +352,8 @@ jobs:
             # cancel-in-progress — dispatching on `main` cancels a running
             # nightly. The /release skill dispatches cut_release runs on a
             # pinned release/vX.Y.Z branch for exactly that reason.
-            for wf_file in "test.yml" "simctl-tests.yml"; do
+            export GITHUB_REPOSITORY="$REPO"
+            for wf_file in "test.yml" "compiler-runtime.yml"; do
               # Only test.yml may reuse the ancestor. Simulator tests still
               # run on the candidate, which is where dispatch below runs them.
               WF_SHA="$SHA"
@@ -370,9 +370,14 @@ jobs:
                   "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=20" \
                   --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "schedule" or .event == "push" and (.head_branch | startswith("v")))] | length')
               else
-                count=$(gh api \
-                  "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=1" \
-                  --jq '.total_count')
+                runs_file=$(mktemp)
+                jobs_dir=$(mktemp -d)
+                gh api "/repos/$REPO/actions/workflows/$wf_file/runs?head_sha=$WF_SHA&per_page=20" > "$runs_file"
+                simulator_state=$(python3 scripts/release_gate_runs.py \
+                  --runs "$runs_file" --jobs-dir "$jobs_dir" --sha "$WF_SHA" --fetch-jobs --repo "$REPO")
+                rm -rf "$runs_file" "$jobs_dir"
+                count=1
+                [ "$simulator_state" = "dispatch-needed" ] && count=0
               fi
               if [ "$count" = "0" ]; then
                 # workflow_dispatch runs on the ref TIP — if the ref moved past
@@ -389,7 +394,7 @@ jobs:
                   # but say so explicitly -- this is the release gate.
                   gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO" -f tier=full
                 else
-                  gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO"
+                  gh workflow run "$wf_file" --ref "$REF_NAME" -R "$REPO" -f suite=simctl-tests
                 fi
               fi
             done
@@ -405,7 +410,7 @@ jobs:
           # skips the lookup, and we no longer swallow gh's stderr — a real
           # API error now gets one retry then fails the gate loudly instead
           # of burning the 45-min budget.
-          for wf_file in "test.yml" "simctl-tests.yml"; do
+          for wf_file in "test.yml" "compiler-runtime.yml"; do
             WF_SHA="$SHA"
             [ "$wf_file" = "test.yml" ] && WF_SHA="$GATE_SHA"
             echo "::group::Waiting for $wf_file"
@@ -413,7 +418,7 @@ jobs:
             # - v0.5.876: 60 → 90 (Tests wall-time grew past 60).
             # - v0.5.883: 90 → 120. v0.5.882 hit 90-min wall because
             #   macOS-14 runner queue delayed doc-tests start by an
-            #   hour. Tests itself runs ~30 min, but Release Packages
+            #   hour. Tests itself runs ~30 min, but the release pipeline
             #   starts at tag-time and runs out of budget waiting for
             #   queue + execution. 120 absorbs typical busy-hour queue.
             deadline=$(( SECONDS + 120 * 60 ))
@@ -448,17 +453,30 @@ jobs:
               fi
               retry_on_error=1
               # Look for ANY successful run on this SHA (order-independent).
-              success_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .html_url' | head -1)
+              success_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.head_sha == "'"$WF_SHA"'") | .html_url' | head -1)
               # test.yml is tiered (scripts/ci_plan.py): a push-to-main SWEEP
               # or a PR-tier run on this SHA is green too, but only a FULL-tier
               # run carries the release-grade suites (parity, compile-smoke,
               # doc-tests, ...). Its fan-in job is NAMED `full-suite-gate` for
               # exactly this check: keep only successful runs that have it.
+              if [ "$wf_file" = "compiler-runtime.yml" ]; then
+                runs_file=$(mktemp)
+                jobs_dir=$(mktemp -d)
+                echo "$api_out" > "$runs_file"
+                state=$(python3 scripts/release_gate_runs.py --runs "$runs_file" \
+                  --jobs-dir "$jobs_dir" --sha "$WF_SHA" --fetch-jobs)
+                rm -rf "$runs_file" "$jobs_dir"
+                case "$state" in
+                  success) success_url="simctl-tests / simctl succeeded on $WF_SHA" ;;
+                  failed) fail_url="simctl-tests / simctl failed on $WF_SHA" ;;
+                  pending|absent) success_url="" ;;
+                esac
+              fi
               if [ "$wf_file" = "test.yml" ] && [ -n "$success_url" ]; then
                 success_url=""
                 for run_id in $(echo "$api_out" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id'); do
-                  if gh api "/repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
-                       --jq '.jobs[] | select(.name == "full-suite-gate" and .conclusion == "success") | .name' 2>/dev/null | grep -q full-suite-gate; then
+                  jobs=$(gh api --paginate "/repos/$REPO/actions/runs/$run_id/jobs?per_page=100" 2>/dev/null) || continue
+                  if echo "$jobs" | jq -s -e '[.[].jobs[]] | any(.name == "full-suite-gate" and .conclusion == "success")' >/dev/null; then
                     success_url="https://github.com/$REPO/actions/runs/$run_id"
                     break
                   fi
@@ -471,10 +489,12 @@ jobs:
               # FAIL signal — but only if there's NO successful run for
               # this SHA. This way a flaky run that someone reran to green
               # doesn't block the release.
-              fail_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion != "success") | .html_url' | head -1)
+              if [ "$wf_file" != "compiler-runtime.yml" ]; then
+                fail_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.head_sha == "'"$WF_SHA"'" and .status == "completed" and .conclusion != "success") | .html_url' | head -1)
+              fi
               # Newest run for the "still running" status line.
-              latest_status=$(echo "$api_out" | jq -r '.workflow_runs[0].status // empty')
-              latest_url=$(echo "$api_out" | jq -r '.workflow_runs[0].html_url // empty')
+              latest_status=$(echo "$api_out" | jq -r '[.workflow_runs[] | select(.head_sha == "'"$WF_SHA"'")][0].status // empty')
+              latest_url=$(echo "$api_out" | jq -r '[.workflow_runs[] | select(.head_sha == "'"$WF_SHA"'")][0].html_url // empty')
               if [ -n "$success_url" ]; then
                 echo "  OK  $wf_file passed: $success_url"
                 break
@@ -585,10 +605,6 @@ jobs:
       # binaries that did build — partial publish beats no publish.
       fail-fast: false
       matrix:
-      - uses: ./.github/actions/perry-mbx-cache
-        with:
-          cache-generation: perry-release-x86_64-apple-darwin
-          save-on-workflow-dispatch: true
         include:
           - os: macos-14
             target: aarch64-apple-darwin
@@ -1870,9 +1886,11 @@ jobs:
           # `startsWith(github.ref, 'refs/tags/v')`, which holds when
           # dispatched with --ref <tag>. Best-effort: a failed dispatch must
           # not fail the release itself.
-          for wf in docs.yml benchmark.yml container-tests.yml; do
-            gh workflow run "$wf" --ref "$TAG" -R "$REPO" \
-              || echo "::warning::could not dispatch $wf on $TAG — run it manually"
+          for rider in maintenance.yml:docs compiler-runtime.yml:benchmark compiler-runtime.yml:container-tests; do
+            wf="${rider%%:*}"
+            suite="${rider#*:}"
+            gh workflow run "$wf" --ref "$TAG" -R "$REPO" -f "suite=$suite" \
+              || echo "::warning::could not dispatch $wf / $suite on $TAG — run it manually"
           done
 
   # Fast preview lane: the package matrices still build the real release

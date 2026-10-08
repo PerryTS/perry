@@ -1,0 +1,5 @@
+Preserve `yield` and `yield*` inside source-ordered object literal construction. The synthetic plain-function builder previously hid these suspension expressions from the enclosing generator pass, so a delegated spread could complete immediately with an empty object. This made OpenCode's tool wrapper lose its parameter schema.
+
+Unify generator and async builder replay behind a structural check for a straight-line, non-async, non-generator closure returning its seed parameter. This removes the await path's generated-parameter-name check and handles suspension in both expression statements and local initializers in source order. No runtime, codegen, extern, cache, or registry changes.
+
+The regression covers a captured initializer, conditional delegation, spread getters, and computed properties with yielded keys and values; its output matches Node and Bun. Related generator/await parity cases pass, and a forced-evacuation probe exercised 40 copying minors and 996 moved objects under from-space protection.

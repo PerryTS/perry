@@ -637,7 +637,7 @@ fn test_numeric_array_layout_metadata_preserves_and_downgrades_on_writes() {
     assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
-        Some(1)
+        None
     );
 
     js_array_set_f64(arr, 0, 99.0);
@@ -1342,7 +1342,7 @@ fn test_numeric_array_layout_immutable_helpers_preserve_or_downgrade() {
     assert_eq!(js_array_is_numeric_f64_layout(mixed), 0);
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(mixed as usize, values.len()),
-        Some(1)
+        None
     );
 }
 
@@ -1366,7 +1366,7 @@ fn test_numeric_array_layout_map_fast_path_downgrades_mapped_pointers() {
     );
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(mapped as usize, 4),
-        Some(4)
+        None
     );
 }
 
@@ -1383,7 +1383,7 @@ fn test_numeric_array_layout_entries_outer_downgrades_inner_pairs_preserve() {
     );
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(entries as usize, values.len()),
-        Some(values.len())
+        None
     );
 
     let pair_box = js_array_get_f64(entries, 0);

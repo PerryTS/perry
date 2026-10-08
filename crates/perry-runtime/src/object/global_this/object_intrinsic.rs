@@ -135,7 +135,6 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // prototype are held as raw pointers across every allocating install
     // below, and both live for the life of the realm.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let _immortal = crate::gc::ImmortalLayoutScope::new();
     let info = crate::fn_info!(global_this_object_thunk, 1; with_declared(1));
     let closure_ptr = crate::closure::js_closure_alloc(info, 0);
     if closure_ptr.is_null() {

@@ -71,7 +71,7 @@ class PaginationTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/test.yml').read_text()
         command = 'python3 scripts/ci_pr_files.py "$REPOSITORY" "$PR_NUMBER"'
         self.assertEqual(workflow.count(command), 3)
-        self.assertEqual(workflow.count('--expected-head "$PR_HEAD_SHA"'), 3)
+        self.assertEqual(workflow.count('--expected-head "$PR_HEAD_SHA"'), 4)
         self.assertNotIn('--json files', workflow)
 
     def fixture(self, pages=None, before=None, after=None):

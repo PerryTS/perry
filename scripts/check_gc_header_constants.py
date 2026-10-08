@@ -15,9 +15,8 @@ collector's header layout into emitted code in two load-bearing ways:
   `expr/element_shape_guard.rs`).
 
 Both sides therefore carry their own copy of `GC_TYPE_OBJECT`,
-`GC_FLAG_FORWARDED`, `OBJ_FLAG_HAS_DESCRIPTORS`, `GC_OBJ_TYPED_LAYOUT_INTACT`
-and friends, and until this checker the agreement was held by a code comment
-("Runtime-side name: `gc::layout::GC_OBJ_TYPED_LAYOUT_INTACT`").
+`GC_FLAG_FORWARDED`, `OBJ_FLAG_HAS_DESCRIPTORS` and friends, and until this
+checker the agreement was held by a code comment naming the runtime constant.
 
 The things that LOOK like they enforce it do not:
 
@@ -95,7 +94,6 @@ RUNTIME_WANTED = {
     "GC_LAYOUT_STATE_MASK",
     "GC_LAYOUT_POINTER_FREE",
     "GC_LAYOUT_SIDE_MASK",
-    "GC_OBJ_TYPED_LAYOUT_INTACT",
 }
 
 # ---------------------------------------------------------------------------
@@ -210,6 +208,8 @@ OUT_OF_SCOPE = {
         "`.perry_gcmap` section format, not the object header",
     ("crates/perry-codegen/src/gc_map.rs", "GC_MAP_LABEL"):
         "`.perry_gcmap` section format, not the object header",
+    ("crates/perry-codegen/src/gc_map.rs", "GC_REC_LABEL"):
+        "`.perry_gcrec` section format (v8 records), not the object header",
 }
 
 # Prefixes that make a codegen `const` look like a header restatement. A new
@@ -336,7 +336,7 @@ def self_test(root: Path) -> int:
         return 1
     print(
         "check_gc_header_constants self-test: OK — a one-bit move of "
-        "GC_OBJ_TYPED_LAYOUT_INTACT is detected, and the tree is currently clean"
+        "OBJ_FLAG_HAS_DESCRIPTORS is detected, and the tree is currently clean"
     )
     return 0
 

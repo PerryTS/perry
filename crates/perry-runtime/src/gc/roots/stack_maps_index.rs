@@ -33,7 +33,7 @@ impl StackMapIndex {
     pub(super) fn match_records(&self, ip: usize) -> Option<lazy::RecordMatch> {
         let matched = lazy::match_records(
             &self.functions,
-            &self.sections,
+            &self.records,
             ip,
             MAX_SAFEPOINT_RETURN_DELTA,
         );
@@ -44,7 +44,7 @@ impl StackMapIndex {
     }
 
     pub(super) fn matched(&self, matched: &lazy::RecordMatch) -> lazy::MatchedRecords<'_> {
-        lazy::MatchedRecords::new(&self.functions, &self.sections, matched)
+        lazy::MatchedRecords::new(&self.functions, &self.records, matched)
     }
 
     /// Materialise a match, for the cross-check and the diagnostic dump only.

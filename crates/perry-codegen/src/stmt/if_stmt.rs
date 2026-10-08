@@ -4,8 +4,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
-use crate::lower_conditional::lower_expr_with_truthy;
-
 #[derive(Clone)]
 struct NativeArenaOwnerAliasSnapshot {
     known: HashMap<u32, u32>,
@@ -269,6 +267,5 @@ pub(crate) fn lower_if(
 }
 
 fn lower_if_condition_i1(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr) -> Result<String> {
-    let (_boxed, truthy) = lower_expr_with_truthy(ctx, condition)?;
-    Ok(truthy)
+    crate::lower_conditional::lower_test(ctx, condition)
 }

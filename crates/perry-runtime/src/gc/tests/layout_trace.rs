@@ -2,11 +2,14 @@ use super::super::*;
 use super::support::*;
 mod array_layout;
 mod element_shape;
+mod header_kinds;
+mod kind_transitions;
 mod large_array_slots;
+mod moving_kinds;
 mod object_closure_slots;
 mod object_layout_invalidation;
-mod per_object_tables;
 mod typed_shape;
+mod whole_heap_kinds;
 
 #[test]
 fn test_trace_array_marks_child() {
@@ -176,10 +179,10 @@ fn test_layout_scan_trace_json_counts_pointer_slot_bytes() {
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];
-    assert_eq!(layout_scans["pointer_slots_read"].as_u64(), Some(1));
-    assert_eq!(layout_scans["pointer_slot_bytes_read"].as_u64(), Some(8));
-    assert_eq!(layout_scans["masked_pointer_slots_read"].as_u64(), Some(1));
-    assert_eq!(layout_scans["unknown_layout_slots_read"].as_u64(), Some(0));
+    assert_eq!(layout_scans["pointer_slots_read"].as_u64(), Some(4));
+    assert_eq!(layout_scans["pointer_slot_bytes_read"].as_u64(), Some(32));
+    assert_eq!(layout_scans["masked_pointer_slots_read"].as_u64(), Some(0));
+    assert_eq!(layout_scans["unknown_layout_slots_read"].as_u64(), Some(4));
 
     clear_marks();
     clear_mark_seeds();
@@ -261,7 +264,7 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
     crate::array::js_array_set_f64(arr, 2, 3.0);
     crate::array::js_array_set_f64(arr, 3, 4.0);
 
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), None);
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -270,10 +273,10 @@ fn test_layout_mask_small_mixed_array_scans_exact_pointer_slot() {
         trace_array(arr as *mut u8, &valid_ptrs, &mut worklist);
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 4);
 
     crate::array::js_array_set_f64(arr, 1, 2.0);
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(0));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), None);
 
     clear_marks();
     clear_mark_seeds();
@@ -303,7 +306,7 @@ fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
         0,
         f64::from_bits(STRING_TAG | (child0 as u64 & POINTER_MASK)),
     );
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), None);
 
     // Reproduce the stale-state hazard: force POINTER_FREE while the mask{0}
     // entry is still present (`set_layout_state` only touches the state bits).
@@ -324,11 +327,11 @@ fn test_pointer_store_restores_side_mask_from_stale_pointer_free() {
     unsafe {
         assert_eq!(
             (*arr_header)._reserved & GC_LAYOUT_STATE_MASK,
-            GC_LAYOUT_SIDE_MASK,
+            GC_LAYOUT_UNKNOWN,
             "recording a pointer into an existing mask must restore SIDE_MASK"
         );
     }
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(2));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), None);
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -372,7 +375,7 @@ fn test_layout_mask_heap_conversion_keeps_sparse_words_zeroed() {
         f64::from_bits(STRING_TAG | (later_child as u64 & POINTER_MASK)),
     );
 
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 66), Some(2));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 66), None);
 
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -382,7 +385,7 @@ fn test_layout_mask_heap_conversion_keeps_sparse_words_zeroed() {
         assert_ne!((*first_child_header).gc_flags & GC_FLAG_MARKED, 0);
         assert_ne!((*later_child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
-    assert_eq!(test_trace_slot_reads(), 2);
+    assert_eq!(test_trace_slot_reads(), 66);
 
     clear_marks();
     clear_mark_seeds();
@@ -431,7 +434,7 @@ fn test_layout_mask_object_and_closure_slots() {
     );
     crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
 
-    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), None);
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
     test_reset_trace_slot_reads();
@@ -439,7 +442,7 @@ fn test_layout_mask_object_and_closure_slots() {
         trace_closure(closure as *mut u8, &valid_ptrs, &mut worklist);
         assert_ne!((*closure_child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 8);
 
     clear_marks();
     clear_mark_seeds();

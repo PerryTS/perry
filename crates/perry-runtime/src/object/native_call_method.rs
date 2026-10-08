@@ -2524,31 +2524,29 @@ pub(crate) unsafe fn native_call_method_tower(
     // vtable, prototype walk) to their aliased native handle, so
     // `server.listen(...)` / `server.on(...)` on the plain-object `this`
     // behave as calls on the underlying server. See native_this_alias.rs.
-    if super::native_this_alias::alias_active() {
-        if let Some((handle_val, composite)) =
-            super::native_this_alias::alias_handle_for_object(object())
-        {
-            // Server aliases dispatch through the PRIMARY handle dispatcher
-            // only: the composite's extension dispatchers (ext-net) may own
-            // an id-colliding socket that would claim shared names like
-            // `address`/`on` first. A `ServerResponse` alias (#10454) needs
-            // the composite, whose http extension owns that handle.
-            let dispatch = if composite {
-                super::class_handles::handle_method_dispatch()
-            } else {
-                super::class_handles::handle_method_dispatch_primary()
-            };
-            if let Some(dispatch) = dispatch {
-                let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
-                let args = refreshed_args();
-                return dispatch(
-                    handle,
-                    method_name_ptr as *const u8,
-                    method_name_len,
-                    args.as_ptr(),
-                    args.len(),
-                );
-            }
+    if let Some((handle_val, composite)) =
+        super::native_this_alias::alias_handle_for_object(object())
+    {
+        // Server aliases dispatch through the PRIMARY handle dispatcher
+        // only: the composite's extension dispatchers (ext-net) may own
+        // an id-colliding socket that would claim shared names like
+        // `address`/`on` first. A `ServerResponse` alias (#10454) needs
+        // the composite, whose http extension owns that handle.
+        let dispatch = if composite {
+            super::class_handles::handle_method_dispatch()
+        } else {
+            super::class_handles::handle_method_dispatch_primary()
+        };
+        if let Some(dispatch) = dispatch {
+            let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
+            let args = refreshed_args();
+            return dispatch(
+                handle,
+                method_name_ptr as *const u8,
+                method_name_len,
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
 

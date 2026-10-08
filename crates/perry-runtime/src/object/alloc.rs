@@ -565,15 +565,6 @@ pub extern "C" fn js_build_class_keys_array(
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
     let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
-    // This array is long-lived and never dies. Without the scope, the per-slot
-    // notes in the builder mint a per-object pointer mask for any class with
-    // enough keys, which arms `PERRY_PER_OBJECT_LAYOUTS_ANY` and puts the
-    // address filter probe on EVERY later allocation in the program (measured
-    // as 3% of an allocation-heavy ECS row: `layout_forget_object` from each
-    // object literal). Under the scope the notes settle on the tag-checked
-    // scan, and `layout_init_all_pointer_slots` below records the final
-    // all-pointer layout anyway.
-    let _immortal = crate::gc::ImmortalLayoutScope::new();
     // Issue #179: route the array and its key strings through the longlived
     // arena so general-arena block 0 doesn't get pinned by the first
     // `new C()` in a loop, which cascaded via block-persistence into every
@@ -583,14 +574,6 @@ pub extern "C" fn js_build_class_keys_array(
     // canonical keys array is immutable for the rest of the program (growing a
     // shape builds a NEW array — `shape_keys_grown`). Say that in the header
     // instead of leaving the per-element pointer mask behind.
-    //
-    // The mask is correct but permanent: the shape cache anchors this array for
-    // the program's lifetime (#179), so its `LAYOUT_SLOT_MASKS` entry never
-    // drains. One such entry is enough to keep the whole per-object side table
-    // non-empty — and every probe of it on the allocation, store, death and
-    // trace paths then has to hash instead of taking the emptiness fast path.
-    // Since ~every program builds at least one shape, that made the fast path
-    // essentially dead: on `churn_alloc` it fired once in 40 million calls.
     //
     // The per-element notes in the builder stay. They are what keeps the
     // already-stored prefix traceable if allocating the *next* key string

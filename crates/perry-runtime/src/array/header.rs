@@ -1722,7 +1722,7 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
 
 /// #7469 — declare ONCE, at allocation, that every element this array will
 /// hold is a heap pointer, so the per-store pointer-mask bookkeeping
-/// (`layout_note_slot`, and the `LAYOUT_SLOT_MASKS` entry it grows) is not
+/// (`layout_note_slot` and the header payload kind) is not
 /// needed for the stores codegen has proven pointer-valued.
 ///
 /// Emitted by codegen at the `[]` literal that binds an array local whose every

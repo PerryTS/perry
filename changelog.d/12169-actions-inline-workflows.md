@@ -1,0 +1,1 @@
+Consolidate GitHub Actions suites into ten category workflows. Inline suite jobs, remove retired child workflow files, restore direct job permissions, and replace non-descriptive workflow labels with readable suite names.

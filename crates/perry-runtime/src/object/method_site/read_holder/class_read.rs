@@ -182,7 +182,7 @@ impl Entry {
             let mut count = 0;
             for i in 0..ABSENT_BUCKETS {
                 let id = *tail.add(i);
-                if id != 0 && crate::object::shapes::shape_record_by_id(id).is_some() {
+                if id != 0 && !crate::object::shapes::shape_is_retired(id) {
                     live[count] = id;
                     count += 1;
                 }

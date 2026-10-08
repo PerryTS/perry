@@ -40,7 +40,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     crate::closure::js_closure_set_capture_ptr(mixed, 2, 7);
-    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 8), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 8), None);
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -49,7 +49,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
     ));
     test_reset_trace_slot_reads();
     trace_marked_objects(&valid_ptrs);
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 8);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }

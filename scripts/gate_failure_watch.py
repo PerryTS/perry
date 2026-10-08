@@ -28,7 +28,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "scripts/gate_failure_watch.json"
 FRESHNESS_CONFIG = ROOT / "scripts/gate_freshness.json"
-WATCH_WORKFLOW = ROOT / ".github/workflows/gate-failure-watch.yml"
+WATCH_WORKFLOW = ROOT / ".github/workflows/maintenance.yml"
 WORKFLOW_DIR = ROOT / ".github/workflows"
 RED_CONCLUSIONS = {"action_required", "failure", "startup_failure", "timed_out"}
 ApiRequest = Callable[[str, str, dict[str, str] | None], dict[str, Any]]
@@ -38,13 +38,16 @@ ApiRequest = Callable[[str, str, dict[str, str] | None], dict[str, Any]]
 class WatchConfig:
     branch: str
     tag_pattern: str
-    workflows: dict[str, str]
+    workflows: dict[str, list[dict[str, Any]]]
     excluded: dict[str, str]
 
 
 def load_config(path: pathlib.Path = CONFIG) -> WatchConfig:
     raw = json.loads(path.read_text())
-    workflows = {item["path"]: item["name"] for item in raw["workflows"]}
+    workflows = {
+        item["path"]: item.get("subjects", [{"name": item["name"], "id": item["path"]}])
+        for item in raw["workflows"]
+    }
     excluded = {item["path"]: item["why"] for item in raw.get("excluded", [])}
     if len(workflows) != len(raw["workflows"]):
         raise ValueError("gate_failure_watch.json contains duplicate workflow paths")
@@ -65,7 +68,7 @@ def eligible_run(run: dict[str, Any], config: WatchConfig) -> bool:
     event = run.get("event")
     branch = run.get("head_branch")
     if event == "schedule":
-        return branch in (None, config.branch)
+        return branch == config.branch
     if event in {"repository_dispatch", "workflow_dispatch"}:
         return branch == config.branch
     if event == "push":
@@ -92,6 +95,57 @@ def failure_rows(jobs: Sequence[dict[str, Any]]) -> list[str]:
     return sorted(rows)
 
 
+def subject_jobs(jobs: Sequence[dict[str, Any]], subject: dict[str, Any]) -> list[dict[str, Any]]:
+    """Select the reusable caller and all its nested jobs for one logical suite."""
+    exact_names = subject.get("job_names")
+    if exact_names:
+        return [job for job in jobs if job.get("name") in exact_names]
+    prefix = str(subject["job"])
+    return [job for job in jobs if str(job.get("name", "")).startswith(prefix + " / ") or job.get("name") == prefix]
+
+
+def subject_verdict(jobs: Sequence[dict[str, Any]], subject: dict[str, Any]) -> str | None:
+    """Return success/failure only when this suite was selected and completed."""
+    rows = subject_jobs(jobs, subject)
+    if not rows:
+        return None
+    if subject.get("job_names"):
+        completed = [job for job in rows if job.get("status") == "completed"]
+        if not completed:
+            return None
+        row = max(completed, key=lambda job: str(job.get("completed_at") or ""))
+        value = row.get("conclusion")
+        return "failure" if value in RED_CONCLUSIONS else ("success" if value == "success" else None)
+    summary = next(
+        (job for job in rows if job.get("name") == f"{subject['job']} / suite result"),
+        None,
+    )
+    if summary:
+        # The inline fan-in handles optional/skipped child jobs and is the
+        # authoritative result for the selected suite.
+        if summary.get("status") != "completed":
+            return None
+        value = summary.get("conclusion")
+        return "failure" if value in RED_CONCLUSIONS else ("success" if value == "success" else None)
+    caller = next((job for job in rows if job.get("name") == subject["job"]), None)
+    if caller and caller.get("conclusion") == "skipped":
+        return None
+    if caller and len(rows) == 1 and rows[0].get("name") == subject["job"]:
+        # GitHub sometimes reports a reusable call only as one caller row.
+        if rows[0].get("status") != "completed": return None
+        value=rows[0].get("conclusion")
+        return "failure" if value in RED_CONCLUSIONS else ("success" if value == "success" else None)
+    nested=[job for job in rows if job is not caller and job.get("name") != subject["job"]]
+    if not nested or any(job.get("status") != "completed" for job in nested):
+        return None
+    conclusions = [job.get("conclusion") for job in nested]
+    if any(value in RED_CONCLUSIONS for value in conclusions):
+        return "failure"
+    if all(value == "success" for value in conclusions):
+        return "success"
+    return None
+
+
 def _gh_api(method: str, path: str, fields: dict[str, str] | None = None) -> dict[str, Any]:
     args = [
         "gh",
@@ -111,12 +165,16 @@ def _gh_api(method: str, path: str, fields: dict[str, str] | None = None) -> dic
 
 
 def get_jobs(repo: str, run_id: int, request: ApiRequest = _gh_api) -> list[dict[str, Any]]:
-    response = request(
-        "GET",
-        f"repos/{repo}/actions/runs/{run_id}/jobs",
-        {"filter": "all", "per_page": "100"},
-    )
-    return list(response.get("jobs") or [])
+    rows=[]; page=1
+    while True:
+        response = request(
+            "GET",
+            f"repos/{repo}/actions/runs/{run_id}/jobs",
+            {"filter": "all", "per_page": "100", "page": str(page)},
+        )
+        batch=list(response.get("jobs") or []); rows.extend(batch)
+        if len(batch)<100: return rows
+        page+=1
 
 
 def get_history(
@@ -297,28 +355,32 @@ def handle_event(
             f"event={run.get('event')} branch={run.get('head_branch')}"
         )
         return 0
-    name = config.workflows[path]
-    conclusion = run.get("conclusion")
-    if conclusion == "success":
+    jobs = get_jobs(repo, int(run["id"]), request)
+    for subject in config.workflows[path]:
+        name = subject["name"]
+        subject_id = str(subject["id"])
+        verdict = subject_verdict(jobs, subject)
+        if verdict is None:
+            print(f"skip: {name} was not selected or has not completed")
+            continue
+        logical_path = str(subject.get("path", path))
+        if verdict == "success":
+            if not dry_run:
+                close_failure_issue(repo, logical_path, name, run, request)
+            else:
+                print(f"dry-run: would close {issue_marker(logical_path)} after green run")
+            continue
+        rows = failure_rows(subject_jobs(jobs, subject))
+        history = get_history(repo, int(run["workflow_id"]), config.branch, request)
+        previous, last_green = previous_runs(run, history, config)
+        previous_rows = (
+            failure_rows(subject_jobs(get_jobs(repo, int(previous["id"]), request), subject))
+            if previous else []
+        )
+        body = issue_body(logical_path, name, run, rows, previous, previous_rows, last_green)
+        print(body)
         if not dry_run:
-            close_failure_issue(repo, path, name, run, request)
-        else:
-            print(f"dry-run: would close {issue_marker(path)} after green run")
-        return 0
-    if conclusion not in RED_CONCLUSIONS:
-        print(f"skip: {name} conclusion={conclusion}")
-        return 0
-
-    rows = failure_rows(get_jobs(repo, int(run["id"]), request))
-    history = get_history(repo, int(run["workflow_id"]), config.branch, request)
-    previous, last_green = previous_runs(run, history, config)
-    previous_rows = (
-        failure_rows(get_jobs(repo, int(previous["id"]), request)) if previous else []
-    )
-    body = issue_body(path, name, run, rows, previous, previous_rows, last_green)
-    print(body)
-    if not dry_run:
-        sync_failure_issue(repo, path, name, body, request)
+            sync_failure_issue(repo, logical_path, name, body, request)
     return 0
 
 
@@ -331,18 +393,36 @@ def check_config() -> int:
 
     config = load_config()
     failures: list[str] = []
-    for path, expected_name in config.workflows.items():
+    for path, subjects in config.workflows.items():
         workflow_file = WORKFLOW_DIR / path
         if not workflow_file.is_file():
             failures.append(f"watched workflow does not exist: {path}")
             continue
         actual_name = (yaml.safe_load(workflow_file.read_text()) or {}).get("name")
-        if actual_name != expected_name:
-            failures.append(f"{path}: configured name {expected_name!r}, actual {actual_name!r}")
+        if not actual_name:
+            failures.append(f"{path}: workflow has no display name")
+        workflow = yaml.load(workflow_file.read_text(), Loader=yaml.BaseLoader) or {}
+        jobs = workflow.get("jobs") or {}
+        seen_subjects: set[str] = set()
+        for subject in subjects:
+            for required in ("id", "name", "path"):
+                if not subject.get(required):
+                    failures.append(f"{path}: subject has empty/missing {required}: {subject!r}")
+            selector = subject.get("job_names") or ([subject.get("job")] if subject.get("job") else [])
+            if not selector or any(not value for value in selector):
+                failures.append(f"{path}: subject {subject.get('id')} has no job selector")
+            logical_path = str(subject.get("path") or "")
+            if logical_path in seen_subjects:
+                failures.append(f"{path}: duplicate logical subject path {logical_path}")
+            seen_subjects.add(logical_path)
+            if subject.get("job") and subject["job"] not in jobs:
+                failures.append(f"{path}: subject {subject.get('id')} selects missing caller job {subject['job']}")
+            if subject.get("job_names") and any(name not in {"pr-gate", "main-gate", "full-suite-gate"} for name in subject["job_names"]):
+                failures.append(f"{path}: subject {subject.get('id')} has unsupported exact job selector")
 
-    observer = yaml.load(WATCH_WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    observer = yaml.load((WORKFLOW_DIR / "maintenance.yml").read_text(), Loader=yaml.BaseLoader)
     trigger_names = set(observer["on"]["workflow_run"]["workflows"])
-    configured_names = set(config.workflows.values())
+    configured_names = {"CI", "GC", "Extended Tests"}
     if trigger_names != configured_names:
         failures.append(
             "workflow_run trigger/config mismatch: "
@@ -354,7 +434,9 @@ def check_config() -> int:
     required = {
         gate.get("source_workflow", gate["workflow"]) for gate in freshness["gates"]
     }
-    missing = required - set(config.workflows) - set(config.excluded)
+    covered = set(config.workflows) | set(config.excluded)
+    covered |= {str(subject.get("path")) for subjects in config.workflows.values() for subject in subjects}
+    missing = required - covered
     if missing:
         failures.append(f"freshness-tracked workflows neither watched nor excluded: {sorted(missing)}")
     stale_exclusions = set(config.excluded) - required
@@ -374,17 +456,18 @@ def check_config() -> int:
 
 
 def self_test() -> int:
-    config = WatchConfig(
-        "main", "^v[0-9]", {"gc-ratchet.yml": "GC Ratchet"}, {}
-    )
+    config = WatchConfig("main", "^v[0-9]", {"gc.yml": [
+        {"id":"gc-ratchet","name":"GC Ratchet","job":"gc-ratchet","path":"gc-ratchet.yml"},
+        {"id":"gc-moving-witnesses","name":"GC Moving Witnesses","job":"gc-moving-witnesses","path":"gc-moving-witnesses.yml"},
+    ]}, {})
     failures: list[str] = []
 
     def run(**overrides: Any) -> dict[str, Any]:
         base = {
             "id": 10,
             "workflow_id": 20,
-            "path": ".github/workflows/gc-ratchet.yml",
-            "name": "GC Ratchet",
+            "path": ".github/workflows/gc.yml",
+            "name": "GC",
             "event": "schedule",
             "head_branch": "main",
             "head_sha": "a" * 40,
@@ -421,6 +504,50 @@ def self_test() -> int:
     rows = failure_rows(jobs)
     if rows != ["aggregate", "matrix (linux) / Compare rows"]:
         failures.append(f"failure row extraction: {rows}")
+
+    subject=config.workflows["gc.yml"][0]
+    if subject_verdict([{"name":"gc-ratchet","status":"completed","conclusion":"skipped"}],subject) is not None:
+        failures.append("skipped logical suite was treated as a verdict")
+    if subject_verdict([{"name":"gc-ratchet","status":"completed","conclusion":"success"}],subject) != "success":
+        failures.append("completed caller success was not recognized")
+    nested_jobs=[{"name":"gc-ratchet","status":"completed","conclusion":"failure"},
+                 {"name":"gc-ratchet / matrix (linux)","status":"completed","conclusion":"success"},
+                 {"name":"gc-ratchet / aggregate","status":"completed","conclusion":"failure","steps":[]}]
+    if subject_verdict(nested_jobs,subject) != "failure": failures.append("nested failed subject was not recognized")
+    sibling_failure_jobs = [
+        {"name":"gc-ratchet","status":"completed","conclusion":"success"},
+        {"name":"gc-ratchet / verdict","status":"completed","conclusion":"success"},
+        {"name":"gc-moving-witnesses / verdict","status":"completed","conclusion":"failure"},
+    ]
+    if subject_verdict(sibling_failure_jobs, subject) != "success":
+        failures.append("sibling failure contaminated a green subject")
+    if failure_rows(subject_jobs(sibling_failure_jobs, subject)):
+        failures.append("sibling failure rows leaked into the green subject")
+
+    core_subject = {
+        "id":"core", "name":"CI core gate",
+        "job_names":["pr-gate", "main-gate", "full-suite-gate"], "path":"test.yml",
+    }
+    if subject_verdict([
+        {"name":"main-gate","status":"completed","conclusion":"failure"},
+        {"name":"coverage","status":"completed","conclusion":"success"},
+    ], core_subject) != "failure":
+        failures.append("core CI gate failure was not tracked independently from coverage")
+    if subject_verdict([
+        {"name":"coverage","status":"completed","conclusion":"success"},
+    ], core_subject) is not None:
+        failures.append("auxiliary coverage run was mistaken for a core CI verdict")
+
+    page_calls: list[str] = []
+    def paged_request(method: str, path: str, fields: dict[str, str] | None = None) -> dict[str, Any]:
+        page = int((fields or {}).get("page", "1"))
+        page_calls.append(str(page))
+        rows = ([{"name": f"noise {i}"} for i in range(100)] if page == 1
+                else [{"name":"gc-ratchet / page-two failure", "status":"completed", "conclusion":"failure"}])
+        return {"jobs": rows}
+    paged_rows = get_jobs("o/r", 77, request=paged_request)
+    if len(paged_rows) != 101 or paged_rows[-1].get("conclusion") != "failure" or page_calls != ["1", "2"]:
+        failures.append("observer dropped a failed subject on job API page two")
 
     history = [
         run(id=10),

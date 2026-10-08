@@ -1,0 +1,1725 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "5423c426f4066c666aa3311672aef270ff69f3ae",
+  "categories": {
+    "ci": {
+      "name": "CI",
+      "entrypoint": "test.yml",
+      "modules": [
+        {
+          "id": "core",
+          "file": "test.yml",
+          "original_events": {
+            "pull_request": {
+              "branches": [
+                "main"
+              ],
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "push": [
+              {
+                "branches": [
+                  "main"
+                ]
+              },
+              {
+                "tags": [
+                  "v*"
+                ]
+              }
+            ],
+            "schedule": [
+              {
+                "cron": "0 4 * * *"
+              },
+              {
+                "cron": "47 */2 * * *"
+              }
+            ],
+            "workflow_dispatch": {
+              "inputs": {
+                "tier": {
+                  "description": "Which tier to run (release-packages.yml dispatches `full`)",
+                  "type": "choice",
+                  "options": [
+                    "pr",
+                    "sweep",
+                    "full"
+                  ],
+                  "default": "full"
+                },
+                "update_gap_snapshot": {
+                  "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "inputs": {
+            "tier": {
+              "description": "Which tier to run (release-packages.yml dispatches `full`)",
+              "type": "choice",
+              "options": [
+                "pr",
+                "sweep",
+                "full"
+              ],
+              "default": "full"
+            },
+            "update_gap_snapshot": {
+              "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+              "type": "boolean",
+              "default": "false"
+            }
+          },
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "coverage",
+          "file": "coverage.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "0 4 * * 1"
+              }
+            ],
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "security-audit",
+          "file": "security-audit.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "0 12 * * 1"
+              }
+            ],
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "workflow_run_names": [
+            "CI"
+          ],
+          "required_jobs": [
+            "config-scans",
+            "soak-gate"
+          ],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "zizmor",
+          "file": "zizmor.yml",
+          "original_events": {
+            "push": {
+              "branches": [
+                "main"
+              ],
+              "paths": [
+                ".github/**"
+              ]
+            },
+            "pull_request": {
+              "paths": [
+                ".github/**"
+              ]
+            }
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "native-result-ledger",
+          "file": "native-result-ledger.yml",
+          "original_events": {
+            "pull_request": {
+              "paths": [
+                "crates/perry-codegen/src/lower_call/native_table/**",
+                "scripts/native_result_ledger.py",
+                "scripts/native_result_ledger.tsv",
+                ".github/workflows/native-result-ledger.yml"
+              ]
+            },
+            "push": {
+              "branches": [
+                "main"
+              ],
+              "paths": [
+                "crates/perry-codegen/src/lower_call/native_table/**",
+                "scripts/native_result_ledger.py",
+                "scripts/native_result_ledger.tsv",
+                ".github/workflows/native-result-ledger.yml"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "npm-launcher",
+          "file": "npm-launcher.yml",
+          "original_events": {
+            "pull_request": {
+              "paths": [
+                "npm/**",
+                "packaging/install.sh",
+                ".github/workflows/npm-launcher.yml"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": [
+            "push"
+          ]
+        }
+      ],
+      "dispatch_inputs": {
+        "tier": {
+          "description": "Which tier to run (release-packages.yml dispatches `full`)",
+          "type": "choice",
+          "options": [
+            "pr",
+            "sweep",
+            "full"
+          ],
+          "default": "full"
+        },
+        "update_gap_snapshot": {
+          "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+          "type": "boolean",
+          "default": false
+        },
+        "suite": {
+          "description": "Core CI or one auxiliary check.",
+          "type": "choice",
+          "options": [
+            "core",
+            "all",
+            "coverage",
+            "security-audit",
+            "zizmor",
+            "native-result-ledger",
+            "npm-launcher"
+          ],
+          "default": "core"
+        }
+      },
+      "core_module": "core"
+    },
+    "gc": {
+      "name": "GC",
+      "entrypoint": "gc.yml",
+      "modules": [
+        {
+          "id": "gc-ratchet",
+          "file": "gc-ratchet.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "7 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-ratchet"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "gc-moving-witnesses",
+          "file": "gc-moving-witnesses.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "12 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-moving-witnesses"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "gc-native-roots",
+          "file": "gc-native-roots.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "37 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-native-roots-complete"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "gc-root-dominance",
+          "file": "gc-root-dominance.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "17 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-root-dominance",
+            "gc-root-dominance-statepoints"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "gc-parse-churn-gate",
+          "file": "gc-parse-churn-gate.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "57 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-parse-churn-gate"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "gc-ptr-shape-off-witness",
+          "file": "gc-ptr-shape-off-witness.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "47 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "gc-ptr-shape-off-witness"
+          ],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "GC suite or all suites.",
+          "type": "choice",
+          "options": [
+            "all",
+            "gc-ratchet",
+            "gc-moving-witnesses",
+            "gc-native-roots",
+            "gc-root-dominance",
+            "gc-parse-churn-gate",
+            "gc-ptr-shape-off-witness"
+          ],
+          "default": "all"
+        }
+      }
+    },
+    "compiler-runtime": {
+      "name": "Compiler and Runtime",
+      "entrypoint": "compiler-runtime.yml",
+      "modules": [
+        {
+          "id": "llvm-inprocess",
+          "file": "llvm-inprocess.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "42 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "llvm-inprocess-complete"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "cc-parity",
+          "file": "cc-parity.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-cc-parity",
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "eh-transport",
+          "file": "eh-transport.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "32 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "eh-transport"
+          ],
+          "validation_only_events": []
+        },
+        {
+          "id": "ext-link",
+          "file": "ext-link.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "52 4 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "Compiler/runtime suite or all suites.",
+          "type": "choice",
+          "options": [
+            "all",
+            "llvm-inprocess",
+            "cc-parity",
+            "eh-transport",
+            "ext-link"
+          ],
+          "default": "all"
+        }
+      },
+      "route_job": "route"
+    },
+    "compatibility": {
+      "name": "Compatibility",
+      "entrypoint": "compiler-runtime.yml",
+      "modules": [
+        {
+          "id": "node-compat-matrix",
+          "file": "node-compat-matrix.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "57 4 * * *"
+              }
+            ],
+            "merge_group": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "merge_group": true,
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "node-suite-guard",
+          "file": "node-suite-guard.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "37 4 * * *"
+              }
+            ],
+            "merge_group": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "merge_group": true,
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "node-core-subset",
+          "file": "node-core-subset.yml",
+          "original_events": {
+            "workflow_dispatch": {
+              "inputs": {
+                "apis": {
+                  "description": "Optional space-separated API list, e.g. 'path url buffer'",
+                  "required": false,
+                  "default": ""
+                },
+                "max_per_api": {
+                  "description": "Maximum upstream Node tests to sample per API; 0 means no cap",
+                  "required": false,
+                  "default": "25"
+                }
+              }
+            },
+            "schedule": [
+              {
+                "cron": "17 3 * * *"
+              }
+            ]
+          },
+          "inputs": {
+            "apis": {
+              "description": "Optional space-separated API list, e.g. 'path url buffer'",
+              "required": false,
+              "default": ""
+            },
+            "max_per_api": {
+              "description": "Maximum upstream Node tests to sample per API; 0 means no cap",
+              "required": false,
+              "default": "25"
+            }
+          },
+          "parent_input_map": {
+            "apis": "apis",
+            "max_per_api": "max_per_api"
+          },
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "feature-matrix",
+          "file": "feature-matrix.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "43 4 * * *"
+              }
+            ]
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        },
+        {
+          "id": "wasi-check",
+          "file": "wasi-check.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ],
+              "paths": [
+                "crates/perry-runtime/**",
+                "crates/perry-dispatch/**",
+                "crates/perry-stdlib/**",
+                "crates/perry-ext-*/**",
+                "crates/perry/**",
+                "crates/perry-codegen/Cargo.toml",
+                "test-files/test_gap_*.ts",
+                ".github/actions/setup-llvm22/**",
+                "Cargo.toml",
+                ".cargo/**",
+                "Cargo.lock",
+                "rust-toolchain.toml",
+                "scripts/wasi_check.sh",
+                "scripts/runtime_abi_check.py",
+                "scripts/wasi_ir_check.sh",
+                "scripts/wasi_toolchain.sh",
+                "scripts/wasi_build_runtime.sh",
+                "scripts/wasi_smoke.sh",
+                "scripts/wasi_smoke/**",
+                "crates/perry-codegen/src/**",
+                "crates/perry/src/commands/compile/**",
+                ".github/workflows/wasi-check.yml",
+                ".github/workflows/compiler-runtime.yml"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "41 2 * * *"
+              }
+            ],
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "npm-package-sweep",
+          "file": "npm-package-sweep.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "25 5 * * *"
+              }
+            ],
+            "workflow_dispatch": {
+              "inputs": {
+                "packages": {
+                  "description": "Optional comma-separated package specs. Empty uses packages.json.",
+                  "type": "string",
+                  "default": ""
+                },
+                "limit": {
+                  "description": "Maximum packages to sweep. Use 0 for all selected packages.",
+                  "type": "number",
+                  "default": 6
+                },
+                "strict": {
+                  "description": "Fail the workflow if any package fails.",
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "inputs": {
+            "packages": {
+              "description": "Optional comma-separated package specs. Empty uses packages.json.",
+              "type": "string",
+              "default": ""
+            },
+            "limit": {
+              "description": "Maximum packages to sweep. Use 0 for all selected packages.",
+              "type": "number",
+              "default": "6"
+            },
+            "strict": {
+              "description": "Fail the workflow if any package fails.",
+              "type": "boolean",
+              "default": "false"
+            }
+          },
+          "parent_input_map": {
+            "packages": "packages",
+            "limit": "limit",
+            "strict": "strict"
+          },
+          "required_jobs": [],
+          "validation_only_events": [
+            "pull_request"
+          ]
+        }
+      ],
+      "dispatch_inputs": {
+        "apis": {
+          "description": "Optional Node core API list.",
+          "type": "string",
+          "default": ""
+        },
+        "max_per_api": {
+          "description": "Node core test limit per API; 0 means unlimited.",
+          "type": "string",
+          "default": "25"
+        },
+        "packages": {
+          "description": "Optional comma-separated package specs.",
+          "type": "string",
+          "default": ""
+        },
+        "limit": {
+          "description": "Package sweep limit; 0 means all selected packages.",
+          "type": "number",
+          "default": 6
+        },
+        "strict": {
+          "description": "Fail on any package sweep failure.",
+          "type": "boolean",
+          "default": false
+        },
+        "suite": {
+          "description": "Compatibility suite or all suites.",
+          "type": "choice",
+          "options": [
+            "all",
+            "node-compat-matrix",
+            "node-suite-guard",
+            "node-core-subset",
+            "feature-matrix",
+            "wasi-check",
+            "npm-package-sweep"
+          ],
+          "default": "all"
+        }
+      },
+      "route_job": "route-compatibility"
+    },
+    "integration": {
+      "name": "Integration",
+      "entrypoint": "compiler-runtime.yml",
+      "modules": [
+        {
+          "id": "container-tests",
+          "file": "container-tests.yml",
+          "original_events": {
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "pull_request": {
+              "branches": [
+                "main"
+              ],
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ],
+              "paths": [
+                "crates/perry-container-compose/**",
+                "crates/perry-container-e2e/**",
+                "crates/perry-stdlib/src/container/**",
+                "crates/perry-stdlib/tests/container_*",
+                "crates/perry-hir/src/lower.rs",
+                "crates/perry-hir/src/ir.rs",
+                "crates/perry-codegen/src/lower_call.rs",
+                "tests/e2e/**",
+                "types/perry/container/**",
+                "types/perry/compose/**",
+                "types/perry/workloads/**",
+                ".github/workflows/container-tests.yml",
+                ".github/workflows/compiler-runtime.yml"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "30 3 * * *"
+              }
+            ],
+            "workflow_dispatch": {
+              "inputs": {
+                "run_e2e": {
+                  "description": "Run e2e tests (Layer D)",
+                  "required": false,
+                  "default": "false",
+                  "type": "choice",
+                  "options": [
+                    "true",
+                    "false"
+                  ]
+                },
+                "run_fuzz": {
+                  "description": "Run fuzz tests (Layer E)",
+                  "required": false,
+                  "default": "false",
+                  "type": "choice",
+                  "options": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            }
+          },
+          "inputs": {
+            "run_e2e": {
+              "description": "Run e2e tests (Layer D)",
+              "required": false,
+              "default": "false",
+              "type": "string",
+              "options": [
+                "true",
+                "false"
+              ]
+            },
+            "run_fuzz": {
+              "description": "Run fuzz tests (Layer E)",
+              "required": false,
+              "default": "false",
+              "type": "string",
+              "options": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          "parent_input_map": {
+            "run_e2e": "run_e2e",
+            "run_fuzz": "run_fuzz"
+          },
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "simctl-tests",
+          "file": "simctl-tests.yml",
+          "original_events": {
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            }
+          },
+          "inputs": {
+            "device": {
+              "description": "Simulator device name (default: iPhone 15)",
+              "required": false,
+              "default": "iPhone 15"
+            }
+          },
+          "parent_input_map": {
+            "device": "device"
+          },
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "next-app-route",
+          "file": "next-app-route.yml",
+          "original_events": {
+            "workflow_dispatch": null,
+            "schedule": [
+              {
+                "cron": "17 3 * * *"
+              }
+            ]
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "auto-opt-app-patterns",
+          "file": "auto-opt-app-patterns.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ],
+              "paths": [
+                "crates/**",
+                "benchmarks/app-patterns/**",
+                "scripts/auto_opt_app_patterns.sh",
+                "Cargo.toml",
+                "Cargo.lock",
+                ".node-version",
+                ".github/actions/setup-llvm22/**",
+                ".github/workflows/auto-opt-app-patterns.yml",
+                "types/perry/container/**",
+                "types/perry/compose/**",
+                "types/perry/workloads/**",
+                ".github/workflows/compiler-runtime.yml"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "22 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "pr_label": "run-extended-tests",
+          "required_jobs": [
+            "auto-opt-app-patterns"
+          ],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "run_e2e": {
+          "description": "Run container E2E tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        },
+        "run_fuzz": {
+          "description": "Run container fuzz tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        },
+        "device": {
+          "description": "Simulator device name.",
+          "type": "string",
+          "default": "iPhone 15"
+        },
+        "suite": {
+          "description": "Integration suite or all suites.",
+          "type": "choice",
+          "options": [
+            "all",
+            "container-tests",
+            "simctl-tests",
+            "next-app-route",
+            "auto-opt-app-patterns"
+          ],
+          "default": "all"
+        }
+      },
+      "route_job": "route-integration"
+    },
+    "performance": {
+      "name": "Performance",
+      "entrypoint": "compiler-runtime.yml",
+      "modules": [
+        {
+          "id": "benchmark",
+          "file": "benchmark.yml",
+          "original_events": {
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "release": {
+              "types": [
+                "published"
+              ]
+            },
+            "workflow_dispatch": null,
+            "schedule": [
+              {
+                "cron": "0 3 * * *"
+              }
+            ]
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "tak-performance",
+          "file": "tak-performance.yml",
+          "original_events": {
+            "workflow_dispatch": null,
+            "schedule": [
+              {
+                "cron": "30 4 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            }
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "tls-budget",
+          "file": "tls-budget.yml",
+          "original_events": {
+            "pull_request": {
+              "types": [
+                "opened",
+                "synchronize",
+                "reopened",
+                "labeled"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "27 */6 * * *"
+              }
+            ],
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [
+            "tls-budget"
+          ],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "Performance suite or all suites.",
+          "type": "choice",
+          "options": [
+            "all",
+            "benchmark",
+            "tak-performance",
+            "tls-budget"
+          ],
+          "default": "all"
+        }
+      },
+      "route_job": "route-performance"
+    },
+    "documentation": {
+      "name": "Documentation",
+      "entrypoint": "maintenance.yml",
+      "modules": [
+        {
+          "id": "docs-check",
+          "file": "docs-check.yml",
+          "original_events": {
+            "pull_request": {
+              "paths": [
+                "README.md",
+                "docs/**",
+                "scripts/check_docs.py",
+                "crates/perry-doc-tests/**",
+                ".github/workflows/docs-check.yml",
+                ".github/workflows/docs.yml",
+                ".github/workflows/maintenance.yml"
+              ]
+            },
+            "push": {
+              "branches": [
+                "main"
+              ],
+              "paths": [
+                "README.md",
+                "docs/**",
+                "scripts/check_docs.py",
+                "crates/perry-doc-tests/**",
+                ".github/workflows/docs-check.yml",
+                ".github/workflows/docs.yml"
+              ]
+            },
+            "schedule": [
+              {
+                "cron": "23 5 * * 1"
+              }
+            ],
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "docs",
+          "file": "docs.yml",
+          "original_events": {
+            "push": {
+              "tags": [
+                "v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {
+            "GITHUB_TOKEN": {
+              "type": "secret"
+            }
+          },
+          "parent_input_map": {},
+          "required_jobs": [],
+          "manual_only": true,
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "Validation, deploy, or all.",
+          "type": "choice",
+          "options": [
+            "docs-check",
+            "docs",
+            "all"
+          ],
+          "default": "docs-check"
+        }
+      },
+      "route_job": "route-documentation"
+    },
+    "release-packages": {
+      "name": "Publish to npm / GitHub Release",
+      "entrypoint": "release-packages.yml",
+      "modules": [
+        {
+          "id": "release-packages",
+          "file": "release-packages.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "37 6 * * *"
+              }
+            ],
+            "release": {
+              "types": [
+                "published"
+              ]
+            },
+            "workflow_dispatch": {
+              "inputs": {
+                "cut_release": {
+                  "description": "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "nightly": {
+                  "description": "Build this exact commit and publish its host/cross archives as a GitHub prerelease. Does not run stable release gates or publish to npm.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "candidate_sha": {
+                  "description": "Required with cut_release: exact pushed candidate SHA. Prevents a moved branch from publishing or being tagged.",
+                  "type": "string",
+                  "default": ""
+                },
+                "dist_tag": {
+                  "description": "npm dist-tag for a cut release (normally latest).",
+                  "type": "string",
+                  "default": "latest"
+                },
+                "socket_scan": {
+                  "description": "Run the optional Socket tarball scan before npm publication.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "existing_tag": {
+                  "description": "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback.",
+                  "type": "string",
+                  "default": ""
+                },
+                "publish_npm": {
+                  "description": "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm.",
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "inputs": {
+            "cut_release": {
+              "description": "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release.",
+              "type": "boolean",
+              "default": "false"
+            },
+            "nightly": {
+              "description": "Build this exact commit and publish its host/cross archives as a GitHub prerelease. Does not run stable release gates or publish to npm.",
+              "type": "boolean",
+              "default": "false"
+            },
+            "candidate_sha": {
+              "description": "Required with cut_release: exact pushed candidate SHA. Prevents a moved branch from publishing or being tagged.",
+              "type": "string",
+              "default": ""
+            },
+            "dist_tag": {
+              "description": "npm dist-tag for a cut release (normally latest).",
+              "type": "string",
+              "default": "latest"
+            },
+            "socket_scan": {
+              "description": "Run the optional Socket tarball scan before npm publication.",
+              "type": "boolean",
+              "default": "false"
+            },
+            "existing_tag": {
+              "description": "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback.",
+              "type": "string",
+              "default": ""
+            },
+            "publish_npm": {
+              "description": "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm.",
+              "type": "boolean",
+              "default": "false"
+            }
+          },
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "cut_release": {
+          "description": "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release.",
+          "type": "boolean",
+          "default": false
+        },
+        "nightly": {
+          "description": "Build this exact commit and publish its host/cross archives as a GitHub prerelease. Does not run stable release gates or publish to npm.",
+          "type": "boolean",
+          "default": false
+        },
+        "candidate_sha": {
+          "description": "Required with cut_release: exact pushed candidate SHA. Prevents a moved branch from publishing or being tagged.",
+          "type": "string",
+          "default": ""
+        },
+        "dist_tag": {
+          "description": "npm dist-tag for a cut release (normally latest).",
+          "type": "string",
+          "default": "latest"
+        },
+        "socket_scan": {
+          "description": "Run the optional Socket tarball scan before npm publication.",
+          "type": "boolean",
+          "default": false
+        },
+        "existing_tag": {
+          "description": "Re-publish an existing release (e.g. v0.5.1300): rebuild and re-upload assets / re-run publish legs for that tag. Replaces the old implicit 'latest release' fallback.",
+          "type": "string",
+          "default": ""
+        },
+        "publish_npm": {
+          "description": "With existing_tag: also (re-)publish the npm packages. release / cut_release runs always publish npm.",
+          "type": "boolean",
+          "default": false
+        },
+        "suite": {
+          "type": "choice",
+          "default": "all",
+          "options": [
+            "all"
+          ]
+        }
+      }
+    },
+    "release-hono-server": {
+      "name": "Publish to npm / Hono Server",
+      "entrypoint": "release-hono-server.yml",
+      "modules": [
+        {
+          "id": "release-hono-server",
+          "file": "release-hono-server.yml",
+          "original_events": {
+            "push": {
+              "tags": [
+                "hono-server-v*"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        }
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "type": "choice",
+          "default": "all",
+          "options": [
+            "all"
+          ]
+        }
+      }
+    },
+    "maintenance": {
+      "name": "Maintenance",
+      "entrypoint": "maintenance.yml",
+      "modules": [
+        {
+          "id": "ci-queue-reaper",
+          "file": "ci-queue-reaper.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "13,43 * * * *"
+              }
+            ],
+            "workflow_dispatch": {
+              "inputs": {
+                "apply": {
+                  "description": "Actually cancel (unchecked = dry run)",
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            }
+          },
+          "inputs": {
+            "apply": {
+              "description": "Actually cancel (unchecked = dry run)",
+              "type": "boolean",
+              "required": false,
+              "default": "false"
+            }
+          },
+          "parent_input_map": {
+            "apply": "apply"
+          },
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "gate-freshness",
+          "file": "gate-freshness.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "5 */2 * * *"
+              }
+            ],
+            "pull_request": {
+              "paths": [
+                "scripts/check_gate_freshness.py",
+                "scripts/gate_freshness.json",
+                ".github/workflows/gate-freshness.yml",
+                ".github/workflows/maintenance.yml"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "validation_only_events": [
+            "pull_request"
+          ],
+          "required_jobs": []
+        },
+        {
+          "id": "gate-failure-watch",
+          "file": "gate-failure-watch.yml",
+          "original_events": {
+            "workflow_run": {
+              "workflows": [
+                "CI",
+                "GC",
+                "Extended Tests"
+              ],
+              "types": [
+                "completed"
+              ]
+            },
+            "pull_request": {
+              "paths": [
+                ".github/workflows/*.yml",
+                "scripts/gate_failure_watch.json",
+                "scripts/gate_failure_watch.py",
+                "scripts/gate_freshness.json",
+                ".github/workflows/maintenance.yml"
+              ]
+            }
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "workflow_run_names": [
+            "CI",
+            "GC",
+            "Extended Tests"
+          ],
+          "validation_only_events": [
+            "pull_request"
+          ],
+          "required_jobs": []
+        },
+        {
+          "id": "soak-autofix",
+          "file": "soak-autofix.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "17 0 * * *"
+              }
+            ],
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "required_jobs": [],
+          "validation_only_events": []
+        },
+        {
+          "id": "npm-publish-freshness",
+          "file": "npm-publish-freshness.yml",
+          "original_events": {
+            "schedule": [
+              {
+                "cron": "20 7 * * *"
+              }
+            ],
+            "pull_request": {
+              "paths": [
+                "scripts/check_npm_publish_freshness.py",
+                "scripts/npm_publish_freshness.json",
+                ".github/workflows/npm-publish-freshness.yml",
+                "npm/**",
+                ".github/workflows/maintenance.yml",
+                "scripts/actions_catalog.json",
+                "scripts/actions_plan.py",
+                "scripts/gate_failure_watch.py",
+                "scripts/gate_failure_watch.json",
+                "scripts/gate_freshness.json"
+              ]
+            },
+            "workflow_dispatch": null
+          },
+          "inputs": {},
+          "parent_input_map": {},
+          "validation_only_events": [
+            "pull_request"
+          ],
+          "required_jobs": [
+            "npm-publish-freshness"
+          ]
+        }
+      ],
+      "dispatch_inputs": {
+        "apply": {
+          "description": "Apply queue cleanup; unchecked is dry run.",
+          "type": "boolean",
+          "default": false
+        },
+        "suite": {
+          "description": "Offline validation by default; choose a live task explicitly.",
+          "type": "choice",
+          "options": [
+            "validate",
+            "ci-queue-reaper",
+            "gate-freshness",
+            "soak-autofix",
+            "npm-publish-freshness",
+            "delete-retired-runs"
+          ],
+          "default": "validate"
+        }
+      },
+      "workflow_run_names": [
+        "CI",
+        "GC",
+        "Extended Tests"
+      ],
+      "self_alerting": [
+        "gate-freshness",
+        "npm-publish-freshness"
+      ],
+      "route_job": "route",
+      "cleanup_push_paths": [
+        ".github/workflows/maintenance.yml",
+        "scripts/delete_retired_workflow_runs.py"
+      ]
+    }
+  },
+  "entrypoints": {
+    "compiler-runtime.yml": {
+      "name": "Extended Tests",
+      "categories": [
+        "compiler-runtime",
+        "compatibility",
+        "integration",
+        "performance"
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "All extended checks, one category, or an individual suite.",
+          "type": "choice",
+          "options": [
+            "all",
+            "compiler-runtime",
+            "compatibility",
+            "integration",
+            "performance",
+            "llvm-inprocess",
+            "cc-parity",
+            "eh-transport",
+            "ext-link",
+            "node-compat-matrix",
+            "node-suite-guard",
+            "node-core-subset",
+            "feature-matrix",
+            "wasi-check",
+            "npm-package-sweep",
+            "container-tests",
+            "simctl-tests",
+            "next-app-route",
+            "auto-opt-app-patterns",
+            "benchmark",
+            "tak-performance",
+            "tls-budget"
+          ],
+          "default": "all"
+        },
+        "apis": {
+          "description": "Optional Node core API list.",
+          "type": "string",
+          "default": ""
+        },
+        "max_per_api": {
+          "description": "Node core test limit per API; 0 means unlimited.",
+          "type": "string",
+          "default": "25"
+        },
+        "packages": {
+          "description": "Optional comma-separated package specs.",
+          "type": "string",
+          "default": ""
+        },
+        "limit": {
+          "description": "Package sweep limit; 0 means all selected packages.",
+          "type": "number",
+          "default": 6
+        },
+        "strict": {
+          "description": "Fail on any package sweep failure.",
+          "type": "boolean",
+          "default": false
+        },
+        "device": {
+          "description": "Simulator device name.",
+          "type": "string",
+          "default": "iPhone 15"
+        },
+        "run_e2e": {
+          "description": "Run container E2E tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        },
+        "run_fuzz": {
+          "description": "Run container fuzz tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        }
+      }
+    },
+    "maintenance.yml": {
+      "name": "Repository",
+      "categories": [
+        "maintenance",
+        "documentation"
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "Offline validation by default; select docs deployment or maintenance explicitly.",
+          "type": "choice",
+          "options": [
+            "validate",
+            "docs-check",
+            "docs",
+            "ci-queue-reaper",
+            "gate-freshness",
+            "soak-autofix",
+            "npm-publish-freshness",
+            "delete-retired-runs"
+          ],
+          "default": "validate"
+        },
+        "apply": {
+          "description": "Apply queue cleanup; unchecked is dry run.",
+          "type": "boolean",
+          "default": false
+        },
+        "confirm_delete_retired_runs": {
+          "description": "Required confirmation for deleting completed runs of retired workflows.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

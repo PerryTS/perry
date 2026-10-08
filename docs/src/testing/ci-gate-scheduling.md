@@ -292,3 +292,12 @@ So the human counter census was not a lucky substitute for a starved gate; **it 
 the only instrument that covered that dimension at all.** Restoring gate freshness
 does not close #7965's third ask, and a freshness dashboard that is entirely green
 would still not have caught it.
+
+
+## GitHub Actions category runs
+
+The Actions sidebar is organized around these entrypoints: `CI`, `GC`, `Compiler and Runtime`, `Compatibility`, `Integration`, `Performance`, `Documentation`, `Publish to npm / GitHub Release`, `Publish to npm / Hono Server`, and `Maintenance`. Category runs expose each selected workflow as a nested job. Their schedules remain staggered and unchanged; the router selects only the suite that owns the fired cron.
+
+Use the **Run workflow** suite selector for focused manual runs. For example, choose `suite=gc-root-dominance` on **GC**, `suite=node-core-subset` on **Compatibility**, or `suite=simctl-tests` on **Integration**. Choose `suite=all` only when the full category is intended. CI defaults to `suite=core`; select an auxiliary suite such as `coverage` or `security-audit` to run it without the protected core gate. Maintenance defaults to offline validation; choose a live maintenance suite only when its effects are intended.
+
+Release automation continues to dispatch the full CI tier and waits for the selected nested simulator job in the Integration run. The parent run may contain unrelated skipped or failed siblings; release gating follows the required subject job.
