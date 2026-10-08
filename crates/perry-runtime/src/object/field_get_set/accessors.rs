@@ -559,20 +559,21 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
     );
 }
 
-/// Invoke an accessor owned by a descriptor-marked object before its empty
-/// backing slot is read. Gate-neutral builtin installs deliberately leave the
-/// process-wide `ACCESSORS_IN_USE` flag clear, but stamp their owner with
-/// `OBJ_FLAG_HAS_DESCRIPTORS`; the caller checks that bit before entering this
-/// helper, so ordinary object reads pay only the already-loaded header-bit
-/// test. This also makes direct reads of builtin prototype accessors preserve
-/// their real behavior (`Set.prototype.size` throws, `RegExp.prototype.source`
-/// returns `"(?:)"`, and so on) once startup is descriptor-gate-free.
-pub(crate) unsafe fn builtin_reflection_accessor_read(
+/// The caller has resolved this holder's key to `slot` under its current
+/// shape. Read that lane's attributes directly, including builtin prototype
+/// accessors, without classifying the receiver or searching the name again.
+/// The getter may collect; no raw holder/key view is used after it runs.
+#[inline]
+pub(crate) unsafe fn object_accessor_at_with_live(
     obj: *const ObjectHeader,
-    key_bytes: &[u8],
+    keys: *const ArrayHeader,
+    slot: u32,
+    live: u32,
 ) -> Option<JSValue> {
-    let name = std::str::from_utf8(key_bytes).ok()?;
-    let acc = get_accessor_descriptor(obj as usize, name)?;
+    if !super::super::key_attrs::key_is_accessor_at(keys, slot) {
+        return None;
+    }
+    let acc = super::super::accessor_pair::slot_accessor_with_live(obj, slot, live);
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }

@@ -1009,8 +1009,8 @@ unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
     };
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     !keys.is_null()
-        && super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name).is_some()
-        && !key_may_be_accessor(obj, name)
+        && super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+            .is_some_and(|slot| !super::key_attrs::key_is_accessor_at(keys, slot))
 }
 
 /// The receiver's OWN accessor for `name`, run now with the receiver as
@@ -1444,7 +1444,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
     if let Some(s) = own {
         // An own key: an inline DATA property holding a directly callable
         // closure. A tombstone (`TAG_HOLE`) is not a closure and refuses.
-        if key_may_be_accessor(obj, name) {
+        if super::key_attrs::key_is_accessor_at(keys, s) {
             refuse(4);
             return;
         }
@@ -1691,12 +1691,6 @@ fn address_is_prime_stable(addr: usize) -> bool {
         && crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown
 }
 
-/// Accessor identity is a fact of the holder shape. Changing the entry
-/// publishes a new ShapeId and retires every memo of the previous holder.
-unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
-    super::key_attrs::object_key_is_accessor(obj, name)
-}
-
 /// The value of spill-located key `index` as the emitted hit will read it:
 /// through `ObjectMeta::spill`, a dense buffer the runtime never shifts.
 unsafe fn spill_bits(obj: *const ObjectHeader, index: u32) -> Option<u64> {
@@ -1846,10 +1840,8 @@ unsafe fn prime_inherited(
     let class_instance = class_id != 0
         && class_id < super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
         && !super::is_anon_shape_class_id(class_id);
-    if key_may_be_accessor(obj, name) {
-        refuse(8);
-        return;
-    }
+    // The caller already proved the receiver lacks the name. Only the
+    // holder's resolved slot can carry its descriptor facts.
     let class_holder = if class_instance {
         match read_holder::class_link(obj) {
             Some(holder) => Some(holder),
@@ -1913,10 +1905,9 @@ unsafe fn prime_inherited(
             return;
         }
         let meta = (*next).meta;
-        if (!meta.is_null()
+        if !meta.is_null()
             && ((*meta).elements != 0
-                || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0))
-            || key_may_be_accessor(next, name)
+                || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
         {
             refuse(8);
             return;
@@ -1926,6 +1917,10 @@ unsafe fn prime_inherited(
             if let Some(s) =
                 super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
             {
+                if super::key_attrs::key_is_accessor_at(keys, s) {
+                    refuse(8);
+                    return;
+                }
                 if s >= shape.live_inline_slot_count {
                     refuse(8);
                     return;
