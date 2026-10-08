@@ -408,6 +408,12 @@ extern "C" fn tee_pull_microtask(
                 None => (None, true, false, false),
             }
         };
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let chunk = chunk.map(|bits| scope.root_nanbox_u64(bits));
+        // A tee source read is consumer progress, including a pending read
+        // on an empty transform output. Use the same backpressure release as
+        // default/BYOB readers and pipeTo so parked transform writes can run.
+        super::transform::transform_release_writes(source);
         match chunk {
             Some(bits) => {
                 // Pipeline is warm from the first delivery on — later
@@ -417,8 +423,6 @@ extern "C" fn tee_pull_microtask(
                 // regardless of which branch's read triggered the pull.
                 // Byte tees clone the chunk for branch-b (CloneAsUint8Array)
                 // so the two branches never share a mutable buffer.
-                let scope = perry_runtime::gc::RuntimeHandleScope::new();
-                let bits = scope.root_nanbox_u64(bits);
                 let b_bits = if is_byte {
                     byob::clone_byte_chunk(bits.get_nanbox_u64())
                 } else {
@@ -655,6 +659,55 @@ unsafe fn settle_cancellations(a: usize, b: usize) {
         if let Some(promise) = promise {
             js_promise_resolve(promise, f64::from_bits(super::TAG_UNDEFINED));
             idalloc::retire_readable_terminal(id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tee_read_releases_transform_backpressure() {
+        let _serial = super::super::tests::serial_guard();
+        let undefined = f64::from_bits(super::super::TAG_UNDEFINED);
+        unsafe {
+            let transform = super::super::js_transform_stream_new(
+                undefined, undefined, undefined, undefined, undefined,
+            );
+            let source = super::super::js_transform_stream_readable(transform) as usize;
+            let writable = super::super::js_transform_stream_writable(transform) as usize;
+            let (first, second) = tee_readable_stream_ids(source);
+            let first = super::super::js_readable_stream_get_reader(first as f64);
+            let second = super::super::js_readable_stream_get_reader(second as f64);
+
+            let write = super::super::transform::transform_write(writable, 1.0);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(write), 0);
+
+            let first_read = super::super::js_reader_read(first);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(first_read), 1);
+            assert_eq!(perry_runtime::promise::js_promise_state(write), 1);
+
+            let second_read = super::super::js_reader_read(second);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(second_read), 1);
+
+            let write = super::super::transform::transform_write(writable, 2.0);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(write), 0);
+            let first_read = super::super::js_reader_read(first);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(first_read), 1);
+            assert_eq!(perry_runtime::promise::js_promise_state(write), 1);
+
+            let second_read = super::super::js_reader_read(second);
+            perry_runtime::promise::js_promise_run_microtasks();
+            assert_eq!(perry_runtime::promise::js_promise_state(second_read), 1);
+            super::super::js_reader_cancel(first, undefined);
+            super::super::js_reader_cancel(second, undefined);
+            perry_runtime::promise::js_promise_run_microtasks();
         }
     }
 }
