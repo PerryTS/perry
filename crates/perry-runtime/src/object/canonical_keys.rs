@@ -1584,6 +1584,18 @@ pub(crate) fn canonical_storage_stats() -> (u64, u64, u64, u64) {
     )
 }
 
+/// Agent-local trie entries and reserved payload bytes for the exit census.
+/// Hash-table control bytes and allocator overhead are excluded; backing
+/// element storage is reported separately by `canonical_storage_stats`.
+pub(crate) fn canonical_trie_stats() -> (usize, usize, usize) {
+    with_table_or((0, 0, 0), |t| {
+        let bytes = t.nodes.capacity() * std::mem::size_of::<Node>()
+            + t.edges.capacity() * std::mem::size_of::<((u32, u64), u32)>()
+            + t.by_addr.capacity() * std::mem::size_of::<((usize, u32), u32)>();
+        (t.edges.len(), t.by_addr.len(), bytes)
+    })
+}
+
 /// Every published canonical list in this agent's trie, as an array address.
 #[cfg(test)]
 pub(crate) fn published_lists_for_test() -> Vec<*mut ArrayHeader> {

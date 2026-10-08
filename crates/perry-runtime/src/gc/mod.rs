@@ -1460,6 +1460,12 @@ fn emit_incremental_liveness_diag() {
     if EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    let (edges, published, payload_bytes) = crate::object::canonical_keys::canonical_trie_stats();
+    let (_, backings, slots, _) = crate::object::canonical_keys::canonical_storage_stats();
+    eprintln!(
+        "[gc-canonical-trie] edges={edges} published={published} reserved_payload_bytes={payload_bytes} backings={backings} backing_bytes={}",
+        slots * 8
+    );
     let (reentrant, no_trigger, start_blocked, resume_blocked) = instruments::budgeted_step_skips();
     let (blocked_alloc, blocked_unsafe_zone, blocked_root_lock) =
         instruments::moving_safepoints_blocked_by_other_guards();
