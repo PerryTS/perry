@@ -137,7 +137,8 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
             bitand_has_nonnegative_i32_mask(left, right)
         }
         Expr::LocalGet(id) => {
-            ctx.integer_locals.contains(id)
+            (ctx.integer_locals.contains(id)
+                || matches!(ctx.local_slot_reps.get(id), Some(super::SlotRep::I32)))
                 && ctx.i32_counter_slots.contains_key(id)
                 && (ctx.nonnegative_integer_locals.contains(id)
                     || ctx
