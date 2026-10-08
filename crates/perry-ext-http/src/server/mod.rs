@@ -67,6 +67,7 @@ mod request;
 mod response;
 mod response_end;
 mod response_fast;
+mod response_payload;
 mod server;
 mod tls;
 mod turnloop_h2;
@@ -170,6 +171,8 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_nanbox_f64_slot(&mut im.signal);
         visitor.visit_nanbox_f64_slot(&mut im.socket_value);
     });
+    // Transport and OutgoingMessage handles only. Standalone ServerResponse
+    // objects are never registered here; GC traces their object-owned JS state.
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
         // #8163: `res.once(event, cb)` stores into a SECOND table that
@@ -215,7 +218,7 @@ mod tests {
     static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct GcTestGuard {
-        frame: u64,
+        roots: perry_runtime::gc::RuntimeHandleScope,
         previous_force_evacuation: i32,
         _lock: MutexGuard<'static, ()>,
     }
@@ -225,7 +228,7 @@ mod tests {
             Self::new_with_slots(0)
         }
 
-        fn new_with_slots(slot_count: u32) -> Self {
+        fn new_with_slots(_slot_count: u32) -> Self {
             let lock = GC_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -235,9 +238,9 @@ mod tests {
             let previous_force_evacuation =
                 perry_runtime::gc::js_gc_force_evacuation_test_override(1);
             perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
+            let roots = perry_runtime::gc::RuntimeHandleScope::new();
             Self {
-                frame,
+                roots,
                 previous_force_evacuation,
                 _lock: lock,
             }
@@ -246,7 +249,6 @@ mod tests {
 
     impl Drop for GcTestGuard {
         fn drop(&mut self) {
-            perry_runtime::gc::js_shadow_frame_pop(self.frame);
             perry_runtime::gc::js_gc_write_barriers_emitted(0);
             perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
         }
@@ -404,10 +406,10 @@ mod tests {
         );
         let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
         let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
-        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+        let options = _guard.roots.root_nanbox_f64(f64::from_bits(options.bits()));
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, options.get_nanbox_f64());
 
         assert_eq!(server.headers_timeout, 111.0);
         assert_eq!(server.keep_alive_timeout, 222.0);
@@ -604,10 +606,10 @@ mod tests {
             perry_ffi::alloc_string(r#"{"requestTimeout":1e300,"headersTimeout":222}"#);
         let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
         let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
-        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+        let options = _guard.roots.root_nanbox_f64(f64::from_bits(options.bits()));
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, options.get_nanbox_f64());
         // Oversized `requestTimeout` clamped; unrelated knob untouched.
         assert_eq!(server.request_timeout, 9_007_199_254_740_991.0);
         assert_eq!(server.headers_timeout, 222.0);

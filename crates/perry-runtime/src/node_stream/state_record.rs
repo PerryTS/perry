@@ -49,7 +49,7 @@ stream_slots! {
     /// the stream's `native_state` names this record, and the record the cell.
     PayloadCell,
     /// The object's native-this alias word (`object::native_this_alias`, its
-    /// own scalar encoding) when the stream is also an aliased native
+    /// traced record encoding) when the stream is also an aliased native
     /// construction: one `native_state` word, one owner.
     NativeAlias,
     ReadableFlag,
@@ -155,8 +155,8 @@ fn record_in_word(word: u64) -> Option<*mut ArrayHeader> {
     is_stream_record_word(word).then(|| (word & crate::value::POINTER_MASK) as *mut ArrayHeader)
 }
 
-/// Is `word` (an `ObjectMeta.native_state`) a stream's state record? Only
-/// this module stores an array there.
+/// Is `word` (an `ObjectMeta.native_state`) the fixed-size stream record?
+/// The shorter native-this alias record uses the same traced array encoding.
 #[inline]
 pub(crate) fn is_stream_record_word(word: u64) -> bool {
     crate::native_payload::is_payload_state_word(word)
@@ -164,6 +164,7 @@ pub(crate) fn is_stream_record_word(word: u64) -> bool {
         // live GC cell.
         && unsafe { gc_type_for_ptr((word & crate::value::POINTER_MASK) as usize) }
             == Some(crate::gc::GC_TYPE_ARRAY)
+        && unsafe { (*((word & crate::value::POINTER_MASK) as *const ArrayHeader)).length as usize } == STREAM_RECORD_SLOT_COUNT
 }
 
 /// The payload cell word a stream family's record holds (0 for a plain
@@ -172,6 +173,9 @@ pub(crate) fn is_stream_record_word(word: u64) -> bool {
 pub(crate) fn record_payload_cell(word: u64) -> u64 {
     let record = (word & crate::value::POINTER_MASK) as *const ArrayHeader;
     // SAFETY: a live record of the fixed length.
+    if !is_stream_record_word(word) {
+        return 0;
+    }
     let bits = unsafe { *crate::array::array_elements_ptr(record).add(Slot::PayloadCell as usize) };
     if bits == crate::value::TAG_UNDEFINED {
         0
@@ -196,9 +200,8 @@ pub(crate) fn record_alias_word(native_state: u64) -> u64 {
     }
 }
 
-/// Store a native-this alias word in the record `native_state` names, if it
-/// names one. The word is a scalar (its top half is the alias mark, a finite
-/// number's bits), so the record holds it as plain data the GC never follows.
+/// Store the traced native-this alias record in the stream record. The array
+/// store supplies the barrier for this child edge.
 pub(crate) fn store_record_alias_word(native_state: u64, alias: u64) -> bool {
     let Some(record) = record_in_word(native_state) else {
         return false;
@@ -297,6 +300,7 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
     if word != 0 && !alias && crate::native_payload::payload_cell_of_word(word).is_none() {
         return false;
     }
+    let previous = scope.root_nanbox_f64(f64::from_bits(word));
     let record = crate::array::js_array_alloc_with_length_exact(STREAM_RECORD_SLOT_COUNT as u32);
     // SAFETY: a fresh array of exactly that length. The cell word (a malloc
     // cell, never moved) and `undefined` need no barrier on a newborn array.
@@ -308,7 +312,7 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
         }
     }
     if alias {
-        store(record, Slot::NativeAlias, f64::from_bits(word));
+        store(record, Slot::NativeAlias, previous.get_nanbox_f64());
     } else if word != 0 {
         // The cell does not move; its word is still current.
         store(record, Slot::PayloadCell, f64::from_bits(word));
@@ -365,5 +369,6 @@ pub(crate) fn test_write_inert_slot(stream: f64, value: f64) {
 
 #[cfg(test)]
 pub(crate) fn test_read_inert_slot(stream: f64) -> f64 {
-    read_slot(stream, Slot::ComposePendingError).unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+    read_slot(stream, Slot::ComposePendingError)
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }

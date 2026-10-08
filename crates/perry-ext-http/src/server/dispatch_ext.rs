@@ -63,8 +63,8 @@ extern "C" {
 
 /// Register the three HTTP-server handle-dispatch extensions with perry-runtime.
 /// Idempotent (`Once` here + the runtime de-dupes by fn pointer). Called from
-/// `ensure_gc_scanner_registered`, so it runs the first time any HTTP/HTTPS/HTTP2
-/// server is created — before any request handler can fire.
+/// `ensure_gc_scanner_registered` for transport handles and directly from
+/// standalone ServerResponse construction, which needs dispatch without roots.
 pub(crate) fn ensure_dispatch_extensions_registered() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| unsafe {
@@ -503,7 +503,8 @@ unsafe extern "C" fn http_server_property_set_dispatch_ext(
     let name = name_str(property_ptr, property_len);
     if matches!(
         name,
-        "statusCode"
+        "destroyed"
+            | "statusCode"
             | "statusMessage"
             | "sendDate"
             | "strictContentLength"

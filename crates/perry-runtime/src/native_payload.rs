@@ -1818,6 +1818,7 @@ fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
 pub(crate) fn export_class_id(module: &str, export: &str) -> Option<u32> {
     use crate::native_class_ids as ids;
     Some(match (module, export) {
+        ("http", "ServerResponse") => ids::HTTP_SERVER_RESPONSE,
         ("crypto", "Hash") => ids::CRYPTO_HASH,
         ("crypto", "Hmac") => ids::CRYPTO_HMAC,
         ("crypto", "Cipheriv") => ids::CRYPTO_CIPHERIV,
