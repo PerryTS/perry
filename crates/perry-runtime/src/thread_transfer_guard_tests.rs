@@ -179,7 +179,7 @@ fn uint8array_round_trips_bytes_and_brand() {
             "structured clone must allocate fresh storage"
         );
         assert!(crate::buffer::is_uint8array_buffer(result as usize));
-        assert_eq!((*result).length, 4);
+        assert_eq!(crate::buffer::store::raw_length(result as usize), 4);
         assert_eq!(
             &crate::buffer::bytes::ReadLease::new(crate::value::js_nanbox_pointer(result as i64))
                 .unwrap()[..],

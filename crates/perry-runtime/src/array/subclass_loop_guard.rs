@@ -326,7 +326,7 @@ pub extern "C" fn js_packed_ecs_u32_loop_guard(
         if address == 0 || addresses[..index].contains(&address) {
             return 0;
         }
-        let length = unsafe { (*(address as *const crate::typedarray::TypedArrayHeader)).length };
+        let length = unsafe { crate::buffer::store::raw_length(address as usize) };
         if common_length.is_some_and(|common| common != length) {
             return 0;
         }

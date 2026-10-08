@@ -867,9 +867,6 @@ pub(crate) unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {
         // Reproduce the old copying Buffer birth followed by rebranding.
         let (value, pin) = bytes::new_bytes(Brand::Buffer, bytes.len(), bytes::Init::PoolCopy);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), pin.as_mut_ptr(), bytes.len());
-        perry_runtime::buffer::mark_as_uint8array(
-            JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize,
-        );
         return value.to_bits();
     }
     bytes::from_slice(Brand::Uint8Array, bytes).to_bits()

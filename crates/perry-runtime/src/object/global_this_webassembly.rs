@@ -829,7 +829,7 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
         ));
     }
     let delta_pages = delta.trunc();
-    let old_bytes = unsafe { (*buf).length } as usize;
+    let old_bytes = unsafe { crate::buffer::store::raw_length(buf as usize) } as usize;
     let old_pages = (old_bytes / WASM_PAGE_BYTES as usize) as u32;
     if delta_pages > (WASM_MAX_PAGES - old_pages) as f64 {
         return Err(MemoryCtorError::Range(
@@ -1767,7 +1767,10 @@ mod tests {
         let buffer = wasm_memory_new_buffer(pages);
         let buf = memory_buffer_ptr(buffer).expect("buffer must be a registered ArrayBuffer");
         unsafe {
-            assert_eq!((*buf).length, WASM_PAGE_BYTES);
+            assert_eq!(
+                crate::buffer::store::raw_length(buf as usize),
+                WASM_PAGE_BYTES
+            );
         }
 
         // Zero pages are legal.
@@ -1832,7 +1835,10 @@ mod tests {
         let after = js_object_get_field_by_name_f64(instance, named_key(b"buffer"));
         let after_buf = memory_buffer_ptr(after).unwrap();
         unsafe {
-            assert_eq!((*after_buf).length, 3 * WASM_PAGE_BYTES);
+            assert_eq!(
+                crate::buffer::store::raw_length(after_buf as usize),
+                3 * WASM_PAGE_BYTES
+            );
             assert_eq!(crate::buffer::js_buffer_get(after_buf, 0), 0xAB);
         }
 

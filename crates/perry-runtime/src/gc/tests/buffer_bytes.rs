@@ -114,8 +114,7 @@ fn every_current_byte_placement_and_view_resolves_the_canonical_window() {
         buffer::js_buffer_set(ab, 4, 77);
     }
     let u8view = buffer::js_buffer_slice(ab, 4, 8);
-    let dv = buffer::js_buffer_slice(ab, 4, 8);
-    buffer::mark_as_data_view(dv as usize);
+    let dv = buffer::store::new_view(GC_TYPE_BUFFER_DATA_VIEW, ab as usize, 4, 4, false);
     let ta = crate::typedarray_view::js_typed_array_view(
         crate::typedarray::KIND_INT32 as i32,
         bits(ab),

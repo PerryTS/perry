@@ -123,7 +123,7 @@ pub(crate) unsafe fn registered_buffer_index_own_property_present(
         return Some(crate::buffer::buffer_has_own_prop(raw_buffer_addr, name));
     }
     let buf = raw_buffer_addr as *const crate::buffer::BufferHeader;
-    Some(idx < (*buf).length)
+    Some(idx < crate::buffer::store::raw_length(buf as usize))
 }
 
 /// `ToPropertyDescriptor` field presence: `HasProperty(descriptor, name)` —

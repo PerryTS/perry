@@ -16,7 +16,7 @@ fn suffix_views_are_sixteen_byte_cells_and_share_native_bytes() {
                 super::store::length(view as usize) as u32,
                 4096 - start as u32
             );
-            assert_eq!((*view).capacity, start as u32);
+            assert_eq!(crate::buffer::store::capacity(view as usize), start as u32);
             let header = crate::value::addr_class::try_read_gc_header(view as usize).unwrap();
             assert_eq!(
                 header.size as usize,
@@ -59,7 +59,10 @@ fn byte_views_follow_the_flattened_owner_without_address_caches() {
             )
         });
     }
-    assert_eq!(unsafe { (*nested).link }, owner as usize);
+    assert_eq!(
+        unsafe { crate::buffer::store::raw_link(nested as usize) },
+        owner as usize
+    );
 }
 
 #[test]
@@ -71,7 +74,7 @@ fn rewritten_view_backing_refreshes_the_derived_pointer() {
     let sub = js_buffer_slice(owner, 5, 15);
     assert_eq!(js_buffer_get(sub, 0), 17);
     unsafe {
-        (*sub).link = replacement as usize;
+        crate::buffer::store::set_test_link(sub as usize, replacement as usize);
     }
     assert_eq!(js_buffer_get(sub, 0), 29);
     bytes::no_gc(|_| unsafe {
@@ -81,7 +84,7 @@ fn rewritten_view_backing_refreshes_the_derived_pointer() {
         );
     });
     unsafe {
-        (*sub).link = owner as usize;
+        crate::buffer::store::set_test_link(sub as usize, owner as usize);
     }
 }
 
@@ -95,7 +98,7 @@ fn data_view_has_owner_link_and_byte_offset() {
 
     unsafe {
         assert_eq!(super::store::length(view as usize) as u32, 8);
-        assert_eq!((*view).capacity, 4);
+        assert_eq!(crate::buffer::store::capacity(view as usize), 4);
         bytes::no_gc(|_| {
             assert_eq!(
                 view::data_view_data_ptr(view),
@@ -218,25 +221,28 @@ fn detaching_materialized_arraybuffer_invalidates_all_shared_views() {
     let view = js_buffer_slice(source, 4, 12);
     let backing = buffer_backing_array_buffer(source as usize);
     let copy = buffer_slice_copy(backing as *const BufferHeader, 0, 16);
-    mark_as_array_buffer(copy as usize);
     detach_array_buffer(backing);
     assert_eq!(unsafe { super::store::length(source as usize) as u32 }, 0);
     assert_eq!(js_buffer_length(view), 0);
     assert_eq!(js_buffer_length(backing as *const BufferHeader), 0);
     assert_eq!(buffer_byte_offset(view as usize), 0);
-    assert_eq!(unsafe { (*copy).length }, 16);
+    assert_eq!(
+        unsafe { crate::buffer::store::length(copy as usize) as u32 },
+        16
+    );
 }
 
 #[test]
 fn arraybuffer_and_uint8array_slice_copy_but_buffer_slice_shares() {
     for kind in 0..4 {
-        let source = js_buffer_alloc(4, 7);
-        match kind {
-            0 => mark_as_array_buffer(source as usize),
-            1 => mark_as_shared_array_buffer(source as usize),
-            2 => mark_as_uint8array(source as usize),
-            _ => (),
-        }
+        let brand = [
+            crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+            crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
+            crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+            crate::gc::GC_TYPE_BUFFER,
+        ][kind];
+        let source = store::store_alloc(brand, 4, store::Init::Copy(&[7; 4]));
+
         let args = [1.0, 3.0];
         let result = unsafe {
             crate::object::dispatch_buffer_method(source as usize, "slice", args.as_ptr(), 2)
@@ -259,11 +265,11 @@ fn changing_a_view_owner_changes_the_resolved_window() {
     let sub = js_buffer_slice(first, 3, 11);
     assert_eq!(js_buffer_get(sub, 0), 57);
     unsafe {
-        (*sub).link = second as usize;
+        crate::buffer::store::set_test_link(sub as usize, second as usize);
     }
     assert_eq!(js_buffer_get(sub, 0), 91);
     unsafe {
-        (*sub).link = first as usize;
+        crate::buffer::store::set_test_link(sub as usize, first as usize);
     }
     assert_eq!(js_buffer_get(sub, 0), 57);
 }

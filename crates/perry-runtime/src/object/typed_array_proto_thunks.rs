@@ -776,9 +776,6 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             } else {
                 crate::buffer::js_buffer_slice(source, start as i32, end as i32)
             };
-            if crate::buffer::is_uint8array_buffer(addr) {
-                crate::buffer::mark_as_uint8array(result as usize);
-            }
             pointer_value(result as usize)
         }
         "copyWithin" => {

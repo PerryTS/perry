@@ -65,20 +65,20 @@ pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
 pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
+#[cfg(test)]
+pub(crate) use header::buffer_alloc_foreign;
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
     buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
     external_registries_hold_for_test, is_any_array_buffer, is_array_buffer, is_data_view,
     is_registered_buffer, is_secret_key, is_shared_array_buffer, is_uint8array_buffer,
-    js_set_crypto_key_death_hook, mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key,
-    mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array,
-    register_buffer, CryptoKeyDeathHookFn,
-};
-pub(crate) use header::{
-    buffer_alloc_foreign, drop_owned_backing_at_thread_exit, finalize_collected_dead_buffer,
-    is_foreign_backed_buffer,
+    js_set_crypto_key_death_hook, mark_as_asymmetric_key, register_buffer, set_crypto_key_meta,
+    CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{buffer_family_type_owned, header_is_owned};
+pub(crate) use header::{
+    drop_owned_backing_at_thread_exit, finalize_collected_dead_buffer, is_foreign_backed_buffer,
+};
 // Only the wasm host re-points a foreign wrapper (#9611); see the fn's docs.
 #[cfg(feature = "wasm-host")]
 pub(crate) use header::rebind_foreign_buffer;
@@ -95,7 +95,7 @@ pub use own_props::{
 };
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;
-pub(crate) use header::{mark_as_resizable_buffer, resizable_info, ResizableInfo};
+pub(crate) use header::{resizable_info, set_resizable, ResizableInfo};
 pub(crate) use resizable::array_buffer_resize;
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
@@ -217,15 +217,14 @@ mod tests {
     /// ABA class this finalizer exists to prevent.
     #[test]
     fn test_dead_buffer_finalize_prunes_crypto_key_side_tables() {
-        let buf = buffer_alloc(32);
+        let buf = store::alloc_test(crate::gc::GC_TYPE_BUFFER_CRYPTO_KEY, 32);
         assert!(!buf.is_null());
         let addr = buf as usize;
 
         // Shape a WebCrypto secret CryptoKey: HMAC / SHA-256 / secret. Its
         // brand is the cell's type byte (#10694); the metadata is the
         // attribute table this finalizer must drop.
-        mark_as_uint8array(addr);
-        mark_as_crypto_key(addr, 1, 2, 1);
+        set_crypto_key_meta(addr, 1, 2, 1);
 
         assert!(crypto_key_meta(addr).is_some(), "meta registered");
         assert!(
@@ -277,7 +276,7 @@ mod tests {
                 "cap={cap}: slab buffer not recognised by is_registered_buffer"
             );
             assert_eq!(
-                unsafe { (*buf).capacity },
+                unsafe { crate::buffer::store::capacity(buf as usize) },
                 cap,
                 "cap={cap}: wrong capacity stored in header"
             );
@@ -415,7 +414,10 @@ mod tests {
             is_registered_buffer(buf as usize),
             "large buffer not in BUFFER_REGISTRY"
         );
-        assert_eq!(unsafe { (*buf).capacity }, SMALL_BUF_THRESHOLD);
+        assert_eq!(
+            unsafe { crate::buffer::store::capacity(buf as usize) },
+            SMALL_BUF_THRESHOLD
+        );
     }
 
     #[test]

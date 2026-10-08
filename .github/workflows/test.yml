@@ -476,7 +476,7 @@ jobs:
       - name: File size limit
         if: ${{ !cancelled() }}
         run: ./scripts/check_file_size.sh
-      - name: Buffer layout ratchet
+      - name: Buffer layout zero-debt gate
         run: ./scripts/check_buffer_layout.sh --self-test && ./scripts/check_buffer_layout.sh
 
       # #7846: erased TypeScript annotations and initializer-refined local

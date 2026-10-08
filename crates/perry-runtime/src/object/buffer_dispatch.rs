@@ -463,10 +463,10 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
     // (#10694), so the key bytes go into a fresh cell carrying the CryptoKey
     // brand rather than re-branding the KeyObject's own cell.
     let input = crate::value::js_nanbox_pointer(addr as i64);
-    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::Buffer, input)
+    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::CryptoKey, input)
         .expect("live key bytes");
     let out = JSValue::from_bits(value.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
-    crate::buffer::mark_as_crypto_key(out as usize, algo_id, hash_id, 1);
+    crate::buffer::set_crypto_key_meta(out as usize, algo_id, hash_id, 1);
     f64::from_bits(JSValue::pointer(out as *mut u8).bits())
 }
 
@@ -582,7 +582,7 @@ pub unsafe fn dispatch_buffer_method(
                 0
             };
             let str_ptr = if args.len() >= 2 {
-                let len = (*buf_ptr).length as i32;
+                let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
                 let start = arg_i32(1);
                 let end = if args.len() >= 3 { arg_i32(2) } else { len };
                 crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
@@ -642,8 +642,9 @@ pub unsafe fn dispatch_buffer_method(
                 source_is_array_buffer || source_is_shared_array_buffer;
             let scope = crate::gc::RuntimeHandleScope::new();
             let buffer = scope.root_raw_mut_ptr(buf_ptr);
-            let len =
-                buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| (*buf).length as i32);
+            let len = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                crate::buffer::store::raw_length(buf as usize) as i32
+            });
             let (start, end) = if source_is_any_array_buffer {
                 // Instance-call lowering reaches this fused dispatch directly,
                 // bypassing the prototype thunk. The shared path therefore owns
@@ -720,16 +721,6 @@ pub unsafe fn dispatch_buffer_method(
             {
                 crate::buffer::view::mark_length_tracking(result as usize);
             }
-            // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
-            // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
-            // false and a subsequent `new Uint8Array(slice)` aliases it.
-            if source_is_array_buffer {
-                crate::buffer::mark_as_array_buffer(result as usize);
-            } else if source_is_shared_array_buffer {
-                crate::buffer::mark_as_shared_array_buffer(result as usize);
-            } else if source_is_uint8array {
-                crate::buffer::mark_as_uint8array(result as usize);
-            }
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "set" => {
@@ -742,7 +733,7 @@ pub unsafe fn dispatch_buffer_method(
         // #2879: `Uint8Array.prototype.copyWithin` — Buffer/Uint8Array elements
         // are single bytes, so copy at byte granularity. Returns the receiver.
         "copyWithin" => {
-            let len = (*buf_ptr).length as i64;
+            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i64;
             let rel = |v: f64| -> i64 {
                 let n = crate::value::JSValue::from_bits(v.to_bits()).to_number();
                 if n.is_nan() {
@@ -796,7 +787,7 @@ pub unsafe fn dispatch_buffer_method(
             let source_end = if args.len() >= 4 {
                 arg_i32(3)
             } else {
-                (*buf_ptr).length as i32
+                crate::buffer::store::raw_length(buf_ptr as usize) as i32
             };
             crate::buffer::js_buffer_copy(buf_ptr, dst_ptr, target_start, source_start, source_end)
                 as f64
@@ -809,7 +800,7 @@ pub unsafe fn dispatch_buffer_method(
         "asciiSlice" | "base64Slice" | "base64urlSlice" | "hexSlice" | "latin1Slice"
         | "ucs2Slice" | "utf8Slice" => {
             let enc = fixed_slice_write_encoding(method_name).unwrap_or(0);
-            let len = (*buf_ptr).length as i32;
+            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
             let start = if !args.is_empty() { arg_i32(0) } else { 0 };
             let end = if args.len() >= 2 { arg_i32(1) } else { len };
             let str_ptr = crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end);
@@ -829,7 +820,7 @@ pub unsafe fn dispatch_buffer_method(
             let max_len = if args.len() >= 3 {
                 arg_i32(2)
             } else {
-                (*buf_ptr).length as i32 - offset
+                crate::buffer::store::raw_length(buf_ptr as usize) as i32 - offset
             };
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
@@ -845,7 +836,10 @@ pub unsafe fn dispatch_buffer_method(
                 );
             }
             let str_ptr = buffer_dispatch_string_ptr(args[0]);
-            let (offset, max_len, enc) = buffer_write_args((*buf_ptr).length as i32, &args[1..]);
+            let (offset, max_len, enc) = buffer_write_args(
+                crate::buffer::store::raw_length(buf_ptr as usize) as i32,
+                &args[1..],
+            );
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
         "export" if crate::buffer::is_secret_key(addr) => {
@@ -863,7 +857,7 @@ pub unsafe fn dispatch_buffer_method(
             secret_to_crypto_key(addr, args[0])
         }
         "fill" => {
-            let len = (*buf_ptr).length as i32;
+            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
             let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
             let end = if args.len() >= 3 { arg_i32(2) } else { len };
             let value = args
@@ -912,9 +906,9 @@ pub unsafe fn dispatch_buffer_method(
                 let target_len = if other.is_null() {
                     0
                 } else {
-                    (*other).length as i32
+                    crate::buffer::store::raw_length(other as usize) as i32
                 };
-                let source_len = (*buf_ptr).length as i32;
+                let source_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
                 let arg_i32_or = |i: usize, default: i32| -> i32 {
                     if i < args.len() {
                         let value = JSValue::from_bits(args[i].to_bits());
@@ -953,7 +947,7 @@ pub unsafe fn dispatch_buffer_method(
             ))
         }
         "lastIndexOf" => {
-            let len = (*buf_ptr).length as i32;
+            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
             let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
             let enc = if args.len() >= 3 {
                 crate::buffer::js_encoding_tag_from_value(args[2])
@@ -982,7 +976,7 @@ pub unsafe fn dispatch_buffer_method(
         }
         // `buf.at(i)` — supports negative indices like Array.prototype.at.
         "at" => {
-            let len = (*buf_ptr).length as i32;
+            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
             let mut idx = arg_i32(0);
             if idx < 0 {
                 idx += len;
@@ -1155,20 +1149,20 @@ pub unsafe fn dispatch_buffer_method(
                     std::str::from_utf8(bytes)
                         .ok()
                         .and_then(|s| s.parse::<u32>().ok())
-                        .is_some_and(|idx| idx < (*buf_ptr).length)
+                        .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
                 } else if (key_bits >> 48) == 0x7FFE {
                     // int32 key
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = (*buf_ptr).length as i32;
+                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
                     idx >= 0 && idx < buf_len
                 } else if !(0x7FF8..=0x7FFF).contains(&(key_bits >> 48)) {
                     // raw f64 numeric key (NaN-boxing tags occupy 0x7FF8..=0x7FFF)
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
                         let idx = n as u32;
-                        let buf_len = (*buf_ptr).length;
+                        let buf_len = crate::buffer::store::raw_length(buf_ptr as usize);
                         idx < buf_len
                     } else {
                         false
@@ -1193,18 +1187,18 @@ pub unsafe fn dispatch_buffer_method(
                     std::str::from_utf8(bytes)
                         .ok()
                         .and_then(|s| s.parse::<u32>().ok())
-                        .is_some_and(|idx| idx < (*buf_ptr).length)
+                        .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
                 } else if (key_bits >> 48) == 0x7FFE {
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = (*buf_ptr).length as i32;
+                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
                     idx >= 0 && idx < buf_len
                 } else if !args[0].is_nan() {
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
                         let idx = n as u32;
-                        let buf_len = (*buf_ptr).length;
+                        let buf_len = crate::buffer::store::raw_length(buf_ptr as usize);
                         idx < buf_len
                     } else {
                         false

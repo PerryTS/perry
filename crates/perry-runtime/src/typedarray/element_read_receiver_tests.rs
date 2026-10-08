@@ -476,13 +476,13 @@ fn js_typed_array_index_get_dynamic_still_reads_a_uint8array_buffer_owner() {
     // a Buffer-backed `Uint8Array` — #5989). Its bytes live at a different
     // offset than a `TypedArrayHeader`'s inline storage, so serving it through
     // the typed-array lane reader would answer something other than 250.
-    let buf = crate::buffer::buffer_alloc(3);
+    let buf = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_UINT8ARRAY, 3);
     unsafe {
         crate::buffer::store::set_length(buf as usize, 3);
     }
     crate::buffer::js_buffer_set(buf, 0, 250);
     crate::buffer::js_buffer_set(buf, 2, 7);
-    crate::buffer::mark_as_uint8array(buf as usize);
+
     assert!(crate::buffer::is_uint8array_buffer(buf as usize));
 
     let recv = ((buf as u64) & POINTER_MASK) as *const TypedArrayHeader;

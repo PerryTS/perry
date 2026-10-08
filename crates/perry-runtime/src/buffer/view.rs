@@ -15,7 +15,7 @@ pub(crate) fn lookup(addr: usize) -> Option<ViewInfo> {
     Some(unsafe {
         ViewInfo {
             backing: store::owner(addr),
-            offset: (*(addr as *const BufferHeader)).capacity,
+            offset: super::store::capacity(addr),
         }
     })
 }
@@ -31,7 +31,7 @@ pub(crate) fn byte_offset_of(addr: usize) -> u32 {
     {
         return 0;
     }
-    unsafe { (*(addr as *const BufferHeader)).capacity }
+    unsafe { super::store::capacity(addr) }
 }
 
 #[inline]

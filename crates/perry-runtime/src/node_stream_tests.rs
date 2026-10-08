@@ -78,16 +78,7 @@ pub(super) fn string_value(s: &str) -> f64 {
 }
 
 fn buffer_value(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    box_pointer(buf as *const u8)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
 }
 
 #[test]

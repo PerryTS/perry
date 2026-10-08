@@ -38,8 +38,9 @@ fn test_dead_data_view_and_sab_brands_die_with_their_cells() {
     let view = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 32])
         .to_bits()
         & crate::value::POINTER_MASK) as usize;
-    let sab = crate::buffer::buffer_alloc(32) as usize;
-    crate::buffer::mark_as_shared_array_buffer(sab);
+    let sab = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER, 32)
+        as usize;
+
     assert_eq!(
         live_buffer_type(view),
         Some(crate::gc::GC_TYPE_BUFFER_DATA_VIEW | crate::codegen_abi::BYTES_TYPE_VIEW)
@@ -71,8 +72,8 @@ fn test_live_data_view_and_shared_array_buffer_flags_survive_full_gc() {
     let view = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 32])
         .to_bits()
         & crate::value::POINTER_MASK) as usize;
-    let sab = crate::buffer::buffer_alloc(32) as usize;
-    crate::buffer::mark_as_shared_array_buffer(sab);
+    let sab = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER, 32)
+        as usize;
 
     js_shadow_slot_set(0, ptr_bits(view));
     js_shadow_slot_set(1, ptr_bits(sab));

@@ -369,7 +369,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
             return reject_with_dom_exception("DataError", "Invalid keyData");
         }
     }
-    let buf = alloc_uint8array_from_slice(&key_bytes);
+    let buf = alloc_crypto_key_from_slice(&key_bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }

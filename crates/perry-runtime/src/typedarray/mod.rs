@@ -661,7 +661,7 @@ unsafe fn native_memory_copy_src_bytes(raw: u64) -> (*const u8, usize) {
     if native_memory_copy_accepts_buffer(addr) {
         let buffer = addr as *const crate::buffer::BufferHeader;
         return (
-            crate::buffer::buffer_data(buffer),
+            crate::buffer::store::data(buffer as usize),
             crate::typedarray::element_length(buffer) as usize,
         );
     }
@@ -678,7 +678,7 @@ unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
     if native_memory_copy_accepts_buffer(addr) {
         let buffer = addr as *mut crate::buffer::BufferHeader;
         return (
-            crate::buffer::buffer_data_mut(buffer),
+            crate::buffer::store::data(buffer as usize),
             crate::typedarray::element_length(buffer) as usize,
         );
     }

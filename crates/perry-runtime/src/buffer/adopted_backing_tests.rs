@@ -51,7 +51,10 @@ fn adopted_response_bytes_survive_views_transfer_gc_and_worker_exit() {
     let root = scope.root_raw_mut_ptr(source);
     unsafe {
         assert!(is_array_buffer(source as usize));
-        assert_eq!((*source).length, 1024 * 1024);
+        assert_eq!(
+            crate::buffer::store::length(source as usize) as u32,
+            1024 * 1024
+        );
         let value = f64::from_bits(JSValue::pointer(source.cast()).bits());
         let view = js_uint8array_new(value);
         let view_root = scope.root_raw_mut_ptr(view);
@@ -80,7 +83,10 @@ fn adopted_response_bytes_survive_views_transfer_gc_and_worker_exit() {
             drop(message);
             crate::gc::js_gc_collect();
             let receiver = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
-            assert_eq!((*receiver).length, 1024 * 1024);
+            assert_eq!(
+                crate::buffer::store::length(receiver as usize) as u32,
+                1024 * 1024
+            );
             assert_eq!(data(receiver) as usize, original);
             assert_eq!(*data(receiver).add(2), 11);
         })

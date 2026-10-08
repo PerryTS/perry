@@ -20,8 +20,8 @@ fn all_byte_brands_have_the_common_cell_and_one_header() {
             unsafe { (*h).obj_type },
             crate::typedarray::type_for_kind(kind)
         );
-        assert_eq!(unsafe { (*p).length }, 3);
-        assert_eq!(unsafe { (*p).link }, 0);
+        assert_eq!(unsafe { crate::buffer::store::raw_length(p as usize) }, 3);
+        assert_eq!(unsafe { crate::buffer::store::raw_link(p as usize) }, 0);
         assert!(!gc_type_is_movable(unsafe { (*h).obj_type }));
         assert_eq!(
             bytes::no_gc(
@@ -39,11 +39,17 @@ fn all_byte_brands_have_the_common_cell_and_one_header() {
 fn foreign_and_view_headers_resolve_the_real_window() {
     let _guard = GcTestIsolationGuard::new();
     let mut data = [3; 16];
-    let owner = buffer::header::buffer_alloc_foreign(data.as_mut_ptr(), 16);
-    buffer::mark_as_uint8array(owner as usize);
+    let owner = buffer::store::store_alloc(
+        GC_TYPE_BUFFER_UINT8ARRAY,
+        16,
+        buffer::store::Init::Foreign(data.as_mut_ptr()),
+    );
     let view = buffer::js_buffer_slice(owner, 3, 9);
-    assert_eq!(unsafe { (*view).link }, owner as usize);
-    assert_eq!(unsafe { (*view).capacity }, 3);
+    assert_eq!(
+        unsafe { crate::buffer::store::raw_link(view as usize) },
+        owner as usize
+    );
+    assert_eq!(unsafe { crate::buffer::store::capacity(view as usize) }, 3);
     bytes::no_gc(|_| {
         assert_eq!(
             bytes::span(crate::value::js_nanbox_pointer(view as i64), false)
@@ -59,14 +65,17 @@ fn foreign_and_view_headers_resolve_the_real_window() {
 }
 
 #[test]
-fn rebranding_has_no_stale_address_admission() {
+fn final_brands_decide_admission_without_an_address_cache() {
     let _guard = GcTestIsolationGuard::new();
-    let owner = buffer::js_buffer_alloc(8, 29);
-    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), Some(29));
-    buffer::mark_as_array_buffer(owner as usize);
-    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), None);
-    buffer::mark_as_uint8array(owner as usize);
-    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), Some(29));
+    for (brand, expected) in [
+        (bytes::Brand::Buffer, Some(29)),
+        (bytes::Brand::ArrayBuffer, None),
+        (bytes::Brand::Uint8Array, Some(29)),
+    ] {
+        let value = bytes::from_slice(brand, &[29; 8]);
+        let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert_eq!(buffer::admitted_u8_read(addr, 0), expected);
+    }
 }
 
 #[test]
@@ -81,7 +90,10 @@ fn bagged_view_keeps_owner_and_properties_across_full_collection() {
         unsafe { buffer::store::owner(view as usize) },
         owner as usize
     );
-    assert_eq!(unsafe { (*view).link }, bag as usize);
+    assert_eq!(
+        unsafe { crate::buffer::store::raw_link(view as usize) },
+        bag as usize
+    );
     js_shadow_slot_set(0, ptr_bits(view as usize));
     full_gc();
     assert!(

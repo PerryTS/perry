@@ -30,7 +30,7 @@ fn external_buffer_producer_returns_headered_distinct_cells_and_exact_bytes() {
                 bytes.as_ptr()
             )
         });
-        assert_eq!(unsafe { (*ptr).length }, 4);
+        assert_eq!(unsafe { crate::buffer::store::raw_length(ptr as usize) }, 4);
     }
     assert_ne!(first, second, "two wrappers must have distinct identity");
     crate::buffer::js_buffer_set(first, 1, 99);
@@ -81,20 +81,19 @@ fn external_buffer_cell_survives_gc_then_releases_its_registration() {
 fn external_buffer_crosses_a_worker_by_value_like_an_ordinary_buffer() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let mut bytes = [42u8, 43];
-    let ptr = crate::buffer::buffer_alloc_foreign(bytes.as_mut_ptr(), 2);
-    js_shadow_slot_set(0, ptr_bits(ptr as usize));
-    let plain = crate::buffer::buffer_alloc(2);
-    js_shadow_slot_set(1, ptr_bits(plain as usize));
-    crate::buffer::js_buffer_set(plain, 0, 42);
-    crate::buffer::js_buffer_set(plain, 1, 43);
-    // The native backing must be invisible at the boundary: a foreign wrapper
-    // serializes exactly as an ordinary buffer holding the same bytes (a
-    // structured clone of an external ArrayBuffer copies it in node).
-    for mark_uint8 in [false, true] {
-        if mark_uint8 {
-            crate::buffer::mark_as_uint8array(ptr as usize);
-            crate::buffer::mark_as_uint8array(plain as usize);
-        }
+    for brand in [GC_TYPE_BUFFER, GC_TYPE_BUFFER_UINT8ARRAY] {
+        let ptr = crate::buffer::store::store_alloc(
+            brand,
+            2,
+            crate::buffer::store::Init::Foreign(bytes.as_mut_ptr()),
+        );
+        js_shadow_slot_set(0, ptr_bits(ptr as usize));
+        let plain = crate::buffer::store::store_alloc(
+            brand,
+            2,
+            crate::buffer::store::Init::Copy(&[42, 43]),
+        );
+        js_shadow_slot_set(1, ptr_bits(plain as usize));
         let foreign = unsafe { crate::thread::serialize_nanbox_for_thread(ptr_bits(ptr as usize)) };
         let ordinary =
             unsafe { crate::thread::serialize_nanbox_for_thread(ptr_bits(plain as usize)) };
@@ -102,7 +101,7 @@ fn external_buffer_crosses_a_worker_by_value_like_an_ordinary_buffer() {
             crate::thread::first_unsupported_transfer_type(&foreign),
             crate::thread::first_unsupported_transfer_type(&ordinary)
         );
-        if mark_uint8 {
+        if brand == GC_TYPE_BUFFER_UINT8ARRAY {
             match foreign {
                 crate::thread::SerializedValue::Uint8Array(copy) => assert_eq!(copy, [42, 43]),
                 _ => panic!("a foreign Uint8Array must cross as a byte copy"),

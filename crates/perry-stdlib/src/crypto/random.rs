@@ -935,14 +935,22 @@ mod tests {
             64,
         );
         let target = boxed_ptr(view as *const u8);
-        let before = unsafe { ((*view).link, (*view).capacity, (*view).length) };
+        let before = (
+            perry_runtime::buffer::buffer_backing_array_buffer(view as usize),
+            perry_runtime::buffer::buffer_byte_offset(view as usize),
+            perry_runtime::buffer::js_buffer_length(view),
+        );
         let returned = js_crypto_random_fill_sync(target, undefined(), undefined());
         assert_eq!(returned.to_bits(), target.to_bits());
-        unsafe {
-            assert_eq!((*view).link, before.0);
-            assert_eq!((*view).capacity, before.1);
-            assert_eq!((*view).length, before.2);
-        }
+        assert_eq!(
+            perry_runtime::buffer::buffer_backing_array_buffer(view as usize),
+            before.0
+        );
+        assert_eq!(
+            perry_runtime::buffer::buffer_byte_offset(view as usize),
+            before.1
+        );
+        assert_eq!(perry_runtime::buffer::js_buffer_length(view), before.2);
         perry_runtime::buffer::bytes::no_gc(|scope| {
             let bytes = perry_runtime::buffer::bytes::bytes(target, scope).unwrap();
             assert!(

@@ -357,12 +357,15 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
     let handles = RuntimeHandleScope::new();
-    let owner = handles.root_raw_mut_ptr(buffer::buffer_alloc(64 * 1024));
+    let owner = handles.root_raw_mut_ptr(buffer::store::store_alloc(
+        GC_TYPE_BUFFER_ARRAY_BUFFER,
+        64 * 1024,
+        buffer::store::Init::Uninit,
+    ));
     let owner = owner.get_raw_mut_ptr::<buffer::BufferHeader>();
     unsafe {
-        (*owner).length = 64 * 1024;
+        crate::buffer::store::set_length(owner as usize, 64 * 1024);
     }
-    buffer::mark_as_array_buffer(owner as usize);
     assert!(!buffer::is_foreign_backed_buffer(owner as usize));
     let first = bytes::pin(bits(owner)).unwrap();
     let second = bytes::pin(bits(owner)).unwrap();
@@ -605,8 +608,11 @@ fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
     let owner = unsafe { buffer::store::owner(first as usize) };
     assert_ne!(owner, first as usize);
     assert_eq!(unsafe { buffer::store::owner(second as usize) }, owner);
-    assert_eq!(unsafe { (*first).capacity }, 0);
-    assert_eq!(unsafe { (*second).capacity }, 8);
+    assert_eq!(unsafe { crate::buffer::store::capacity(first as usize) }, 0);
+    assert_eq!(
+        unsafe { crate::buffer::store::capacity(second as usize) },
+        8
+    );
     assert_eq!(buffer::buffer_backing_array_buffer(first as usize), owner);
     assert_eq!(buffer::buffer_backing_array_buffer(second as usize), owner);
     let unpooled = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::PoolCopy, 4096);

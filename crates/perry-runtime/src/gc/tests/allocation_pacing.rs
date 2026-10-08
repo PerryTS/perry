@@ -228,7 +228,7 @@ fn large_buffer_burst_reclaims_at_a_precise_boundary_and_keeps_roots() {
     let keep = crate::value::JSValue::from_bits(js_shadow_slot_get(0))
         .as_pointer::<crate::buffer::BufferHeader>();
     unsafe {
-        assert_eq!((*keep).length, MIB as u32);
+        assert_eq!(crate::buffer::store::raw_length(keep as usize), MIB as u32);
         assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
     }
     assert_eq!(test_debt(), (0, 0), "only the completed full pays the debt");

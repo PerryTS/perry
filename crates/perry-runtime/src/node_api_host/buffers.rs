@@ -147,7 +147,11 @@ pub unsafe extern "C" fn napi_create_external_buffer(
         Ok(length) => length,
         Err(status) => return status,
     };
-    let buffer = crate::buffer::buffer_alloc_foreign(data.cast(), length);
+    let buffer = crate::buffer::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        length,
+        crate::buffer::store::Init::Foreign(data.cast()),
+    );
     crate::buffer::set_foreign_finalizer(
         buffer,
         super::metadata::finalizer(finalize_cb, data, finalize_hint),
@@ -245,8 +249,12 @@ pub unsafe extern "C" fn napi_create_external_arraybuffer(
         Ok(length) => length,
         Err(status) => return status,
     };
-    let buffer = crate::buffer::buffer_alloc_foreign(external_data.cast(), byte_length);
-    crate::buffer::mark_as_array_buffer(buffer as usize);
+    let buffer = crate::buffer::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        byte_length,
+        crate::buffer::store::Init::Foreign(external_data.cast()),
+    );
+
     crate::buffer::set_foreign_finalizer(
         buffer,
         super::metadata::finalizer(finalize_cb, external_data, finalize_hint),

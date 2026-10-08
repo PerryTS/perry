@@ -95,8 +95,7 @@ fn uint8array_mark_is_found_after_the_idle_fast_path_ran() {
     let scratch = unregistered_scratch_addr();
     assert!(!crate::buffer::is_uint8array_buffer(scratch));
 
-    let buf = crate::buffer::buffer_alloc(8) as usize;
-    crate::buffer::mark_as_uint8array(buf);
+    let buf = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_UINT8ARRAY, 8) as usize;
 
     assert!(
         crate::buffer::is_uint8array_buffer(buf),
@@ -111,8 +110,8 @@ fn array_buffer_and_data_view_marks_are_found_after_the_idle_fast_path_ran() {
     assert!(!crate::buffer::is_array_buffer(scratch));
     assert!(!crate::buffer::is_data_view(scratch));
 
-    let ab = crate::buffer::buffer_alloc(16) as usize;
-    crate::buffer::mark_as_array_buffer(ab);
+    let ab = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER, 16) as usize;
+
     let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 16])
         .to_bits()
         & crate::value::POINTER_MASK) as usize;
@@ -200,8 +199,8 @@ fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
     let scratch = unregistered_scratch_addr();
     assert!(!crate::buffer::is_detached_buffer(scratch));
 
-    let ab = crate::buffer::buffer_alloc(16) as usize;
-    crate::buffer::mark_as_array_buffer(ab);
+    let ab = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER, 16) as usize;
+
     assert!(!crate::buffer::is_detached_buffer(ab));
     crate::buffer::detach_array_buffer(ab);
 

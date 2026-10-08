@@ -150,7 +150,7 @@ pub(super) unsafe fn js_webcrypto_key_object_to_crypto_key(
         Err((name, message)) => throw_dom_exception(name, message),
     };
     let bytes = key_material(&key_string, kind, asym_type);
-    let buf = alloc_uint8array_from_slice(&bytes);
+    let buf = alloc_crypto_key_from_slice(&bytes);
     if buf.is_null() {
         throw_dom_exception("OperationError", "The operation failed");
     }

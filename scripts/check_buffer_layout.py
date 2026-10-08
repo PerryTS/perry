@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Ratchet byte-layout coupling until the remaining owners land B4c/B5.
+"""B5: zero byte-layout coupling outside buffer::store and perry-abi.
 
-Only buffer accessors and ABI constants may introduce a layout dependency.
-Existing codegen, zlib, fetch and node_stream sites remain explicit debt;
-removing a site requires removing its baseline entry in the same commit.
+There is no debt baseline or update mode. Consumers use scoped bytes or store
+accessors; emitted layout uses the shared ABI constants. Brand mutators are
+forbidden even without a nearby allocation: a byte cell's brand is final.
 """
 import argparse
 import collections
-import json
 from pathlib import Path
 import re
 import subprocess
@@ -15,113 +14,122 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE = ROOT / 'scripts/buffer_layout_baseline.json'
+STRINGS = re.compile(r'//[^\n]*|/\*.*?\*/|\'(?:\\.|[^\'\\])\'|'
+                     r'r(?P<hashes>\#{0,255})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"', re.S)
 PATTERNS = [
-    re.compile(r'size_of\s*::\s*<\s*(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\s*>'),
+    re.compile(r'size_of\s*::\s*<\s*(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\s*>\s*\(\s*\)'),
     re.compile(r'\b(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)'),
     re.compile(r'\(\*(?:buf(?:fer)?(?:_ptr)?|ta|view|result|backing)\)\.(?:length|capacity)\s*=(?!=)'),
     re.compile(r'(?<!fn )\b(?:buffer_data(?:_mut)?|typed_array_bytes(?:_mut)?|js_value_buffer_or_typedarray_data|js_native_buffer_data_ptr)\s*\('),
     re.compile(r'\btypedarray::data_ptr(?:_mut)?\s*\('),
+    re.compile(r'\b(?:js_buffer_)?mark_as_(?:array_buffer|shared_array_buffer|data_view|uint8array|secret_key|crypto_key)(?:_\w+)?\b'),
 ]
-# These are the layout/accessor implementations, rather than byte consumers.
-ACCESSORS = {
-    'crates/perry-runtime/src/buffer/header.rs',
-    'crates/perry-runtime/src/buffer/bytes.rs',
-    'crates/perry-runtime/src/typedarray/mod.rs',
+BYTE_EMITTERS = {
+    'function.rs', 'buffer_views.rs', 'let_buffer_views.rs', 'i32_fast_path.rs',
+    'inline_dyn_typed_array.rs', 'index_set_typed_array.rs', 'ta_element_read.rs',
+    'typed_array_rmw.rs', 'u8_buffer_read.rs', 'arrays.rs', 'stable_packed_typed_array.rs',
 }
-EMITTERS = {
-    'function.rs', 'buffer_views.rs', 'i32_fast_path.rs', 'inline_dyn_typed_array.rs',
-    'index_set_typed_array.rs', 'ta_element_read.rs', 'typed_array_rmw.rs',
-    'u8_buffer_read.rs', 'arrays.rs', 'stable_packed_typed_array.rs',
-}
-EMITTED = re.compile(r'\b(?:add|gep)\([^\n]*"(?:8|16|10)"')
-# Rust strings in IR inspectors and hand-written IR fixtures are not runtime
-# calls. Preserve line positions; emitted offset checks still use the source.
-STRINGS = re.compile(r'//[^\n]*|/\*.*?\*/|\'(?:\\.|[^\'\\])\'|'
-                     r'r(?P<hashes>\#{0,255})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"', re.S)
+EMITTED = re.compile(r'\b(?:add|gep)\([^;]*?"(?:8|16|10)"[^;]*?\)', re.S)
+BYTE_NAME = re.compile(r'\b\w*(?:buffer|bytes|typed|view)\w*\b|\bta\b')
+
 
 def inventory(root=ROOT):
     out = collections.Counter()
     for p in sorted((root / 'crates').rglob('*.rs')):
         relative = p.relative_to(root).as_posix()
-        if relative.startswith('crates/perry-abi/') or '/buffer/store' in relative or relative in ACCESSORS:
+        if relative.startswith('crates/perry-abi/') or relative.startswith('crates/perry-runtime/src/buffer/store'):
             continue
         source = p.read_text()
-        code_lines = STRINGS.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), source).splitlines()
-        for line, code_line in zip(source.splitlines(), code_lines):
-            code = line.strip()
-            if code.startswith('//'):
-                continue
-            emitted = '/perry-codegen/' in relative and p.name in EMITTERS and EMITTED.search(code)
-            if emitted or any(pattern.search(code_line) for pattern in PATTERNS):
-                out[relative + '|' + re.sub(r'\s+', ' ', code)] += 1
+        code = STRINGS.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), source)
+        matches = [m for pattern in PATTERNS for m in pattern.finditer(code)]
+        # Include arbitrary names explicitly typed/cast as byte headers, then
+        # follow simple pointer aliases (not array/string pointers).
+        if 'BufferHeader' not in code and 'TypedArrayHeader' not in code:
+            names = set()
+        else:
+            names = set(re.findall(r'\b(\w+)\s*:\s*\*\s*(?:mut|const)\s+(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\b', code))
+            names.update(re.findall(r'\blet\s+(?:mut\s+)?(\w+)[^;=\n]*=\s*[^;\n]*?\bas\s*\*\s*(?:mut|const)\s+(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\b', code))
+        for _ in range(len(names) + 1):
+            aliases = {alias for alias, src in re.findall(r'\blet\s+(?:mut\s+)?(\w+)\s*=\s*\(?\s*(\w+)\s*(?:as\s+\*\s*(?:const|mut)\s+u8)?\s*\)?\s*;', code) if src in names}
+            if aliases <= names: break
+            names.update(aliases)
+        if names:
+            receiver = r'(?:' + '|'.join(re.escape(n) for n in sorted(names)) + ')'
+            matches.extend(re.finditer(r'\b'+receiver+r'\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)', code))
+            matches.extend(re.finditer(r'\(\*\s*'+receiver+r'\s*\)\s*\.(?:length|capacity)\s*=(?!=)', code))
+        if '/perry-codegen/' in relative:
+            for m in EMITTED.finditer(source):
+                # An operation inside a comment/string fixture isn't code.
+                if not re.search(r'\b(?:add|gep)\s*\(', code[m.start():m.start()+4]): continue
+                if p.name in BYTE_EMITTERS or BYTE_NAME.search(m.group()): matches.append(m)
+        lines = source.splitlines()
+        for line in sorted({source.count('\n', 0, m.start()) for m in matches}):
+            out[f'{relative}:{line+1}|{lines[line].strip()}'] += 1
     return out
 
+
 def self_test():
-    # Exercise the executable gate, including its exit status, not only regexes.
+    # Each fixture independently runs the executable gate and must exit red.
+    fixtures = [
+        'let dst = (buf as *mut u8).add(8);',
+        'let dst = (buffer as *mut u8).add(16);',
+        '(*buffer).length = 8;', '(*ta).capacity = 16;',
+        'std::mem::size_of::<crate::buffer::BufferHeader>()',
+        'std::mem::size_of::<TypedArrayHeader>()',
+        'let n = std::mem::size_of::<\n crate::typedarray::TypedArrayHeader\n>();',
+        'fn f(p: *mut BufferHeader) { (*p).length = 1; }',
+        'fn f(p: *const TypedArrayHeader) { let bytes = (p as *const u8); bytes.add(16); }',
+        'let ptr = crate::buffer::buffer_data(buffer);',
+        'let data = typed_array_bytes(ta);',
+        'let data = js_value_buffer_or_typedarray_data(value, &mut len);',
+        'let data = crate::typedarray::data_ptr_mut(ta);',
+        'let b = buffer_alloc(8);\nmark_as_uint8array(b as usize);',
+        'let b = buffer_alloc(8);\nlet alias = b;\ncrate::buffer::mark_as_array_buffer(alias as usize);',
+        'let quote = \'"\'; // an unmatched " in a comment\nlet data = buffer_data(buffer);',
+    ]
+    emitted = [f'let data = blk.add(I64, &buffer, "{n}");' for n in [8,16,10]] + [
+        'let data = blk.gep(I8, &bytes_header, &[(I32, "16")]);',
+        'let data = blk.gep(\n I8, &buffer, &[(I32, "10")]);',
+    ]
     with tempfile.TemporaryDirectory(prefix='.buffer-gate-', dir=ROOT) as directory:
         root = Path(directory)
-        crate = root / 'crates/perry-ext-fixture/src'
-        crate.mkdir(parents=True)
-        baseline = root / 'baseline.json'
-        baseline.write_text('{}\n')
-        emitted = root / 'crates/perry-codegen/src/function.rs'
-        emitted.parent.mkdir(parents=True)
-        fixtures = [(crate / 'lib.rs', code) for code in [
-            'let dst = (buf as *mut u8).add(8);',
-            '(*buffer).length = 8;',
-            'std::mem::size_of::<crate::buffer::BufferHeader>()',
-            'let ptr = crate::buffer::buffer_data(buffer);',
-            'let data = typed_array_bytes(ta);',
-            'let data = js_value_buffer_or_typedarray_data(value, &mut len);',
-            'let data = crate::typedarray::data_ptr_mut(ta);',
-            'let quote = \'"\'; // an unmatched " in a comment\nlet data = buffer_data(buffer);',
-        ]] + [(emitted, code) for code in [
-            'let data = blk.add(I64, &raw, "8");',
-            'let data = blk.gep(I8, &header, &[(I32, "16")]);',
-        ]]
-        last = None
-        for index, (fixture, planted) in enumerate(fixtures):
-            if last is not None: last.unlink()
-            fixture.write_text(planted + '\n')
-            child = subprocess.run([sys.executable, __file__, '--root', str(root),
-                                    '--baseline', str(baseline)], capture_output=True, text=True)
-            assert child.returncode == 1 and child.stdout.count('new:') == 1, (planted, child.stdout, child.stderr)
-            print(f'buffer-layout sabotage {index + 1}: RED')
-            last = fixture
-        last.unlink()
-        (crate / 'lib.rs').write_text('// buffer_data(buffer);\nlet n = array.length;\n'
-                                    'let ir = "call ptr @js_native_buffer_data_ptr(double %v)";\n'
-                                    'let text = r#"buffer_data(buffer)"#;\n')
-        assert not inventory(root), 'unrelated arrays and comments must stay outside the gate'
+        fixture = root / 'crates/perry-ext-fixture/src/lib.rs'
+        emitter = root / 'crates/perry-codegen/src/other.rs'
+        fixture.parent.mkdir(parents=True); emitter.parent.mkdir(parents=True)
+        for i, (path, planted) in enumerate([(fixture, s) for s in fixtures]+[(emitter, s) for s in emitted]):
+            path.write_text(planted+'\n')
+            child = subprocess.run([sys.executable, __file__, '--root', str(root)], capture_output=True, text=True)
+            assert child.returncode == 1 and 'forbidden:' in child.stdout, (planted, child.stdout, child.stderr)
+            print(f'buffer-layout sabotage {i+1}: RED')
+            path.unlink()
+        fixture.write_text('// buffer_data(buffer);\nlet n = array.length;\n'
+                           'let ir = "call ptr @js_native_buffer_data_ptr(double %v)";\n'
+                           'let text = r#"buffer_data(buffer)"#;\n')
+        assert not inventory(root), 'unrelated arrays, comments and strings must stay outside the gate'
+        allowed = root / 'crates/perry-runtime/src/buffer/store/fixture.rs'
+        allowed.parent.mkdir(parents=True); allowed.write_text('\n'.join(fixtures))
+        abi = root / 'crates/perry-abi/src/lib.rs'
+        abi.parent.mkdir(parents=True); abi.write_text('\n'.join(fixtures))
+        assert not inventory(root), 'only store and ABI implementations are exempt'
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--update', action='store_true', help='review and commit every baseline change')
     ap.add_argument('--self-test', action='store_true')
     ap.add_argument('--root', type=Path, default=ROOT)
-    ap.add_argument('--baseline', type=Path, default=BASE)
     args = ap.parse_args()
     if args.self_test:
-        self_test()
-        return
+        self_test(); return
     current = inventory(args.root)
-    if args.update:
-        args.baseline.write_text(json.dumps(dict(sorted(current.items())), indent=2) + '\n')
-        print(f'buffer-layout baseline: {sum(current.values())} sites')
-        return
-    baseline = collections.Counter(json.loads(args.baseline.read_text()))
-    added, stale = current - baseline, baseline - current
-    if added or stale:
-        for label, entries in [('new', added), ('stale (ratchet down)', stale)]:
-            for site, n in entries.items():
-                print(f'{label}: {n} x {site}')
-        raise SystemExit(1)
+    for site in current:
+        print(f'forbidden: {site}')
+    if current: raise SystemExit(1)
     if args.root == ROOT:
         wrapper = (ROOT / 'crates/perry-ffi/src/buffer.rs').read_text()
         assert 'bytes::from_slice' in wrapper
         assert '.add(' not in wrapper and 'copy_nonoverlapping' not in wrapper
-    print(f'buffer-layout ratchet: {sum(current.values())} existing sites, 0 new')
+    print('buffer-layout gate: 0 sites')
+
 
 if __name__ == '__main__':
     main()

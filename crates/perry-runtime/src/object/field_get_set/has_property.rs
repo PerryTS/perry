@@ -665,7 +665,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             }
             if key_val.is_int32() {
                 let index = key_val.as_int32();
-                let present = unsafe { index >= 0 && (index as u32) < (*ta).length };
+                let present = unsafe {
+                    index >= 0 && (index as u32) < crate::buffer::store::raw_length(ta as usize)
+                };
                 return if present { nanbox_true } else { nanbox_false };
             }
             if key_val.is_number() {
@@ -675,7 +677,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                         && f >= 0.0
                         && f.fract() == 0.0
                         && f <= i32::MAX as f64
-                        && (f as u32) < (*ta).length
+                        && (f as u32) < crate::buffer::store::raw_length(ta as usize)
                 };
                 return if present { nanbox_true } else { nanbox_false };
             }

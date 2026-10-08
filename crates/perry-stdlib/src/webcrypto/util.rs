@@ -66,7 +66,7 @@ pub(super) use perry_runtime::{
 };
 
 extern "C" {
-    fn js_buffer_mark_as_crypto_key_external(
+    fn js_buffer_set_crypto_key_meta_external(
         addr: usize,
         algo: u8,
         hash: u8,
@@ -298,7 +298,7 @@ pub(super) fn register_crypto_key_with_bit_length(
     ensure_crypto_key_thread_exit_hook_registered();
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
     unsafe {
-        js_buffer_mark_as_crypto_key_external(
+        js_buffer_set_crypto_key_meta_external(
             buf_addr,
             runtime_algo_id(mat.algo),
             runtime_hash_id(mat.hash),
@@ -406,7 +406,7 @@ fn release_crypto_keys_in_freed_ranges(freed: &perry_runtime::arena::thread_exit
 #[cfg(test)]
 #[no_mangle]
 pub extern "C" fn perry_test_11471_register_crypto_key() -> usize {
-    let buf = unsafe { alloc_uint8array_from_slice(&[7u8; 32]) };
+    let buf = unsafe { alloc_crypto_key_from_slice(&[7u8; 32]) };
     let addr = buf as usize;
     register_crypto_key(
         addr,
@@ -942,6 +942,19 @@ pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHea
     JSValue::from_bits(
         perry_runtime::buffer::bytes::from_slice(
             perry_runtime::buffer::bytes::Brand::Uint8Array,
+            bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut()
+}
+
+/// Allocate key bytes with their final CryptoKey brand.
+pub(super) unsafe fn alloc_crypto_key_from_slice(bytes: &[u8]) -> *mut BufferHeader {
+    JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::CryptoKey,
             bytes,
         )
         .to_bits(),

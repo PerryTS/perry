@@ -72,7 +72,7 @@
       "why": "Keyed by NEXT_WRITER_ID per getWriter(); releaseLock only sets locked=false and the only remove is in #[cfg(test)]"
     },
     {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "ASYMMETRIC_KEY_REGISTRY",
       "verdict": "open_leak",
       "why": "Keyed by the address of a PEM-string KeyObject per createPublic/PrivateKey; finalize_collected_dead_buffer clears the other crypto tables but not this one"

@@ -156,5 +156,5 @@ pub(super) unsafe fn buffer_own_key_present(
     let Some(index) = super::canonical_array_index(key_name) else {
         return false;
     };
-    index < (*buf).length
+    index < crate::buffer::store::raw_length(buf as usize)
 }

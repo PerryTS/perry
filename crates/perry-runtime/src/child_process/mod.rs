@@ -156,7 +156,7 @@ mod tests {
             (result.to_bits() & crate::value::POINTER_MASK) as *const crate::buffer::BufferHeader;
         assert!(!buf.is_null());
         unsafe {
-            assert!((*buf).length > 0);
+            assert!(crate::buffer::store::raw_length(buf as usize) > 0);
         }
     }
 

@@ -556,13 +556,14 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             }
         }
         GcRewriteDescriptorKind::Buffer => {
-            let cell = user_ptr as *mut crate::buffer::BufferHeader;
             #[cfg(test)]
             let trace_link = !crate::buffer::bytes::b4_sabotage("view_edge");
             #[cfg(not(test))]
             let trace_link = true;
-            if (*cell).link != 0 && trace_link {
-                visit(pointer_slot(std::ptr::addr_of_mut!((*cell).link)));
+            if trace_link {
+                if let Some(slot) = crate::buffer::store::gc_link_slot(user_ptr as usize) {
+                    visit(pointer_slot(slot));
+                }
             }
         }
         GcRewriteDescriptorKind::WeakStorage => {

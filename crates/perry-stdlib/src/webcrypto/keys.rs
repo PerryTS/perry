@@ -61,8 +61,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
 
-        let private_buf = alloc_uint8array_from_slice(&private_der);
-        let public_buf = alloc_uint8array_from_slice(&public_der);
+        let private_buf = alloc_crypto_key_from_slice(&private_der);
+        let public_buf = alloc_crypto_key_from_slice(&public_der);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -114,8 +114,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let public_bytes = signing_key.verifying_key().to_bytes();
 
-        let private_buf = alloc_uint8array_from_slice(&seed);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&seed);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -176,8 +176,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         };
         let public_bytes = signing_key.verifying_key().to_bytes().to_vec();
 
-        let private_buf = alloc_uint8array_from_slice(&seed);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&seed);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -237,8 +237,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_bytes = private_key.to_bytes();
         let public_bytes = public_key.to_bytes();
 
-        let private_buf = alloc_uint8array_from_slice(&private_bytes);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&private_bytes);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -311,8 +311,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
 
-        let private_buf = alloc_uint8array_from_slice(&private_der);
-        let public_buf = alloc_uint8array_from_slice(&public_der);
+        let private_buf = alloc_crypto_key_from_slice(&private_der);
+        let public_buf = alloc_crypto_key_from_slice(&public_der);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -372,8 +372,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let private_bytes = private_key.as_bytes().to_vec();
         let public_bytes = public_key.as_bytes().to_vec();
 
-        let private_buf = alloc_uint8array_from_slice(&private_bytes);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&private_bytes);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -438,8 +438,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
 
-        let private_buf = alloc_uint8array_from_slice(&private_bytes);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&private_bytes);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -504,8 +504,8 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
 
-        let private_buf = alloc_uint8array_from_slice(&private_bytes);
-        let public_buf = alloc_uint8array_from_slice(&public_bytes);
+        let private_buf = alloc_crypto_key_from_slice(&private_bytes);
+        let public_buf = alloc_crypto_key_from_slice(&public_bytes);
         if private_buf.is_null() || public_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let mut key_bytes = vec![0u8; byte_len];
         use rand_core_06::RngCore;
         rand_core_06::OsRng.fill_bytes(&mut key_bytes);
-        let buf = alloc_uint8array_from_slice(&key_bytes);
+        let buf = alloc_crypto_key_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -602,7 +602,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         let mut key_bytes = vec![0u8; 32];
         use rand_core_06::RngCore;
         rand_core_06::OsRng.fill_bytes(&mut key_bytes);
-        let buf = alloc_uint8array_from_slice(&key_bytes);
+        let buf = alloc_crypto_key_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -665,7 +665,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
                 *last &= 0xFF << (8 - bit_len % 8);
             }
         }
-        let buf = alloc_uint8array_from_slice(&key_bytes);
+        let buf = alloc_crypto_key_from_slice(&key_bytes);
         if buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
@@ -744,7 +744,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
 
     // Allocate the CryptoKey-shaped buffer and register the requested
     // WebCrypto algorithm so later operations can validate it.
-    let buf = alloc_uint8array_from_slice(&key_bytes);
+    let buf = alloc_crypto_key_from_slice(&key_bytes);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
