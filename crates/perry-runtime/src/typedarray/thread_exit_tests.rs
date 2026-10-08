@@ -24,7 +24,7 @@ fn legacy_allocator_retirement_hook_has_no_live_admission_state_to_clear() {
     let second = typed_array_alloc(KIND_INT32, 16);
     invalidate_caches_in_range(first as usize, first as usize + 1);
     assert_eq!(
-        inline_u32_addr(crate::value::js_nanbox_pointer(first as i64)),
+        owning_u32_addr(crate::value::js_nanbox_pointer(first as i64)),
         first as usize
     );
     assert_eq!(lookup_typed_array_kind(second as usize), Some(KIND_INT32));

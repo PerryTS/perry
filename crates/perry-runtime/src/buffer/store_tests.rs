@@ -110,7 +110,9 @@ fn native_birth_accounts_capacity_without_collecting_and_release_balances_it() {
     let _lock = crate::gc::global_side_table_test_lock();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let _policy = crate::gc::ByteStorePolicyTestGuard::new(256);
-    let mut body = Vec::with_capacity(4096);
+    // Cross the external allocation step with retained capacity, even though
+    // the visible body is small. A collecting birth hook must turn this red.
+    let mut body = Vec::with_capacity(16 * 1024 * 1024);
     body.resize(257, 37);
     let capacity = body.capacity();
     let original = body.as_ptr();
@@ -156,6 +158,18 @@ fn uint8_owner_is_native_and_detach_reads_header_length() {
     assert!(super::super::bytes::no_gc(|proof| {
         super::super::bytes::bytes(value, proof).is_err()
     }));
+}
+
+#[test]
+fn collecting_during_native_birth_turns_the_birth_witness_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "buffer::store::tests::native_birth_accounts_capacity_without_collecting_and_release_balances_it", "--nocapture"])
+        .env("PERRY_B4_SABOTAGE", "birth_collect").output().unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(
+        !child.status.success(),
+        "collection inside birth must be detected"
+    );
 }
 
 #[test]

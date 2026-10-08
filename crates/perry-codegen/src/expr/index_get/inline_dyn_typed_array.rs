@@ -390,11 +390,10 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     // coarsest split that keeps every load in bounds — reading 8 bytes from a
     // `Uint8Array`'s last element is not ours to take.)
     //
-    // The receiver's own storage byte (`TA_STORAGE_INLINE`) is the licence to
-    // compute the data pointer as `header + 16` without consulting the view
-    // registries (#10516); an external-storage receiver,
-    // like a BigInt lane or an out-of-range index, leaves through
-    // `arrlike.ic.miss` — the same exit the old `tav.get.slow` edge reached.
+    // The common byte-cell resolver admits the brand, follows a view's owner,
+    // and resolves Inline or OutOfLine storage from the owner's header.
+    // Special owners retain their runtime rules. BigInt lanes, rejected
+    // owners and out-of-range indices leave through `arrlike.ic.miss`.
     //
     // This arm sits AHEAD of the object probe, which was measured both ways:
     // putting it on the probe's decline edge instead saves an object receiver
