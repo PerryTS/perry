@@ -187,3 +187,47 @@ fn freezing_an_array_snapshots_indices_before_the_holder_reserve_grows() {
         }
     }
 }
+
+#[test]
+fn array_index_descriptors_inside_capacity_do_not_block_holey_dense_growth() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let array = crate::array::js_array_constructor_single(2_000_000.0);
+        let array = crate::array::js_array_set_f64_extend(array, 0, 7.0);
+        let array = crate::array::clean_arr_ptr_mut(array);
+        set_property_attrs(
+            array as usize,
+            "0".into(),
+            PropertyAttrs::new(false, true, true),
+        );
+        set_accessor_descriptor(array as usize, "1".into(), getter());
+        let array = crate::array::clean_arr_ptr_mut(array);
+        let capacity = (*array).capacity;
+        assert!(capacity < (*array).length, "subject: a logical holey tail");
+        assert!(!crate::array::array_has_sparse_index_properties_resolved(
+            array
+        ));
+        let grown = crate::array::js_array_set_f64_extend(array, capacity, 42.0);
+        assert!(
+            (*grown).capacity > capacity,
+            "near fill must grow the dense allocation"
+        );
+        assert_eq!(crate::array::js_array_get_f64(grown, capacity), 42.0);
+        assert_eq!(crate::array::js_array_get_f64(grown, 0), 7.0);
+        assert_eq!(crate::array::js_array_get_f64(grown, 1), 41.0);
+        assert!(!get_property_attrs(grown as usize, "0").unwrap().writable());
+
+        // A genuine sparse property still blocks growth across its value.
+        let far = (*grown).capacity + 500_000;
+        let sparse = crate::array::js_array_set_f64_extend(grown, far, 9.0);
+        assert!(crate::array::array_has_sparse_index_properties_resolved(
+            sparse
+        ));
+        let capacity = (*sparse).capacity;
+        let filled = crate::array::js_array_set_f64_extend(sparse, capacity, 43.0);
+        assert_eq!((*filled).capacity, capacity);
+        assert_eq!(crate::array::js_array_get_f64(filled, far), 9.0);
+        assert_eq!(crate::array::js_array_get_f64(filled, capacity), 43.0);
+    }
+}
