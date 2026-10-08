@@ -42,10 +42,11 @@
 //! runs. A Number's representation is its raw double, so neither clone ever
 //! puts a non-Number bit pattern where the other expects a JS value.
 //!
-//! Scope of the tier: loops that touch no receiver (no property or element
-//! access) — those belong to the region tier that follows — and that use an
-//! admitted local as a direct bitwise operand, the only shape where the clone
-//! pays for its code size.
+//! Scope of the tier: bitwise loops and typed byte-scanning loops. Byte reads
+//! keep the existing checked element lowering and B4 owner proof; this tier
+//! proves the loop-carried Number; byte-result numeric facts additionally require
+//! B4 receiver admission.
+//! Other receiver accesses belong to the region tier that follows.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -85,40 +86,43 @@ struct LoopFacts<'a> {
     /// value at entry is not the value the clone reads, so they are never
     /// entry-tested candidates.
     declared: HashSet<u32>,
-    /// Locals that appear directly as an operand of a bitwise operator.
-    bitwise_operands: HashSet<u32>,
+    /// Locals used directly by bitwise operations or as typed-byte indices.
+    numeric_consumers: HashSet<u32>,
+    byte_receivers: BTreeSet<u32>,
     nodes: usize,
 }
 
 impl<'a> LoopFacts<'a> {
     /// `false` when the loop contains a construct this tier does not reason
     /// about; the caller then declines the whole loop.
-    fn walk_stmts(&mut self, stmts: &'a [Stmt]) -> bool {
-        stmts.iter().all(|stmt| self.walk_stmt(stmt))
+    fn walk_stmts(&mut self, ctx: &FnCtx<'_>, stmts: &'a [Stmt]) -> bool {
+        stmts.iter().all(|stmt| self.walk_stmt(ctx, stmt))
     }
 
-    fn walk_stmt(&mut self, stmt: &'a Stmt) -> bool {
+    fn walk_stmt(&mut self, ctx: &FnCtx<'_>, stmt: &'a Stmt) -> bool {
         match stmt {
             Stmt::Let { id, init, .. } => {
                 self.declared.insert(*id);
-                init.as_ref().is_none_or(|init| self.walk_expr(init))
+                init.as_ref().is_none_or(|init| self.walk_expr(ctx, init))
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) => self.walk_expr(expr),
-            Stmt::Return(value) => value.as_ref().is_none_or(|value| self.walk_expr(value)),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => self.walk_expr(ctx, expr),
+            Stmt::Return(value) => value
+                .as_ref()
+                .is_none_or(|value| self.walk_expr(ctx, value)),
             Stmt::Break | Stmt::Continue => true,
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                self.walk_expr(condition)
-                    && self.walk_stmts(then_branch)
+                self.walk_expr(ctx, condition)
+                    && self.walk_stmts(ctx, then_branch)
                     && else_branch
                         .as_deref()
-                        .is_none_or(|branch| self.walk_stmts(branch))
+                        .is_none_or(|branch| self.walk_stmts(ctx, branch))
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                self.walk_expr(condition) && self.walk_stmts(body)
+                self.walk_expr(ctx, condition) && self.walk_stmts(ctx, body)
             }
             Stmt::For {
                 init,
@@ -126,10 +130,10 @@ impl<'a> LoopFacts<'a> {
                 update,
                 body,
             } => {
-                init.as_deref().is_none_or(|init| self.walk_stmt(init))
-                    && condition.as_ref().is_none_or(|c| self.walk_expr(c))
-                    && update.as_ref().is_none_or(|u| self.walk_expr(u))
-                    && self.walk_stmts(body)
+                init.as_deref().is_none_or(|init| self.walk_stmt(ctx, init))
+                    && condition.as_ref().is_none_or(|c| self.walk_expr(ctx, c))
+                    && update.as_ref().is_none_or(|u| self.walk_expr(ctx, u))
+                    && self.walk_stmts(ctx, body)
             }
             // try/switch/labels and the box-management statements carry
             // control flow or storage protocols this tier does not model.
@@ -137,23 +141,59 @@ impl<'a> LoopFacts<'a> {
         }
     }
 
-    fn walk_expr(&mut self, expr: &'a Expr) -> bool {
+    fn walk_expr(&mut self, ctx: &FnCtx<'_>, expr: &'a Expr) -> bool {
         self.nodes += 1;
         if self.nodes > MAX_LOOP_NODES {
             return false;
         }
         match expr {
             // A closure could capture, an `await`/`yield` suspends with the
-            // frame's storage protocol, and a receiver access belongs to the
+            // frame's storage protocol, and other receiver accesses belong to the
             // region tier that runs after this one.
             Expr::Closure { .. }
             | Expr::Await(_)
             | Expr::Yield { .. }
-            | Expr::PropertyGet { .. }
             | Expr::PropertySet { .. }
-            | Expr::IndexGet { .. }
             | Expr::IndexSet { .. }
             | Expr::PutValueSet { .. } => return false,
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                // Admission is only for the local index. Keep full property
+                // semantics for live length, including overrides/getters.
+                if property != "length"
+                    || crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1)
+                {
+                    return false;
+                }
+            }
+            Expr::IndexGet { object, index } => {
+                if crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1) {
+                    return false;
+                }
+                if let Expr::LocalGet(id) = index.as_ref() {
+                    self.numeric_consumers.insert(*id);
+                }
+            }
+            Expr::Uint8ArrayGet {
+                array: object,
+                index,
+            }
+            | Expr::BufferIndexGet {
+                buffer: object,
+                index,
+            } => {
+                let Expr::LocalGet(id) = object.as_ref() else {
+                    return false;
+                };
+                if ctx.reassigned_locals.contains(id) || ctx.boxed_vars.contains(id) {
+                    return false;
+                }
+                self.byte_receivers.insert(*id);
+                if let Expr::LocalGet(id) = index.as_ref() {
+                    self.numeric_consumers.insert(*id);
+                }
+            }
             Expr::LocalSet(id, value) => {
                 self.writes.entry(*id).or_default().push(Some(value));
             }
@@ -163,7 +203,7 @@ impl<'a> LoopFacts<'a> {
             Expr::Binary { op, left, right } if is_bitwise(*op) => {
                 for operand in [left.as_ref(), right.as_ref()] {
                     if let Expr::LocalGet(id) = operand {
-                        self.bitwise_operands.insert(*id);
+                        self.numeric_consumers.insert(*id);
                     }
                 }
             }
@@ -172,14 +212,14 @@ impl<'a> LoopFacts<'a> {
                 operand,
             } => {
                 if let Expr::LocalGet(id) = operand.as_ref() {
-                    self.bitwise_operands.insert(*id);
+                    self.numeric_consumers.insert(*id);
                 }
             }
             _ => {}
         }
         let mut ok = true;
         perry_hir::walker::walk_expr_children(expr, &mut |child| {
-            ok = ok && self.walk_expr(child);
+            ok = ok && self.walk_expr(ctx, child);
         });
         ok
     }
@@ -210,6 +250,7 @@ fn is_bitwise(op: BinaryOp) -> bool {
 fn produces_number(ctx: &FnCtx<'_>, expr: &Expr, numbers: &BTreeSet<u32>) -> bool {
     match expr {
         Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => false,
         Expr::LocalGet(id) => {
             numbers.contains(id) || crate::type_analysis::is_numeric_expr(ctx, expr)
         }
@@ -246,7 +287,7 @@ fn match_number_locals(
     condition: Option<&Expr>,
     update: Option<&Expr>,
     body: &[Stmt],
-) -> Option<Vec<u32>> {
+) -> Option<(Vec<u32>, Vec<u32>)> {
     if !ctx.pending_labels.is_empty() || ctx.try_depth != 0 || ctx.is_async_fn {
         return None;
     }
@@ -256,9 +297,9 @@ fn match_number_locals(
     if let Some(Stmt::Let { id, .. }) = init {
         facts.declared.insert(*id);
     }
-    let walked = condition.is_none_or(|c| facts.walk_expr(c))
-        && update.is_none_or(|u| facts.walk_expr(u))
-        && facts.walk_stmts(body);
+    let walked = condition.is_none_or(|c| facts.walk_expr(ctx, c))
+        && update.is_none_or(|u| facts.walk_expr(ctx, u))
+        && facts.walk_stmts(ctx, body);
     if !walked {
         return None;
     }
@@ -298,10 +339,16 @@ fn match_number_locals(
             numbers.remove(&id);
         }
     }
-    if !numbers.iter().any(|id| facts.bitwise_operands.contains(id)) {
+    if !numbers
+        .iter()
+        .any(|id| facts.numeric_consumers.contains(id))
+    {
         return None;
     }
-    Some(numbers.into_iter().collect())
+    Some((
+        numbers.into_iter().collect(),
+        facts.byte_receivers.into_iter().collect(),
+    ))
 }
 
 /// Try the tier. `init` has already been lowered by the caller.
@@ -315,7 +362,8 @@ pub(super) fn lower(
     if !enabled() {
         return Ok(false);
     }
-    let Some(numbers) = match_number_locals(ctx, init, condition, update, body) else {
+    let Some((numbers, byte_receivers)) = match_number_locals(ctx, init, condition, update, body)
+    else {
         return Ok(false);
     };
     trace(&format!("admitted {} local(s)", numbers.len()));
@@ -333,7 +381,26 @@ pub(super) fn lower(
             None => is_number,
         });
     }
-    let all_numbers = all_numbers.expect("the matcher admits at least one local");
+    let mut all_numbers = all_numbers.expect("the matcher admits at least one local");
+    // Reuse B4 admission before publishing numeric byte-result facts. A lying
+    // receiver runs the original loop; detach/resize still invalidate storage.
+    let mut receiver_proofs = Vec::new();
+    for id in byte_receivers {
+        if crate::expr::ta_element_read::byte_receiver_is_proven(ctx, &Expr::LocalGet(id)) {
+            continue;
+        }
+        let boxed = lower_expr(ctx, &Expr::LocalGet(id))?;
+        let Some(access) = crate::expr::u8_buffer_read::byte_view_param_for(
+            ctx,
+            &Expr::LocalGet(id),
+            &boxed,
+            &crate::expr::u8_buffer_read::U8_BRANDS,
+        ) else {
+            return Ok(false);
+        };
+        all_numbers = ctx.block().and(I1, &all_numbers, &access.valid_i1);
+        receiver_proofs.push((id, ctx.snapshot_guarded_proof(&id)));
+    }
 
     let fast_idx = ctx.new_block("for.number_locals.fast.preheader");
     let slow_idx = ctx.new_block("for.number_locals.slow.preheader");
@@ -344,6 +411,15 @@ pub(super) fn lower(
     ctx.block().cond_br(&all_numbers, &fast_label, &slow_label);
 
     ctx.current_block = fast_idx;
+    for (id, _) in &receiver_proofs {
+        ctx.proven_local_types.insert(
+            *id,
+            perry_hir::types::Type::Union(vec![
+                perry_hir::types::Type::Named("Uint8Array".into()),
+                perry_hir::types::Type::Named("Buffer".into()),
+            ]),
+        );
+    }
     let scope_id = ctx.next_loop_proof_scope_id();
     ctx.receiver_descriptors
         .materialize_number_locals(scope_id, &numbers);
@@ -381,6 +457,13 @@ pub(super) fn lower(
         ctx.numeric_accumulator_f64_slots.remove(id);
     }
     ctx.receiver_descriptors.dematerialize_scope(scope_id);
+    for (id, previous) in receiver_proofs {
+        if let Some(ty) = previous {
+            ctx.proven_local_types.insert(id, ty);
+        } else {
+            ctx.proven_local_types.remove(&id);
+        }
+    }
     fast?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -394,4 +477,30 @@ pub(super) fn lower(
 
     ctx.current_block = merge_idx;
     Ok(true)
+}
+
+/// Number admission proves the index, not the receiver. Checked byte reads
+/// can still enter a collecting property fallback, so the scanner clone keeps
+/// its ordinary armed poll on every back edge.
+pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &[&Expr]) -> bool {
+    fn guarded(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+        let index = match expr {
+            Expr::Uint8ArrayGet { index, .. } | Expr::BufferIndexGet { index, .. } => index,
+            Expr::IndexGet { object, index }
+                if crate::expr::ta_element_read::receiver_kind(ctx, object) == Some(1) =>
+            {
+                index
+            }
+            _ => return false,
+        };
+        matches!(index.as_ref(), Expr::LocalGet(id) if ctx.numeric_accumulator_f64_slots.contains_key(id))
+    }
+    let mut found = false;
+    crate::collectors::for_each_expr_in_stmts(body, &mut |e| found |= guarded(ctx, e));
+    fn walk(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+        let mut found = guarded(ctx, expr);
+        perry_hir::walker::walk_expr_children(expr, &mut |e| found |= walk(ctx, e));
+        found
+    }
+    found || controls.iter().any(|e| walk(ctx, e))
 }

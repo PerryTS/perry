@@ -94,6 +94,7 @@ pub(crate) fn record_boxed_slot_js_value_bits(
 /// statement splits control flow, `ctx.current_block` is updated to the
 /// "fall-through" block after the split.
 pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    crate::expr::ta_element_read::prepare_loop_accesses(ctx, stmts);
     // Step 4b: a loop / body region's body lowers as F-body + G-body.
     if let Some(idx) = region_loop::pending_for(ctx, stmts) {
         return region_loop::lower_split(ctx, stmts, idx, lower_region_list);
@@ -186,6 +187,7 @@ fn lower_stmts_versioned_tail(
 }
 
 fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
+    crate::expr::ta_element_read::prepare_loop_accesses(ctx, stmts);
     lower_stmts_from(ctx, stmts, emit_shadow_clears, emit_shadow_clears)
 }
 

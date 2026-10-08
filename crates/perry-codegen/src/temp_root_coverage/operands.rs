@@ -16,15 +16,15 @@ use super::{main_ir_for, under_both_lowerings};
 use crate::testing::temp_slots::{assert_no_temp_rooting, temp_root_slots};
 use perry_hir::{Expr, Stmt};
 
-/// A local declared with a Buffer annotation, so the receiver of the element
-/// read is a plain local get (the shape the fixture's parameter has).
+/// A constructed byte array. An erased Buffer annotation alone cannot
+/// establish that a checked read returns only a byte or undefined.
 fn buffer_local(id: u32) -> Stmt {
     Stmt::Let {
         id,
         name: "buf".to_string(),
         ty: perry_hir::types::Type::Named("Buffer".to_string()),
         mutable: false,
-        init: Some(Expr::Undefined),
+        init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(4))))),
     }
 }
 
@@ -92,8 +92,7 @@ fn a_proven_index_typed_array_read_is_not_temp_rooted() {
     });
 }
 
-/// Same for a `Buffer`-node element read, whose every lowering coerces the key
-/// to i32 and reads a byte.
+/// Same for the Buffer-node spelling on a construction-proven byte receiver.
 #[test]
 fn a_buffer_index_read_is_not_temp_rooted() {
     under_both_lowerings(|lowering| {

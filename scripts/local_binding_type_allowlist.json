@@ -242,6 +242,22 @@
       "reason": "The Array hint on a class evaluation's compiler-private self binding (the evaluation_owner of a fresh or first evaluation) is not a user annotation: the shared-mutable capture rewrite is what both sets it and allocates the one-element cell, in the same pass, so the cell representation holds by construction wherever the hint is present. The raw POINTER_MASK_I64 decode and js_array_set_f64 below are therefore reaching a cell the compiler itself created; the else arm stores the plain value for an unrewritten binding."
     },
     {
+      "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
+      "function": "byte_receiver_is_proven",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "Numeric byte-result evidence requires a stable construction or a dominating B4 byte-brand admission; erased annotations cannot establish this fact."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
+      "function": "receiver_kind",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The annotation selects a checked element emitter. B4 admission validates the live receiver and the generic boxed property fallback handles every miss."
+    },
+    {
       "path": "crates/perry-codegen/src/expr/ta_param_f64_read.rs",
       "function": "declared_typed_array_class_f64",
       "access": "local_type_hint",
@@ -363,6 +379,14 @@
     },
     {
       "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
+      "function": "array_is_untyped",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared type is read only to DECLINE the shape-keyed loop clone for a receiver that carries any layout claim (a named class or an anon-shape the resolver found ambiguous); it never selects a layout. A receiver admitted here (no annotation, any, unknown) still goes through the preheader's runtime proof \u2014 js_array_ensure_element_shape_ordinary must return a nonzero ShapeId and js_shape_ordinary_inline_slot_for_key a slot for every tracked key \u2014 and the per-element residual check re-validates that ShapeId on every read, so a stale or wrong hint can only cost the clone, never a wrong offset."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
       "function": "declared_array_element_type_hint",
       "access": "local_type_hint",
       "count": 1,
@@ -456,6 +480,22 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The candidate is admitted only to a masked-window clone whose runtime preheader guard proves the receiver and index window."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/number_local_loop.rs",
+      "function": "lower",
+      "access": "snapshot_guarded_proof",
+      "count": 1,
+      "classification": "metadata-only",
+      "reason": "Restore bookkeeping for the existing Number-loop clone: byte-brand narrowing is installed only under B4 admission and the exact prior proof is restored before lowering the generic loop."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
+      "function": "static_class_name",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared class only picks a region receiver's static supplier (its static ShapeId and slots): at planning, whether a receiver naming more keys than a learned word addresses may be planned at all, and at the guard, the id and constant slots. The guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape takes the plain copy (a receiver wider than a learned word is guarded only when the same supplier still serves it at guard time, else the loop is lowered plainly); a wrong hint can only cost the region, never a wrong slot."
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
@@ -680,22 +720,6 @@
       "count": 1,
       "classification": "metadata-only",
       "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
-    },
-    {
-      "path": "crates/perry-codegen/src/stmt/element_shape_loop.rs",
-      "function": "array_is_untyped",
-      "access": "local_type_hint",
-      "count": 1,
-      "classification": "runtime-validated",
-      "reason": "The declared type is read only to DECLINE the shape-keyed loop clone for a receiver that carries any layout claim (a named class or an anon-shape the resolver found ambiguous); it never selects a layout. A receiver admitted here (no annotation, any, unknown) still goes through the preheader's runtime proof \u2014 js_array_ensure_element_shape_ordinary must return a nonzero ShapeId and js_shape_ordinary_inline_slot_for_key a slot for every tracked key \u2014 and the per-element residual check re-validates that ShapeId on every read, so a stale or wrong hint can only cost the clone, never a wrong offset."
-    },
-    {
-      "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
-      "function": "static_class_name",
-      "access": "local_type_hint",
-      "count": 1,
-      "classification": "runtime-validated",
-      "reason": "The declared class only picks a region receiver's static supplier (its static ShapeId and slots): at planning, whether a receiver naming more keys than a learned word addresses may be planned at all, and at the guard, the id and constant slots. The guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape takes the plain copy (a receiver wider than a learned word is guarded only when the same supplier still serves it at guard time, else the loop is lowered plainly); a wrong hint can only cost the region, never a wrong slot."
     }
   ]
 }

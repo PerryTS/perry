@@ -6934,10 +6934,8 @@ fn lower_for_after_element_region(
         return Ok(());
     }
 
-    // #10511: a receiver-free loop whose bitwise operators read locals the
-    // function scope cannot prove Number runs in a clone versioned on one
-    // entry test per local (the 5L rule over the loop's own writes). It
-    // touches no receiver, so the region tier below has nothing to plan.
+    // The existing Number-local tier also admits typed byte indices. It
+    // proves the loop-carried Number; checked receiver reads still use B4.
     if super::number_local_loop::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
@@ -7828,13 +7826,15 @@ pub(crate) fn emit_gc_loop_safepoint(
     // `ctx` ends with the block so the poll emission below can take it
     // mutably.
     let needs_poll = {
+        let guarded_byte_index =
+            super::number_local_loop::has_guarded_byte_index(ctx, body, controls);
         let is_inert = |e: &perry_hir::Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
         let body = if region_loop::body_cannot_collect(ctx, body) {
             &[][..]
         } else {
             body
         };
-        crate::loop_purity::loop_may_allocate(body, controls, &is_inert)
+        guarded_byte_index || crate::loop_purity::loop_may_allocate(body, controls, &is_inert)
     };
     if !needs_poll {
         return;
@@ -9693,6 +9693,10 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    // A while loop is the same Number induction with no init/update clause.
+    if super::number_local_loop::lower(ctx, None, Some(condition), None, body)? {
+        return Ok(());
+    }
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
         lower_while_impl(ctx, condition, body)
