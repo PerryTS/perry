@@ -166,20 +166,31 @@ pub unsafe extern "C-unwind" fn js_array_record_literal(values: *const f64, coun
 /// The prototype shape describes the iteration member and its ConstFn body.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i32 {
-    let proto = crate::array::array_prototype_addr_if_resolved();
-    if proto != 0 && crate::object::iterator_prototypes_materialized() {
-        return array_record_needs_iterator_resolved(value, proto, std::ptr::null_mut());
-    }
-    array_record_needs_iterator_cold(value, std::ptr::null_mut())
+    array_record_enter(value, std::ptr::null_mut(), false)
 }
 
 /// Capture the actual source and its shape verdict together. The output is
 /// published only after intrinsic materialization has finished allocating.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_enter(value: f64, out: *mut f64) -> i32 {
+    array_record_enter(value, out, false)
+}
+
+/// The counted consumer's entry: the same proof (bit 0), then the packed-f64
+/// loop admission of the live head the proof already resolved (bit 1). The
+/// loop consumes bit 1 in place of a second receiver classification.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_enter_counted(value: f64, out: *mut f64) -> i32 {
+    array_record_enter(value, out, true)
+}
+
+#[inline(always)]
+unsafe fn array_record_enter(value: f64, out: *mut f64, counted: bool) -> i32 {
     let proto = crate::array::array_prototype_addr_if_resolved();
-    if proto != 0 && crate::object::iterator_prototypes_materialized() {
-        return array_record_needs_iterator_resolved(value, proto, out);
+    // Published only once the whole iterator-prototype tower is built.
+    let next_owner = crate::object::array_iterator_prototype_addr();
+    if proto != 0 && next_owner != 0 {
+        return array_record_needs_iterator_resolved(value, proto, next_owner, out, counted);
     }
     array_record_needs_iterator_cold(value, out)
 }
@@ -194,11 +205,19 @@ unsafe fn array_record_needs_iterator_cold(value: f64, out: *mut f64) -> i32 {
     array_record_needs_iterator_resolved(
         value.get_nanbox_f64(),
         crate::array::array_prototype_addr(),
+        crate::object::array_iterator_prototype_addr(),
         out,
+        false,
     )
 }
 
-unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize, out: *mut f64) -> i32 {
+unsafe fn array_record_needs_iterator_resolved(
+    value: f64,
+    proto: usize,
+    next_owner: usize,
+    out: *mut f64,
+    counted: bool,
+) -> i32 {
     if !out.is_null() {
         // GC_STORE_AUDIT(STACK): publish after the cold entry has completed reentry.
         *out = value;
@@ -213,69 +232,79 @@ unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize, out: *m
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return 1;
     }
-    // An alias can still name a growth stub. Its old flags do not describe
-    // members subsequently installed on the live array.
-    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
-    if !array.is_null() && !out.is_null() {
-        // GC_STORE_AUDIT(STACK): caller owns the repaired live source root.
-        *out = crate::value::js_nanbox_pointer(array as i64);
-    }
-    if array.is_null()
-        || crate::array::array_object_flags_resolved(array) & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
-    {
-        return 1;
-    }
-    let symbol = crate::symbol::well_known_symbol("iterator");
-    if crate::array::array_object_flags_resolved(array) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-    {
-        let own = crate::array::array_property_bag(array);
-        if !own.is_null() {
-            if crate::object::shaped_symbols::position(own, symbol as usize).is_some() {
-                return 1;
-            }
+    let mut array = raw as *const crate::array::ArrayHeader;
+    let mut flags = header._reserved;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        // An alias can still name a growth stub. Its old flags do not
+        // describe members subsequently installed on the live array.
+        array = crate::array::clean_arr_ptr(array);
+        if array.is_null() {
+            return 1;
+        }
+        flags = crate::array::array_object_flags_resolved(array);
+        if !out.is_null() {
+            // GC_STORE_AUDIT(STACK): caller owns the repaired live source root.
+            *out = crate::value::js_nanbox_pointer(array as i64);
         }
     }
-    array_record_prototypes_need_iterator(proto, symbol as usize)
+    if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+        return 1;
+    }
+    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
+    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        let own = crate::array::array_property_bag(array);
+        if !own.is_null() && crate::object::shaped_symbols::position(own, symbol).is_some() {
+            return 1;
+        }
+    }
+    if array_record_prototypes_need_iterator(proto, next_owner, symbol) != 0 {
+        return 1;
+    }
+    if counted && crate::typed_feedback::packed_f64_loop_admits_live_array(array, flags) {
+        return 2;
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator() -> i32 {
     let mut proto_addr = crate::array::array_prototype_addr_if_resolved();
-    if proto_addr == 0 || !crate::object::iterator_prototypes_materialized() {
+    let mut next_owner = crate::object::array_iterator_prototype_addr();
+    if proto_addr == 0 || next_owner == 0 {
         let _ = crate::object::builtin_prototype_value("Array");
         crate::object::ensure_iterator_prototypes();
         proto_addr = crate::array::array_prototype_addr();
+        next_owner = crate::object::array_iterator_prototype_addr();
     }
     let symbol = crate::symbol::well_known_symbol("iterator");
-    array_record_prototypes_need_iterator(proto_addr, symbol as usize)
+    array_record_prototypes_need_iterator(proto_addr, next_owner, symbol as usize)
 }
 
-unsafe fn array_record_prototypes_need_iterator(proto_addr: usize, symbol: usize) -> i32 {
-    // The intrinsic root is an Array, and its actual property bag owns the
-    // symbol shape. Avoid rediscovering that known receiver brand through
-    // the generic descriptor router. No mutation fact is cached here.
-    let proto = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
-    if proto.is_null() {
+/// Both intrinsic members, read from their owners' current shapes: the
+/// Array prototype's property bag names `@@iterator` at a ConstFn lane whose
+/// body is `values`, and %ArrayIteratorPrototype% names `next` at a ConstFn
+/// lane whose body is the intrinsic step. No mutation fact is cached here.
+#[inline(always)]
+unsafe fn array_record_prototypes_need_iterator(
+    proto_addr: usize,
+    next_owner: usize,
+    symbol: usize,
+) -> i32 {
+    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
+    if bag.is_null() {
         return 1;
     }
-    let Some(shape) = crate::object::shapes::object_shape_record(proto) else {
+    let Some(shape) = crate::object::shapes::object_shape_record(bag) else {
         return 1;
     };
     let key_bits = crate::value::POINTER_TAG | symbol as u64;
-    let keys = shape.keys() as *const crate::array::ArrayHeader;
-    let slots = crate::array::array_elements_ptr(keys);
-    let canonical = crate::object::array_prototype_values_thunk as *const u8;
-    let member = (0..shape.logical_key_count()).find(|&i| *slots.add(i as usize) == key_bits);
-    let Some(slot) = member else {
-        return 1;
-    };
-    let Some(info) = shape.constfn_info(slot) else {
-        return 1;
-    };
-    if (*(info as *const crate::closure::JsFunctionInfo)).code != canonical {
+    let values = crate::object::array_prototype_values_thunk as *const u8;
+    if !crate::object::shape_member_body_is(shape, |bits| bits == key_bits, values) {
         return 1;
     }
-    i32::from(!crate::object::array_record_next_is_builtin())
+    i32::from(!crate::object::array_iterator_next_is_intrinsic(
+        next_owner as *const ObjectHeader,
+    ))
 }
 
 #[no_mangle]
