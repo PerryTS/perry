@@ -15,10 +15,7 @@ mod common_methods;
 mod direct_site;
 mod disposal;
 mod function_shape;
-pub(crate) use function_shape::{
-    call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
-    run_function_intrinsic, FunctionIntrinsicFacts,
-};
+pub(crate) use function_shape::run_function_intrinsic;
 mod handle_methods;
 mod memo_entries;
 mod namespace_override;
@@ -2742,3 +2739,5 @@ mod receiver_repr_guard_tests {
         );
     }
 }
+
+mod compiled_target;

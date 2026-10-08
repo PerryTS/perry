@@ -712,6 +712,10 @@ pub const fn method_site_padded_argc(argc: usize) -> usize {
         padded
     }
 }
+/// First exotic shape. Method sites on this band compare only the ShapeId:
+/// the low payload word is exotic state (a function's capture count), not a
+/// class id. Ordinary receivers keep their existing shape/class word.
+pub const METHOD_SITE_SHAPE_ONLY_FROM: u32 = 0xB800_0000;
 /// The entry `slot` bit for an inherited entry (the direct holder's slot).
 /// Combined with [`METHOD_SITE_CONSTFN`] the holder's shape fixes the body.
 pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
@@ -720,12 +724,14 @@ pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// The entry `slot` bit for an own key of a function-object receiver: an
 /// inline slot of the object at `ClosureHeader::props`.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
+/// A method body using the native argument-list ABI (callee, this, args, argc).
+/// Composes with each storage kind; never with ConstFn.
+pub const METHOD_SITE_NATIVE_ARGS: u64 = 1 << 60;
 /// An own inline method whose ShapeId fixes one static body. The hit loads
 /// the receiver's current closure slot for captures, but needs no closure
 /// kind or info load after the shape compare.
 pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
-/// The index bits of an entry's `slot` word (bit 60 remains reserved for the
-/// accessor entry kind; bit 59 is ConstFn).
+/// The index bits of an entry's `slot` word (bit 60 is NativeArgs; bit 59 is ConstFn).
 pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
 /// What `js_method_site_prepare` answers for a call whose method read nothing
 /// can observe: dispatch by name after the arguments (#11910). The array-hole

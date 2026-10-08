@@ -93,6 +93,28 @@ pub(crate) fn emit_js_body_call(
     }
 }
 
+/// Enter a native argument-list body without constructing a rest Array.
+/// The body owns rooting any arguments it retains across collection.
+pub(crate) fn emit_native_args_body_call(
+    blk: &mut LlBlock,
+    code: &str,
+    callee: &str,
+    this_bits: &str,
+    args: &str,
+    argc: &str,
+) -> String {
+    blk.call_indirect(
+        DOUBLE,
+        code,
+        &[
+            (I64, callee),
+            (I64, this_bits),
+            (crate::types::PTR, args),
+            (I64, argc),
+        ],
+    )
+}
+
 /// [`emit_js_body_call`] through a code pointer whose caller-side native GC
 /// values need not be relocated across the call (`LlBlock::call_indirect_gc_leaf`
 /// states when that is sound).

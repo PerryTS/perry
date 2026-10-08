@@ -82,8 +82,9 @@ pub(crate) unsafe extern "C" fn function_prototype_bind_thunk(
     // `(thisArg, ...boundArgs)` is exactly the call's own argument list; the
     // `bind` body (the method form's) builds the bound function from it.
     let args_ptr = if len == 0 { std::ptr::null() } else { args };
-    crate::object::native_call_method::run_function_intrinsic(target, "bind", args_ptr, len)
-        .unwrap_or(target)
+    // This is the bind body already; its implementation owns the callable
+    // brand check. Do not re-dispatch by name and classify the target twice.
+    crate::closure::js_function_bind(target, args_ptr, len)
 }
 
 pub(crate) extern "C" fn global_this_set_timeout_thunk(

@@ -645,11 +645,16 @@ pub unsafe extern "C" fn js_function_bind(
     use crate::value::JSValue;
 
     let target_jv = JSValue::from_bits(target_value.to_bits());
+    // One representation proof also answers callable for a closure. Do not
+    // classify the same function again through value_is_callable below.
+    let closure_target =
+        target_jv.is_pointer() && is_closure_ptr(target_jv.as_pointer::<ClosureHeader>() as usize);
     // Spec brand check: `Function.prototype.bind` on a non-callable receiver
     // throws a TypeError. Callable non-closures (small native function
     // handles, proxies wrapping callables) keep the prior conservative
     // pass-through — they can't be wrapped in a BOUND_FUNCTION closure yet.
-    if !crate::object::value_is_callable(target_value)
+    if !closure_target
+        && !crate::object::value_is_callable(target_value)
         && crate::proxy::js_proxy_is_proxy(target_value) != 1
     {
         let message = b"Bind must be called on a function";
@@ -660,14 +665,12 @@ pub unsafe extern "C" fn js_function_bind(
     // A pointer target is a closure (a class function object is one) or a
     // callable native handle; only a non-pointer target can be the legacy
     // INT32 class form, so only it pays the class probe.
-    let target_is_closure = if target_jv.is_pointer() {
-        let ptr = target_jv.as_pointer::<ClosureHeader>();
-        if ptr.is_null() || !is_closure_ptr(ptr as usize) {
-            // Preserve the existing conservative pass-through for callable
-            // native handles that do not use the closure representation.
-            return target_value;
-        }
+    let target_is_closure = if closure_target {
         true
+    } else if target_jv.is_pointer() {
+        // Callable handles and proxies retain the existing conservative
+        // pass-through until they use the bound-closure representation.
+        return target_value;
     } else if crate::object::class_ref_id(target_value)
         .or_else(|| {
             crate::object::class_prototype_ref_id(target_value)
@@ -704,22 +707,60 @@ pub unsafe extern "C" fn js_function_bind(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
-    let this_arg_h = args
-        .first()
-        .map(|this_arg| scope.root_nanbox_f64(*this_arg));
+    let this_h = scope.root_nanbox_f64(
+        args.first()
+            .copied()
+            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+    );
     let partial_handles = if args.len() > 1 {
         scope.root_nanbox_f64_slice(&args[1..])
     } else {
         Vec::new()
     };
 
-    let bound_this = match &this_arg_h {
-        // `coerce_call_this` reads the receiver before it allocates.
-        Some(this_arg) => coerce_call_this(target_h.get_nanbox_f64(), this_arg.get_nanbox_f64()),
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
-    };
-    let this_h = scope.root_nanbox_f64(bound_this);
+    // Coercion consumes the original thisArg; reuse its root for the result.
+    // Partial arguments remain independent roots throughout.
+    let bound_this = coerce_call_this(target_h.get_nanbox_f64(), this_h.get_nanbox_f64());
+    this_h.set_nanbox_f64(bound_this);
     crate::gc::collection_point("function_bind.coerced");
+
+    // The birth shape proves name and length are untouched own data
+    // properties. For a compiled body their values are immutable body facts;
+    // use those facts instead of probing its property bag and metadata readers.
+    let declared_metadata = target_is_closure && {
+        let target =
+            JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+        (*target).shape_id == crate::closure::shape::birth_shape_for_body((*target).info)
+            && !(*target).info.is_null()
+            && (*(*target).info).flags & crate::codegen_abi::FN_COMPILED_BODY != 0
+    };
+    // HasOwnProperty(length), then Get(length), precede Get(name). A getter
+    // may change the target's name, so the name proof is checked again below.
+    let target_len_f = if declared_metadata {
+        let target =
+            JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+        crate::closure::info_length(&*(*target).info)
+            .or_else(|| crate::closure::info_arity(&*(*target).info))
+            .unwrap_or(0) as f64
+    } else if target_is_closure {
+        let target =
+            JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+        if crate::object::has_own_helpers::closure_own_key_present(target as usize, "length") {
+            let value = crate::closure::closure_get_dynamic_prop(target as usize, "length");
+            let value = JSValue::from_bits(value.to_bits());
+            if value.is_int32() {
+                value.as_int32() as f64
+            } else if value.is_number() {
+                value.as_number()
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
 
     // Spec step 12-13: `Get(Target, "name")` must run now, synchronously — a
     // target whose `name` getter throws must fail `bind()` itself (Test262
@@ -780,71 +821,6 @@ pub unsafe extern "C" fn js_function_bind(
     };
     let args_h = (!bound_args_arr.is_null()).then(|| scope.root_raw_mut_ptr(bound_args_arr));
 
-    // Spec `.length` = max(0, ToIntegerOrInfinity(Get(target, "length")) -
-    // boundArgs.length). An `Object.defineProperty(fn, "length", {value})`
-    // override (own dynamic prop) wins over the registered declared length,
-    // and the value may be NaN (→ 0), ±Infinity, or beyond int32. This read
-    // is an own-data-property lookup only (no accessor/getter support), so
-    // unlike `.name` above it cannot run arbitrary code or allocate — it is
-    // resolved BEFORE the bound closure exists, from the rooted target.
-    let target_closure = target_is_closure.then(|| {
-        JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>()
-    });
-    // Spec step 5: `HasOwnProperty(Target, "length")` then `Get(Target,
-    // "length")` — a GETTER installed by `Object.defineProperty(fn, "length",
-    // {get})` runs. Only a FunctionDictionary target can carry one (every
-    // accessor install leaves the described shapes), so the common case stays
-    // the own-data / registered-length read below. The getter may allocate:
-    // everything live is rooted above, and the target is re-read after.
-    let accessor_len = target_closure.and_then(|t| unsafe {
-        if crate::closure::shape::closure_on_base_shape(t) {
-            return None;
-        }
-        crate::object::get_accessor_descriptor(t as usize, "length")?;
-        let v = crate::closure::closure_get_dynamic_prop(t as usize, "length");
-        let jv = JSValue::from_bits(v.to_bits());
-        Some(if jv.is_int32() {
-            jv.as_int32() as f64
-        } else if jv.is_number() {
-            jv.as_number()
-        } else {
-            0.0
-        })
-    });
-    let target_closure = target_is_closure.then(|| {
-        JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>()
-    });
-    let target_len_f = if let Some(len) = accessor_len {
-        len
-    } else if let Some(target_closure) = target_closure {
-        if !crate::closure::shape::closure_on_base_shape(target_closure)
-            && !crate::object::has_own_helpers::closure_own_key_present(
-                target_closure as usize,
-                "length",
-            )
-        {
-            0.0
-        } else {
-            match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
-                Some(v) => {
-                    let jv = JSValue::from_bits(v.to_bits());
-                    if jv.is_int32() {
-                        jv.as_int32() as f64
-                    } else if jv.is_number() {
-                        jv.as_number()
-                    } else {
-                        0.0
-                    }
-                }
-                None => crate::closure::closure_length(target_closure).unwrap_or(0) as f64,
-            }
-        }
-    } else {
-        // Constructor arity is not currently retained in the class registry.
-        // This is still the spec default for a synthesized constructor and is
-        // independent of bound-argument forwarding/constructibility.
-        0.0
-    };
     let target_len_f = if target_len_f.is_nan() {
         0.0
     } else {
@@ -862,13 +838,13 @@ pub unsafe extern "C" fn js_function_bind(
         &crate::closure::BOUND_FUNCTION_INFO,
         BOUND_FUNCTION_CAPTURES,
     );
-    let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
+    let bound = bound as *mut ClosureHeader;
     let target_value = target_h.get_nanbox_f64();
     let bound_this = this_h.get_nanbox_f64();
     let name_hint = name_h.get_nanbox_f64();
     // Nothing below allocates until the capture install is done, so the raw
     // addresses are scoped to this block.
-    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+    {
         let args_bits = match args_h.as_ref() {
             Some(h) => h.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| arr as u64),
             None => 0,
@@ -888,10 +864,12 @@ pub unsafe extern "C" fn js_function_bind(
                 len_bits,
             ],
         );
-    });
-    if !len_in_capture {
-        // +Infinity (or beyond u32): store as an own dynamic prop, which the
-        // `.length` read path prefers over the bound-length capture.
+    }
+    // Installing fresh captures cannot collect. The only remaining
+    // allocation is the exceptional own length property, so only that arm
+    // needs a root for the newly allocated bound closure.
+    let bound = if !len_in_capture {
+        let bound_h = scope.root_raw_mut_ptr(bound);
         bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
             crate::closure::closure_define_dynamic_prop(
                 bound as usize,
@@ -899,12 +877,12 @@ pub unsafe extern "C" fn js_function_bind(
                 f64::from_bits(JSValue::number(bound_len).bits()),
             )
         });
-    }
-
-    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
-        crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
-        f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
-    })
+        bound_h.with_mut_ptr(|bound: *mut ClosureHeader| bound)
+    } else {
+        bound
+    };
+    crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
+    f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
 }
 
 /// Keepalive anchor for the `js_function_bind` symbol. The auto-optimize
