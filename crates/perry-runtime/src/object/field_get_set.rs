@@ -387,10 +387,10 @@ mod buffer_ic_miss_tests {
     }
 
     unsafe fn secret_buffer(len: usize) -> *mut crate::buffer::BufferHeader {
-        let buf = crate::buffer::buffer_alloc(len as u32);
+        let buf =
+            crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_SECRET_KEY, len as u32);
         crate::buffer::store::set_length(buf as usize, len as u32);
-        crate::buffer::mark_as_uint8array(buf as usize);
-        crate::buffer::mark_as_secret_key(buf as usize);
+
         buf
     }
 

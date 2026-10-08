@@ -15,7 +15,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const ADDR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 extern "C" {
-    fn js_buffer_mark_as_crypto_key_external(
+    fn js_buffer_set_crypto_key_meta_external(
         addr: usize,
         algo: u8,
         hash: u8,
@@ -350,10 +350,20 @@ fn external_buffer_release_verdict(seen: Option<bool>) -> Result<(), &'static st
 fn thread_exit_releases_the_threads_external_buffer_registrations() {
     let alive = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
-        let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
+        let buf = scope.root_raw_mut_ptr(
+            perry_runtime::JSValue::from_bits(
+                perry_runtime::buffer::bytes::from_slice(
+                    perry_runtime::buffer::bytes::Brand::CryptoKey,
+                    &[0; 16],
+                )
+                .to_bits(),
+            )
+            .as_pointer::<u8>()
+            .cast_mut(),
+        );
         let addr = buf.get_raw_mut_ptr::<u8>() as usize;
         // Registration installs the cleanup hook before the observing hook.
-        unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
+        unsafe { js_buffer_set_crypto_key_meta_external(addr, 1, 0, 1, 1, 0, 0) };
         *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, None);
         perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
             record_external_buffer_release,
@@ -372,9 +382,19 @@ fn thread_exit_releases_the_threads_external_buffer_registrations() {
 #[test]
 fn external_buffer_verdict_is_taken_at_release_not_by_address() {
     let scope = RuntimeHandleScope::new();
-    let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
+    let buf = scope.root_raw_mut_ptr(
+        perry_runtime::JSValue::from_bits(
+            perry_runtime::buffer::bytes::from_slice(
+                perry_runtime::buffer::bytes::Brand::CryptoKey,
+                &[0; 16],
+            )
+            .to_bits(),
+        )
+        .as_pointer::<u8>()
+        .cast_mut(),
+    );
     let addr = buf.get_raw_mut_ptr::<u8>() as usize;
-    unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
+    unsafe { js_buffer_set_crypto_key_meta_external(addr, 1, 0, 1, 1, 0, 0) };
     assert!(
         perry_runtime::buffer::external_registries_hold_for_test(addr),
         "the newcomer is registered, so an address-only check would fail"

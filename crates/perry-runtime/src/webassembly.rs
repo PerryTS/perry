@@ -717,11 +717,15 @@ fn instance_memory_span(inst: *mut c_void) -> (*mut u8, usize) {
 /// Allocate the `ArrayBuffer` that exposes `data[..len]` — wasmi's own linear
 /// memory — and record it as the instance's published span.
 fn publish_memory_buffer(inst: *mut c_void, data: *mut u8, len: usize) -> f64 {
-    let buffer = crate::buffer::buffer_alloc_foreign(data, len as u32);
+    let buffer = crate::buffer::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        len as u32,
+        crate::buffer::store::Init::Foreign(data),
+    );
     if buffer.is_null() {
         return nanbox_undefined();
     }
-    crate::buffer::mark_as_array_buffer(buffer as usize);
+
     WASM_MEMORY_BINDINGS.with(|bindings| {
         bindings.borrow_mut().insert(
             inst as usize,
@@ -1304,14 +1308,15 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     }
     let mut len = 0usize;
     let data = unsafe { perry_wasm_host_memory_span(external, &mut len) };
-    let buffer = crate::buffer::buffer_alloc_foreign(
-        data,
+    let buffer = crate::buffer::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
         len.min(crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize) as u32,
+        crate::buffer::store::Init::Foreign(data),
     );
     if buffer.is_null() {
         return nanbox_undefined();
     }
-    crate::buffer::mark_as_array_buffer(buffer as usize);
+
     let receiver_value = JSValue::from_bits(receiver.to_bits());
     let object = if receiver_value.is_pointer() {
         receiver_value.as_pointer::<crate::object::ObjectHeader>()
@@ -1347,14 +1352,15 @@ pub extern "C" fn js_webassembly_memory_grow(memory_value: f64, delta: u32) -> f
     let previous = unbox_pointer(previous) as usize;
     let mut len = 0usize;
     let data = unsafe { perry_wasm_host_memory_span(handle as *mut c_void, &mut len) };
-    let buffer = crate::buffer::buffer_alloc_foreign(
-        data,
+    let buffer = crate::buffer::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
         len.min(crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize) as u32,
+        crate::buffer::store::Init::Foreign(data),
     );
     if buffer.is_null() {
         return -1.0;
     }
-    crate::buffer::mark_as_array_buffer(buffer as usize);
+
     let _ = object_set(
         object,
         b"buffer",

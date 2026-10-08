@@ -42,14 +42,15 @@ pub unsafe extern "C" fn js_crypto_create_secret_key(
         // string literal — pass the raw bytes through unchanged.
         raw
     };
-    let buf = alloc_buffer_from_slice(&bytes);
-    if !buf.is_null() {
-        // Mark as Uint8Array so `instanceof Uint8Array` works, both in
-        // perry-native code and after the bridge materializes a v8
-        // Uint8Array on the V8 side.
-        perry_runtime::buffer::mark_as_uint8array(buf as usize);
-        perry_runtime::buffer::mark_as_secret_key(buf as usize);
-    }
+    let buf = perry_runtime::JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::SecretKey,
+            &bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
     buf
 }
 
@@ -82,11 +83,15 @@ pub unsafe extern "C" fn js_crypto_generate_key_sync(
     };
     let mut bytes = vec![0u8; byte_len];
     rand_core_06::OsRng.fill_bytes(&mut bytes);
-    let buf = alloc_buffer_from_slice(&bytes);
-    if !buf.is_null() {
-        perry_runtime::buffer::mark_as_uint8array(buf as usize);
-        perry_runtime::buffer::mark_as_secret_key(buf as usize);
-    }
+    let buf = perry_runtime::JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::SecretKey,
+            &bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
     buf
 }
 

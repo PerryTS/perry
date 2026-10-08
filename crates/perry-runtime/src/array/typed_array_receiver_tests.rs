@@ -844,7 +844,7 @@ fn closure(func: *const crate::closure::JsFunctionInfo) -> *const crate::closure
 fn read_uint8_result(result: *mut ArrayHeader) -> Vec<u8> {
     assert!(!result.is_null(), "the helper must answer a collection");
     let buf = result as *const crate::buffer::BufferHeader;
-    let len = unsafe { (*buf).length } as usize;
+    let len = unsafe { crate::buffer::store::raw_length(buf as usize) } as usize;
     (0..len)
         .map(|i| crate::buffer::js_buffer_get(buf, i as i32) as u8)
         .collect()

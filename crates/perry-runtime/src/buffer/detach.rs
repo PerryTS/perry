@@ -35,7 +35,7 @@ pub fn detach_array_buffer(addr: usize) {
     }
     let backing = super::view::backing_of(addr);
     let buf = backing as *mut BufferHeader;
-    let capacity = unsafe { (*buf).capacity };
+    let capacity = unsafe { super::store::capacity(buf as usize) };
     unsafe {
         super::store::clear_owner_extent(buf as usize);
     }
@@ -198,7 +198,7 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
         }
         None => {
             let dst = super::from::zeroed_array_buffer_storage(new_len);
-            mark_as_array_buffer(dst as usize);
+
             dst
         }
     };

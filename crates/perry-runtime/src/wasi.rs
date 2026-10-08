@@ -1067,7 +1067,7 @@ fn write_u32(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u32) 
     let Some(offset) = argument(offset) else {
         return false;
     };
-    let len = unsafe { (*buffer).length } as usize;
+    let len = unsafe { crate::buffer::store::raw_length(buffer as usize) } as usize;
     if offset.checked_add(4).is_none_or(|end| end > len) {
         return false;
     }
@@ -1089,7 +1089,7 @@ fn write_u64(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u64) 
     let Some(offset) = argument(offset) else {
         return false;
     };
-    let len = unsafe { (*buffer).length } as usize;
+    let len = unsafe { crate::buffer::store::raw_length(buffer as usize) } as usize;
     if offset.checked_add(8).is_none_or(|end| end > len) {
         return false;
     }
@@ -1147,7 +1147,7 @@ fn snapshot_get(import: f64, key: &[u8], pointers: f64, strings: f64) -> f64 {
         return 28.0;
     };
     let values = snapshot_values(import, key);
-    let len = unsafe { (*buffer).length } as usize;
+    let len = unsafe { crate::buffer::store::raw_length(buffer as usize) } as usize;
     for index in 0..crate::array::js_array_length(values) {
         let bytes =
             crate::builtins::jsvalue_string_content(crate::array::js_array_get_f64(values, index))
@@ -1297,7 +1297,7 @@ pub extern "C" fn js_wasi_import_stub(
             };
             ensure_import_started(import.get_nanbox_f64());
             let buffer = bound_memory(import.get_nanbox_f64());
-            let buffer_len = unsafe { (*buffer).length } as usize;
+            let buffer_len = unsafe { crate::buffer::store::raw_length(buffer as usize) } as usize;
             if offset.checked_add(len).is_none_or(|end| end > buffer_len) {
                 return 28.0;
             }

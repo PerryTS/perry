@@ -111,10 +111,16 @@ pub(crate) unsafe fn view_value(
         None => nul_terminated_len(start),
     };
 
-    let buffer = crate::buffer::buffer_alloc_foreign(start as *mut u8, length);
-    if array_buffer {
-        crate::buffer::mark_as_array_buffer(buffer as usize);
-    }
+    let brand = if array_buffer {
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER
+    } else {
+        crate::gc::GC_TYPE_BUFFER
+    };
+    let buffer = crate::buffer::store::store_alloc(
+        brand,
+        length,
+        crate::buffer::store::Init::Foreign(start as *mut u8),
+    );
     f64::from_bits(JSValue::pointer(buffer as *mut u8).bits())
 }
 
@@ -146,7 +152,11 @@ pub(crate) unsafe fn node_view_value(
     let buffer = if copy {
         JSValue::from_bits(
             crate::buffer::bytes::from_slice(
-                crate::buffer::bytes::Brand::Buffer,
+                if array_buffer {
+                    crate::buffer::bytes::Brand::ArrayBuffer
+                } else {
+                    crate::buffer::bytes::Brand::Buffer
+                },
                 std::slice::from_raw_parts(address as *const u8, length as usize),
             )
             .to_bits(),
@@ -154,11 +164,16 @@ pub(crate) unsafe fn node_view_value(
         .as_pointer::<crate::buffer::BufferHeader>()
         .cast_mut()
     } else {
-        crate::buffer::buffer_alloc_foreign(address as *mut u8, length)
+        crate::buffer::store::store_alloc(
+            if array_buffer {
+                crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER
+            } else {
+                crate::gc::GC_TYPE_BUFFER
+            },
+            length,
+            crate::buffer::store::Init::Foreign(address as *mut u8),
+        )
     };
-    if array_buffer {
-        crate::buffer::mark_as_array_buffer(buffer as usize);
-    }
     f64::from_bits(JSValue::pointer(buffer as *mut u8).bits())
 }
 
@@ -188,7 +203,10 @@ mod tests {
         let buffer = address as *mut crate::buffer::BufferHeader;
 
         assert!(crate::buffer::is_array_buffer(address));
-        assert_eq!(unsafe { (*buffer).length }, 2);
+        assert_eq!(
+            unsafe { crate::buffer::store::raw_length(buffer as usize) },
+            2
+        );
         crate::buffer::bytes::no_gc(|scope| {
             assert_eq!(
                 crate::buffer::bytes::bytes(value, scope).unwrap().as_ptr(),

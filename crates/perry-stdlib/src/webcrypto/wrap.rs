@@ -624,7 +624,7 @@ pub unsafe extern "C" fn js_webcrypto_unwrap_key(
         Ok(u) => u,
         Err((name, message)) => return reject_with_dom_exception(name, message),
     };
-    let buf = alloc_uint8array_from_slice(&recovered);
+    let buf = alloc_crypto_key_from_slice(&recovered);
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }

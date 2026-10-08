@@ -151,7 +151,7 @@ impl<'s> Reader<'s> {
             SerializedValue::ArrayBuffer(bytes) => array_buffer(bytes),
             SerializedValue::TransferredArrayBuffer(store) => {
                 let buffer = crate::buffer::buffer_adopt_backing(store.take(), store.length);
-                crate::buffer::mark_as_array_buffer(buffer as usize);
+
                 JSValue::pointer(buffer as *const u8).bits()
             }
             SerializedValue::View {

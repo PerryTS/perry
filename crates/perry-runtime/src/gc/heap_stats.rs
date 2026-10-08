@@ -100,7 +100,7 @@ unsafe fn backing_bytes(header: &GcHeader, user: *mut u8) -> (u64, u64) {
         && !crate::gc::is_byte_view_type(header.obj_type)
         && header._reserved & crate::codegen_abi::BYTES_DETACHED == 0
     {
-        let bytes = (*user.cast::<crate::buffer::BufferHeader>()).capacity as u64;
+        let bytes = crate::buffer::store::capacity(user as usize) as u64;
         return (
             bytes,
             if matches!(
@@ -123,11 +123,17 @@ mod memory_accounting_tests {
     #[test]
     fn backing_ownership_excludes_aliases_and_detached_buffers() {
         let before = heap_stats();
-        let buf = crate::buffer::buffer_alloc(4 * 1024 * 1024);
+        let buf = crate::buffer::store::alloc_test(
+            crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+            4 * 1024 * 1024,
+        );
         unsafe {
-            crate::buffer::store::set_length(buf as usize, (*buf).capacity);
+            crate::buffer::store::set_length(
+                buf as usize,
+                crate::buffer::store::capacity(buf as usize),
+            );
         }
-        crate::buffer::mark_as_array_buffer(buf as usize);
+
         let owned = heap_stats();
         assert_eq!(
             owned.array_buffer_bytes - before.array_buffer_bytes,

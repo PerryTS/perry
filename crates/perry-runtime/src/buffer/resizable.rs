@@ -33,7 +33,11 @@ fn throw_invalid_length(message: &str) -> ! {
 pub(crate) fn alloc_resizable_array_buffer(len: i32, max: i32) -> *mut BufferHeader {
     let len = len.max(0) as u32;
     let max = (max.max(0) as u32).max(len);
-    let buf = buffer_alloc(max);
+    let buf = super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        max,
+        super::store::Init::Uninit,
+    );
     unsafe {
         super::store::set_length(buf as usize, len);
     }
@@ -47,8 +51,7 @@ pub(crate) fn alloc_resizable_array_buffer(len: i32, max: i32) -> *mut BufferHea
             super::detach::decommit_payload_pages_zeroed(data.add(len as usize), tail);
         }
     });
-    mark_as_array_buffer(buf as usize);
-    mark_as_resizable_buffer(
+    set_resizable(
         buf as usize,
         ResizableInfo {
             max_byte_length: max,

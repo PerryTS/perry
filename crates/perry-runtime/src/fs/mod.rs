@@ -1890,7 +1890,7 @@ fn buffer_len_from_value(value: f64) -> usize {
     if buf.is_null() {
         0
     } else {
-        unsafe { (*buf).length as usize }
+        unsafe { crate::buffer::store::raw_length(buf as usize) as usize }
     }
 }
 

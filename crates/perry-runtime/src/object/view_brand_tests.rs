@@ -129,24 +129,19 @@ fn data_view_is_a_view_but_not_a_typed_array_or_buffer() {
 
 #[test]
 fn backing_stores_and_key_material_are_not_views() {
-    let marks: [(&str, fn(usize)); 5] = [
-        ("ArrayBuffer", buffer::mark_as_array_buffer),
-        ("SharedArrayBuffer", buffer::mark_as_shared_array_buffer),
-        ("secret key", buffer::mark_as_secret_key),
-        ("CryptoKey", |addr| {
-            buffer::mark_as_crypto_key(addr, 0, 0, 0)
-        }),
-        ("asymmetric key", |addr| {
-            buffer::mark_as_asymmetric_key(addr, 0, 0)
-        }),
-    ];
-    for (label, mark) in marks {
-        let buf = buffer::buffer_alloc(4);
-        mark(buf as usize);
-        let value = boxed(buf);
+    for (label, brand) in [
+        ("ArrayBuffer", buffer::bytes::Brand::ArrayBuffer),
+        ("SharedArrayBuffer", buffer::bytes::Brand::SharedArrayBuffer),
+        ("secret key", buffer::bytes::Brand::SecretKey),
+        ("CryptoKey", buffer::bytes::Brand::CryptoKey),
+    ] {
+        let value = buffer::bytes::from_slice(brand, &[0; 4]);
         assert_eq!(view_brand(value), None, "{label}");
         assert_eq!(row(value), NOT_A_VIEW, "{label}");
     }
+    let buf = buffer::buffer_alloc(4);
+    buffer::mark_as_asymmetric_key(buf as usize, 0, 0);
+    assert_eq!(row(boxed(buf)), NOT_A_VIEW);
 }
 
 #[test]
@@ -165,30 +160,20 @@ fn primitives_are_not_views() {
 
 #[test]
 fn uint8_view_shortcut_agrees_with_the_full_brand() {
-    let fixtures: [(&str, fn(usize)); 7] = [
-        ("Buffer", |_| {}),
-        ("Uint8Array", buffer::mark_as_uint8array),
-        ("DataView", buffer::mark_as_data_view),
-        ("ArrayBuffer", buffer::mark_as_array_buffer),
-        ("SharedArrayBuffer", buffer::mark_as_shared_array_buffer),
-        ("secret key", buffer::mark_as_secret_key),
-        ("asymmetric key", |addr| {
-            buffer::mark_as_asymmetric_key(addr, 0, 0)
-        }),
-    ];
-    for (label, mark) in fixtures {
-        let addr = if label == "DataView" {
-            (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 4])
-                .to_bits()
-                & crate::value::POINTER_MASK) as usize
-        } else {
-            buffer::buffer_alloc(4) as usize
-        };
-        mark(addr);
+    for brand in [
+        buffer::bytes::Brand::Buffer,
+        buffer::bytes::Brand::Uint8Array,
+        buffer::bytes::Brand::DataView,
+        buffer::bytes::Brand::ArrayBuffer,
+        buffer::bytes::Brand::SharedArrayBuffer,
+        buffer::bytes::Brand::SecretKey,
+    ] {
+        let value = buffer::bytes::from_slice(brand, &[0; 4]);
+        let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
         assert_eq!(
             buffer::is_uint8_view_buffer(addr),
             buffer::buffer_brand(addr).is_some_and(buffer::BufferBrand::is_uint8_array),
-            "{label}"
+            "{brand:?}"
         );
     }
     // A live heap object that was never registered as a buffer.

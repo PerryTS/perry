@@ -28,7 +28,7 @@ pub(super) unsafe fn format_data_view_value(buf_ptr: *const crate::buffer::Buffe
     if buf_ptr.is_null() {
         return "DataView {\n  [byteLength]: 0,\n  [byteOffset]: 0,\n  [buffer]: ArrayBuffer { [Uint8Contents]: <>, [byteLength]: 0 }\n}".to_string();
     }
-    let len = (*buf_ptr).length as usize;
+    let len = crate::buffer::store::raw_length(buf_ptr as usize) as usize;
     let buffer = format_array_buffer_value(buf_ptr, "ArrayBuffer");
     format!("DataView {{\n  [byteLength]: {len},\n  [byteOffset]: 0,\n  [buffer]: {buffer}\n}}")
 }

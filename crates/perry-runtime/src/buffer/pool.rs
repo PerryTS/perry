@@ -21,7 +21,9 @@ pub(crate) fn alloc_view(size: u32, len: u32) -> *mut BufferHeader {
         POOL_OFFSET.with(|offset| unsafe {
             let mut pool = owner.get();
             let start = offset.get();
-            if pool == 0 || start.saturating_add(len) > (*(pool as *const BufferHeader)).capacity {
+            if pool == 0
+                || start.saturating_add(len) > crate::buffer::store::capacity(pool as usize)
+            {
                 let fresh = super::store::store_alloc(
                     crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
                     size,

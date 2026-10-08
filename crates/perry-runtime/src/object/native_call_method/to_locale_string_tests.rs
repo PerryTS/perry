@@ -102,8 +102,10 @@ fn a_uint8array_joins_its_bytes_and_a_buffer_decodes_them() {
     // The Buffer-vs-`Uint8Array` split. Both are the same `BufferHeader` in
     // perry, and `Buffer.prototype.toLocaleString` is an OWN override that a
     // plain `Uint8Array` does not inherit.
-    let u8a = buffer(&[3, 1, 2]) as usize;
-    crate::buffer::mark_as_uint8array(u8a);
+    let u8a =
+        (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Uint8Array, &[3, 1, 2])
+            .to_bits()
+            & crate::value::POINTER_MASK) as usize;
     // node: `new Uint8Array([3,1,2]).toLocaleString()` === "3,1,2".
     assert_eq!(locale_string(boxed(u8a)), "3,1,2");
 
@@ -142,8 +144,10 @@ fn an_array_buffer_and_data_view_keep_the_object_tag() {
     // `Symbol.toStringTag` gap, NOT something the new buffer arm introduced —
     // the arm routes them to `dispatch_buffer_method`, whose `toLocaleString`
     // decodes, so the assertion here is that they are NOT served the decode.
-    let ab = buffer(&[104, 105]) as usize;
-    crate::buffer::mark_as_array_buffer(ab);
+    let ab =
+        (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::ArrayBuffer, &[104, 105])
+            .to_bits()
+            & crate::value::POINTER_MASK) as usize;
     assert_ne!(locale_string(boxed(ab)), "hi");
     let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[104, 105])
         .to_bits()

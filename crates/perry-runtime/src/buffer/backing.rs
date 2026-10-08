@@ -215,7 +215,7 @@ mod tests {
             )
             .unwrap();
             assert!(crate::buffer::is_detached_buffer(source as usize));
-            assert_eq!((*source).length, 0);
+            assert_eq!(crate::buffer::store::length(source as usize) as u32, 0);
             collect();
             assert_eq!(
                 count(),
@@ -233,7 +233,10 @@ mod tests {
                     original,
                     "transfer must move the original allocation"
                 );
-                assert_eq!((*received).length, 32 * 1024 * 1024);
+                assert_eq!(
+                    crate::buffer::store::length(received as usize) as u32,
+                    32 * 1024 * 1024
+                );
                 drop(message);
                 collect();
                 let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;

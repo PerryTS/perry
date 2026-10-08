@@ -65,7 +65,7 @@ fn empty_and_short_arrays_keep_exactly_the_common_cell_and_bytes() {
                     )
                 });
                 assert_eq!(
-                    (*ta).capacity as usize,
+                    crate::buffer::store::capacity(ta as usize) as usize,
                     len as usize * elem_size_for_kind(kind)
                 );
             }
@@ -85,7 +85,7 @@ fn view_link_is_the_only_authority_for_the_resolved_bytes() {
         crate::buffer::store::new_view(type_for_kind(KIND_FLOAT64), first as usize, 0, 2, false);
     unsafe {
         assert_eq!(load_at(view, 0), 1.5);
-        (*view).link = second as usize;
+        crate::buffer::store::set_test_link(view as usize, second as usize);
         assert_eq!(load_at(view, 0), 19.5);
     }
 }

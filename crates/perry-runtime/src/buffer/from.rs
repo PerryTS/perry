@@ -482,7 +482,7 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
 #[no_mangle]
 pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
     let buf = buffer_from_array_with_brand(arr_ptr, crate::gc::GC_TYPE_BUFFER_UINT8ARRAY);
-    mark_as_uint8array(buf as usize);
+
     buf
 }
 
@@ -512,7 +512,7 @@ fn js_uint8array_from_source(source: f64) -> *mut BufferHeader {
                     .copy_from_slice(&bytes);
             });
         }
-        mark_as_uint8array(buf as usize);
+
         buf
     }
 }
@@ -601,8 +601,14 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 let src = raw as *const BufferHeader;
                 unsafe {
                     let len = (super::store::length(src as usize) as u32) as i32;
-                    let view = js_buffer_slice(src, 0, len);
-                    mark_as_uint8array(view as usize);
+                    let view = super::store::new_view(
+                        crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+                        src as usize,
+                        0,
+                        len as u32,
+                        false,
+                    );
+
                     // No explicit length: over a resizable ArrayBuffer the
                     // view's length follows `byteLength` (#10873).
                     super::view::mark_length_tracking(view as usize);
@@ -621,7 +627,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             unsafe {
                 super::store::set_length(dst as usize, source.len() as u32);
             }
-            mark_as_uint8array(dst as usize);
+
             super::bytes::no_gc(|scope| unsafe {
                 super::bytes::bytes_mut(crate::value::js_nanbox_pointer(dst as i64), scope)
                     .unwrap()
@@ -651,7 +657,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                     js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
                 }
                 let dst = result.get_raw_mut_ptr();
-                mark_as_uint8array(dst as usize);
+
                 return dst;
             }
         }
@@ -740,8 +746,14 @@ pub extern "C" fn js_uint8array_view(
             Some(requested) => requested.max(0) as i32,
         };
         let end = start.saturating_add(len).min(total_len as i32);
-        let view = js_buffer_slice(src, start, end);
-        mark_as_uint8array(view as usize);
+        let view = super::store::new_view(
+            crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+            src as usize,
+            start as u32,
+            (end - start) as u32,
+            false,
+        );
+
         if requested.is_none() {
             super::view::mark_length_tracking(view as usize);
         }
@@ -799,7 +811,7 @@ pub(super) fn array_buffer_to_index(value: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
     let buf = zeroed_array_buffer_storage(size);
-    mark_as_array_buffer(buf as usize);
+
     buf
 }
 
@@ -820,12 +832,11 @@ pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeade
 pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
     let size = size.max(0) as u32;
     let buf = crate::shared_sab::alloc_shared_sab(size);
-    let addr = buf as usize;
     // Register in the creating thread's tables too so local predicates
     // (`is_registered_buffer`, `is_shared_array_buffer`, views) work without a
     // round-trip through the process-global registry.
     register_buffer(buf);
-    mark_as_shared_array_buffer(addr);
+
     buf
 }
 
@@ -958,7 +969,7 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     if length_jv.is_undefined() {
         super::view::mark_length_tracking(view as usize);
     }
-    mark_as_data_view(view as usize);
+
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
 }
 

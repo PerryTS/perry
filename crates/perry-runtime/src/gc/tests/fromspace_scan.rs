@@ -296,8 +296,8 @@ fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
         );
         std::ptr::write_bytes(holder, 0, slot + 8);
         let bh = holder as *mut crate::buffer::BufferHeader;
-        (*bh).length = capacity as u32;
-        (*bh).capacity = capacity as u32;
+        crate::buffer::store::set_length(bh as usize, capacity as u32);
+        crate::buffer::store::set_test_capacity(bh as usize, capacity as u32);
         let young_header = header_from_user_ptr(young) as *mut GcHeader;
         (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
     }
@@ -314,7 +314,7 @@ fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
 
     // Declare the whole word as buffer bytes and it is scanned again.
     unsafe {
-        (*(holder as *mut crate::buffer::BufferHeader)).capacity = (slot + 8 - header_bytes) as u32;
+        crate::buffer::store::set_test_capacity(holder as usize, (slot + 8 - header_bytes) as u32);
     }
     let covered = scan_heap_for_fromspace_refs();
     assert!(
@@ -326,6 +326,6 @@ fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
 
     unsafe {
         std::ptr::write_bytes(holder.add(slot), 0, 8);
-        (*(holder as *mut crate::buffer::BufferHeader)).capacity = capacity as u32;
+        crate::buffer::store::set_test_capacity(holder as usize, capacity as u32);
     }
 }

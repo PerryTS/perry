@@ -130,7 +130,10 @@ mod transfer_tests {
                 original
             )
         });
-        assert_eq!(unsafe { (*buffer).length }, 128 * 1024);
+        assert_eq!(
+            perry_runtime::buffer::js_buffer_length(buffer) as u32,
+            128 * 1024
+        );
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = None);
     }
 }

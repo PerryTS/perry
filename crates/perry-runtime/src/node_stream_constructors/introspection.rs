@@ -151,23 +151,11 @@ fn stream_byte_view_bytes(value: f64) -> Vec<u8> {
     {
         return Vec::new();
     }
-    if crate::buffer::is_registered_buffer(addr) {
-        let data = crate::buffer::js_native_buffer_data_ptr(value);
-        let len = crate::buffer::js_native_buffer_byte_len(value);
-        if data.is_null() || len == 0 {
-            return Vec::new();
-        }
-        return unsafe { std::slice::from_raw_parts(data, len).to_vec() };
-    }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        return unsafe {
-            crate::typedarray::typed_array_bytes(ta)
-                .map(|bytes| bytes.to_vec())
-                .unwrap_or_default()
-        };
-    }
-    Vec::new()
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .map(|bytes| bytes.to_vec())
+            .unwrap_or_default()
+    })
 }
 
 /// #2685: `stream._uint8ArrayToBuffer(view)` returns a Buffer containing the

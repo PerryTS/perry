@@ -23,7 +23,10 @@ unsafe fn check_accepted(bytes: &[u8]) -> bool {
         crate::string::compute_utf16_len(expected.as_ptr(), expected.len() as u32)
     );
     assert_eq!((*result).flags, 0);
-    assert_eq!((*result).capacity, (*result).byte_len);
+    assert_eq!(
+        crate::buffer::store::capacity(result as usize),
+        (*result).byte_len
+    );
     true
 }
 

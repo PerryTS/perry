@@ -1841,7 +1841,7 @@
    "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
   },
   {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "file": "crates/perry-runtime/src/buffer/store/layout.rs",
    "names": [
     "EXTERNAL_CRYPTO_KEY_META_REGISTRY"
    ],
@@ -1850,7 +1850,7 @@
    "hook": "release_external_buffer_registries_in_freed_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "file": "crates/perry-runtime/src/buffer/store/layout.rs",
    "names": [
     "CRYPTO_KEY_DEATH_HOOK"
    ],
@@ -1858,7 +1858,7 @@
    "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
   },
   {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "file": "crates/perry-runtime/src/buffer/store/layout.rs",
    "names": [
     "PERRY_U8_INLINE_CACHE"
    ],

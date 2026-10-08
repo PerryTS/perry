@@ -1234,10 +1234,15 @@ pub unsafe extern "C" fn js_crypto_hkdf_sync(
     // Cap at the largest HKDF output across supported digests (255*64 for
     // sha512); per-digest over-length is rejected by `expand` below.
     let make = |bytes: &[u8]| -> *mut perry_runtime::buffer::BufferHeader {
-        let buf = alloc_buffer_from_slice(bytes);
-        if !buf.is_null() {
-            perry_runtime::buffer::mark_as_array_buffer(buf as usize);
-        }
+        let buf = perry_runtime::JSValue::from_bits(
+            perry_runtime::buffer::bytes::from_slice(
+                perry_runtime::buffer::bytes::Brand::ArrayBuffer,
+                bytes,
+            )
+            .to_bits(),
+        )
+        .as_pointer::<perry_runtime::buffer::BufferHeader>()
+        .cast_mut();
         buf
     };
     if out_len == 0 || out_len > 255 * 64 {

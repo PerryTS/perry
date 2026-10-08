@@ -81,11 +81,11 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         }
         if crate::buffer::is_registered_buffer(handle) {
             let buf = handle as *const crate::buffer::BufferHeader;
-            return unsafe { (*buf).length as f64 };
+            return unsafe { crate::buffer::store::raw_length(buf as usize) as f64 };
         }
         if crate::typedarray::lookup_typed_array_kind(handle).is_some() {
             let ta = handle as *const crate::typedarray::TypedArrayHeader;
-            return unsafe { (*ta).length as f64 };
+            return unsafe { crate::buffer::store::raw_length(ta as usize) as f64 };
         }
         let gc_header = (handle - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let obj_type = unsafe { (*gc_header).obj_type };
@@ -178,11 +178,11 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         }
         if crate::buffer::is_registered_buffer(handle) {
             let buf = handle as *const crate::buffer::BufferHeader;
-            return unsafe { (*buf).length as f64 };
+            return unsafe { crate::buffer::store::raw_length(buf as usize) as f64 };
         }
         if crate::typedarray::lookup_typed_array_kind(handle).is_some() {
             let ta = handle as *const crate::typedarray::TypedArrayHeader;
-            return unsafe { (*ta).length as f64 };
+            return unsafe { crate::buffer::store::raw_length(ta as usize) as f64 };
         }
     }
 
@@ -526,7 +526,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                 return f64::from_bits(TAG_UNDEFINED);
             }
             "length" | "byteLength" => {
-                return (*buf).length as f64;
+                return crate::buffer::store::raw_length(buf as usize) as f64;
             }
             "byteOffset" | "offset" => {
                 return crate::buffer::buffer_byte_offset(ptr as usize) as f64;

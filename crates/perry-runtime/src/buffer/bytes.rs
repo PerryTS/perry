@@ -123,7 +123,7 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
     }
     #[cfg(test)]
     let ptr = if sabotage("view_window") && owner != addr && super::is_registered_buffer(owner) {
-        super::buffer_data(owner as *const super::BufferHeader) as *mut u8
+        unsafe { super::store::data(owner) }
     } else {
         ptr
     };
@@ -362,6 +362,9 @@ pub enum Brand {
     Uint8Array = 1,
     ArrayBuffer = 2,
     DataView = 3,
+    SharedArrayBuffer = 4,
+    SecretKey = 5,
+    CryptoKey = 6,
 }
 pub enum Init {
     Zero,
@@ -374,6 +377,9 @@ pub enum Init {
 impl Brand {
     pub(crate) fn cell_type(self) -> u8 {
         match self {
+            Self::SharedArrayBuffer => crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
+            Self::SecretKey => crate::gc::GC_TYPE_BUFFER_SECRET_KEY,
+            Self::CryptoKey => crate::gc::GC_TYPE_BUFFER_CRYPTO_KEY,
             Self::Buffer => crate::gc::GC_TYPE_BUFFER,
             Self::Uint8Array => crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
             Self::ArrayBuffer | Self::DataView => crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
@@ -418,7 +424,7 @@ pub(crate) fn new_typed_bytes(kind: u8, length: u32) -> (f64, Pinned) {
         pin(value).unwrap_or_else(|error| unsafe {
             panic!("fresh typed bytes must be pinnable: {error:?}; kind={kind} length={length} type={} flags={} cell_len={} capacity={}",
                 (*super::store::header(ptr as usize)).obj_type,
-                (*super::store::header(ptr as usize))._reserved, (*ptr).length, (*ptr).capacity)
+                (*super::store::header(ptr as usize))._reserved, super::store::length(ptr as usize), super::store::capacity(ptr as usize))
         }),
     )
 }
@@ -530,13 +536,8 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
     };
     #[cfg(test)]
     if sabotage("inline_copy") {
-        let cell = JSValue::from_bits(value.to_bits())
-            .as_pointer::<u8>()
-            .cast_mut();
-        // Poison the pointer word, then let the witness inspect it BEFORE
-        // dereferencing it. This reproduces ump's corruption without a UAF.
         unsafe {
-            std::ptr::copy_nonoverlapping(input.as_ptr(), cell.add(8), input.len());
+            super::store::sabotage_inline_copy(value, input);
         }
         return value;
     }

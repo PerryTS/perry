@@ -161,7 +161,7 @@ pub(crate) fn view_meta_of(addr: usize) -> Option<ViewMeta> {
     Some(unsafe {
         ViewMeta {
             backing: crate::buffer::store::owner(addr),
-            byte_offset: (*(addr as *const crate::buffer::BufferHeader)).capacity,
+            byte_offset: crate::buffer::store::capacity(addr as usize),
         }
     })
 }

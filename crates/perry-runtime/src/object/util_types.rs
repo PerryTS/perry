@@ -429,12 +429,8 @@ pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
 mod buffer_view_tests {
     use super::*;
 
-    fn check_buffer(mark: Option<fn(usize)>, view: bool, typed: bool) {
-        let buffer = crate::buffer::buffer_alloc(4);
-        if let Some(mark) = mark {
-            mark(buffer as usize);
-        }
-        let value = f64::from_bits(JSValue::pointer(buffer.cast()).bits());
+    fn check_buffer(brand: crate::buffer::bytes::Brand, view: bool, typed: bool) {
+        let value = crate::buffer::bytes::from_slice(brand, &[0; 4]);
         let expected_view = JSValue::bool(view).bits();
         let expected_typed = JSValue::bool(typed).bits();
         assert_eq!(
@@ -466,29 +462,17 @@ mod buffer_view_tests {
 
     #[test]
     fn node_buffer_is_a_uint8_array_view() {
-        check_buffer(None, true, true);
+        check_buffer(crate::buffer::bytes::Brand::Buffer, true, true);
     }
 
     #[test]
     fn buffer_backings_keep_their_distinct_predicate_brands() {
-        check_buffer(Some(crate::buffer::mark_as_uint8array), true, true);
-        check_buffer(Some(crate::buffer::mark_as_data_view), true, false);
-        check_buffer(Some(crate::buffer::mark_as_array_buffer), false, false);
-        check_buffer(
-            Some(crate::buffer::mark_as_shared_array_buffer),
-            false,
-            false,
-        );
-        check_buffer(Some(crate::buffer::mark_as_secret_key), false, false);
-        check_buffer(
-            Some(|addr| crate::buffer::mark_as_crypto_key(addr, 0, 0, 0)),
-            false,
-            false,
-        );
-        check_buffer(
-            Some(|addr| crate::buffer::mark_as_asymmetric_key(addr, 0, 0)),
-            false,
-            false,
-        );
+        use crate::buffer::bytes::Brand;
+        check_buffer(Brand::Uint8Array, true, true);
+        check_buffer(Brand::DataView, true, false);
+        check_buffer(Brand::ArrayBuffer, false, false);
+        check_buffer(Brand::SharedArrayBuffer, false, false);
+        check_buffer(Brand::SecretKey, false, false);
+        check_buffer(Brand::CryptoKey, false, false);
     }
 }

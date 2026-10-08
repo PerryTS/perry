@@ -156,7 +156,7 @@ pub extern "C" fn js_native_arena_view(
             .checked_mul(size)
             .and_then(|n| offset.checked_add(n))
             .unwrap_or_else(|| throw_range_error(b"NativeArena view is out of bounds"));
-        if end > (*owner).length as u64 {
+        if end > crate::buffer::store::raw_length(owner as usize) as u64 {
             throw_range_error(b"NativeArena view is out of bounds");
         }
         crate::buffer::store::new_view(
@@ -200,7 +200,7 @@ pub extern "C" fn js_native_pod_view(
         let end = byte_offset
             .checked_add(byte_length)
             .unwrap_or_else(|| throw_range_error(b"NativePodView is out of bounds"));
-        if end > (*owner).length as u64 {
+        if end > crate::buffer::store::raw_length(owner as usize) as u64 {
             throw_range_error(b"NativePodView is out of bounds");
         }
         let view = crate::arena::arena_alloc_gc_old(
@@ -499,10 +499,10 @@ mod tests {
         let target = boxed_ptr(view as *const u8);
         let before = unsafe {
             (
-                (*view).link,
+                crate::buffer::store::raw_link(view as usize),
                 crate::buffer::store::data(view as usize),
-                (*view).capacity,
-                (*view).length,
+                crate::buffer::store::capacity(view as usize),
+                crate::buffer::store::raw_length(view as usize),
             )
         };
 
@@ -510,13 +510,13 @@ mod tests {
         assert_eq!(returned.to_bits(), target.to_bits());
 
         unsafe {
-            assert_eq!((*view).link, before.0);
+            assert_eq!(crate::buffer::store::raw_link(view as usize), before.0);
             assert_eq!(crate::buffer::store::data(view as usize), before.1);
-            assert_eq!((*view).capacity, before.2);
-            assert_eq!((*view).length, before.3);
+            assert_eq!(crate::buffer::store::capacity(view as usize), before.2);
+            assert_eq!(crate::buffer::store::raw_length(view as usize), before.3);
             let bytes = std::slice::from_raw_parts(
                 crate::buffer::store::data(view as usize),
-                (*view).length as usize,
+                crate::buffer::store::raw_length(view as usize) as usize,
             );
             assert!(
                 bytes.iter().any(|&byte| byte != 0),

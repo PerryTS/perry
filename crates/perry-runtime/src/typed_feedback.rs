@@ -2339,7 +2339,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
             return f64::from_bits(TAG_UNDEFINED);
         };
         let buf = raw_addr as *const crate::buffer::BufferHeader;
-        let len = unsafe { (*buf).length };
+        let len = unsafe { crate::buffer::store::raw_length(buf as usize) };
         if (index as u32) >= len {
             return f64::from_bits(TAG_UNDEFINED);
         }

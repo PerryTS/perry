@@ -1,5 +1,22 @@
 //! The shared byte cell, its single traced link and ordinary property bag.
-use super::BufferHeader;
+
+/// Opaque shared header for every byte-family owner and view.
+/// Field access belongs to store; emitted access uses perry-abi constants.
+// The byte store starts at offset 16 on every target (BYTES_STORE), and
+// typed-array elements may require 8-byte alignment. Round the ILP32 header
+// up from 12 bytes as well, preserving the native layout and link offset.
+#[repr(C, align(8))]
+pub struct BufferHeader {
+    /// Length in bytes
+    length: u32,
+    /// Capacity (allocated space)
+    capacity: u32,
+    /// Owner or ordinary shaped property bag; the cell's only traced edge.
+    link: usize,
+}
+
+pub(crate) mod layout;
+
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
@@ -382,3 +399,62 @@ pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHea
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[inline(always)]
+pub(crate) unsafe fn capacity(addr: usize) -> u32 {
+    (*(addr as *const BufferHeader)).capacity
+}
+#[inline(always)]
+pub(crate) unsafe fn initialize_shared_block(cell: *mut BufferHeader, size: u32) {
+    std::ptr::write(
+        cell,
+        BufferHeader {
+            length: size,
+            capacity: size,
+            link: 0,
+        },
+    );
+}
+#[cfg(test)]
+pub(crate) unsafe fn raw_link(addr: usize) -> usize {
+    (*(addr as *const BufferHeader)).link
+}
+#[cfg(test)]
+pub(crate) unsafe fn set_test_link(addr: usize, link: usize) {
+    (*(addr as *mut BufferHeader)).link = link;
+}
+
+#[cfg(test)]
+pub(crate) fn alloc_test(brand: u8, capacity: u32) -> *mut BufferHeader {
+    let cell = store_alloc(brand, capacity, Init::Uninit);
+    unsafe {
+        set_length(cell as usize, 0);
+    }
+    cell
+}
+
+/// The stored element count, before view bounds/length-tracking resolution.
+#[inline(always)]
+pub(crate) unsafe fn raw_length(addr: usize) -> u32 {
+    (*(addr as *const BufferHeader)).length
+}
+/// The collector alone rewrites this edge; callers never expose a derived byte pointer.
+#[inline(always)]
+pub(crate) unsafe fn gc_link_slot(addr: usize) -> Option<*mut usize> {
+    let cell = addr as *mut BufferHeader;
+    ((*cell).link != 0).then(|| std::ptr::addr_of_mut!((*cell).link))
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn set_test_capacity(addr: usize, cap: u32) {
+    (*(addr as *mut BufferHeader)).capacity = cap;
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn sabotage_inline_copy(value: f64, input: &[u8]) {
+    // Restore the old +8 copy so the witness detects pointer-word corruption.
+    let cell = JSValue::from_bits(value.to_bits())
+        .as_pointer::<u8>()
+        .cast_mut();
+    std::ptr::copy_nonoverlapping(input.as_ptr(), cell.add(8), input.len());
+}

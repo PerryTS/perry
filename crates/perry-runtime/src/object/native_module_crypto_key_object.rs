@@ -32,8 +32,7 @@ fn conversion_failed(detail: &str) -> ! {
 /// matching KeyObject, and throws `ERR_INVALID_ARG_TYPE` for everything else.
 /// Perry models the two KeyObject shapes differently:
 ///
-/// * **secret** — the key bytes in a `BufferHeader` flagged by
-///   `mark_as_secret_key`, which is what the KeyObject property/method surface
+/// * **secret** — the key bytes in a `BufferHeader` born as a SecretKey, which is what the KeyObject property/method surface
 ///   keys off (`type`, `symmetricKeySize`, `export`).
 /// * **asymmetric** — a PEM (RSA/EC) or internal Ed/X surrogate *string*
 ///   flagged by `mark_as_asymmetric_key`.
@@ -72,10 +71,9 @@ pub(super) unsafe fn key_object_from(value: f64) -> f64 {
 /// registry hit turned such keys into a silent `invalid_key` throw.
 unsafe fn secret_key_object(addr: usize) -> f64 {
     let input = crate::value::js_nanbox_pointer(addr as i64);
-    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::Uint8Array, input)
+    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::SecretKey, input)
         .unwrap_or_else(|_| conversion_failed("could not read the secret key buffer"));
     let out = JSValue::from_bits(value.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
-    crate::buffer::mark_as_secret_key(out as usize);
     f64::from_bits(JSValue::pointer(out as *const u8).bits())
 }
 

@@ -179,13 +179,13 @@
       "why": "Map from AsyncHook record indices to requested enabled/disabled booleans while callback delivery is nested. Both key and value are scalar state; callbacks themselves remain in HOOKS and are visited by scan_async_hooks_roots_mut."
     },
     {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "CRYPTO_KEY_META_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "Thread-local attribute table of GC_TYPE_BUFFER_CRYPTO_KEY cells: address -> numeric (algo, hash, kind, extractable, usages, bit length). The key is the address of a non-moving buffer cell, used only as a lookup key and never dereferenced through this table; the values are integers. It is consulted only after the cell's own type byte says CryptoKey (#10694), and the BufferSideTables finalize hook drops the entry when the cell is swept, so a recycled address cannot inherit it."
     },
     {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "FOREIGN_FINALIZER_OWNERS",
       "verdict": "not_a_gc_pointer",
       "why": "node-api-host only: addresses of foreign-backed buffer cells (non-moving, born old) that still owe a Node-API finalizer, so shutdown can release them. Used only as keys to re-find the cell for enqueue_foreign_finalizer; the finalizer record itself lives in the cell. An entry leaves when the finalizer runs, which the BufferSideTables finalize hook does when the cell is swept. Holds no edge the collector must trace: it must NOT keep the buffer alive."
@@ -3042,7 +3042,7 @@
       "name": "TDZ_SUPPRESS_DEPTH"
     },
     {
-      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "ASYMMETRIC_KEY_REGISTRY"
     },
     {

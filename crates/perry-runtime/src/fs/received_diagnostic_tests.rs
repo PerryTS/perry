@@ -136,8 +136,7 @@ fn received_native_brands() {
         .to_bits()
         & crate::value::POINTER_MASK) as usize;
     add(crate::value::js_nanbox_pointer(view as i64), "DataView");
-    let backing = crate::buffer::buffer_alloc(1);
-    crate::buffer::mark_as_array_buffer(backing as usize);
+    let backing = crate::buffer::store::alloc_test(crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER, 1);
     add(
         crate::value::js_nanbox_pointer(backing as i64),
         "ArrayBuffer",
@@ -395,12 +394,12 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
         }
         "Buffer" => crate::buffer::buffer_alloc(1) as i64,
         "ArrayBuffer" | "SharedArrayBuffer" => {
-            let buffer = crate::buffer::buffer_alloc(1);
-            if name == "SharedArrayBuffer" {
-                crate::buffer::mark_as_shared_array_buffer(buffer as usize);
+            let brand = if name == "SharedArrayBuffer" {
+                crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
             } else {
-                crate::buffer::mark_as_array_buffer(buffer as usize);
-            }
+                crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER
+            };
+            let buffer = crate::buffer::store::alloc_test(brand, 1);
             buffer as i64
         }
         "Date" => crate::value::js_nanbox_get_pointer(crate::date::alloc_date_cell(0.0)),

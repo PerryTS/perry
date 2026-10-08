@@ -219,7 +219,7 @@ unsafe fn import_shared_secret_key(
         Ok(u) => u,
         Err((name, message)) => return Err(reject_with_dom_exception(name, message)),
     };
-    let buf = alloc_uint8array_from_slice(key_bytes);
+    let buf = alloc_crypto_key_from_slice(key_bytes);
     if buf.is_null() {
         return Err(reject_with_dom_exception(
             "OperationError",

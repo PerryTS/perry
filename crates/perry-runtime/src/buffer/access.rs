@@ -478,10 +478,12 @@ pub extern "C" fn js_buffer_slice(
         return buffer_alloc(0);
     }
     let (start, length) = slice_bounds(buf_ptr, start, end);
-    let result = super::view::alloc(buf_ptr, start, length);
-    if is_uint8array_buffer(buf_ptr as usize) {
-        mark_as_uint8array(result as usize);
-    }
+    let brand = if is_uint8array_buffer(buf_ptr as usize) {
+        crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
+    } else {
+        crate::gc::GC_TYPE_BUFFER
+    };
+    let result = super::store::new_view(brand, buf_ptr as usize, start, length, false);
     result
 }
 
@@ -508,7 +510,16 @@ pub(crate) fn buffer_slice_copy(
     let (start, length) = slice_bounds(buf, start, end);
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_raw_const_ptr(buf);
-    let result = buffer_alloc(length);
+    let brand = if is_array_buffer(buf as usize) {
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER
+    } else if is_shared_array_buffer(buf as usize) {
+        crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
+    } else if is_uint8array_buffer(buf as usize) {
+        crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
+    } else {
+        crate::gc::GC_TYPE_BUFFER
+    };
+    let result = super::store::store_alloc(brand, length, super::store::Init::Uninit);
     unsafe {
         super::store::set_length(result as usize, length);
         super::bytes::no_gc(|scope| {

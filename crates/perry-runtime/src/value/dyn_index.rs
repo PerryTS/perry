@@ -330,7 +330,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if crate::buffer::is_registered_buffer(raw_ptr) {
         let buf = raw_ptr as *const crate::buffer::BufferHeader;
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
-            let len = unsafe { (*buf).length };
+            let len = unsafe { crate::buffer::store::raw_length(buf as usize) };
             if (idx_i32 as u32) >= len {
                 return f64::from_bits(TAG_UNDEFINED);
             }
@@ -354,7 +354,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
             if !key_ptr.is_null() {
                 if let Some(canon) = unsafe { canonical_buffer_index(key_ptr) } {
-                    let len = unsafe { (*buf).length };
+                    let len = unsafe { crate::buffer::store::raw_length(buf as usize) };
                     if canon >= len {
                         return f64::from_bits(TAG_UNDEFINED);
                     }

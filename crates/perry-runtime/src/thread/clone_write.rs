@@ -562,7 +562,7 @@ impl Writer<'_> {
         } else {
             crate::typedarray::KIND_UINT8
         };
-        let length = (*header).length;
+        let length = crate::buffer::store::raw_length(header as usize);
         if self.mode == CloneMode::Thread {
             if kind == crate::typedarray::KIND_UINT8 {
                 // Keep perry/thread's plain-bytes form: no backing copy.

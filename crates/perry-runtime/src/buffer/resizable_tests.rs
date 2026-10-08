@@ -27,7 +27,11 @@ fn resize_never_moves_the_payload_and_reserves_max_once() {
     let data = pin.as_ptr();
     unsafe {
         assert_eq!(super::store::length(buf as usize) as u32, 4);
-        assert_eq!((*buf).capacity, 4096, "capacity IS the reservation");
+        assert_eq!(
+            crate::buffer::store::capacity(buf as usize),
+            4096,
+            "capacity IS the reservation"
+        );
     }
     assert_eq!(resizable_max_byte_length(buf as usize), Some(4096));
     assert!(is_resizable_buffer(buf as usize));
@@ -36,7 +40,7 @@ fn resize_never_moves_the_payload_and_reserves_max_once() {
         resize(buf, len);
         unsafe {
             assert_eq!(super::store::length(buf as usize) as u32, len);
-            assert_eq!((*buf).capacity, 4096);
+            assert_eq!(crate::buffer::store::capacity(buf as usize), 4096);
         }
         bytes::no_gc(|_| {
             assert_eq!(
@@ -113,7 +117,7 @@ fn fixed_length_buffers_are_not_resizable() {
     let via_options = js_array_buffer_new_with_options(8.0, undefined());
     assert!(!is_resizable_buffer(via_options as usize));
     unsafe {
-        assert_eq!((*via_options).length, 8);
+        assert_eq!(crate::buffer::store::length(via_options as usize) as u32, 8);
     }
 }
 
@@ -258,7 +262,7 @@ fn transfer_preserves_resizability_and_to_fixed_length_drops_it() {
     assert!(is_detached_buffer(buf as usize));
     assert_eq!(resizable_max_byte_length(moved as usize), Some(8));
     unsafe {
-        assert_eq!((*moved).length, 4);
+        assert_eq!(crate::buffer::store::length(moved as usize) as u32, 4);
         assert_eq!(
             &bytes::ReadLease::new(boxed(moved)).unwrap()[..],
             &[9, 8, 7, 6]
@@ -267,7 +271,7 @@ fn transfer_preserves_resizability_and_to_fixed_length_drops_it() {
     let pinned = unbox(array_buffer_transfer(moved as usize, &[], false));
     assert!(!is_resizable_buffer(pinned as usize));
     unsafe {
-        assert_eq!((*pinned).length, 4);
+        assert_eq!(crate::buffer::store::length(pinned as usize) as u32, 4);
     }
 }
 
@@ -277,7 +281,7 @@ fn a_fresh_cell_does_not_inherit_resizability() {
     assert!(is_resizable_buffer(buf as usize));
     let fresh = js_array_buffer_new(1);
     assert!(!is_resizable_buffer(fresh as usize));
-    assert_eq!(unsafe { (*fresh).link }, 0);
+    assert_eq!(unsafe { crate::buffer::store::raw_link(fresh as usize) }, 0);
 }
 
 #[test]

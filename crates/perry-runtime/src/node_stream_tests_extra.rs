@@ -688,12 +688,11 @@ fn readable_unshift_after_eof_before_end_prepends_chunk() {
 }
 
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
-    let len = crate::buffer::js_native_buffer_byte_len(value);
-    let data = crate::buffer::js_native_buffer_data_ptr(value);
-    if data.is_null() || len == 0 {
-        return Vec::new();
-    }
-    unsafe { std::slice::from_raw_parts(data, len).to_vec() }
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .map(|bytes| bytes.to_vec())
+            .unwrap_or_default()
+    })
 }
 
 #[test]

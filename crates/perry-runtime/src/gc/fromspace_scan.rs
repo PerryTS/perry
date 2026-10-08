@@ -269,7 +269,7 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
                 + (*(user as *const crate::string::StringHeader)).byte_len as usize,
         ),
         t if crate::gc::is_buffer_family_type(t) => Some(crate::buffer::buffer_payload_size(
-            (*(user as *const crate::buffer::BufferHeader)).capacity as usize,
+            crate::buffer::store::capacity(user as usize) as usize,
         )),
         _ => None,
     };
