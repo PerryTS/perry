@@ -1,4 +1,4 @@
-name: Release Packages
+name: Publish to npm / GitHub Release
 
 on:
   schedule:
@@ -251,7 +251,7 @@ jobs:
     # below. Both must move together.
     # - v0.5.876: 60 → 90 (Tests had grown past 60 min wall)
     # - v0.5.883: 90 → 120 (macOS-14 runners queue 30-60+ min during
-    #   busy hours; Tests itself takes ~30 min, but Release Packages
+    #   busy hours; Tests itself takes ~30 min, but the release pipeline
     #   starts at the same time as Tests and runs out of budget before
     #   Tests gets dequeued + executes. 120 absorbs typical runner
     #   queue + Tests wall-time).
@@ -418,7 +418,7 @@ jobs:
             # - v0.5.876: 60 → 90 (Tests wall-time grew past 60).
             # - v0.5.883: 90 → 120. v0.5.882 hit 90-min wall because
             #   macOS-14 runner queue delayed doc-tests start by an
-            #   hour. Tests itself runs ~30 min, but Release Packages
+            #   hour. Tests itself runs ~30 min, but the release pipeline
             #   starts at tag-time and runs out of budget waiting for
             #   queue + execution. 120 absorbs typical busy-hour queue.
             deadline=$(( SECONDS + 120 * 60 ))

@@ -2,7 +2,7 @@
  * Perry's registry-first release orchestrator.
  *
  * npm run publish:release dispatches the exact candidate to GitHub Actions.
- * The existing Release Packages workflow builds, optionally Socket-scans, and
+ * The existing Publish to npm / GitHub Release workflow builds, optionally Socket-scans, and
  * directly publishes the exact nine tarballs through npm Trusted Publisher /
  * OIDC. It verifies their public registry shasums and only then creates the tag
  * + GitHub Release. Back on the maintainer machine, this script independently
