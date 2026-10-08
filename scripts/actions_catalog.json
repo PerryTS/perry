@@ -1229,7 +1229,7 @@
       }
     },
     "release-packages": {
-      "name": "Release / Packages",
+      "name": "Publish to npm / GitHub Release",
       "entrypoint": "release-packages.yml",
       "modules": [
         {
@@ -1374,7 +1374,7 @@
       }
     },
     "release-hono-server": {
-      "name": "Release / Hono Server",
+      "name": "Publish to npm / Hono Server",
       "entrypoint": "release-hono-server.yml",
       "modules": [
         {

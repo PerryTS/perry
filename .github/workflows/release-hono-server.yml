@@ -1,4 +1,4 @@
-name: Release @perryts/hono-server
+name: Publish to npm / @perryts/hono-server
 
 # Independent release path for the packages/hono-perry-server workspace package
 # (@perryts/hono-server). Deliberately decoupled from the compiler's
