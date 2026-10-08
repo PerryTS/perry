@@ -569,7 +569,7 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
             "typedarray::tests::owning_u32_admission_reads_current_header",
         ),
         (
-            "view_bag_owner_spilled",
+            "view_bag_owner_not_first",
             "gc::tests::buffer_b4::a_bagged_view_holds_its_owner_at_the_fixed_first_slot",
         ),
     ] {
@@ -644,7 +644,7 @@ fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
 /// inline slot 0, and growth, deletes and a moving collection keep it there.
 #[test]
 fn a_bagged_view_holds_its_owner_at_the_fixed_first_slot() {
-    let _guard = CopyingNurseryTestGuard::new(0);
+    let _guard = CopyingNurseryTestGuard::new(1);
     let _force = ForcedEvacuationTestGuard::on();
     let owner = buffer::buffer_alloc(32) as usize;
     unsafe { buffer::store::set_length(owner, 32) };

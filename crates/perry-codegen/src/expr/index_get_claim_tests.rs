@@ -831,8 +831,16 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     let view = super::class_field_barrier_tests::block_body(&ir, "bytes.view.owner.")
         .expect("the pointer-layout guard exists");
     assert!(
-        view.contains("load i64") && view.contains("arrlike.ic.miss"),
-        "view misses must guard the pointer layout before reaching the load: {view}"
+        view.contains("load i64") && view.contains("bytes.view.bag"),
+        "a view whose link is not a plain owner must take the bag test: {view}"
+    );
+    // The bag test admits only a bag (GC_TYPE_OBJECT) and exits to the miss.
+    let bag = super::class_field_barrier_tests::block_body(&ir, "bytes.view.bag.")
+        .expect("the bagged-view guard exists");
+    assert!(
+        bag.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_OBJECT))
+            && bag.contains("arrlike.ic.miss"),
+        "view misses must guard the pointer layout before reaching the load: {bag}"
     );
     let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")
         .expect("the view byte load exists");
