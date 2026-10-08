@@ -275,7 +275,7 @@ pub(crate) use accessors::{
     accessor_receiver_override_end, accessor_receiver_override_take,
     array_prototype_property_value, invoke_accessor_getter, invoke_accessor_setter,
     is_typed_array_prototype, object_accessor_at_with_live, object_field_at_with_live,
-    ordinary_object_prototype_property_value, own_data_field_by_name,
+    ordinary_object_prototype_property_value, own_data_field_by_bytes, own_data_field_by_name,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor,
     primitive_tagged_prototype_property, string_index_value,
 };

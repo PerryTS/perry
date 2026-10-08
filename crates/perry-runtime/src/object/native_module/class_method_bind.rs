@@ -132,12 +132,8 @@ pub extern "C" fn js_class_method_bind(
                         {
                             let obj = recv_jsv.as_pointer::<ObjectHeader>();
                             if crate::value::addr_class::is_above_handle_band(obj as usize) {
-                                let key = crate::string::js_string_from_bytes(
-                                    method_name_ptr,
-                                    method_name_len as u32,
-                                );
                                 if let Some(own) =
-                                    unsafe { super::own_data_field_by_name(obj, key) }
+                                    unsafe { super::own_data_field_by_bytes(obj, name.as_bytes()) }
                                 {
                                     if own.bits() != crate::value::TAG_UNDEFINED {
                                         return f64::from_bits(own.bits());
@@ -185,18 +181,11 @@ pub extern "C" fn js_class_method_snapshot_bind(
         return js_class_method_bind(instance, method_name_ptr, method_name_len);
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let instance_handle = scope.root_nanbox_f64(instance);
     if !method_name_ptr.is_null() && method_name_len > 0 {
-        let key = crate::string::js_string_from_bytes(method_name_ptr, method_name_len as u32);
-        let key_handle = scope.root_string_ptr(key);
-        let current = instance_handle.get_nanbox_f64();
-        let obj = JSValue::from_bits(current.to_bits()).as_pointer::<ObjectHeader>();
+        let obj = value.as_pointer::<ObjectHeader>();
         if crate::value::addr_class::is_above_handle_band(obj as usize) {
-            let own = key_handle.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
-                super::own_data_field_by_name(obj, key)
-            });
-            if let Some(own) = own {
+            let name = unsafe { std::slice::from_raw_parts(method_name_ptr, method_name_len) };
+            if let Some(own) = unsafe { super::own_data_field_by_bytes(obj, name) } {
                 if own.bits() != crate::value::TAG_UNDEFINED {
                     return f64::from_bits(own.bits());
                 }
@@ -204,11 +193,7 @@ pub extern "C" fn js_class_method_snapshot_bind(
         }
     }
 
-    build_bound_method_closure(
-        instance_handle.get_nanbox_f64(),
-        method_name_ptr,
-        method_name_len,
-    )
+    build_bound_method_closure(instance, method_name_ptr, method_name_len)
 }
 
 /// By-ID sibling of `js_class_method_bind` for static-name lowering.
@@ -326,3 +311,7 @@ pub(super) fn build_bound_method_closure_with_private_brand(
         crate::value::js_nanbox_pointer(closure as i64)
     })
 }
+
+#[cfg(test)]
+#[path = "class_method_bind_alloc_tests.rs"]
+mod alloc_tests;
