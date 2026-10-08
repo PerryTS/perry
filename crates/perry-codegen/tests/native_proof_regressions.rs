@@ -15287,11 +15287,14 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
     // one canonical value, as for any other receiver. A per-read receiver
     // snapshot allocated and named a bound closure on every read.
     assert!(
-        capture.contains("call double @js_class_method_bind_by_id"),
-        "a this.method value read must answer the canonical method value:\n{capture}"
+        capture.contains("call double @js_object_get_field_ic_slow")
+            && capture.contains("_packed_get")
+            && capture.contains("icmp eq i32"),
+        "a this.method value read must load the live shape's method slot:\n{capture}"
     );
     assert!(
-        !capture.contains("js_class_method_snapshot_bind"),
+        !capture.contains("call double @js_class_method_bind_by_id")
+            && !capture.contains("js_class_method_snapshot_bind"),
         "a this.method value read must not build a receiver snapshot:\n{capture}"
     );
 }
@@ -15330,11 +15333,9 @@ fn annotated_class_method_value_uses_generic_lookup() {
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     // (#8033) An erased annotation is never a proof, so the body reachable
     // WITHOUT a validated argument must keep generic lookup. (#8099) A
-    // class-typed parameter is now additionally admitted into the #8094
-    // runtime-guarded clone, where the direct bind ABI is legal because
-    // `js_param_type_guard` established the receiver's class identity. Assert
-    // both halves: the interesting failure is the direct ABI appearing in the
-    // fallback, which is the exact regression #8033 exists to prevent.
+    // class-typed parameter is additionally admitted into the #8094 guarded
+    // clone. #12016: class identity does not prove a method's property value;
+    // both bodies must validate the receiver's live shape on each read.
     let generic = ir_function_body(&ir, "__probe$generic(");
     assert!(
         // T1 renamed the tower's cold exits; this assertion is about the
@@ -15352,10 +15353,11 @@ fn annotated_class_method_value_uses_generic_lookup() {
     );
     let specialized = ir_function_body(&ir, "__probe$spec_b(");
     assert!(
-        specialized.contains("call double @js_class_method_bind_by_id")
-            || specialized.contains("call double @js_class_method_bind(double"),
-        "the guarded clone is what the validated annotation buys — if it stops \
-         selecting the direct bind, the assertions above pass vacuously:\n{specialized}"
+        specialized.contains("call double @js_object_get_field_ic_slow")
+            && specialized.contains("_packed_get")
+            && specialized.contains("icmp eq i32")
+            && !specialized.contains("call double @js_class_method_bind_by_id"),
+        "the guarded clone must still read the live shape's slot:\n{specialized}"
     );
 }
 
