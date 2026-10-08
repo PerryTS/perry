@@ -19,21 +19,43 @@ impl HolderEdit {
                     Some(crate::gc::GC_TYPE_ARRAY) => crate::array::array_property_bag_ensure(
                         owner as *mut crate::array::ArrayHeader,
                     ),
-                    Some(crate::gc::GC_TYPE_OBJECT)
-                        if super::super::key_attrs::attrs_live_in_keys_for_install(owner) =>
-                    {
-                        return None
+                    Some(crate::gc::GC_TYPE_LAZY_ARRAY) => {
+                        let array = crate::json_tape::force_materialize_lazy(
+                            owner as *mut crate::json_tape::LazyArrayHeader,
+                        );
+                        crate::array::array_property_bag_ensure(array)
+                    }
+                    Some(crate::gc::GC_TYPE_OBJECT) => {
+                        let live = super::filter::resolve_object_holder(owner);
+                        if live == owner {
+                            return None;
+                        }
+                        // An evacuation alias is not a native registry handle.
+                        // Normalize writes as well as reads to the live holder.
+                        return Some(Self {
+                            owner: live,
+                            bag: live as *mut ObjectHeader,
+                            _no_move,
+                        });
                     }
                     _ if crate::buffer::header::is_owned_byte_cell(owner) => {
                         crate::buffer::store::bag_ensure(owner)
                     }
-                    Some(_) if super::super::cell_meta_slot(owner).is_some() => {
-                        super::super::cell_expando_ensure(owner)?
-                    }
+                    Some(
+                        crate::gc::GC_TYPE_ERROR
+                        | crate::gc::GC_TYPE_MAP
+                        | crate::gc::GC_TYPE_SET
+                        | crate::gc::GC_TYPE_PROMISE
+                        | crate::gc::GC_TYPE_DATE_CELL,
+                    ) => super::super::cell_expando_ensure(owner)?,
                     Some(crate::gc::GC_TYPE_TEMPORAL) => {
                         super::super::exotic_expando::property_bag_ensure(owner)
                     }
-                    _ => super::super::handle_expando::handle_property_bag_ensure(owner as i64),
+                    None => super::super::handle_expando::handle_property_bag_ensure(owner as i64),
+                    Some(kind) => {
+                        debug_assert!(false, "GC cell type {kind} is not a descriptor holder");
+                        return None;
+                    }
                 }
             };
             return Some(Self {
