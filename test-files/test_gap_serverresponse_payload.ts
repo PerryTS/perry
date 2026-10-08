@@ -1,0 +1,25 @@
+import * as http from 'node:http';
+import * as util from 'node:util';
+import { Writable } from 'node:stream';
+const H: any = http;
+const res: any = new H.ServerResponse({method:'GET'});
+console.log('ctor',res.constructor.name,'instance',res instanceof H.ServerResponse);
+res.statusCode = 201;
+res.setHeader('X-a','1');
+console.log('open',res.statusCode,res.getHeader('x-a'),res.setHeader('X-b','2') === res);
+const data: string[] = [];
+const socket = new Writable({write(chunk: any, enc: any, cb: any) { data.push(String(chunk)); cb(); }});
+res.assignSocket(socket);
+res.end('abc');
+console.log('closed',res.statusCode,res.headersSent,res.writableEnded,res.writableFinished,res.getHeader('x-a'));
+console.log('wire',data.join('').includes('201 Created'),data.join('').endsWith('abc'));
+function Response(this:any,req:any) { H.ServerResponse.call(this,req); }
+util.inherits(Response,H.ServerResponse);
+const alias:any = new (Response as any)({method:'GET'});
+alias.statusCode=202;
+alias.setHeader('y','3');
+console.log('alias',alias.statusCode,alias.getHeader('y'),alias.setHeader('z','4')===alias);
+const dead: any = new H.ServerResponse({method:'GET'});
+dead.on('error', () => {});
+dead.destroy();
+console.log('destroy', dead.destroyed, dead.write('x'));

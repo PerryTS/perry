@@ -7,12 +7,12 @@
 //! `EndTail`, which parks every snapshot the sequence consumes in the
 //! runtime's transient-root stack before any of it crosses a JS call.
 
-use perry_ffi::{get_handle, get_handle_mut, JsClosure, JsValue, RawClosureHeader};
+use perry_ffi::{JsClosure, JsValue, RawClosureHeader};
 
 use crate::server::request::emit_no_arg_to_listeners;
 use crate::server::response::{
-    callback_from_bits, finalize_buffered_end, pick_trailing_callback, socket_write_str,
-    take_event_listeners, ServerResponse,
+    callback_from_bits, finalize_buffered_end, pick_trailing_callback, response_event_listeners,
+    socket_write_str,
 };
 use crate::server::turnloop_serve::wire::{self, Framing};
 use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
@@ -28,6 +28,8 @@ use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
 /// FFI entry; `handle` must be a live `ServerResponse` handle (or absent).
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2: i64, arg3: i64) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     // `end(cb)` passes the callback as the first arg; otherwise it trails.
     let first_cb = callback_from_bits(chunk.to_bits() as i64);
     let (real_chunk, callback) = if first_cb != 0 {
@@ -36,20 +38,18 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
         (chunk, pick_trailing_callback(arg2, arg3))
     };
 
-    let is_standalone = get_handle::<ServerResponse>(handle)
+    let is_standalone = super::response::response_state(response_root.get())
         .map(|sr| sr.standalone)
         .unwrap_or(false);
     if is_standalone {
         // standalone_end already runs write cbs → end cb → listeners in order.
-        standalone_end(handle, real_chunk, callback);
+        standalone_end(response_root.get(), real_chunk, callback);
         return;
     }
 
     let (finish_listeners, close_listeners) =
-        finalize_buffered_end(handle, real_chunk).unwrap_or_default();
-    let write_cbs = get_handle_mut::<ServerResponse>(handle)
-        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
-        .unwrap_or_default();
+        finalize_buffered_end(response_root.get(), real_chunk).unwrap_or_default();
+    let write_cbs = super::response::take_write_callbacks(response_root.get());
     // #8163: every snapshot crosses the JS calls below — root them all first.
     let scope = perry_ffi::TransientRootScope::enter();
     let tail = EndTail::root(
@@ -73,7 +73,15 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
 /// connection's encoder + fire `'finish'` and `'close'` listeners.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
-    if let Some((finish_listeners, close_listeners)) = finalize_buffered_end(handle, chunk) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response::response_state(response_root.get()).is_some_and(|sr| sr.standalone) {
+        unsafe { standalone_end(response_root.get(), chunk, 0) };
+        return;
+    }
+    if let Some((finish_listeners, close_listeners)) =
+        finalize_buffered_end(response_root.get(), chunk)
+    {
         // #8163: the `'close'` snapshot crosses the `'finish'` emits.
         let scope = perry_ffi::TransientRootScope::enter();
         let tail = EndTail::root(&scope, &[], 0, &finish_listeners, &close_listeners);
@@ -88,11 +96,15 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
 /// order, then the end callback (#4904).
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, callback: i64) {
-    let is_standalone = get_handle::<ServerResponse>(handle)
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let is_standalone = super::response::response_state(response_root.get())
         .map(|sr| sr.standalone)
         .unwrap_or(false);
     if is_standalone {
-        standalone_end(handle, chunk, callback);
+        standalone_end(response_root.get(), chunk, callback_root.get());
         return;
     }
     // #4909 — Node's flush ordering, matching `js_node_http_res_end_full`:
@@ -100,16 +112,14 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
     // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
     // before any callback ran.
     let (finish_listeners, close_listeners) =
-        finalize_buffered_end(handle, chunk).unwrap_or_default();
-    let write_cbs = get_handle_mut::<ServerResponse>(handle)
-        .map(|sr| std::mem::take(&mut sr.pending_write_callbacks))
-        .unwrap_or_default();
+        finalize_buffered_end(response_root.get(), chunk).unwrap_or_default();
+    let write_cbs = super::response::take_write_callbacks(response_root.get());
     // #8163: every snapshot crosses the JS calls below — root them all first.
     let scope = perry_ffi::TransientRootScope::enter();
     let tail = EndTail::root(
         &scope,
         &write_cbs,
-        callback,
+        callback_root.get(),
         &finish_listeners,
         &close_listeners,
     );
@@ -124,6 +134,10 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
 /// for head+body, then the zero-length finish chunk Node's corked flush
 /// emits. The body is suppressed for HEAD requests.
 unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -131,9 +145,9 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         jsvalue_to_body_bytes(chunk)
     };
 
-    let (socket, payload, write_cbs, finish_listeners, close_listeners);
+    let payload;
     {
-        let sr = match get_handle_mut::<ServerResponse>(handle) {
+        let sr = match super::response::response_state_mut(response_root.get()) {
             Some(s) => s,
             None => return,
         };
@@ -195,25 +209,27 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
             bytes.extend_from_slice(&body);
         }
         payload = bytes;
-        socket = sr.standalone_socket;
-        write_cbs = std::mem::take(&mut sr.pending_write_callbacks);
-        finish_listeners = take_event_listeners(sr, "finish");
-        close_listeners = take_event_listeners(sr, "close");
         sr.writable_finished = true;
     }
-    // #8163: `socket_write_str` calls the socket's JS `write`, so every
-    // snapshot taken above is already crossing JS from here on — root first.
     let scope = perry_ffi::TransientRootScope::enter();
+    let end_callback = scope.root_addr(callback_root.get());
+    let socket = scope.root_nanbox(super::response::response_socket(response_root.get()));
+    let write_cbs = scope.root_addrs(&super::response::take_write_callbacks(response_root.get()));
+    let finish = scope.root_addrs(&response_event_listeners(response_root.get(), "finish"));
+    let close = scope.root_addrs(&response_event_listeners(response_root.get(), "close"));
     let tail = EndTail::root(
         &scope,
-        &write_cbs,
-        callback,
-        &finish_listeners,
-        &close_listeners,
+        &EndTail::current(&write_cbs),
+        end_callback.get(),
+        &EndTail::current(&finish),
+        &EndTail::current(&close),
     );
-    if !JsValue::from_bits(socket.to_bits()).is_undefined() {
-        socket_write_str(socket, &String::from_utf8_lossy(&payload));
-        socket_write_str(socket, "");
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::close(response_root.get());
+    }
+    if !JsValue::from_bits(socket.get().to_bits()).is_undefined() {
+        socket_write_str(socket.get(), &String::from_utf8_lossy(&payload));
+        socket_write_str(socket.get(), "");
     }
     tail.run_write_callbacks();
     tail.run_end_callback();

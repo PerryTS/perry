@@ -130,3 +130,53 @@ fn an_unreferenced_aliased_object_is_collected() {
         "every unreferenced aliased object must be collected"
     );
 }
+
+/// A response alias owns its ordinary payload target through a traced edge.
+/// The stream record can be installed on either side of alias construction.
+#[test]
+fn an_alias_traces_and_rewrites_an_ordinary_target_in_both_stream_orders() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _no_stack = ConservativeScanDisabledGuard::new();
+    register_object_model_scanners();
+    let scope = RuntimeHandleScope::new();
+    for stream_first in [false, true] {
+        let receiver = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        if stream_first {
+            crate::node_stream::js_node_stream_writable_subclass_init(boxed(&receiver), undefined);
+        }
+        let weak = {
+            let inner = RuntimeHandleScope::new();
+            let target = inner.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            register_this_to_handle_alias(boxed(&receiver), boxed(&target), true);
+            let weak = crate::weakref::js_weakref_new(boxed(&target));
+            weak
+        };
+        let weak = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(weak as i64));
+        if !stream_first {
+            crate::node_stream::js_node_stream_writable_subclass_init(boxed(&receiver), undefined);
+        }
+        let before = alias_handle_for_object(boxed(&receiver))
+            .unwrap()
+            .0
+            .to_bits();
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(trace.copying_nursery.copied_objects > 0);
+        let target = crate::weakref::js_weakref_deref(weak.get_nanbox_f64());
+        assert_ne!(target.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_ne!(target.to_bits(), before, "the target moved");
+        assert_eq!(
+            alias_handle_for_object(boxed(&receiver)).map(|(v, c)| (v.to_bits(), c)),
+            Some((target.to_bits(), true))
+        );
+        js_gc_collect();
+        assert_eq!(
+            alias_handle_for_object(boxed(&receiver))
+                .unwrap()
+                .0
+                .to_bits(),
+            crate::weakref::js_weakref_deref(weak.get_nanbox_f64()).to_bits()
+        );
+    }
+}

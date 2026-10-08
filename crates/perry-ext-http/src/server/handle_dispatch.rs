@@ -30,6 +30,7 @@ use perry_ffi::{
 use crate::server::http2_server::Http2SecureServer;
 use crate::server::https_server::HttpsServer;
 use crate::server::request::IncomingMessage;
+#[cfg(test)]
 use crate::server::response::ServerResponse;
 use crate::server::server::HttpServer;
 use crate::server::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED};
@@ -199,7 +200,9 @@ pub extern "C" fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32 {
 /// Probe: is `handle` a live server-side `ServerResponse`?
 #[no_mangle]
 pub extern "C" fn js_ext_http_server_response_is_handle(handle: i64) -> i32 {
-    if get_handle::<ServerResponse>(handle).is_some() {
+    if super::response::response_state(handle).is_some()
+        || super::response_payload::is_response(handle)
+    {
         1
     } else {
         0
@@ -844,70 +847,79 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let undef = f64::from_bits(TAG_UNDEFINED);
     let method = method_name(method_ptr, method_len);
     if method.is_empty() {
         return undef;
     }
     let args = args_slice(args_ptr, args_len);
-    let self_ref = handle_to_pointer_f64(handle);
 
     if server_response_method_bytes(&method).is_some()
-        && server_response_method_bytes_for_handle(handle, &method).is_none()
+        && server_response_method_bytes_for_handle(response_root.get(), &method).is_none()
     {
         return undef;
     }
 
-    match method.as_str() {
+    let result = match method.as_str() {
         "setHeader" if args.len() >= 2 => {
             let name = string_value_arg(args[0]);
             if !name.is_null() {
                 // Pass the raw JSValue so array values (Set-Cookie) keep their
                 // per-element structure for one-line-per-element wire output.
-                js_node_http_res_set_header(handle, name, args[1]);
+                js_node_http_res_set_header(response_root.get(), name, args[1]);
             }
-            self_ref
+            handle_to_pointer_f64(response_root.get())
         }
         "getHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
             if name.is_null() {
                 undef
             } else {
-                js_node_http_res_get_header(handle, name)
+                js_node_http_res_get_header(response_root.get(), name)
             }
         }
         "removeHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_remove_header(handle, name);
+                js_node_http_res_remove_header(response_root.get(), name);
             }
             undef
         }
         "hasHeader" if !args.is_empty() => {
             let name = string_value_arg(args[0]);
-            bool_value(!name.is_null() && js_node_http_res_has_header(handle, name) != 0)
+            bool_value(
+                !name.is_null() && js_node_http_res_has_header(response_root.get(), name) != 0,
+            )
         }
-        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(handle)),
-        "getHeaderNames" => json_string_value(js_node_http_res_get_header_names_json(handle)),
+        "getHeaders" => json_string_value(js_node_http_res_get_headers_json(response_root.get())),
+        "getHeaderNames" => {
+            json_string_value(js_node_http_res_get_header_names_json(response_root.get()))
+        }
         "appendHeader" if args.len() >= 2 => {
             let name = string_value_arg(args[0]);
             if !name.is_null() {
-                js_node_http_res_append_header(handle, name, string_value_arg(args[1]));
+                js_node_http_res_append_header(
+                    response_root.get(),
+                    name,
+                    string_value_arg(args[1]),
+                );
             }
-            self_ref
+            handle_to_pointer_f64(response_root.get())
         }
         "setHeaders" if !args.is_empty() => {
-            js_node_http_res_set_headers(handle, args[0]);
-            self_ref
+            js_node_http_res_set_headers(response_root.get(), args[0]);
+            handle_to_pointer_f64(response_root.get())
         }
         "writeHead" if !args.is_empty() => {
             js_node_http_res_write_head(
-                handle,
+                response_root.get(),
                 number_arg(Some(args[0]), 200.0),
                 raw_arg(args.get(1).copied()),
                 raw_arg(args.get(2).copied()),
             );
-            self_ref
+            handle_to_pointer_f64(response_root.get())
         }
         "write" if !args.is_empty() => {
             // `write(chunk[, encoding][, callback])` — the callback is the
@@ -919,11 +931,15 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                 .find(|c| *c != 0)
                 .unwrap_or(0);
             bool_value(
-                crate::server::response::js_node_http_res_write_with_cb(handle, args[0], cb) != 0,
+                crate::server::response::js_node_http_res_write_with_cb(
+                    response_root.get(),
+                    args[0],
+                    cb,
+                ) != 0,
             )
         }
         "addTrailers" if !args.is_empty() => {
-            js_node_http_res_add_trailers(handle, args[0]);
+            js_node_http_res_add_trailers(response_root.get(), args[0]);
             undef
         }
         "end" => {
@@ -944,43 +960,47 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
                     .unwrap_or(0);
                 (first, cb)
             };
-            crate::server::response_end::js_node_http_res_end_with_cb(handle, chunk, cb);
-            self_ref
+            crate::server::response_end::js_node_http_res_end_with_cb(
+                response_root.get(),
+                chunk,
+                cb,
+            );
+            handle_to_pointer_f64(response_root.get())
         }
         "flushHeaders" => {
-            js_node_http_res_flush_headers(handle);
+            js_node_http_res_flush_headers(response_root.get());
             undef
         }
         "cork" => {
-            js_node_http_res_cork(handle);
+            js_node_http_res_cork(response_root.get());
             undef
         }
         "uncork" => {
-            js_node_http_res_uncork(handle);
+            js_node_http_res_uncork(response_root.get());
             undef
         }
         "setTimeout" => {
             js_node_http_res_set_timeout(
-                handle,
+                response_root.get(),
                 number_arg(args.first().copied(), 0.0),
                 closure_arg(args.get(1).copied()),
             );
-            self_ref
+            handle_to_pointer_f64(response_root.get())
         }
         "writeEarlyHints" => {
             js_node_http_res_write_early_hints(
-                handle,
+                response_root.get(),
                 args.first().copied().unwrap_or(undef),
                 closure_arg(args.get(1).copied()),
             );
             undef
         }
         "writeContinue" => {
-            js_node_http_res_write_continue(handle);
+            js_node_http_res_write_continue(response_root.get());
             undef
         }
         "writeProcessing" => {
-            js_node_http_res_write_processing(handle);
+            js_node_http_res_write_processing(response_root.get());
             undef
         }
         // #4975: `outgoingMessage.destroy()` flips the `destroyed` flag (read
@@ -988,24 +1008,28 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         // `write()` then errors its callback with `ERR_STREAM_DESTROYED`
         // rather than buffering (see `js_node_http_res_write_with_cb`).
         "destroy" => {
-            let turnloop = get_handle_mut::<ServerResponse>(handle).and_then(|sr| {
-                sr.destroyed = true;
-                sr.turnloop
-            });
+            let turnloop =
+                super::response::response_state_mut(response_root.get()).and_then(|sr| {
+                    sr.destroyed = true;
+                    sr.turnloop
+                });
+            if super::response_payload::is_response(response_root.get()) {
+                super::response_payload::close(response_root.get());
+            }
             // The socket closes immediately and an in-flight request gets a
             // reset, which is what Node's `socket.destroy()` does.
             if let Some((conn, _)) = turnloop {
                 crate::server::turnloop_serve::destroy_connection(conn);
             }
-            self_ref
+            handle_to_pointer_f64(response_root.get())
         }
         "assignSocket" if !args.is_empty() => {
-            crate::server::response::js_node_http_res_assign_socket(handle, args[0]);
+            crate::server::response::js_node_http_res_assign_socket(response_root.get(), args[0]);
             undef
         }
         "detachSocket" => {
             crate::server::response::js_node_http_res_detach_socket(
-                handle,
+                response_root.get(),
                 args.first().copied().unwrap_or(undef),
             );
             undef
@@ -1014,61 +1038,72 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
             if event_ptr.is_null() {
-                return self_ref;
+                return handle_to_pointer_f64(response_root.get());
             }
-            js_node_http_res_on(handle, event_ptr, closure_arg(Some(args[1])));
-            self_ref
+            js_node_http_res_on(response_root.get(), event_ptr, closure_arg(Some(args[1])));
+            handle_to_pointer_f64(response_root.get())
         }
         "once" | "prependOnceListener" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
             if event_ptr.is_null() {
-                return self_ref;
+                return handle_to_pointer_f64(response_root.get());
             }
-            js_node_http_res_once(handle, event_ptr, closure_arg(Some(args[1])));
-            self_ref
+            js_node_http_res_once(response_root.get(), event_ptr, closure_arg(Some(args[1])));
+            handle_to_pointer_f64(response_root.get())
         }
         "setStatus" | "__set_statusCode" if !args.is_empty() => {
-            js_node_http_res_set_status(handle, number_arg(Some(args[0]), 200.0));
+            js_node_http_res_set_status(response_root.get(), number_arg(Some(args[0]), 200.0));
             undef
         }
-        "getStatus" | "__get_statusCode" => js_node_http_res_get_status(handle),
-        "__get_statusMessage" | "statusMessage" => js_node_http_res_get_status_message(handle),
+        "getStatus" | "__get_statusCode" => js_node_http_res_get_status(response_root.get()),
+        "__get_statusMessage" | "statusMessage" => {
+            js_node_http_res_get_status_message(response_root.get())
+        }
         "__set_statusMessage" if !args.is_empty() => {
             let msg = string_value_arg(args[0]);
             if !msg.is_null() {
-                js_node_http_res_set_status_message(handle, msg);
+                js_node_http_res_set_status_message(response_root.get(), msg);
             }
             undef
         }
-        "__get_headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
-        "__get_writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
-        "__get_writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
-        "__get_finished" | "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        "__get_headersSent" => bool_value(js_node_http_res_headers_sent(response_root.get()) != 0),
+        "__get_writableEnded" => {
+            bool_value(js_node_http_res_writable_ended(response_root.get()) != 0)
+        }
+        "__get_writableFinished" => {
+            bool_value(js_node_http_res_writable_finished(response_root.get()) != 0)
+        }
+        "__get_finished" | "finished" => {
+            bool_value(js_node_http_res_finished(response_root.get()) != 0)
+        }
         // #4975: `outgoingMessage.destroyed` getter, also reachable through the
         // `__get_destroyed` codegen form.
-        "__get_destroyed" | "destroyed" => bool_value(
-            get_handle::<ServerResponse>(handle)
-                .map(|sr| sr.destroyed)
-                .unwrap_or(false),
-        ),
-        "__get_sendDate" | "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
+        "__get_destroyed" | "destroyed" => {
+            bool_value(super::response::response_destroyed(response_root.get()))
+        }
+        "__get_sendDate" | "sendDate" => {
+            bool_value(js_node_http_res_send_date(response_root.get()) != 0)
+        }
         "__set_sendDate" if !args.is_empty() => {
-            js_node_http_res_set_send_date(handle, args[0]);
+            js_node_http_res_set_send_date(response_root.get(), args[0]);
             undef
         }
         "__get_strictContentLength" | "strictContentLength" => {
-            bool_value(js_node_http_res_strict_content_length(handle) != 0)
+            bool_value(js_node_http_res_strict_content_length(response_root.get()) != 0)
         }
         "__set_strictContentLength" if !args.is_empty() => {
-            js_node_http_res_set_strict_content_length(handle, args[0]);
+            js_node_http_res_set_strict_content_length(response_root.get(), args[0]);
             undef
         }
-        "__get_req" | "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
+        "__get_req" | "req" => {
+            handle_value_or_undefined(js_node_http_res_req_handle(response_root.get()))
+        }
         "__get_socket" | "socket" | "__get_connection" | "connection" => {
-            response_socket_value(handle)
+            response_socket_value(response_root.get())
         }
         _ => undef,
-    }
+    };
+    result
 }
 
 /// Dispatch a property read on a registered server-side `IncomingMessage`.
@@ -1163,40 +1198,47 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     property_ptr: *const u8,
     property_len: usize,
 ) -> f64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let undef = f64::from_bits(TAG_UNDEFINED);
     let property = method_name(property_ptr, property_len);
     if property.is_empty() {
         return undef;
     }
 
-    if let Some(name) = server_response_method_bytes_for_handle(handle, &property) {
-        return bind_handle_method(handle, name);
+    if let Some(name) = server_response_method_bytes_for_handle(response_root.get(), &property) {
+        return bind_handle_method(response_root.get(), name);
     }
 
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), &property) {
+        if v.to_bits() != TAG_UNDEFINED {
+            return v;
+        }
+    }
     match property.as_str() {
-        "statusCode" => js_node_http_res_get_status(handle),
-        "statusMessage" => js_node_http_res_get_status_message(handle),
-        "headersSent" => bool_value(js_node_http_res_headers_sent(handle) != 0),
-        "writableEnded" => bool_value(js_node_http_res_writable_ended(handle) != 0),
-        "writableFinished" => bool_value(js_node_http_res_writable_finished(handle) != 0),
-        "finished" => bool_value(js_node_http_res_finished(handle) != 0),
+        "statusCode" => js_node_http_res_get_status(response_root.get()),
+        "statusMessage" => js_node_http_res_get_status_message(response_root.get()),
+        "headersSent" => bool_value(js_node_http_res_headers_sent(response_root.get()) != 0),
+        "writableEnded" => bool_value(js_node_http_res_writable_ended(response_root.get()) != 0),
+        "writableFinished" => {
+            bool_value(js_node_http_res_writable_finished(response_root.get()) != 0)
+        }
+        "finished" => bool_value(js_node_http_res_finished(response_root.get()) != 0),
         // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
-        "destroyed" => bool_value(
-            get_handle::<ServerResponse>(handle)
-                .map(|sr| sr.destroyed)
-                .unwrap_or(false),
-        ),
+        "destroyed" => bool_value(super::response::response_destroyed(response_root.get())),
         "writableCorked" => 0.0,
         "writableHighWaterMark" => 65_536.0,
-        "writableLength" => get_handle::<ServerResponse>(handle)
+        "writableLength" => super::response::response_state(response_root.get())
             .map(|sr| sr.buffered_body.len() as f64)
             .unwrap_or(0.0),
         "writableObjectMode" => bool_value(false),
         "writableNeedDrain" => bool_value(false),
-        "sendDate" => bool_value(js_node_http_res_send_date(handle) != 0),
-        "strictContentLength" => bool_value(js_node_http_res_strict_content_length(handle) != 0),
-        "req" => handle_value_or_undefined(js_node_http_res_req_handle(handle)),
-        "socket" | "connection" => response_socket_value(handle),
+        "sendDate" => bool_value(js_node_http_res_send_date(response_root.get()) != 0),
+        "strictContentLength" => {
+            bool_value(js_node_http_res_strict_content_length(response_root.get()) != 0)
+        }
+        "req" => handle_value_or_undefined(js_node_http_res_req_handle(response_root.get())),
+        "socket" | "connection" => response_socket_value(response_root.get()),
         // #4909 — `out.constructor.name` discrimination (corpus
         // outgoing-message tests branch on it).
         "constructor" => constructor_object("ServerResponse"),
@@ -1234,25 +1276,48 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property_set(
     property_len: usize,
     value: f64,
 ) -> i32 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let value_root = response_scope.root_nanbox(value);
     let property = method_name(property_ptr, property_len);
+    if super::response_payload::closed_property(response_root.get(), &property).is_some()
+        && matches!(
+            property.as_str(),
+            "statusCode" | "statusMessage" | "sendDate" | "strictContentLength" | "destroyed"
+        )
+    {
+        super::response_payload::set(response_root.get(), &property, value_root.get());
+        return 1;
+    }
+    let value = value_root.get();
     match property.as_str() {
         "statusCode" => {
-            js_node_http_res_set_status(handle, number_arg(Some(value), 200.0));
+            js_node_http_res_set_status(response_root.get(), number_arg(Some(value), 200.0));
             1
         }
         "statusMessage" => {
             let msg = string_value_arg(value);
             if !msg.is_null() {
-                js_node_http_res_set_status_message(handle, msg);
+                js_node_http_res_set_status_message(response_root.get(), msg);
             }
             1
         }
         "sendDate" => {
-            js_node_http_res_set_send_date(handle, value);
+            js_node_http_res_set_send_date(response_root.get(), value);
             1
         }
         "strictContentLength" => {
-            js_node_http_res_set_strict_content_length(handle, value);
+            js_node_http_res_set_strict_content_length(response_root.get(), value);
+            1
+        }
+        "destroyed" => {
+            if let Some(sr) = super::response::response_state_mut(response_root.get()) {
+                sr.destroyed = JsValue::from_bits(value.to_bits()).to_bool();
+            }
+            1
+        }
+        "socket" | "connection" => {
+            super::response::set_response_socket(response_root.get(), value);
             1
         }
         _ => 0,
@@ -1320,11 +1385,19 @@ fn handle_value_or_undefined(handle: i64) -> f64 {
 
 #[inline]
 fn response_socket_value(handle: i64) -> f64 {
+    if super::response_payload::is_response(handle) {
+        let v = super::response::response_socket(handle);
+        return if v.to_bits() == TAG_UNDEFINED {
+            f64::from_bits(TAG_NULL)
+        } else {
+            v
+        };
+    }
     // #4904: a standalone response's socket is whatever `assignSocket`
     // installed (undefined reads as Node's pre-assignment `null`).
-    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+    if let Some(sr) = super::response::response_state(handle) {
         if sr.standalone {
-            let v = sr.standalone_socket;
+            let v = super::response::response_socket(handle);
             return if JsValue::from_bits(v.to_bits()).is_undefined() {
                 f64::from_bits(TAG_NULL)
             } else {
@@ -1332,7 +1405,7 @@ fn response_socket_value(handle: i64) -> f64 {
             };
         }
     }
-    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+    if let Some(sr) = super::response::response_state(handle) {
         if sr.socket_handle != 0 {
             return handle_to_pointer_f64(sr.socket_handle);
         }
@@ -1549,7 +1622,7 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
 }
 
 fn server_response_method_bytes_for_handle(handle: i64, name: &str) -> Option<&'static [u8]> {
-    if get_handle::<ServerResponse>(handle)
+    if super::response::response_state(handle)
         .map(|sr| sr.outgoing_message_only)
         .unwrap_or(false)
         && matches!(
