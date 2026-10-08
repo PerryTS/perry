@@ -813,8 +813,8 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     );
     // #10515: the byte-view arm admits only a byte-view brand (#10694: a Node
     // `Buffer`, `GC_TYPE_BUFFER`, or a `Uint8Array`, `GC_TYPE_BUFFER_UINT8ARRAY`)
-    // whose address the admission cache holds; a miss tests the separate
-    // pointer-storage layout before falling through to the same exit.
+    // resolved by the common byte-cell admission. The view arm selects its
+    // owner, then guards its storage before falling through to the same exit.
     let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
         .expect("the byte-view brand guard exists");
     assert!(
@@ -825,8 +825,8 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
             ))
             && !u8_brand.contains("@PERRY_U8_INLINE_CACHE")
             && u8_brand.contains("arrlike.u8.view"),
-        "the byte-view arm must test both byte-view brands and the admission \
-         cache, and offer a miss to the pointer-layout arm:\n{u8_brand}"
+        "the byte-view arm must test both byte-view brands and offer the \
+         view to the common owner admission:\n{u8_brand}"
     );
     // A view reads its owner straight-line: a bag link (GC_TYPE_OBJECT)
     // selects the bag's fixed owner slot, then the one owner admission guards
