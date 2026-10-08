@@ -1,3 +1,7 @@
+mod region_class;
+pub(crate) use region_class::{
+    classify_heap_generation, classify_heap_space_in_range, uniform_heap_generation,
+};
 mod maintenance;
 pub(crate) use maintenance::shrink_page_tables;
 
@@ -419,6 +423,13 @@ pub(crate) fn register_block_space_with_object_starts(
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
+    #[cfg(target_os = "linux")]
+    if super::region::reservation::set_space(base, size, space, Some(object_starts as usize)) {
+        if matches!(generation, HeapGeneration::Old) {
+            register_old_block_pages(base, size);
+        }
+        return;
+    }
     let end = base + size;
     let range = PageGenerationRange {
         base,
@@ -504,6 +515,13 @@ fn retag_block_space_inner(
     register_old_pages: bool,
 ) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if super::region::reservation::set_space(base, size, space, None) {
+        if register_old_pages && matches!(generation, HeapGeneration::Old) {
+            register_old_block_pages(base, size);
+        }
         return;
     }
     let end = base + size;
@@ -795,6 +813,18 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
     if base == 0 || size == 0 {
         return;
     }
+    #[cfg(target_os = "linux")]
+    if let Some(generation) = super::region::reservation::owned_generation(base) {
+        let was_old = generation == HeapGeneration::Old;
+        super::region::reservation::set_space(base, size, HeapSpace::Unknown, Some(0));
+        if was_old {
+            let pages: Vec<usize> = (generation_page_for_addr(base)
+                ..=generation_page_for_addr(base + size - 1))
+                .collect();
+            unregister_old_block_pages(&pages);
+        }
+        return;
+    }
     let end = base + size;
     let first_key = generation_class_key_for_addr(base);
     let last_key = generation_class_key_for_addr(end - 1);
@@ -851,8 +881,9 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
 /// call paid its own `_tlv_get_addr`. Out-of-lining the miss lets the hit arm
 /// inline, and LLVM then CSEs the one remaining hot-TLS resolution across
 /// every classification in the barrier.
-#[inline(always)]
-pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
+
+#[cfg(any(not(target_os = "linux"), test))]
+fn legacy_classify_heap_generation(addr: usize) -> HeapGeneration {
     if addr == 0 {
         return HeapGeneration::Unknown;
     }
@@ -874,7 +905,9 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
 /// across registrations). A whole arena block is registered as one range, so
 /// this answers "what generation is this block" without classifying each
 /// object on it.
-pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGeneration> {
+
+#[cfg(any(not(target_os = "linux"), test))]
+fn legacy_uniform_heap_generation(base: usize, end: usize) -> Option<HeapGeneration> {
     if base == 0 || end <= base {
         return None;
     }
@@ -889,6 +922,7 @@ pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGen
 /// Cache-miss arm of [`classify_heap_generation`]: consult the page map and
 /// re-prime the one-entry cache.
 #[inline(never)]
+#[cfg(any(not(target_os = "linux"), test))]
 fn classify_heap_generation_uncached(addr: usize, key: usize) -> HeapGeneration {
     let found = {
         let pages = hot_page_generations().borrow();
@@ -925,8 +959,9 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
 /// the cache base. This one is the copying minor's inner loop —
 /// `CopyingPointerSet::classify_arena` calls it once per visited slot — so on a
 /// promotion-heavy cycle it runs millions of times per collection.
-#[inline(always)]
-pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
+
+#[cfg(any(not(target_os = "linux"), test))]
+fn legacy_classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
     if addr == 0 {
         return None;
     }
@@ -940,6 +975,7 @@ pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, us
 
 /// Cache-miss arm of [`classify_heap_space_in_range`].
 #[inline(never)]
+#[cfg(any(not(target_os = "linux"), test))]
 fn classify_heap_space_in_range_uncached(
     addr: usize,
     key: usize,
@@ -960,6 +996,11 @@ fn classify_heap_space_in_range_uncached(
 /// avoid this metadata write on their bump-allocation path.
 #[inline(always)]
 pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
+    #[cfg(target_os = "linux")]
+    if obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE {
+        super::region::reservation::note_payload_cell(header_addr);
+    }
+
     if !matches!(
         obj_type,
         crate::gc::GC_TYPE_MAP

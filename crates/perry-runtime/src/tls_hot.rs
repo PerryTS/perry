@@ -471,6 +471,15 @@ pub(crate) mod darwin_tsd {
     }
 }
 
+/// Native-thread identity is the address of existing const TLS storage.
+/// Resolving it neither fills the hot pointers nor adds a cached identity;
+/// arena mappings can use it during allocator initialization and teardown.
+#[cfg(target_os = "linux")]
+#[inline(always)]
+pub(crate) fn thread_identity() -> usize {
+    HOT.with(|cell| cell.get() as usize)
+}
+
 /// Resolve, fill and publish this thread's cache. Cold: once per thread.
 #[cfg(all(
     target_vendor = "apple",
