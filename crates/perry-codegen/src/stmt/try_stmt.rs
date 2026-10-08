@@ -10,8 +10,9 @@
 //!      body emits becomes an `invoke` unwinding there
 //!      (`LlBlock::eh_invoke_suffix`).
 //!   3. The landing pad funnels into the catch entry, which runs
-//!      `js_try_end` → `js_get_exception` → `js_clear_exception` and binds
-//!      the catch parameter.
+//!      `js_try_end` → `js_get_exception` → `js_clear_exception` (one call,
+//!      `js_catch_enter`, when the handler was armed) and binds the catch
+//!      parameter.
 //!   4. Catch/finally bodies lower under the *enclosing* scope, so a throw
 //!      escaping them wires to the outer handler — or leaves the function
 //!      when there is none. Re-raise sites (`js_throw` after a finally copy)
@@ -154,12 +155,14 @@ pub(crate) fn lower_try(
 
     // --- catch (reached only through the landing pad) ---
     ctx.current_block = catch_idx;
-    if registered {
-        ctx.block().call_void("js_try_end", &[]);
-    }
     if let Some(clause) = catch {
-        let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
-        ctx.block().call_void("js_clear_exception", &[]);
+        let exc = if registered {
+            ctx.block().call(DOUBLE, "js_catch_enter", &[])
+        } else {
+            let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+            ctx.block().call_void("js_clear_exception", &[]);
+            exc
+        };
         // Bind the catch param (if any) to the exception value.
         if let Some((id, _name)) = &clause.param {
             // Slot lives in the entry block — a closure inside the catch
@@ -226,6 +229,9 @@ pub(crate) fn lower_try(
         // exception path, then re-raise via js_throw — unless the finally
         // itself completed abruptly (a `return`/`throw` inside finally
         // overrides the pending exception, per spec).
+        if registered {
+            ctx.block().call_void("js_try_end", &[]);
+        }
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
         if let Some(f) = finally {
             lower_stmts(ctx, f)?;

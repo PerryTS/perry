@@ -3238,6 +3238,9 @@ HEAP_SOURCE_CALLS = frozenset({
     "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
     "js_box_get_bits", "js_new_target_get",
     "js_static_this_resolve", "js_get_exception",
+    # A catch entry's try-end + get + clear in one call: hands back the
+    # exception exactly as js_get_exception does.
+    "js_catch_enter",
 })
 
 

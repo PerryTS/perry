@@ -89,6 +89,7 @@ pub(crate) fn callee_is_nothrow(name: &str) -> bool {
                 | "js_try_end"
                 | "js_get_exception"
                 | "js_clear_exception"
+                | "js_catch_enter"
                 | "js_has_exception"
                 | "js_derived_super_scope_push"
                 | "js_derived_super_scope_pop"
