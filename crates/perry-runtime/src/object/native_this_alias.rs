@@ -102,7 +102,16 @@ fn decode_alias_word(word: u64) -> Option<(f64, bool)> {
     })
 }
 
-/// The alias an object carries, read from the object itself.
+/// Is `word` (an `ObjectMeta.native_state`) an alias word?
+#[inline]
+pub(crate) fn is_alias_word(word: u64) -> bool {
+    decode_alias_word(word).is_some()
+}
+
+/// The alias an object carries, read from the object itself: its
+/// `native_state` word, or, when the runtime also keeps stream state for the
+/// object, the alias slot of that state record (`node_stream::state_record`;
+/// one word, one owner).
 ///
 /// # Safety
 /// `obj` must be a live `GC_TYPE_OBJECT` header (the caller has classified
@@ -113,7 +122,8 @@ pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f6
     if meta.is_null() {
         return None;
     }
-    decode_alias_word((*meta).native_state)
+    let word = (*meta).native_state;
+    decode_alias_word(word).or_else(|| decode_alias_word(crate::node_stream::record_alias_word(word)))
 }
 
 /// Look up the forwarding handle for an arbitrary receiver (NaN-boxed or raw
@@ -178,6 +188,11 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
         let meta = super::object_meta_ensure(obj);
         let word = (*meta).native_state;
+        // An object the runtime keeps stream state for holds its alias in
+        // that record, which owns the word.
+        if crate::node_stream::store_record_alias_word(word, alias_word(id, composite)) {
+            return true;
+        }
         // The word is free, or already this object's alias (a second
         // construction re-aliases, as before). Any other occupant is a
         // native family's state, which an ordinary `this` never carries;

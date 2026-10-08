@@ -1108,6 +1108,7 @@ fn every_stream_sabotage_makes_its_witness_red() {
         ("drain_after_teardown", "gc::tests::native_payload_streams::z10_worker_exit_with_a_step_queued_runs_no_step"),
         ("record_trace", "gc::tests::stream_state_record::stream_record_survives_a_moving_collection"),
         ("record_barrier", "gc::tests::stream_state_record::stream_record_survives_a_moving_collection"),
+        ("record_displaces_alias", "gc::tests::stream_state_record::a_stream_record_and_a_native_this_alias_share_one_word"),
     ] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", witness, "--nocapture", "--test-threads=1"])

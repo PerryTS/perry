@@ -143,3 +143,61 @@ fn stream_record_survives_a_moving_collection() {
         assert_chunk(got, n, "old readable");
     }
 }
+
+/// One `native_state` word, one owner: an object that is both a runtime
+/// stream and a native-this alias (`http.ServerResponse.call(this, req)`,
+/// `http.Server.call(this, …)` on an object the runtime keeps stream state
+/// for) holds the alias in its state record. Whichever comes first, both
+/// stay readable, and both survive a moving collection. Sabotage
+/// `record_displaces_alias`: a record refuses an aliased object (its state
+/// is dropped).
+#[test]
+fn a_stream_record_and_a_native_this_alias_share_one_word() {
+    use crate::object::native_this_alias::{alias_handle_for_object, register_this_to_handle_alias};
+    const HANDLE: i64 = 0xe1727;
+    let _no_stack = super::support::ConservativeScanDisabledGuard::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = crate::value::js_nanbox_pointer(HANDLE);
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let alias_of = |v: f64| alias_handle_for_object(v).map(|(h, c)| (h.to_bits(), c));
+    let plain = || {
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ))
+    };
+
+    // Alias first, then a stream constructor body (`Writable.call(this)`).
+    let a = plain();
+    register_this_to_handle_alias(a.get_nanbox_f64(), handle, true);
+    crate::node_stream::js_node_stream_writable_subclass_init(a.get_nanbox_f64(), undefined);
+    // Stream first, then the alias.
+    let b = plain();
+    crate::node_stream::js_node_stream_readable_subclass_init(b.get_nanbox_f64(), undefined);
+    register_this_to_handle_alias(b.get_nanbox_f64(), handle, false);
+    // Alias first, then one runtime state store (a pipe/finished write on a
+    // light-my-request Response).
+    let c = plain();
+    register_this_to_handle_alias(c.get_nanbox_f64(), handle, true);
+    test_write_inert_slot(c.get_nanbox_f64(), chunk(7));
+
+    let check = |what: &str| {
+        for (s, composite) in [(&a, true), (&b, false), (&c, true)] {
+            assert_eq!(
+                alias_of(s.get_nanbox_f64()),
+                Some((handle.to_bits(), composite)),
+                "{what}: the alias survives"
+            );
+            assert!(
+                test_record_slot_bits(s.get_nanbox_f64()).is_some(),
+                "{what}: the stream state survives"
+            );
+        }
+        assert!(crate::node_stream::is_classic_stream_instance_value(a.get_nanbox_f64()));
+        assert!(crate::node_stream::is_classic_stream_instance_value(b.get_nanbox_f64()));
+        assert_chunk(test_read_inert_slot(c.get_nanbox_f64()), 7, what);
+    };
+    check("fresh");
+    crate::gc::gc_collect_minor();
+    crate::gc::js_gc_collect();
+    check("after collections");
+}
