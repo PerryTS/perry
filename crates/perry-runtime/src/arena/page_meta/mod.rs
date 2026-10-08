@@ -883,6 +883,7 @@ pub(crate) fn unregister_block_generation(base: usize, size: usize) {
 /// every classification in the barrier.
 
 #[cfg(any(not(target_os = "linux"), test))]
+#[inline(always)]
 fn legacy_classify_heap_generation(addr: usize) -> HeapGeneration {
     if addr == 0 {
         return HeapGeneration::Unknown;
@@ -961,6 +962,7 @@ pub(crate) fn classify_heap_space(addr: usize) -> HeapSpace {
 /// promotion-heavy cycle it runs millions of times per collection.
 
 #[cfg(any(not(target_os = "linux"), test))]
+#[inline(always)]
 fn legacy_classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
     if addr == 0 {
         return None;

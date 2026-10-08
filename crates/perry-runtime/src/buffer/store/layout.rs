@@ -113,7 +113,8 @@ pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
 /// reservation descriptor regardless of its allocating thread. The caller
 /// must still hold the cell lifetime; classification is not a payload pin.
 /// Other targets retain their existing tracked-header and region proof.
-#[inline]
+#[cfg_attr(target_os = "linux", inline)]
+#[cfg_attr(not(target_os = "linux"), inline(never))]
 pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
     #[cfg(test)]
     if byte_cell_proof_sabotaged() {
@@ -138,7 +139,8 @@ pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
 /// arena (its header and extent inside one live region, arena-flagged, of the
 /// type the caller read), or a process-global SharedArrayBuffer block.
 #[cfg_attr(not(target_os = "linux"), cold)]
-#[inline]
+#[cfg_attr(not(target_os = "linux"), inline(never))]
+#[cfg_attr(target_os = "linux", inline)]
 fn byte_cell_in_any_region(addr: usize, obj_type: u8) -> bool {
     if obj_type == GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER && crate::shared_sab::is_shared_sab(addr) {
         return true;
