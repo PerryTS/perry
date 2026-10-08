@@ -262,11 +262,11 @@ pub fn note_worker_agent() {
 /// by the index [`refuse`] counts under. One string, see
 /// [`crate::hot_diag::report_name`].
 fn refusal_name(reason: usize) -> &'static str {
-    const NAMES: &str = "not_object_pointer not_ordinary dictionary own_spill_slot own_accessor own_not_direct_callable inh_class_instance inh_proto_not_in_shape inh_hop_refused inh_not_found inh_not_direct_callable inh_workers dc_not_closure dc_special dc_rest dc_captures_this dc_arity_pad dc_bound site_megamorphic";
+    const NAMES: &str = "not_object_pointer not_ordinary dictionary own_spill_slot own_accessor own_not_direct_callable inh_class_instance inh_proto_not_in_shape inh_hop_refused inh_not_found inh_not_direct_callable inh_workers dc_not_closure dc_special dc_rest dc_captures_this dc_arity_pad dc_bound site_megamorphic function_implicit_own_key";
     crate::hot_diag::report_name(NAMES, reason)
 }
 per_test_global! {
-    static SITE_REFUSED: [AtomicU64; 19] = [const { AtomicU64::new(0) }; 19];
+    static SITE_REFUSED: [AtomicU64; 20] = [const { AtomicU64::new(0) }; 20];
 }
 #[inline]
 fn refuse(reason: usize) {
@@ -1955,6 +1955,10 @@ mod report_names_line_up {
         assert_eq!(super::refusal_name(0), "not_object_pointer");
         assert_eq!(super::refusal_name(11), "inh_workers");
         assert_eq!(super::refusal_name(18), "site_megamorphic");
-        assert_eq!(super::refusal_name(19), "?");
+        assert_eq!(super::refusal_name(19), "function_implicit_own_key");
+        for i in 0..super::SITE_REFUSED.len() {
+            assert_ne!(super::refusal_name(i), "?", "unnamed counter {i}");
+        }
+        assert_eq!(super::refusal_name(super::SITE_REFUSED.len()), "?");
     }
 }
