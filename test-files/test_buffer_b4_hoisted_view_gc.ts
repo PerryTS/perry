@@ -1,3 +1,4 @@
+// parity-node-argv: --expose-gc
 declare function gc(): void;
 function scan(view: Uint32Array): number {
   let sum = 0;

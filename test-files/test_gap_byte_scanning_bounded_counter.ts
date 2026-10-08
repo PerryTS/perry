@@ -1,3 +1,4 @@
+// parity-node-argv: --expose-gc
 // Bounded byte indices use one guarded canonical i32 counter, preserving every miss.
 export function scanBounded(bytes: Uint8Array, i: number, end: number, extra: boolean, tick: () => void): string {
   const stop = Math.min(end, end);
