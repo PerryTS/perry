@@ -1,0 +1,1 @@
+const {Writable}=require("stream"); class R extends Writable{_write(c,e,cb){console.log(c.toString());cb()} write(c,e,cb){return super.write(c,e,cb)}} console.log(Object.getPrototypeOf(R.prototype)===Writable.prototype); console.log(new R().write("x"));

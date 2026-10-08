@@ -1,0 +1,1 @@
+const {Readable}=require("stream"); class R extends Readable{_read(){} push(c){return super.push(c)}} const r=new R(); console.log(r.push("x")); console.log(r.read().toString()); console.log(r.push(null));

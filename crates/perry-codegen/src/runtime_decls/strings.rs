@@ -1558,6 +1558,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[I32, PTR, I64, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_super_method_call_key",
+        DOUBLE,
+        &[I32, DOUBLE, DOUBLE, PTR, I64],
+    );
+    module.declare_function(
+        "js_super_method_call_key_apply",
+        DOUBLE,
+        &[I32, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Retain the legacy registration ABI. New assignments use ordinary
     // PutValue and synchronize function metadata only from the stored value.

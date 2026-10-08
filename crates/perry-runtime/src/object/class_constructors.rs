@@ -875,19 +875,62 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    // Legacy ABI takes bytes. Protect values across its key allocation;
+    // generated callers pass their interned key to the shared operation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this_value);
+    let args = if args_ptr.is_null() || args_len == 0 {
+        Vec::new()
+    } else {
+        scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, args_len))
+    };
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = crate::value::nanbox_string_key(key);
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+    js_super_method_call_key(
+        child_class_id,
+        key,
+        receiver.get_nanbox_f64(),
+        args.as_ptr(),
+        args.len(),
+    )
+}
+
+/// Call super with codegen's interned property key, without allocating a
+/// new string for each invocation.
+///
+/// # Safety
+/// args_ptr holds args_len values, or is null for zero arguments.
+#[no_mangle]
+pub unsafe extern "C" fn js_super_method_call_key(
+    child_class_id: u32,
+    key: f64,
+    this_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     super::class_super_chain::super_call_with_lookup(
-        name,
+        key,
         this_value,
         args_ptr,
         args_len,
         |key, receiver| {
-            let key = f64::from_bits(crate::value::JSValue::string_ptr(key as *mut _).bits());
             Some(crate::value::JSValue::from_bits(
                 super::js_super_accessor_get(child_class_id, key, receiver).to_bits(),
             ))
         },
     )
 }
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_SUPER_METHOD_CALL_KEY: unsafe extern "C" fn(
+    u32,
+    f64,
+    f64,
+    *const f64,
+    usize,
+) -> f64 = js_super_method_call_key;
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
@@ -921,6 +964,29 @@ pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
     this_value: f64,
     args_array: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this_value);
+    let args = scope.root_nanbox_f64(args_array);
+    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    js_super_method_call_key_apply(
+        child_class_id,
+        crate::value::nanbox_string_key(key),
+        receiver.get_nanbox_f64(),
+        args.get_nanbox_f64(),
+    )
+}
+
+/// Spread calls use the same interned key and value-call operation.
+///
+/// # Safety
+/// args_array is a NaN-boxed array value.
+#[no_mangle]
+pub unsafe extern "C" fn js_super_method_call_key_apply(
+    child_class_id: u32,
+    key: f64,
+    this_value: f64,
+    args_array: f64,
+) -> f64 {
     let arr =
         (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
     let n = if arr.is_null() {
@@ -937,15 +1003,13 @@ pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
     } else {
         (flat.as_ptr(), flat.len())
     };
-    js_super_method_call_dynamic(
-        child_class_id,
-        name_ptr,
-        name_len,
-        this_value,
-        args_ptr,
-        args_len,
-    )
+    js_super_method_call_key(child_class_id, key, this_value, args_ptr, args_len)
 }
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_SUPER_METHOD_CALL_KEY_APPLY: unsafe extern "C" fn(u32, f64, f64, f64) -> f64 =
+    js_super_method_call_key_apply;
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]

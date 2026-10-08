@@ -136,7 +136,15 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
 /// recursive helper that returns its receiver can't create a cycle — and the
 /// VALUE stash below applies the same rejection (`is_self_heritage_value`).
 #[no_mangle]
-pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_value: f64) {
+pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+    register_class_parent_dynamic(class_id, parent_value);
+    // ClassDefinitionEvaluation fixes the instance prototype edge now,
+    // before a later assignment can replace the superclass's prototype.
+    // Store that edge on the existing prototype object, not a second table.
+    class_decl_prototype_value(class_id);
+}
+
+fn register_class_parent_dynamic(class_id: u32, mut parent_value: f64) {
     // Stash the parent VALUE keyed by child class id so `super()` can read it
     // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
     // expression inside the constructor scope. The decl-time call here runs in

@@ -27,6 +27,7 @@ pub(crate) enum StreamProto {
     Readable,
     Writable,
     Duplex,
+    Transform,
 }
 
 /// Install `kind`'s method set (and its symbol-keyed methods) on `proto`.
@@ -37,6 +38,10 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
     let writable = writable_methods();
     let methods: Vec<(&'static str, StubFn)> = match kind {
         StreamProto::Readable => readable.to_vec(),
+        StreamProto::Transform => vec![(
+            "_transform",
+            crate::fn_info!(ns_transform3, 3; with_declared(3)),
+        )],
         // `_write` is the user's hook, not a prototype method the runtime
         // calls: a prototype `_write` would read as a subclass override.
         StreamProto::Writable => writable
@@ -90,7 +95,7 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
             proto_value.get_nanbox_f64(),
         );
     }
-    if kind != StreamProto::Duplex {
+    if matches!(kind, StreamProto::Readable | StreamProto::Writable) {
         install_async_dispose_symbol_on_prototype(proto_value.get_nanbox_f64());
     }
 }
@@ -169,4 +174,16 @@ pub(crate) fn chain_reaches_stream_prototype(value: f64, name: &str) -> bool {
         ));
     }
     false
+}
+
+/// Transform's ordinary prototype hook; subclass overrides shadow this
+/// method, and super._transform reaches its specified base behavior.
+extern "C" fn ns_transform3(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _chunk: f64,
+    _encoding: f64,
+    _callback: f64,
+) -> f64 {
+    throw_missing_stream_method("The _transform() method is not implemented")
 }
