@@ -15157,8 +15157,11 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    // The method site's miss takes the same method id and forwards a
+    // non-object receiver to the universal dispatch.
     assert!(
-        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
+        (ir.contains("call double @js_typed_feedback_native_call_method_by_id")
+            || ir.contains("call double @js_method_site_miss(")),
         "static-name dynamic method fallback should use typed-feedback method-id ABI:\n{ir}"
     );
     assert!(

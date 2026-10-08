@@ -7,7 +7,7 @@
 //! claims and why it cannot go stale). Emitted:
 //!
 //! ```text
-//!   t   = bits - RECEIVER_BIAS ; t <u SPAN                 else PRIMITIVE
+//!   t   = bits - RECEIVER_BIAS ; t <u SPAN                 else MISS
 //!         site != null                                       else MISS
 //!   w   = load [recv]           ; (class_id | ShapeId)
 //!         w == site.word                                     else MISS
@@ -21,7 +21,8 @@
 //!         h = handle(v) ; f = site.code
 //!   CALL: r = f(h, recv, args...)    (the receiver is the `this` parameter)
 //!   MISS: js_method_site_miss(slot, feedback_site, recv, method_id, args)
-//!   PRIMITIVE: js_typed_feedback_native_call_method_by_id(feedback_site, recv, method_id, args)
+//!         (a primitive receiver goes from there straight to
+//!         js_typed_feedback_native_call_method_by_id, the universal dispatch)
 //! ```
 //!
 //! Step 5C (ConstFn lanes): a completed shape whose lane at the key's slot
@@ -237,9 +238,10 @@ pub(crate) fn emit_method_site(
 
     // Entry: the fused receiver test decides the RECEIVER KIND. A primitive
     // (a string, a number, a boolean, undefined, ...) is not the site's: it
-    // takes the universal dispatcher directly, with its string and primitive
-    // arms, exactly as without a site. A heap object takes the site: its memo
-    // if the site has one, else the miss, which primes it.
+    // takes the miss call, which sends it straight to the universal
+    // dispatcher, with its string and primitive arms, exactly as without a
+    // site. A heap object takes the site: its memo if the site has one, else
+    // the miss, which primes it.
     // The runtime publishes this process-global slot with an AtomicPtr CAS.
     // A worker may enter the site just as the primary agent first publishes
     // it, before the sticky worker gate below is loaded. Pair the load with
@@ -252,9 +254,7 @@ pub(crate) fn emit_method_site(
         cache,
         present,
     };
-    let prim_idx = ctx.new_block("msite.primitive");
     let object_idx = ctx.new_block("msite.object");
-    let prim_l = ctx.block_label(prim_idx);
     let object_l = ctx.block_label(object_idx);
     // Only a lane the receiver may itself carry is compared; every lane's
     // body is a candidate of the learned ConstFn hit below.
@@ -269,7 +269,10 @@ pub(crate) fn emit_method_site(
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
         let fused = emit_fused_receiver_test(blk, &bits);
-        blk.cond_br(&fused.is_object_pointer, &first_l, &prim_l);
+        // A primitive takes the miss call too: `js_method_site_miss` sends a
+        // receiver that fails this same test straight to the universal
+        // dispatcher, as the site's separate primitive arm did.
+        blk.cond_br(&fused.is_object_pointer, &first_l, &miss_l);
         fused.biased
     };
     // Static ConstFn lanes: the receiver's completed shape names the body, so
@@ -771,30 +774,8 @@ pub(crate) fn emit_method_site(
         ctx.block().br(&merge_l);
     }
 
-    // primitive: the universal dispatcher, as without a site.
-    ctx.current_block = prim_idx;
-    let prim_value = ctx.block().call(
-        DOUBLE,
-        "js_typed_feedback_native_call_method_by_id",
-        &[
-            (I64, feedback_site),
-            (DOUBLE, recv_box),
-            (I64, method_id),
-            (PTR, args_ptr),
-            (I64, argc),
-        ],
-    );
-    let prim_end = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_l);
-    }
-
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![
-        (&hit_value, &hit_end),
-        (&miss_value, &miss_end),
-        (&prim_value, &prim_end),
-    ];
+    let mut incoming: Vec<(&str, &str)> = vec![(&hit_value, &hit_end), (&miss_value, &miss_end)];
     incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     ctx.block().phi(DOUBLE, &incoming)
