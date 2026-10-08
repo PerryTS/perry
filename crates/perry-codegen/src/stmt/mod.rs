@@ -417,6 +417,38 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     }
     match stmt {
         Stmt::Expr(e) => {
+            // The protocol step already published the record's output. Only
+            // the indexed representation needs a transfer here; avoid loading
+            // and republishing the same GC edge on every override step.
+            if let perry_hir::Expr::LocalSet(id, value) = e {
+                if let perry_hir::Expr::NativeMethodCall {
+                    module,
+                    method,
+                    args,
+                    ..
+                } = value.as_ref()
+                {
+                    if module == "__perry_runtime"
+                        && method == "arrayRecordForValue"
+                        && args.len() == 3
+                        && matches!(args[1], perry_hir::Expr::LocalGet(output) if output == *id)
+                    {
+                        return lower_if(
+                            ctx,
+                            &perry_hir::Expr::Compare {
+                                op: perry_hir::CompareOp::Eq,
+                                left: Box::new(args[0].clone()),
+                                right: Box::new(perry_hir::Expr::Bool(false)),
+                            },
+                            &[Stmt::Expr(perry_hir::Expr::LocalSet(
+                                *id,
+                                Box::new(args[2].clone()),
+                            ))],
+                            None,
+                        );
+                    }
+                }
+            }
             // #10185: the element-shape fast clone's carried-index statements
             // (the recurrence and its trailing write-back) are lowered
             // VIRTUALLY, exactly like the `Let` bindings in `let_stmt.rs` —

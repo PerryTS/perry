@@ -1457,7 +1457,16 @@ pub(super) fn lower_stmt_for_of_inner(
     }
 
     let record = use_lazy_iter.then(|| {
-        crate::iterator_record::IteratorRecordPlan::new(ctx, arr_expr.clone(), &mut module.init)
+        crate::iterator_record::IteratorRecordPlan::new_typed(
+            ctx,
+            arr_expr.clone(),
+            if proven_array {
+                Type::Array(Box::new(elem_type.clone()))
+            } else {
+                Type::Any
+            },
+            &mut module.init,
+        )
     });
     let arr_expr = record
         .as_ref()

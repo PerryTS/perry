@@ -54,10 +54,19 @@ fn swap_evaluates_one_source_and_guards_iterator_creation() {
                 }
             ))
             .count(),
-        1,
-        "one source evaluation"
+        0,
+        "the proven dense literal must remain scalar until it becomes observable"
     );
     let dump = format!("{module:#?}");
+    assert_eq!(
+        dump.matches("__iterator_literal_").count(),
+        2,
+        "evaluate each source element once"
+    );
+    assert!(
+        dump.contains("arrayRecordCloseAbsent"),
+        "an observable close must still materialize its receiver"
+    );
     let guard = dump
         .find(GUARD)
         .expect("a literal-source swap must read the array-iteration guard");

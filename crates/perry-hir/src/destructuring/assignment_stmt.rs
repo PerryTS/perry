@@ -213,6 +213,7 @@ fn lower_array_assignment_from_expr(
         finally: None,
     });
     result.push(close_stmt);
+    result.extend(source.release(&[iter_id, next_id]));
 
     Ok(result)
 }
@@ -225,12 +226,12 @@ fn iterator_next_value_stmts(
     value_id: LocalId,
     read_value: bool,
 ) -> Vec<Stmt> {
-    let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Any);
+    let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
             id: step_id,
             name: step_name,
-            ty: Type::Any,
+            ty: Type::Boolean,
             mutable: false,
             init: Some(runtime_iterator_call(
                 "iteratorStep",
@@ -252,15 +253,17 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::LocalGet(step_id),
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(step_id)),
+                right: Box::new(Expr::Bool(true)),
+            },
             then_branch: vec![Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
             ))],
-            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
-                value_id,
-                Box::new(Expr::LocalGet(value_id)),
-            ))]),
+            // IteratorStepValue already owns publication to the output slot.
+            else_branch: Some(vec![]),
         },
     ];
 
@@ -282,7 +285,11 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::LocalGet(done_id),
+        condition: Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(done_id)),
+            right: Box::new(Expr::Bool(true)),
+        },
         then_branch: vec![Stmt::Expr(Expr::LocalSet(
             value_id,
             Box::new(Expr::Undefined),
@@ -731,8 +738,9 @@ mod iterator_close_tests {
         ) {
             assert!(
                 matches!(&body[rest + 2], Stmt::If {
-                condition: Expr::LocalGet(id), ..
-            } if *id != done_id),
+                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+            } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
+                && matches!(right.as_ref(), Expr::Bool(true))),
                 "drain must test the saved pre-drain done bit"
             );
         }

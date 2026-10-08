@@ -228,10 +228,10 @@ pub use self::numeric_range::{
 };
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
-    array_prototype_addr, forget_object_prototype_intrinsic, function_prototype_addr,
-    function_prototype_addr_if_resolved, note_object_prototype_intrinsic, object_prototype_addr,
-    object_prototype_addr_if_resolved, object_prototype_addr_matches, prime_prototype_addr_cache,
-    primitive_wrapper_prototype_addr,
+    array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
+    function_prototype_addr, function_prototype_addr_if_resolved, note_object_prototype_intrinsic,
+    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
+    prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -340,11 +340,10 @@ pub(crate) use iter_object::dispatch_array_iterator_step;
 
 mod iterator_step;
 pub use iterator_step::{
-    js_array_record_close, js_array_record_needs_iterator, js_iterator_next_method,
+    js_array_record_close, js_array_record_close_absent, js_array_record_literal_needs_iterator,
+    js_array_record_needs_iterator, js_array_record_source, js_iterator_next_method,
     js_iterator_step, js_iterator_step_rest_to_array,
 };
-
-
 
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;

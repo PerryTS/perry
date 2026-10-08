@@ -425,12 +425,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             super::super::native_module::set_bound_native_closure_name(values, "values");
             let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(values as i64));
             install_builtin_iterator_symbol(proto_obj, values.get_nanbox_f64());
-            unsafe {
-                super::super::shapes::learn_object_constfn_lanes(
-                    super::super::shaped_symbols::owner(proto_obj as usize).unwrap(),
-                    |_, bits| bits == values.get_nanbox_f64().to_bits(),
-                );
-            }
             install_proto_method(
                 proto_obj,
                 "slice",
@@ -639,6 +633,14 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // Descriptor edits during intrinsic construction now share this
+            // holder. Learn the finished shape, after its last slot/attribute edit.
+            unsafe {
+                super::super::shapes::learn_object_constfn_lanes(
+                    super::super::shaped_symbols::owner(proto_obj as usize).unwrap(),
+                    |_, bits| bits == values.get_nanbox_f64().to_bits(),
+                );
+            }
         }
         "ArrayBuffer" => {
             install_proto_method(

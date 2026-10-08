@@ -312,26 +312,32 @@ fn array_record_prototype_symbol_identity_guard() {
         let symbol = crate::value::js_nanbox_get_pointer(sym) as usize;
         let other = crate::symbol::well_known_symbol("toStringTag") as usize;
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        let attrs = super::super::shaped_symbols::entry(addr, symbol).unwrap();
-        assert!(super::super::shaped_symbols::delete(addr, symbol));
-        assert!(super::super::shaped_symbols::define(
-            addr,
-            other,
-            original.to_bits(),
-            attrs
-        ));
         let bag = super::super::shaped_symbols::owner(addr).unwrap();
+        let slot = super::super::shaped_symbols::position(bag, symbol).unwrap();
+        let keys = super::super::object_keys(bag);
+        let replacement = crate::array::js_array_alloc(keys.count());
+        let mut replacement = replacement;
+        for i in 0..keys.count() {
+            let key = if i == slot {
+                JSValue::from_bits(crate::value::POINTER_TAG | other as u64)
+            } else {
+                keys.get(i)
+            };
+            replacement = crate::array::js_array_push(replacement, key);
+        }
+        // Preserve the original slot and values while changing only the
+        // member's identity; an append/delete fixture could miss ConstFn lanes.
+        super::super::set_object_keys(bag, super::super::ObjectKeys::owned(replacement));
         super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
         assert!(
             super::super::shapes::object_shape_record(bag)
                 .unwrap()
-                .constfn_info(0)
+                .constfn_info(slot)
                 .is_some(),
-            "the unrelated member must carry the genuine values body"
+            "the unrelated member must carry the genuine values body at its actual slot"
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
-        super::super::shaped_symbols::delete(addr, other);
-        super::super::shaped_symbols::define(addr, symbol, original.to_bits(), attrs);
+        super::super::set_object_keys(bag, keys);
     }
 }
 
@@ -388,5 +394,34 @@ fn array_record_next_key_survives_intern_collision() {
             "exercise atom eviction, not the same pointer"
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
+    }
+}
+
+#[test]
+fn array_record_bootstrap_entry_has_current_shape_facts() {
+    unsafe {
+        // Unlike fixture(), this uses exactly production intrinsic setup,
+        // without relearning facts after setup. It catches a vacuous fast path.
+        let _ = crate::object::builtin_prototype_value("Array");
+        let a = js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
+        assert_eq!(crate::array::js_array_record_needs_iterator(a), 0);
+        assert_eq!(crate::array::js_array_record_literal_needs_iterator(), 0);
+    }
+}
+
+#[test]
+fn array_record_entry_repairs_only_its_private_source() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (alias, _, symbol) = fixture();
+        let old = crate::value::js_nanbox_get_pointer(alias) as *mut crate::array::ArrayHeader;
+        let live = crate::array::js_array_grow(old, 100);
+        let record = crate::array::js_array_record_source(alias);
+        assert_eq!(crate::value::js_nanbox_get_pointer(record), live as i64);
+        assert_ne!(record.to_bits(), alias.to_bits());
+        assert_eq!(crate::array::js_array_record_needs_iterator(record), 0);
+        crate::symbol::js_object_set_symbol_property(record, symbol, 33.0);
+        assert_eq!(crate::array::js_array_record_needs_iterator(record), 1);
+        assert_eq!(crate::array::js_array_record_source(42.0), 42.0);
     }
 }

@@ -113,12 +113,12 @@ fn iterator_next_value_stmts(
     track_step_failure: bool,
     read_value: bool,
 ) -> Vec<Stmt> {
-    let (step_id, step_name) = fresh_destruct_local(ctx, Type::Any);
+    let (step_id, step_name) = fresh_destruct_local(ctx, Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
             id: step_id,
             name: step_name,
-            ty: Type::Any,
+            ty: Type::Boolean,
             mutable: false,
             init: Some(runtime_iterator_call(
                 "iteratorStep",
@@ -140,15 +140,17 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::LocalGet(step_id),
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(step_id)),
+                right: Box::new(Expr::Bool(true)),
+            },
             then_branch: vec![Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
             ))],
-            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
-                value_id,
-                Box::new(Expr::LocalGet(value_id)),
-            ))]),
+            // IteratorStepValue already owns publication to the output slot.
+            else_branch: Some(vec![]),
         },
     ];
 
@@ -172,7 +174,11 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::LocalGet(done_id),
+        condition: Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(done_id)),
+            right: Box::new(Expr::Bool(true)),
+        },
         then_branch: vec![Stmt::Expr(Expr::LocalSet(
             value_id,
             Box::new(Expr::Undefined),
@@ -355,6 +361,7 @@ pub(crate) fn lower_array_pattern_binding(
         // runtime savepoint capture on every destructuring.
         result.extend(body);
         result.push(close_stmt);
+        result.extend(source.release(&[iter_id, next_id]));
         return Ok(());
     }
     let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
@@ -377,6 +384,7 @@ pub(crate) fn lower_array_pattern_binding(
         finally: None,
     });
     result.push(close_stmt);
+    result.extend(source.release(&[iter_id, next_id]));
 
     Ok(())
 }
@@ -1030,8 +1038,9 @@ mod iterator_close_tests {
         ) {
             assert!(
                 matches!(&body[rest + 2], Stmt::If {
-                condition: Expr::LocalGet(id), ..
-            } if *id != done_id),
+                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+            } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
+                && matches!(right.as_ref(), Expr::Bool(true))),
                 "drain must test the saved pre-drain done bit"
             );
         }
@@ -1045,5 +1054,40 @@ mod iterator_close_tests {
                 "rest must receive the saved pre-drain done bit"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod record_control_tests {
+    use super::*;
+    #[test]
+    fn iterator_step_control_uses_its_constructed_boolean_and_single_publication() {
+        let mut ctx = LoweringContext::new("record_control");
+        let stmts = iterator_next_value_stmts(&mut ctx, 1, 2, 3, 4, false, true);
+        let Stmt::If {
+            condition,
+            else_branch: Some(pull),
+            ..
+        } = &stmts[0]
+        else {
+            panic!()
+        };
+        assert!(
+            matches!(condition, Expr::Compare { op: CompareOp::Eq, right, .. }
+            if matches!(right.as_ref(), Expr::Bool(true)))
+        );
+        let Stmt::If {
+            condition,
+            else_branch: Some(success),
+            ..
+        } = &pull[1]
+        else {
+            panic!()
+        };
+        assert!(
+            matches!(condition, Expr::Compare { op: CompareOp::Eq, right, .. }
+            if matches!(right.as_ref(), Expr::Bool(true)))
+        );
+        assert!(success.is_empty(), "step publishes its output exactly once");
     }
 }

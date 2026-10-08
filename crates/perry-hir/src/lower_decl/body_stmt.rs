@@ -84,27 +84,13 @@ fn finish_for_with_property_array_hoist(
 /// a handful of ordinary nested blocks can overflow Rust's default 2 MiB test
 /// thread before expression lowering gets a chance to grow the stack (#9196).
 pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
-    lower_body_stmt_with_for_of_mode(ctx, stmt, false)
-}
-
-// The guard's forced protocol mode belongs to one statement. Recursive body
-// lowering must let each nested loop choose its own iterable driver.
-fn lower_body_stmt_with_for_of_mode(
-    ctx: &mut LoweringContext,
-    stmt: &ast::Stmt,
-    force_lazy: bool,
-) -> Result<Vec<Stmt>> {
     stacker::maybe_grow(BODY_STMT_STACK_RED_ZONE, BODY_STMT_STACK_SEGMENT, || {
-        lower_body_stmt_impl(ctx, stmt, force_lazy)
+        lower_body_stmt_impl(ctx, stmt)
     })
 }
 
 #[inline(never)]
-fn lower_body_stmt_impl(
-    ctx: &mut LoweringContext,
-    stmt: &ast::Stmt,
-    force_lazy: bool,
-) -> Result<Vec<Stmt>> {
+fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
     match stmt {
@@ -1918,7 +1904,16 @@ fn lower_body_stmt_impl(
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
             }
             let record = use_lazy_iter.then(|| {
-                crate::iterator_record::IteratorRecordPlan::new(ctx, arr_expr.clone(), &mut result)
+                crate::iterator_record::IteratorRecordPlan::new_typed(
+                    ctx,
+                    arr_expr.clone(),
+                    if proven_array {
+                        Type::Array(Box::new(item_hir_type.clone()))
+                    } else {
+                        Type::Any
+                    },
+                    &mut result,
+                )
             });
             let arr_expr = record
                 .as_ref()
