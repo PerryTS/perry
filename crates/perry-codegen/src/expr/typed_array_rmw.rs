@@ -15,7 +15,7 @@
 //!
 //! when `base` and `key` are immutable locals and `base` traces through exact
 //! local aliases to a Uint32Array candidate.  The runtime guard, rather than a
-//! TypeScript annotation, proves pointer identity, inline storage, concrete
+//! TypeScript annotation, proves pointer identity, owning storage, concrete
 //! kind, an exact numeric index, and bounds.  Guard failure runs the unchanged
 //! generic get/add/set lowering.  The RHS runs only after the direct load, and
 //! the view/kind/bounds guard is checked again after the RHS; a failure there
@@ -29,7 +29,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, BufferElem, ExpectedNativeRep, LoweredValue,
     MaterializationReason,
 };
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{lower_expr, lower_expr_native, FnCtx};
 
@@ -142,14 +142,34 @@ fn record_rejection(ctx: &mut FnCtx<'_>, receiver_id: u32, reason: &str) {
     );
 }
 
-/// Pointer/inline-storage/kind cache guard.  Returns the unboxed header address
+/// Pointer/owning-storage/kind guard. Returns the unboxed header address
 /// and the guard condition.  The address is used only on a passing edge.
-fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String) {
-    super::byte_cell::inline_owner_guard(
+fn proven_owner(ctx: &FnCtx<'_>, object: &Expr) -> Option<crate::native_value::BufferViewSlot> {
+    super::proven_view_access::proven_view_receiver(ctx, object)
+        .map(|(_, view)| view)
+        .filter(|view| matches!(view.elem, BufferElem::U32))
+}
+
+fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object: &Expr, object_box: &str) -> (String, String) {
+    if proven_owner(ctx, object).is_some() {
+        // Use the existing sealed-owner proof; no additional admission or
+        // cached state is needed. Its rooted data slot also serves the RMW.
+        return (super::unbox_to_i64(ctx.block(), object_box), "true".into());
+    }
+    super::byte_cell::owner_guard(
         ctx,
         object_box,
         super::byte_cell::brand_for_kind(UINT32_KIND as u8),
     )
+}
+
+fn emit_data_base(ctx: &mut FnCtx<'_>, object: &Expr, raw: &str, prefix: &str) -> String {
+    if let Some(view) = proven_owner(ctx, object) {
+        let data = ctx.block().load(PTR, &view.data_slot);
+        return ctx.block().ptrtoint(&data, I64);
+    }
+    let word = super::byte_cell::header_word(ctx.block(), raw);
+    super::byte_cell::owner_data(ctx, raw, &word, prefix)
 }
 
 fn emit_index_range_guard(ctx: &mut FnCtx<'_>, index_box: &str) -> String {
@@ -256,22 +276,26 @@ pub(super) fn try_lower_guarded_uint32_add(
         crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
     let object_box = rooted_values[0].clone();
     let index_box = rooted_values[1].clone();
-    let (raw, receiver_ok) = emit_receiver_guard(ctx, &object_box);
+    let (raw, receiver_ok) = emit_receiver_guard(ctx, candidate.object, &object_box);
     let index_range_ok = emit_index_range_guard(ctx, &index_box);
     let precheck_ok = ctx.block().and(I1, &receiver_ok, &index_range_ok);
 
     let convert_idx = ctx.new_block("ta.rmw.index.convert");
     let load_idx = ctx.new_block("ta.rmw.load");
+    let load_data_idx = ctx.new_block("ta.rmw.read.data");
     let full_fallback_idx = ctx.new_block("ta.rmw.full_fallback");
     let post_guard_idx = ctx.new_block("ta.rmw.post_rhs_guard");
     let store_idx = ctx.new_block("ta.rmw.store");
+    let store_data_idx = ctx.new_block("ta.rmw.write.data");
     let set_fallback_idx = ctx.new_block("ta.rmw.set_fallback");
     let merge_idx = ctx.new_block("ta.rmw.merge");
     let convert_label = ctx.block_label(convert_idx);
     let load_label = ctx.block_label(load_idx);
+    let load_data_label = ctx.block_label(load_data_idx);
     let full_fallback_label = ctx.block_label(full_fallback_idx);
     let post_guard_label = ctx.block_label(post_guard_idx);
     let store_label = ctx.block_label(store_idx);
+    let store_data_label = ctx.block_label(store_data_idx);
     let set_fallback_label = ctx.block_label(set_fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block()
@@ -280,14 +304,17 @@ pub(super) fn try_lower_guarded_uint32_add(
     ctx.current_block = convert_idx;
     let (index_i64, exact_and_in_bounds) = emit_exact_and_bounds_guard(ctx, &raw, &index_box);
     ctx.block()
-        .cond_br(&exact_and_in_bounds, &load_label, &full_fallback_label);
+        .cond_br(&exact_and_in_bounds, &load_data_label, &full_fallback_label);
+
+    ctx.current_block = load_data_idx;
+    let data_base = emit_data_base(ctx, candidate.object, &raw, "ta.rmw.read.data");
+    ctx.block().br(&load_label);
 
     // Fast read and JS-number addition.  Load before RHS evaluation: that
     // ordering is observable when the RHS mutates the same element.
     ctx.current_block = load_idx;
     let old_value = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, &crate::runtime_abi::BYTES_STORE.to_string());
         let byte_offset = blk.shl(I64, &index_i64, "2");
         let address = blk.add(I64, &data_base, &byte_offset);
         let ptr = blk.inttoptr(I64, &address);
@@ -307,18 +334,21 @@ pub(super) fn try_lower_guarded_uint32_add(
     // immutable reference temporary from its GC-visible slot instead of
     // retaining the pre-RHS NaN-boxed pointer SSA value.
     let post_object_box = lower_expr(ctx, candidate.object)?;
-    let (post_raw, post_receiver_ok) = emit_receiver_guard(ctx, &post_object_box);
+    let (post_raw, post_receiver_ok) = emit_receiver_guard(ctx, candidate.object, &post_object_box);
     let (_, post_bounds_ok) = emit_exact_and_bounds_guard(ctx, &post_raw, &index_box);
     let post_ok = ctx.block().and(I1, &post_receiver_ok, &post_bounds_ok);
     let conversion_ok = emit_safe_toint32_range_guard(ctx, &sum);
     let post_ok = ctx.block().and(I1, &post_ok, &conversion_ok);
     ctx.block()
-        .cond_br(&post_ok, &store_label, &set_fallback_label);
+        .cond_br(&post_ok, &store_data_label, &set_fallback_label);
+
+    ctx.current_block = store_data_idx;
+    let data_base = emit_data_base(ctx, candidate.object, &post_raw, "ta.rmw.write.data");
+    ctx.block().br(&store_label);
 
     ctx.current_block = store_idx;
     {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &post_raw, &crate::runtime_abi::BYTES_STORE.to_string());
         let byte_offset = blk.shl(I64, &index_i64, "2");
         let address = blk.add(I64, &data_base, &byte_offset);
         let ptr = blk.inttoptr(I64, &address);
@@ -384,7 +414,7 @@ pub(super) fn try_lower_guarded_uint32_add(
         vec![
             "typed_array_rmw=selected".to_string(),
             "typed_array_kind=Uint32Array".to_string(),
-            "typed_array_guard=pointer+inline_storage+kind_cache+exact_numeric_index+bounds"
+            "typed_array_guard=owner_proof_or_pointer+owning_storage+kind+exact_numeric_index+bounds"
                 .to_string(),
             "post_rhs_guard=backing_store+kind+bounds".to_string(),
             "post_rhs_receiver=reload_gc_visible_local".to_string(),

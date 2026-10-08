@@ -227,13 +227,7 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     let view = ctx.new_block("bytes.view");
     let view_owner = ctx.new_block("bytes.view.owner");
     let store = ctx.new_block("bytes.store");
-    let inline = ctx.new_block("bytes.inline");
-    let external = ctx.new_block("bytes.external");
-    let done = ctx.new_block("bytes.ready");
-    let labels = [
-        header, owner, view, view_owner, store, inline, external, done,
-    ]
-    .map(|b| ctx.block_label(b));
+    let labels = [header, owner, view, view_owner, store].map(|b| ctx.block_label(b));
     let bits = ctx.block().bitcast_double_to_i64(boxed);
     let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let tag = ctx.block().and(
@@ -325,25 +319,7 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     let offset = ctx
         .block()
         .phi(I64, &[("0", &owner_end), (&offset, &view_end)]);
-    let base = ctx
-        .block()
-        .add(I64, &owning, &crate::runtime_abi::BYTES_STORE.to_string());
-    let flag = ctx.block().and(I64, &word, &(1u64 << 23).to_string());
-    let is_ool = ctx.block().icmp_ne(I64, &flag, "0");
-    ctx.block().cond_br(&is_ool, &labels[6], &labels[5]);
-    ctx.current_block = inline;
-    let inline_end = ctx.block().label.clone();
-    ctx.block().br(&labels[7]);
-    ctx.current_block = external;
-    let slot = ctx.block().inttoptr(I64, &base);
-    let data = ctx.block().load(PTR, &slot);
-    let data = ctx.block().ptrtoint(&data, I64);
-    let external_end = ctx.block().label.clone();
-    ctx.block().br(&labels[7]);
-    ctx.current_block = done;
-    let base = ctx
-        .block()
-        .phi(I64, &[(&base, &inline_end), (&data, &external_end)]);
+    let base = owner_data(ctx, &owning, &word, "bytes");
     let data = ctx.block().add(I64, &base, &offset);
     let len_ptr = ctx.block().inttoptr(I64, &raw);
     let len = ctx.block().load(I32, &len_ptr);
@@ -354,6 +330,39 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
         data,
         len,
     }
+}
+
+/// Resolve an admitted owner's store. The header decides whether BYTES_STORE
+/// is the first inline byte or the out-of-line data word. This does not admit
+/// receivers or extend a pointer's lifetime: callers retain their existing
+/// owner roots and hoist only under their existing storage proof.
+pub(crate) fn owner_data(ctx: &mut FnCtx<'_>, raw: &str, word: &str, prefix: &str) -> String {
+    let base = ctx
+        .block()
+        .add(I64, raw, &crate::runtime_abi::BYTES_STORE.to_string());
+    #[cfg(test)]
+    if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("inline_data") {
+        return base;
+    }
+    let inline = ctx.new_block(&format!("{prefix}.inline"));
+    let external = ctx.new_block(&format!("{prefix}.external"));
+    let done = ctx.new_block(&format!("{prefix}.ready"));
+    let inline_l = ctx.block_label(inline);
+    let external_l = ctx.block_label(external);
+    let done_l = ctx.block_label(done);
+    let flag = ctx.block().and(I64, word, &(1u64 << 23).to_string());
+    let is_ool = ctx.block().icmp_ne(I64, &flag, "0");
+    ctx.block().cond_br(&is_ool, &external_l, &inline_l);
+    ctx.current_block = inline;
+    ctx.block().br(&done_l);
+    ctx.current_block = external;
+    let slot = ctx.block().inttoptr(I64, &base);
+    let data = ctx.block().load(PTR, &slot);
+    let data = ctx.block().ptrtoint(&data, I64);
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    ctx.block()
+        .phi(I64, &[(&base, &inline_l), (&data, &external_l)])
 }
 
 /// A view's owner header admits the emitted path when it is an owner role,
@@ -436,7 +445,7 @@ pub(crate) fn kind_and_width(blk: &mut crate::block::LlBlock, h: &str) -> (Strin
     (kind, blk.shl(I64, "1", &shift))
 }
 
-pub(crate) fn inline_owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) -> (String, String) {
+pub(crate) fn owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) -> (String, String) {
     let inspect = ctx.new_block("bytes.inline.guard");
     let done = ctx.new_block("bytes.inline.admission");
     let inspect_l = ctx.block_label(inspect);
@@ -466,9 +475,11 @@ pub(crate) fn inline_owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) ->
     ctx.block().cond_br(&g, &inspect_l, &done_l);
     ctx.current_block = inspect;
     let h = header_word(ctx.block(), &raw);
-    let ty = ctx
-        .block()
-        .and(I64, &h, &(0xffu64 | (1 << 16) | (1 << 23)).to_string());
+    let ty = ctx.block().and(
+        I64,
+        &h,
+        &(0xffu64 | (1 << 16) | (1 << 24) | (1 << 30)).to_string(),
+    );
     let guard = ctx.block().icmp_eq(I64, &ty, &brand.to_string());
     ctx.block().br(&done_l);
     ctx.current_block = done;
@@ -535,6 +546,10 @@ pub(crate) fn retain_fresh_local_owner(ctx: &mut FnCtx<'_>, boxed: &str) {
     ctx.receiver_descriptors
         .retain_byte_owner(receiver_slot, owner_slot);
 }
+
+#[cfg(test)]
+#[path = "native_owner_tests.rs"]
+mod native_owner_tests;
 
 #[cfg(test)]
 mod tests {

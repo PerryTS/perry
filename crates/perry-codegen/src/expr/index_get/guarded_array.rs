@@ -372,8 +372,7 @@ pub(crate) fn emit_array_region_guard(
 /// The `Float64Array` twin of [`emit_array_region_guard`]'s dense facts
 /// (#10741): a heap pointer whose GC header names a typed array (never
 /// forwarded: typed arrays live in the non-moving space), of element kind
-/// `Float64`, with inline storage (its own storage byte, header byte 10, is
-/// `TA_STORAGE_INLINE` — #10516 — so its elements start at payload `+16`), and
+/// `Float64`, with an owning byte-cell header (Inline or OutOfLine), and
 /// the same bounds against its `length` (payload `+0`). On a pass it stores
 /// the element base into `base_slot`; F-body's reads and stores are then the
 /// same raw `f64` slots as a dense array's, its reads canonicalising a NaN
@@ -403,21 +402,21 @@ pub(crate) fn emit_typed_f64_region_guard(
         band_offset
     };
     ctx.current_block = deref_idx;
-    let handle = {
+    let (handle, word) = {
         let blk = ctx.block();
         let handle = blk.add(I64, &band_offset, "1048576");
         let word = emit_array_guard_word(blk, &handle);
-        let masked = blk.and(I32, &word, &(0xffu32 | (1 << 15) | (1 << 23)).to_string());
+        let masked = blk.and(I32, &word, &(0xffu32 | (1 << 15)).to_string());
         let ok = blk.icmp_eq(
             I32,
             &masked,
             &crate::expr::byte_cell::brand_for_kind(7).to_string(),
         );
         blk.cond_br(&ok, &len_label, &join_label);
-        handle
+        (handle, word)
     };
     ctx.current_block = len_idx;
-    let (pass, base) = {
+    let (pass, base, data_end) = {
         let blk = ctx.block();
         let length_ptr = blk.inttoptr(I64, &handle);
         let length = blk.load(I32, &length_ptr);
@@ -427,9 +426,11 @@ pub(crate) fn emit_typed_f64_region_guard(
             let within = blk.fcmp("ole", bound, &len_f);
             fits = blk.and(I1, &fits, &within);
         }
-        let base = blk.add(I64, &handle, &crate::runtime_abi::BYTES_STORE.to_string());
-        blk.br(&join_label);
-        (fits, base)
+        let word = blk.zext(I32, &word, I64);
+        let base = super::super::byte_cell::owner_data(ctx, &handle, &word, "rloop.ta.data");
+        let data_end = ctx.block().label.clone();
+        ctx.block().br(&join_label);
+        (fits, base, data_end)
     };
     ctx.current_block = join_idx;
     let blk = ctx.block();
@@ -438,12 +439,12 @@ pub(crate) fn emit_typed_f64_region_guard(
         &[
             ("false", &pre_label),
             ("false", &deref_label),
-            (&pass, &len_label),
+            (&pass, &data_end),
         ],
     );
     let base = blk.phi(
         I64,
-        &[("0", &pre_label), ("0", &deref_label), (&base, &len_label)],
+        &[("0", &pre_label), ("0", &deref_label), (&base, &data_end)],
     );
     blk.store(I64, &base, base_slot);
     pass

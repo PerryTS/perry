@@ -772,7 +772,16 @@ pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
         }
     });
     if due {
-        set_safepoint_pending(true);
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("external_base") {
+            set_safepoint_pending(true);
+            return;
+        }
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("birth_collect") {
+            super::js_gc_collect();
+        }
+        defer_nursery_cap_to_precise_safepoint();
     }
 }
 

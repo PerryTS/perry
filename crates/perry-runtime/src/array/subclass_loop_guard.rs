@@ -322,7 +322,7 @@ pub extern "C" fn js_packed_ecs_u32_loop_guard(
     let mut addresses = [0usize; 4];
     let mut common_length = None;
     for index in 0..column_count as usize {
-        let address = crate::typedarray::inline_u32_addr(columns[index]);
+        let address = crate::typedarray::owning_u32_addr(columns[index]);
         if address == 0 || addresses[..index].contains(&address) {
             return 0;
         }

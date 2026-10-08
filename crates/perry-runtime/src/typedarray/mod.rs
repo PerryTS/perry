@@ -369,9 +369,9 @@ pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
 }
 
 /// Whole-loop admission reads the receiver header as the authority. Views
-/// and external stores cannot satisfy the owning-inline proof.
+/// cannot satisfy the owning proof. Inline and Native stores share it.
 #[inline]
-pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
+pub(crate) fn owning_u32_addr(receiver: f64) -> usize {
     let value = crate::value::JSValue::from_bits(receiver.to_bits());
     if !value.is_pointer() {
         return 0;
@@ -386,8 +386,16 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
     }
     unsafe {
         let h = crate::gc::header_from_trusted_user_ptr(addr as *const u8);
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("inline_admission")
+            && (*h)._reserved & crate::codegen_abi::BYTES_OUT_OF_LINE != 0
+        {
+            return 0;
+        }
         if (*h).obj_type == type_for_kind(KIND_UINT32)
-            && (*h)._reserved & crate::codegen_abi::BYTES_OUT_OF_LINE == 0
+            && (*h)._reserved
+                & (crate::codegen_abi::BYTES_DETACHED | crate::codegen_abi::BYTES_RESIZABLE)
+                == 0
         {
             addr
         } else {
@@ -1020,24 +1028,49 @@ mod tests {
 
     #[test]
     fn owning_u32_admission_reads_current_header() {
-        let ta = typed_array_alloc(KIND_UINT32, 16);
-        let boxed = crate::value::js_nanbox_pointer(ta as i64);
-        assert_eq!(inline_u32_addr(boxed), ta as usize);
-        unsafe {
-            (*crate::buffer::store::header(ta as usize))._reserved |=
-                crate::codegen_abi::BYTES_OUT_OF_LINE;
+        for len in [16, 65536] {
+            let ta = typed_array_alloc(KIND_UINT32, len);
+            let boxed = crate::value::js_nanbox_pointer(ta as i64);
+            assert_eq!(
+                crate::buffer::header::has_owned_backing(ta as usize),
+                len > 1024
+            );
+            assert_eq!(
+                owning_u32_addr(boxed),
+                ta as usize,
+                "Native owners must admit"
+            );
+            unsafe {
+                let h = crate::buffer::store::header(ta as usize);
+                (*h)._reserved |= crate::codegen_abi::BYTES_DETACHED;
+                assert_eq!(owning_u32_addr(boxed), 0, "detached owners must decline");
+                (*h)._reserved &= !crate::codegen_abi::BYTES_DETACHED;
+                (*h).obj_type = type_for_kind(KIND_INT32);
+                assert_eq!(owning_u32_addr(boxed), 0, "wrong brands must decline");
+                (*h).obj_type = type_for_kind(KIND_UINT32) | crate::codegen_abi::BYTES_TYPE_VIEW;
+                assert_eq!(owning_u32_addr(boxed), 0, "views must decline");
+                (*h).obj_type = type_for_kind(KIND_UINT32);
+                assert_eq!(owning_u32_addr(boxed), ta as usize);
+            }
         }
-        assert_eq!(inline_u32_addr(boxed), 0);
-        unsafe {
-            (*crate::buffer::store::header(ta as usize))._reserved &=
-                !crate::codegen_abi::BYTES_OUT_OF_LINE;
-            (*crate::buffer::store::header(ta as usize)).obj_type = type_for_kind(KIND_INT32);
-        }
-        assert_eq!(inline_u32_addr(boxed), 0);
-        unsafe {
-            (*crate::buffer::store::header(ta as usize)).obj_type = type_for_kind(KIND_UINT32);
-        }
-        assert_eq!(inline_u32_addr(boxed), ta as usize);
+    }
+
+    #[test]
+    fn inline_only_admission_turns_the_native_u32_witness_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "typedarray::tests::owning_u32_admission_reads_current_header",
+                "--nocapture",
+            ])
+            .env("PERRY_B4_SABOTAGE", "inline_admission")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "Native admission must be exercised"
+        );
     }
 
     #[test]

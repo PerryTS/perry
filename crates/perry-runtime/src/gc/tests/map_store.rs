@@ -5,6 +5,80 @@ use super::support::*;
 use crate::map::*;
 
 #[test]
+fn map_growth_arms_a_deferred_safepoint_with_a_current_arena_base() {
+    on_fresh_thread(|| {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        policy::set_safepoint_pending(false);
+        policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(0));
+        let before = gc_collection_count();
+        let map = js_map_alloc(4);
+        js_shadow_slot_set(0, ptr_bits(map as usize));
+        let mut entries = 0;
+        while !policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
+            js_map_set(map, entries as f64, entries as f64);
+            entries += 1;
+            assert!(
+                entries <= 1_100_000,
+                "Map growth must cross the external allocation step"
+            );
+        }
+        assert!(
+            unsafe { (*map).capacity } >= 524288,
+            "the external growth subject must be live"
+        );
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "external growth must defer collection"
+        );
+        let current = crate::arena::arena_total_bytes();
+        assert!(current > 0, "zero cannot hide a stale base");
+        assert_eq!(
+            policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(std::cell::Cell::get),
+            current
+        );
+        // A further external pulse must preserve the first deferral base.
+        policy::gc_note_external_side_alloc(16 * 1024 * 1024);
+        assert_eq!(
+            policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(std::cell::Cell::get),
+            current
+        );
+        policy::gc_note_external_side_free(16 * 1024 * 1024);
+        triggers.make_arena_trigger_due();
+        js_gc_loop_safepoint();
+        assert!(
+            gc_collection_count() > before,
+            "the precise safepoint must consume pressure"
+        );
+        assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
+        let moved = ptr_from_slot(0);
+        assert_eq!(
+            js_map_get(moved, (entries - 1) as f64),
+            (entries - 1) as f64
+        );
+    });
+}
+
+#[test]
+fn stale_external_deferral_base_turns_the_map_growth_witness_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gc::tests::map_store::map_growth_arms_a_deferred_safepoint_with_a_current_arena_base",
+            "--nocapture",
+        ])
+        .env("PERRY_B4_SABOTAGE", "external_base")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(
+        !child.status.success(),
+        "the stale nursery base must be detected"
+    );
+}
+
+#[test]
 fn map_store_full_sweep_reclaims_dead_active_block_and_preserves_live_owner() {
     for stepped in [false, true] {
         std::thread::spawn(move || {
