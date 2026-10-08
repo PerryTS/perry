@@ -16,6 +16,7 @@ mod buffer_bound_method_name;
 mod buffer_side_tables;
 mod bulk_closure_captures;
 mod canonical_keys_holders;
+pub(super) mod canonical_keys_minor_prune;
 mod census;
 mod census_block_windows;
 mod census_whole_block;
