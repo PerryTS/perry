@@ -548,6 +548,7 @@ js_callback_timer_has_pending	i32s
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
 js_cancel_frame	void	i64
+js_catch_enter	f64	
 js_checkpoint	void	i32s
 js_cheerio_load	i64	ptr
 js_cheerio_load_fragment	i64	ptr

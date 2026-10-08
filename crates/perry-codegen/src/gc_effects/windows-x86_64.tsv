@@ -540,6 +540,7 @@ js_callback_timer_has_pending	Leaf
 js_callback_timer_next_deadline	Reenters
 js_callback_timer_tick	Reenters
 js_cancel_frame	Leaf
+js_catch_enter	Leaf
 js_checkpoint	Reenters
 js_cheerio_load	Reenters
 js_cheerio_load_fragment	Reenters
