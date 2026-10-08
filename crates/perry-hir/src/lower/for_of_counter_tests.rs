@@ -1,22 +1,9 @@
-//! #7766: the `for…of` desugar's synthetic counter must be seeded as an
-//! INTEGER literal.
-//!
-//! The counter is integral by construction (zero init, `++` only), but
-//! `collectors/i32_locals.rs::collect_integer_let_ids` seeds on the literal
-//! KIND, not on provable integrality. A `Number(0.0)` init therefore kept
-//! every desugared `for…of` counter out of `integer_locals`, so it never got
-//! a canonical i32 slot — and every i32-counter loop optimization silently
-//! declined the `for…of` spelling of a loop it served in indexed form. The
-//! element-shape versioned clone (#7771) is the case that made this visible:
-//! its matcher hard-requires `ctx.i32_counter_slots`, so it could never fire
-//! for `for…of` at all.
-//!
-//! This is a VERDICT test, not a behaviour test: the desugar is correct
-//! either way and prints the same numbers, so only the literal kind
-//! distinguishes "optimizable" from "structurally excluded" — CLAUDE.md's
-//! fourth way a gate can be unable to fail. Behaviour is covered by
-//! `test-files/test_gap_repsel_element_shape_param_binding.ts`, byte-compared
-//! against node.
+//! The array IteratorRecord cursor remains integral by construction: a literal
+//! zero seed and successful-step increments. Its compiler proof is attached to
+//! the indexed read rather than a signed i32 shadow, which would wrap at 2^31.
+//! These verdict tests cover both lowering entry points and reject an unproven
+//! Number seed as well as a return to the old signed-counter initializer.
+//! Codegen tests verify the unsigned read and full-range numeric increment.
 
 #![cfg(test)]
 
@@ -101,8 +88,15 @@ fn synthetic_counter_inits(stmts: &[Stmt]) -> Vec<Expr> {
     out
 }
 
+fn unsigned_integer_seed(expr: &Expr) -> bool {
+    matches!(expr, Expr::NativeMethodCall { module, method, args,
+        class_name: None, object: None }
+        if module == "__perry_runtime" && method == "arrayRecordIndex"
+            && matches!(args.as_slice(), [Expr::Integer(0)]))
+}
+
 #[test]
-fn module_level_for_of_counter_is_an_integer_literal() {
+fn module_level_for_of_counter_has_unsigned_integer_proof() {
     let m = lower(
         "class P { constructor(public x: number) {} }\n\
          const a: P[] = [new P(1)];\n\
@@ -116,14 +110,13 @@ fn module_level_for_of_counter_is_an_integer_literal() {
         "the for-of desugar should mint a `__idx_*` counter; found none"
     );
     assert!(
-        inits.iter().all(|e| matches!(e, Expr::Integer(0))),
-        "every desugared for-of counter must be seeded `Integer(0)` so \
-         `collect_integer_let_ids` can see it; got {inits:?}"
+        inits.iter().all(unsigned_integer_seed),
+        "each array record must seed its unsigned proof with Integer(0); got {inits:?}"
     );
 }
 
 #[test]
-fn function_body_for_of_counter_is_an_integer_literal() {
+fn function_body_for_of_counter_has_unsigned_integer_proof() {
     // The function-body desugar is a SECOND emission site
     // (`lower_decl/body_stmt.rs`). It drifted independently before, and the
     // parameter case #7766 is about lives here, not in module init.
@@ -147,7 +140,7 @@ fn function_body_for_of_counter_is_an_integer_literal() {
         "the function-body for-of desugar should mint a `__idx_*` counter"
     );
     assert!(
-        inits.iter().all(|e| matches!(e, Expr::Integer(0))),
-        "every desugared for-of counter must be seeded `Integer(0)`; got {inits:?}"
+        inits.iter().all(unsigned_integer_seed),
+        "each array record must seed its unsigned proof with Integer(0); got {inits:?}"
     );
 }

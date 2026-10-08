@@ -1207,9 +1207,6 @@ fn lower_body_stmt_impl(
             });
         }
         ast::Stmt::ForOf(for_of_stmt) => {
-            // #7760: where this arm's own statements begin, so the guard below
-            // can splice them back out as the index arm.
-            let result_mark = result.len();
             // `for (… of m.values()/keys()/entries())` on a statically-proven
             // Map/Set is the direct-collection loop written another way; see
             // `for_head::rewrite_collection_view_for_of`.
@@ -1794,19 +1791,8 @@ fn lower_body_stmt_impl(
                 ctx.pop_block_scope(for_scope_mark);
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
-            // Lazy iterator protocol for generic iterables (see stmt_loops.rs).
-            // #7760: the guard emission below lowers this same statement twice.
-            let use_lazy_iter = needs_runtime_iterator || force_lazy;
-            // Guarded exactly when this would otherwise be a plain array index
-            // loop, which ignores a patched `Array.prototype[Symbol.iterator]`.
-            let guard_with_lazy_arm = !force_lazy
-                && proven_array
-                && !needs_runtime_iterator
-                && !is_string_iter
-                && !is_iterable_map
-                && !is_iterable_set
-                && !is_iterable_typed_array
-                && !for_of_stmt.is_await;
+            // Ordinary arrays are a representation of the same synchronous record.
+            let use_lazy_iter = needs_runtime_iterator || (proven_array && !for_of_stmt.is_await);
             let arr_expr = if is_iterable_map {
                 if map_kv_fastpath {
                     arr_expr
@@ -1826,7 +1812,7 @@ fn lower_body_stmt_impl(
                 // Mirrors the module-init path in stmt_loops.rs.
                 arr_expr
             } else if use_lazy_iter {
-                Expr::GetIterator(Box::new(arr_expr))
+                arr_expr
             } else if is_string_iter {
                 // #10062: index an array of code points, not the string's
                 // UTF-16 code units. Shares the runtime string iterator's
@@ -1931,6 +1917,12 @@ fn lower_body_stmt_impl(
                 ctx.locals
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
             }
+            let record = use_lazy_iter.then(|| {
+                crate::iterator_record::IteratorRecordPlan::new(ctx, arr_expr.clone(), &mut result)
+            });
+            let arr_expr = record
+                .as_ref()
+                .map_or(arr_expr, |r| r.guarded_get_iterator());
             result.push(Stmt::Let {
                 id: arr_id,
                 name: format!("__arr_{}", arr_id),
@@ -2243,7 +2235,12 @@ fn lower_body_stmt_impl(
                     for_of_stmt.span.lo.0,
                     guarded_stmts,
                 ));
-                result.extend(lazy_iter_for_stmts(ctx, arr_id, result_id, full_body));
+                result.extend(
+                    record
+                        .as_ref()
+                        .unwrap()
+                        .drive(ctx, arr_id, result_id, full_body),
+                );
                 ctx.pop_block_scope(for_scope_mark);
                 return Ok(result);
             }
@@ -2299,19 +2296,6 @@ fn lower_body_stmt_impl(
                 body: loop_body,
             });
             ctx.pop_block_scope(for_scope_mark);
-            if guard_with_lazy_arm {
-                // Splice out the index form just emitted, lower the same
-                // statement again in lazy mode, and branch between them on the
-                // runtime flag. Re-lowering rather than cloning keeps the two
-                // arms from drifting and gives the lazy arm its own locals.
-                let index_arm: Vec<Stmt> = result.split_off(result_mark);
-                let lazy_arm = lower_body_stmt_with_for_of_mode(ctx, stmt, true);
-                result.push(Stmt::If {
-                    condition: Expr::ArrayIterationPatched,
-                    then_branch: lazy_arm?,
-                    else_branch: Some(index_arm),
-                });
-            }
         }
         ast::Stmt::ForIn(for_in_stmt) => {
             // Desugar for-in to a for-of over Object.keys(obj) (same as in lower_stmt).

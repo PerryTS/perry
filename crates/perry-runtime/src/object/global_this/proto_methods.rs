@@ -415,6 +415,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     }
     match builtin_name {
         "Array" => {
+            // Install the iteration member before the wide named-method layout:
+            // its body then lives in the shape's existing ConstFn lanes.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let values = crate::closure::js_closure_alloc(
+                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+                0,
+            );
+            super::super::native_module::set_bound_native_closure_name(values, "values");
+            let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(values as i64));
+            install_builtin_iterator_symbol(proto_obj, values.get_nanbox_f64());
+            unsafe {
+                super::super::shapes::learn_object_constfn_lanes(
+                    super::super::shaped_symbols::owner(proto_obj as usize).unwrap(),
+                    |_, bits| bits == values.get_nanbox_f64().to_bits(),
+                );
+            }
             install_proto_method(
                 proto_obj,
                 "slice",
@@ -457,13 +473,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // matching Map/Set/String/%TypedArray%, which already do this
             // (`install_collection_iterator_symbol`). Attributes are the spec's
             // `{ writable: true, enumerable: false, configurable: true }`.
-            let values_value = install_proto_method(
-                proto_obj,
-                "values",
-                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
+            let key = crate::string::intern_ascii_literal(b"values");
+            super::super::js_object_set_field_by_name(proto_obj, key, values.get_nanbox_f64());
+            super::super::set_builtin_property_attrs(
+                proto_obj as usize,
+                "values".into(),
+                super::super::PropertyAttrs::new(true, false, true),
             );
-            install_builtin_iterator_symbol(proto_obj, values_value);
             install_proto_method(
                 proto_obj,
                 "pop",

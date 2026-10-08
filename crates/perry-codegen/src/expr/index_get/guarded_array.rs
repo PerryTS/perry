@@ -459,6 +459,58 @@ pub(super) fn lower_guarded_array_index_get(
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
 ) -> Result<String> {
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Signed(idx_i32),
+        block_prefix,
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+    )
+}
+
+/// The same indexed read with a compiler proof of a nonnegative u32 index.
+/// Retain its original JS number on the cold path, including indices > i32::MAX.
+pub(super) fn lower_unsigned_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    index: &str,
+    receiver_slot: Option<&str>,
+) -> Result<String> {
+    let idx_i32 = ctx.block().fptoui(DOUBLE, index, I32);
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Unsigned {
+            i32_value: &idx_i32,
+            number: index,
+        },
+        "array_record_index",
+        false,
+        false,
+        receiver_slot,
+    )
+}
+
+enum GuardedArrayIndex<'a> {
+    Signed(&'a str),
+    Unsigned { i32_value: &'a str, number: &'a str },
+}
+
+fn lower_guarded_array_index_get_with_index(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    index: GuardedArrayIndex<'_>,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
+) -> Result<String> {
+    let (idx_i32, unsigned_index) = match index {
+        GuardedArrayIndex::Signed(value) => (value, None),
+        GuardedArrayIndex::Unsigned { i32_value, number } => (i32_value, Some(number)),
+    };
     let site_id = ctx.typed_feedback_site_id(ctx.ic_site_counter);
     crate::typed_feedback_profile::register_site(
         site_id,
@@ -625,11 +677,31 @@ pub(super) fn lower_guarded_array_index_get(
         };
 
         ctx.current_block = live_deref_idx;
+        // Only the record's proven cursor owns the private source root that
+        // needs eager forwarding repair. Ordinary indexed reads keep their
+        // existing fallback custody and local-flow facts.
+        let repair_slot = unsigned_index.and(receiver_slot);
+        let repair_idx =
+            repair_slot.map(|_| ctx.new_block(&format!("{}.guard.repair", block_prefix)));
+        let live_success_label = repair_idx
+            .map(|idx| ctx.block_label(idx))
+            .unwrap_or_else(|| range_label.clone());
         {
             let blk = ctx.block();
             let live_word = emit_array_guard_word(blk, &live_handle);
             let word_ok = emit_array_guard_word_ok(blk, &live_word);
-            blk.cond_br(&word_ok, &range_label, &guard_fail_label);
+            blk.cond_br(&word_ok, &live_success_label, &guard_fail_label);
+        }
+        if let (Some(repair_idx), Some(slot)) = (repair_idx, repair_slot) {
+            // The verified forwarding destination is the same JS array. Repair
+            // the existing local root on this cold edge so later length and
+            // element reads use its live storage, including after body growth.
+            ctx.current_block = repair_idx;
+            let blk = ctx.block();
+            let tagged = blk.or(I64, &live_handle, crate::nanbox::POINTER_TAG_I64);
+            let boxed = blk.bitcast_i64_to_double(&tagged);
+            blk.store(DOUBLE, &boxed, slot);
+            blk.br(&range_label);
         }
         let live_end = ctx.block().label.clone();
 
@@ -829,7 +901,9 @@ pub(super) fn lower_guarded_array_index_get(
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     // Materialize the f64 index only here (cold path) so the int→fp conversion
     // stays out of the numeric loop's hot region.
-    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let idx_box = unsigned_index
+        .map(str::to_owned)
+        .unwrap_or_else(|| ctx.block().sitofp(I32, idx_i32, DOUBLE));
     let fallback_boxed = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_array_index_get_fallback_boxed",

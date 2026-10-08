@@ -206,6 +206,9 @@ pub fn collect_pointer_typed_locals(
         local_value_types: &HashMap<u32, Type>,
         non_pointer_locals: &HashSet<u32>,
     ) -> Option<Type> {
+        if let Some(ty) = crate::type_analysis::iterator_record_primitive_type(expr) {
+            return Some(ty);
+        }
         match expr {
             Expr::Undefined => Some(Type::Void),
             Expr::Null => Some(Type::Null),
@@ -1840,3 +1843,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "iterator_record_pointer_tests.rs"]
+mod iterator_record_pointer_tests;

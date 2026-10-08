@@ -1958,3 +1958,6 @@ mod wide_object_membership_tests;
 
 mod packed_keys;
 pub(crate) use packed_keys::packed_key_names;
+
+pub(crate) use iterator_prototypes::array_record_close_is_absent;
+pub(crate) use iterator_prototypes::array_record_next_is_builtin;

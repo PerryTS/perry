@@ -189,7 +189,7 @@ fn iterator_next_value_stmts(
 /// iterator; a rest element drains the remainder; and the iterator is closed
 /// (`IteratorClose`) on both normal completion (when not exhausted) and on any
 /// abrupt completion from a default initializer or nested pattern.
-fn lower_array_pattern_binding(
+pub(crate) fn lower_array_pattern_binding(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
     source: ArraySource,
@@ -266,20 +266,7 @@ fn lower_array_pattern_binding(
                     )));
                     rest_done_id = saved_done_id;
                 }
-                body.push(Stmt::Let {
-                    id: rest_id,
-                    name: rest_name,
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(runtime_iterator_call(
-                        "iteratorRestToArray",
-                        vec![
-                            Expr::LocalGet(iter_id),
-                            Expr::LocalGet(next_id),
-                            Expr::LocalGet(rest_done_id),
-                        ],
-                    )),
-                });
+                body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
                 // Draining exhausts the iterator, so it is now done.
                 body.push(Stmt::Expr(Expr::LocalSet(
                     done_id,
@@ -615,10 +602,11 @@ pub(crate) fn lower_pattern_binding_into(
             // Array binding patterns use the iterator protocol (GetIterator /
             // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
             // index reads. See `lower_array_pattern_binding`.
+            let plan = array_fast::FastPlan::new(ctx, source, result);
             lower_array_pattern_binding(
                 ctx,
                 arr_pat,
-                ArraySource::Iterator(source),
+                ArraySource::Guarded(plan),
                 mutable,
                 is_var_decl,
                 result,
@@ -950,10 +938,20 @@ mod iterator_close_tests {
                         ..
                     } => {
                         if let Some(branch) = else_branch {
-                            let next = branch.iter().position(|s| matches!(
-                                s, Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
-                                if method == "iteratorStep"
-                            ));
+                            let next = branch.iter().position(|s| {
+                                let Stmt::Let {
+                                    init: Some(init), ..
+                                } = s
+                                else {
+                                    return false;
+                                };
+                                let protocol = match init {
+                                    Expr::Conditional { then_expr, .. } => then_expr.as_ref(),
+                                    init => init,
+                                };
+                                matches!(protocol, Expr::NativeMethodCall { method, .. }
+                                    if method == "iteratorStep")
+                            });
                             if let Some(next) = next {
                                 assert!(next > 0, "IteratorNext must be preceded by marking done");
                                 assert!(matches!(&branch[next - 1],
@@ -1010,6 +1008,12 @@ mod iterator_close_tests {
                 matches!(s,
                     Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
                     if method == "iteratorRestToArray"
+                ) || matches!(
+                    s,
+                    Stmt::Let {
+                        init: Some(Expr::Array(_)),
+                        ..
+                    }
                 )
             })
             .unwrap();
@@ -1017,6 +1021,20 @@ mod iterator_close_tests {
             Stmt::Expr(Expr::LocalSet(id, value)) if matches!(**value, Expr::Bool(true)) => *id,
             _ => panic!("draining must mark done before any iterator step"),
         };
+        if matches!(
+            &body[rest],
+            Stmt::Let {
+                init: Some(Expr::Array(_)),
+                ..
+            }
+        ) {
+            assert!(
+                matches!(&body[rest + 2], Stmt::If {
+                condition: Expr::LocalGet(id), ..
+            } if *id != done_id),
+                "drain must test the saved pre-drain done bit"
+            );
+        }
         if let Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }),
             ..

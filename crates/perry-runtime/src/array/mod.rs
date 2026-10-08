@@ -190,7 +190,7 @@ pub(crate) use self::indexing::{
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{
-    array_index_fast_path_invalid_for, array_iteration_not_pristine, array_proto_iterator_modified,
+    array_index_fast_path_invalid_for, array_iteration_not_pristine,
     invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
     note_array_index_write, note_array_iteration_not_pristine, note_array_proto_iterator_write,
     note_object_prototype_index_write, object_prototype_has_index_flag,
@@ -340,5 +340,11 @@ pub(crate) use iter_object::dispatch_array_iterator_step;
 
 mod iterator_step;
 pub use iterator_step::{
-    js_iterator_next_method, js_iterator_step, js_iterator_step_rest_to_array,
+    js_array_record_close, js_array_record_needs_iterator, js_iterator_next_method,
+    js_iterator_step, js_iterator_step_rest_to_array,
 };
+
+
+
+#[cfg(test)]
+pub(crate) use iterator_step::js_array_record_iterator_at;

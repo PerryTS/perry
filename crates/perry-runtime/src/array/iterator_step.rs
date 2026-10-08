@@ -140,3 +140,107 @@ pub unsafe extern "C-unwind" fn js_iterator_step_rest_to_array(
 #[used(compiler)]
 static KEEP_ITERATOR_STEP_REST: unsafe extern "C-unwind" fn(f64, f64, f64) -> f64 =
     js_iterator_step_rest_to_array;
+
+/// Entry proof for the array representation of an IteratorRecord. Own array
+/// keys/reparenting are already described by the array's header shape word.
+/// The prototype shape describes the iteration member and its ConstFn body.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    if !JSValue::from_bits(value.get_nanbox_f64().to_bits()).is_pointer() {
+        return 1;
+    }
+    let raw = js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
+        return 1;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return 1;
+    }
+    // An alias can still name a growth stub. Its old flags do not describe
+    // members subsequently installed on the live array.
+    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    if array.is_null()
+        || crate::array::array_object_flags_resolved(array) & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    {
+        return 1;
+    }
+    // Intrinsic setup may allocate, so reload the rooted source afterwards.
+    let _ = crate::array::array_prototype_addr();
+    let symbol = crate::symbol::well_known_symbol("iterator");
+    let array = crate::array::clean_arr_ptr(
+        js_nanbox_get_pointer(value.get_nanbox_f64()) as *const crate::array::ArrayHeader
+    );
+    if crate::array::array_object_flags_resolved(array) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+    {
+        if let Some(own) = crate::object::shaped_symbols::owner(array as usize) {
+            if crate::object::shaped_symbols::position(own, symbol as usize).is_some() {
+                return 1;
+            }
+        }
+    }
+    let proto_addr = crate::array::array_prototype_addr();
+    let Some(proto) = crate::object::shaped_symbols::owner(proto_addr) else {
+        return 1;
+    };
+    if proto.is_null() {
+        return 1;
+    }
+    let Some(shape) = crate::object::shapes::object_shape_record(proto) else {
+        return 1;
+    };
+    let key_bits = crate::value::POINTER_TAG | symbol as u64;
+    let keys = shape.keys() as *const crate::array::ArrayHeader;
+    let slots = crate::array::array_elements_ptr(keys);
+    let canonical = crate::object::array_prototype_values_thunk as *const u8;
+    let member = (0..shape.logical_key_count()).find(|&i| *slots.add(i as usize) == key_bits);
+    let Some(slot) = member else {
+        return 1;
+    };
+    let Some(info) = shape.constfn_info(slot) else {
+        return 1;
+    };
+    if (*(info as *const crate::closure::JsFunctionInfo)).code != canonical {
+        return 1;
+    }
+    i32::from(!crate::object::array_record_next_is_builtin())
+}
+
+/// Materialize the record only when IteratorClose needs an observable receiver.
+/// It retains the original values algorithm and cursor, even after next changes.
+pub(crate) unsafe fn js_array_record_iterator_at(value: f64, index: f64) -> f64 {
+    let iter = crate::array::array_values_iter(value);
+    let obj = js_nanbox_get_pointer(iter) as *mut ObjectHeader;
+    crate::object::js_object_set_field(obj, 1, JSValue::number(index));
+    iter
+}
+
+/// The omitted array record uses exactly the shared IteratorClose algorithm.
+/// Its absent-return shape proof avoids materializing an unobservable receiver.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_close(
+    value: f64,
+    index: f64,
+    done: f64,
+    error: f64,
+    throwing: f64,
+) -> f64 {
+    let throwing = crate::value::js_is_truthy(throwing) != 0;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let error = scope.root_nanbox_f64(error);
+    if crate::value::js_is_truthy(done) != 0 || crate::object::array_record_close_is_absent() {
+        return if throwing {
+            error.get_nanbox_f64()
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        };
+    }
+    let iter = js_array_record_iterator_at(value.get_nanbox_f64(), index);
+    if throwing {
+        crate::array::js_iterator_close_on_throw(iter, done, error.get_nanbox_f64())
+    } else {
+        crate::array::js_iterator_close_if_not_done(iter, done)
+    }
+}
