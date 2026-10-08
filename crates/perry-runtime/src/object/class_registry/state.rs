@@ -1565,11 +1565,12 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                     // Use ordinary Get, exactly as user code reading
                     // F.prototype: native/global constructors, own accessors
                     // and functions without an own prototype share that read.
+                    let key = crate::string::canonical_key(b"prototype");
                     let parent_proto = unsafe {
-                        crate::value::js_get_property(
-                            dynamic_parent.get_nanbox_f64(),
-                            b"prototype".as_ptr() as i64,
-                            b"prototype".len() as i64,
+                        super::super::field_get_set::js_object_get_field_by_name_f64(
+                            JSValue::from_bits(dynamic_parent.get_nanbox_f64().to_bits())
+                                .as_pointer::<ObjectHeader>(),
+                            key,
                         )
                     };
                     Some(
