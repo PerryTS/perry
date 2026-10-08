@@ -335,6 +335,14 @@ fn canonical_index_key(bytes: &[u8]) -> Option<u32> {
 
 /// Does the own holder shape carry customized descriptor facts?
 pub(crate) fn object_has_descriptors(obj: usize) -> bool {
+    // Ordinary property readers already carry an object holder. Its shape is
+    // the answer; normalizing it through closure/byte/exotic storage repeats
+    // admission work that belongs only to those other receiver kinds.
+    unsafe {
+        if super::key_attrs::attrs_live_in_keys(obj) {
+            return super::key_attrs::object_summary(obj as *const ObjectHeader) != 0;
+        }
+    }
     owner_may_have_descriptor_entries(obj, false)
 }
 
