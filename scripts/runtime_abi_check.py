@@ -272,7 +272,7 @@ def codegen_sources() -> list[pathlib.Path]:
     return sorted(
         p
         for p in CODEGEN_SRC.rglob("*.rs")
-        if not (p.name == "tests.rs" or p.name.endswith("_tests.rs") or "/tests/" in str(p))
+        if not (p.name == "tests.rs" or p.name.endswith("_tests.rs") or "/tests/" in p.as_posix())
     )
 
 
@@ -280,7 +280,7 @@ def rust_sources() -> list[pathlib.Path]:
     return sorted(
         p
         for p in CRATES.rglob("*.rs")
-        if "/target/" not in str(p) and "/tests/fixtures/" not in str(p)
+        if "/target/" not in p.as_posix() and "/tests/fixtures/" not in p.as_posix()
     )
 
 
@@ -808,6 +808,8 @@ def emit_wasm_abi(rust_files: dict[str, str]) -> str:
         if ret is None or any(t is None for t in toks):
             continue  # unclassifiable: the lowering leaves such calls alone
         lines.append(f"{name}\t{ret}\t{','.join(toks)}")
+    if len(lines) == 3:
+        raise ValueError("no WASI runtime ABI symbols found; refusing to emit an empty table")
     return "\n".join(lines) + "\n"
 
 
@@ -869,7 +871,10 @@ def load(paths) -> dict[str, str]:
     out = {}
     for p in paths:
         try:
-            out[str(p.relative_to(ROOT))] = p.read_text(errors="replace")
+            # These keys feed crate-prefix and stub-ranking checks which
+            # intentionally use '/'. Native Windows separators otherwise
+            # make --emit-wasm-abi silently emit an empty signature table.
+            out[p.relative_to(ROOT).as_posix()] = p.read_text(errors="replace")
         except OSError:
             pass
     return out
@@ -1044,6 +1049,28 @@ def self_test() -> int:
     """})
     if any(rows.entries.values()):
         failures.append("native predicate widths and dispatcher-supplied source arity must agree")
+
+    # Exercise Windows path spelling on EVERY host. A Linux-only test of a
+    # real Path cannot catch str(relative_path) introducing backslashes.
+    class WindowsSource:
+        def relative_to(self, _root):
+            return pathlib.PureWindowsPath(r"crates\perry-runtime\src\probe.rs")
+
+        def read_text(self, **_kwargs):
+            return '#[no_mangle] pub extern "C" fn js_path_probe(x: u64) -> u64 {}'
+
+    loaded = load([WindowsSource()])
+    if "crates/perry-runtime/src/probe.rs" not in loaded:
+        failures.append("source keys must use forward slashes on Windows")
+    else:
+        table = emit_wasm_abi(loaded)
+        if "js_path_probe\ti64\ti64\n" not in table:
+            failures.append("Windows sources must contribute WASI ABI signatures")
+    try:
+        emit_wasm_abi({})
+        failures.append("empty WASI ABI emission must fail before overwriting the table")
+    except ValueError:
+        pass
     if failures:
         print("runtime_abi_check self-test FAILED:", file=sys.stderr)
         for f in failures:

@@ -9,7 +9,10 @@ pub const NODE_BUFFER_CLASS_ID: u32 = 0xFFFF000C;
 /// Buffer header - similar to StringHeader but specifically for binary data
 /// NOTE: Layout must match ArrayHeader (length at offset 0, capacity at offset 4)
 /// because the codegen treats Uint8Array like arrays with hardcoded offsets.
-#[repr(C)]
+// The byte store starts at offset 16 on every target (BYTES_STORE), and
+// typed-array elements may require 8-byte alignment. Round the ILP32 header
+// up from 12 bytes as well, preserving the native layout and link offset.
+#[repr(C, align(8))]
 pub struct BufferHeader {
     /// Length in bytes
     pub length: u32,

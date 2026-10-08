@@ -1,0 +1,3 @@
+- Fix the WASI byte-buffer header layout on 32-bit targets and find wasi-sdk's `clang.exe` on Windows.
+- Add pinned Windows WASI tooling, a portable runtime builder, and executable acceptance probes for #11375. Extend WASI CI with the passing core and Node compatibility subsets.
+- Fix Windows path handling in runtime ABI checks and reject empty generated ABI tables.

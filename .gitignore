@@ -8,6 +8,10 @@ __pycache__/
 # Pinned Node oracle for the builtin-module compat matrix
 # (scripts/node_compat_matrix.mjs downloads + SRI-verifies + caches here).
 .cache/node-pin/
+# Pinned WASI SDK/runtime and local acceptance reports.
+.cache/wasi/
+.cache/wasi-*/
+.cache/wasi-*.log
 # Local receipts for the staged npm release pipeline. These must survive
 # between `publish:stage` and `publish:approve`, but must never make a clean
 # release-candidate checkout appear dirty or be committed.
