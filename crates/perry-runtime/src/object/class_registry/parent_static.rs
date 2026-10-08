@@ -1619,6 +1619,13 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // Walk the parent-closure chain and invoke the resolved callable with `this`
     // bound to the receiver, mirroring the GET path.
     if let Some(closure_ptr) = parent_closure_in_chain(class_id) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
+        let args = if args_ptr.is_null() || args_len == 0 {
+            Vec::new()
+        } else {
+            scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, args_len))
+        };
         let closure_val = f64::from_bits(
             crate::value::POINTER_TAG | (closure_ptr as u64 & crate::value::POINTER_MASK),
         );
@@ -1633,11 +1640,21 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // not a real inherited member.
             && member.to_bits() != closure_val.to_bits()
         {
+            // The inherited object-literal method can keep this in a capture
+            // slot. Apply the same rebinding as Function.call/apply, retaining
+            // lexical this for arrows and already-bound functions.
+            let member = scope.root_nanbox_f64(member);
+            let member = crate::closure::rebind_explicit_this(
+                member.get_nanbox_f64(),
+                receiver.get_nanbox_f64(),
+            );
+            let member = scope.root_nanbox_f64(member);
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
             let result = crate::closure::native_call_value_this(
-                member,
-                crate::closure::JsThis::from_f64(receiver),
-                args_ptr,
-                args_len,
+                member.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
             );
             return result;
         }
