@@ -717,54 +717,22 @@ pub enum Expr {
         strict: bool,
     },
 
-    // Issue #838: `<ClassName>.prototype.<method> = <fn>` and the
-    // aliased shape `let p = <ClassName>.prototype; p.<method> = <fn>`.
-    // dayjs / chalk / pre-ES6 npm packages still attach instance
-    // methods via this pattern instead of inside the `class { … }`
-    // block. Codegen emits `js_register_prototype_method(class_id,
-    // name, fn)` which stores the closure into a per-class side
-    // table; the runtime's `js_object_get_field_by_name` and
-    // `js_native_call_method` dispatch hot paths consult it after
-    // the regular vtable / proto-object walks miss, so
-    // `(new Class()).method()` reaches the registered closure with
-    // `this` bound to the receiver.
+    // Legacy HIR prototype-store nodes. Source assignments now produce
+    // PropertySet; these ABI adapters store on the actual prototype object.
     RegisterPrototypeMethod {
         class_name: String,
         method_name: String,
         value: Box<Expr>,
     },
 
-    // Issue #838 followup (b): function-classic prototype-method dispatch.
-    // dayjs's minified bundle (and Babel's `var Foo = function(){ function
-    // Foo(...){...}; var p = Foo.prototype; p.x = …; return Foo; }()`
-    // emit pattern) declares its instance "class" via a function
-    // declaration, not a `class` block. The #838 recogniser bailed
-    // because `lookup_class("M")` returned None for function decls. This
-    // node carries the function ref so codegen can pass the closure
-    // value to `js_register_function_prototype_method` — the runtime
-    // helper allocates a synthetic class id keyed by the closure's
-    // bits and stores the method on `CLASS_PROTOTYPE_METHODS[cid]`.
-    // Paired with `Expr::NewDynamic` lowering: when the callee is the
-    // same function ref, the new-construct helper stamps the same
-    // synthetic id on the instance, so dispatch finds the method via
-    // the regular `(*obj).class_id → CLASS_PROTOTYPE_METHODS` walk.
+    // Legacy function-prototype store, carrying the constructor value.
     RegisterFunctionPrototypeMethod {
         func: Box<Expr>,
         method_name: String,
         value: Box<Expr>,
     },
 
-    // Read side of the JS-classic prototype-method pattern:
-    // `<funcDecl>.prototype.<name>` (or `<funcDecl>.prototype['<name>']`).
-    // Returns the closure stored in `CLASS_PROTOTYPE_METHODS` for the
-    // synthetic class id derived from the function value. Pre-fix this
-    // shape lowered to `PropertyGet(PropertyGet(funcDecl, "prototype"),
-    // name)` whose receiver evaluated to `undefined` — the user's
-    // `typeof Foo.prototype.method` came back as `'undefined'` even
-    // though `(new Foo()).method` reached the registered closure via
-    // the side-table walk. Ramda's transducer pattern only needs the
-    // assignment side, but the read side rounds out spec parity for
-    // `Constructor.prototype.method` introspection.
+    // Ordinary Get of the current <func>.prototype.<name> property.
     GetFunctionPrototypeMethod {
         func: Box<Expr>,
         method_name: String,

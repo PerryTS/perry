@@ -421,9 +421,6 @@ unsafe fn object_proto_may_have_to_json_recompute() -> bool {
 ///
 /// - the class vtable registry (methods/getters/setters; deletion-aware,
 ///   parent-chain walk) — `class_instance_has_member`;
-/// - the assignment side table (`Class.prototype.toJSON = fn` registers in
-///   `CLASS_PROTOTYPE_METHODS`, possibly with no prototype OBJECT
-///   materialized at all) — `lookup_prototype_method`;
 /// - the two prototype-object tables: synthetic `Object.create(proto)` /
 ///   `Function.prototype = obj` prototypes (`CLASS_PROTOTYPE_OBJECTS`) and
 ///   reflective `ClassName.prototype` decl objects
@@ -436,9 +433,7 @@ fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
     if crate::object::class_instance_has_member(class_id, "toJSON") {
         return true;
     }
-    if crate::object::lookup_prototype_method(class_id, "toJSON").is_some() {
-        return true;
-    }
+
     let mut cid = class_id;
     let mut depth = 0u32;
     while cid != 0 && depth < 32 {
@@ -477,11 +472,10 @@ fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
 /// | route to a newly reachable `toJSON` | caught by |
 /// |---|---|
 /// | `class C { toJSON() {} }`, a getter or a setter registered for this class or any ancestor (`CLASS_VTABLE_REGISTRY`) | `VTABLE_GEN` — `js_register_class_method` / `_getter` / `_setter`, `js_register_class_computed_method` / `_accessor`, and the bound-method vtable copy in `object_ops/define_property.rs` all bump it |
-/// | `C.prototype.toJSON = fn` (`CLASS_PROTOTYPE_METHODS`, possibly with no prototype object at all) | `VTABLE_GEN` — `class_prototype_method_root_store` bumps it through `invalidate_class_prototype_fast_guards_for_method` |
 /// | a NEW parent edge splicing in an ancestor that carries any of the above | the SEMANTIC property epoch — `class_registry::parent_static::register_class` is the only writer of the parent map and calls `prop_plan_epoch_bump` before publishing |
 /// | `Object.setPrototypeOf`, a descriptor install, or a `delete` anywhere | the SEMANTIC property epoch |
 /// | a prototype OBJECT materializing for this class or an ancestor — the very thing the walk looks for, since such an object can carry arbitrary later-added properties | `CLASS_LOOKUP_SURFACE_GEN`, bumped inside `class_prototype_object_root_store` and `class_decl_prototype_object_root_store` |
-/// | `js_register_class_generic_origin`, which redirects both prototype-object readers and `lookup_prototype_method`'s chain hop | `CLASS_LOOKUP_SURFACE_GEN` |
+/// | `js_register_class_generic_origin`, which redirects both prototype-object readers through the prototype link | `CLASS_LOOKUP_SURFACE_GEN` |
 ///
 /// Garbage collection is deliberately NOT an input. The class side-table
 /// scanners only rewrite EXISTING slots, so no collection can add a registry

@@ -3705,20 +3705,12 @@
       "name": "TEST_ARGUMENTS_REGISTRY_PROBES"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/prototype_methods.rs",
-      "name": "CLASS_PROTOTYPE_METHODS"
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_DYNAMIC_PARENT_VALUE"
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_PARENT_CLOSURES"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_PROTOTYPE_METHOD_NONENUM"
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",

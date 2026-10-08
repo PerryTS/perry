@@ -1,106 +1,6 @@
 //! `Object.defineProperty` and its class-prototype-method installation helper.
 use super::*;
 
-/// #2159 helper: install a `target_cid.method` entry from an
-/// `Object.defineProperty(C.prototype, name, descriptor)` call.
-///
-/// The descriptor's `value` came in two main shapes in practice:
-///
-/// 1. A `BOUND_METHOD_FUNC_PTR` closure returned by `getOwnPropertyDescriptor`
-///    on a sibling class (drizzle's `applyMixins(Base, [Mixin])`: the
-///    `getOwnPropertyDescriptor(Mixin.prototype, name)` value reads as
-///    `js_class_method_bind(Mixin_class_ref, name)`). Dispatching that bound
-///    closure would re-enter `js_native_call_method` against the class-ref —
-///    a class object reaches the *static* dispatch arm, not the instance
-///    method, so calling it would return the wrong thing. Instead we look up
-///    the raw vtable entry on the source class and copy it onto the target
-///    class's vtable directly, so future `inst.method(args)` dispatches via
-///    the regular chain walk with `this = inst`.
-///
-/// 2. A user-supplied closure (e.g. `Object.defineProperty(C.prototype, "m",
-///    { value: function () { … } })`). Route through the same per-class
-///    prototype-method side table that `js_register_prototype_method` (#838)
-///    uses, so the `inst.m` / `inst.m()` lookup paths in
-///    `field_get_set.rs` / `native_call_method.rs` find it after the regular
-///    vtable miss.
-unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits: u64) {
-    use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR};
-    use crate::object::class_registry::{VTableMethodEntry, CLASS_VTABLE_REGISTRY};
-
-    // Reject undefined / null / numeric values up front — those aren't
-    // methods and shouldn't make it onto the prototype side tables.
-    let value = f64::from_bits(value_bits);
-    let jsv = crate::JSValue::from_bits(value_bits);
-    if !jsv.is_pointer() {
-        return;
-    }
-    let ptr = jsv.as_pointer::<u8>() as usize;
-    if ptr < 0x1000 {
-        return;
-    }
-
-    // Shape (1): BOUND_METHOD closure. Extract source class-ref + method
-    // name from the captures (see `js_class_method_bind`), then copy the
-    // source class's vtable entry (or any inherited entry up the parent
-    // chain) onto `target_cid`.
-    if crate::closure::is_closure_ptr(ptr) {
-        let closure = ptr as *const ClosureHeader;
-        if (*closure).code() == BOUND_METHOD_FUNC_PTR {
-            let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
-            let recv_value = crate::JSValue::from_bits(recv.to_bits());
-            let source_cid = super::super::class_ref_id(recv).or_else(|| {
-                recv_value.is_pointer().then(|| {
-                    super::super::class_registry::class_id_for_decl_prototype_object(
-                        recv_value.as_pointer::<u8>() as usize,
-                    )
-                })?
-            });
-            if let Some(source_cid) = source_cid {
-                if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                    super::super::lookup_class_method_in_chain(source_cid, name)
-                {
-                    let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
-                    if guard.is_none() {
-                        *guard = Some(crate::fast_hash::new_ptr_hash_map());
-                    }
-                    let reg = guard.as_mut().unwrap();
-                    let vtable = reg.entry(target_cid).or_default();
-                    vtable.methods.insert(
-                        name.to_string(),
-                        VTableMethodEntry {
-                            func_ptr,
-                            param_count,
-                            has_synthetic_arguments,
-                            has_rest,
-                            entry: 0,
-                        },
-                    );
-                    drop(guard);
-                    super::super::class_registry::class_prototype_method_root_remove(
-                        target_cid, name,
-                    );
-                    super::super::class_registry::invalidate_class_prototype_fast_guards_for_method(
-                        name,
-                    );
-                    super::super::class_registry::js_register_class_id(target_cid);
-                    crate::typed_feedback::invalidate_method_change(target_cid);
-                    return;
-                }
-            }
-        }
-    }
-
-    // Shape (2): any other callable value (user closure, regular function).
-    // Mirror the `Class.prototype.method = fn` direct-assignment path so the
-    // existing `lookup_prototype_method` walks find it.
-    super::super::class_registry::js_register_prototype_method(
-        target_cid,
-        name.as_ptr(),
-        name.len(),
-        value,
-    );
-}
-
 /// #6363: `[[DefineOwnProperty]]` for a native HANDLE receiver — a pointer-tagged
 /// small registry id (zlib stream, fetch Request/Response/Headers/Blob, crypto
 /// hash, …), not a heap `ObjectHeader`.
@@ -668,18 +568,14 @@ pub extern "C" fn js_object_define_property(
             return obj_value;
         }
 
-        // #2159: when the receiver is a class-ref (`Class.prototype` evaluates
-        // back to the class itself in Perry — see `class_ref_id` /
-        // `js_object_get_own_property_descriptor`'s class-ref arm), route the
-        // descriptor through the class-vtable / prototype-method side tables
-        // so instance lookups (`new C().method`) see the new entry. Drizzle's
-        // `applyMixins(Base, [Mixin])` copies methods between class
-        // prototypes via `Object.defineProperty(Base.prototype, name,
-        // Object.getOwnPropertyDescriptor(Mixin.prototype, name))` — pre-fix
-        // the call hit `extract_obj_ptr → null` (a class-ref isn't a pointer)
-        // and silently dropped the descriptor, so `await
-        // db.select().from(x)` saw `instance.then === undefined` and `await`
-        // unwrapped the builder unchanged.
+        // Legacy prototype refs denote the same ordinary object as a
+        // reflective C.prototype read. Define the descriptor on that holder.
+        if let Some(cid) = super::super::class_prototype_ref_id(obj_value) {
+            let proto = super::super::class_registry::class_decl_prototype_value(cid);
+            js_object_define_property(proto, key_handle.get_nanbox_f64(), desc_handle.get_nanbox_f64());
+            return f64::from_bits(obj_value_handle.get_heap_word_u64());
+        }
+        // Constructor refs use their static property storage.
         if let Some(target_cid) = super::super::class_ref_id(obj_value) {
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.arm();
@@ -846,18 +742,6 @@ pub extern "C" fn js_object_define_property(
                             );
                             return obj_value;
                         }
-                        // #5024 followup: a `defineProperty` data descriptor is
-                        // non-enumerable unless it explicitly sets
-                        // `enumerable: true`. Record that so the prototype-object
-                        // mirror (reflective `Object.keys`/`for-in`) doesn't
-                        // surface it — `Class.prototype.m = fn` assignment, which
-                        // routes through the same side table, stays enumerable.
-                        super::super::class_registry::class_prototype_method_set_enumerable(
-                            target_cid,
-                            &name,
-                            descriptor_enumerable(descriptor_value),
-                        );
-                        define_class_prototype_method(target_cid, &name, value_field.bits());
                     }
                 }
             }
@@ -1305,40 +1189,6 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
-        // A declaration prototype mirrors callable replacements into class-id
-        // dispatch. An evaluation prototype owns its properties alone: its
-        // instances read this object through their recorded chain (#12029).
-        if let Some(target_cid) = super::super::class_registry::class_id_for_decl_prototype_object(
-            obj as usize,
-        )
-        .filter(|_| {
-            super::super::field_get_set::class_evaluation_prototype_class_id(obj as usize).is_none()
-        }) {
-            if let Some(ref name) = key_rust {
-                if across!(desc_has_field(descriptor_value, b"value")) {
-                    let value_bits = across!(desc_read_field(descriptor_value, b"value").bits());
-                    if !crate::value::JSValue::from_bits(value_bits).is_undefined() {
-                        // The method value must survive `descriptor_enumerable`,
-                        // which reads two more descriptor fields.
-                        let value_slot = scope.root_nanbox_u64(value_bits);
-                        // #5024 followup: defineProperty data descriptor is
-                        // non-enumerable unless it sets `enumerable: true`. Mark
-                        // it so the prototype-method enumeration mirror honours
-                        // the descriptor instead of defaulting to enumerable
-                        // (the `Class.prototype.m = fn` assignment default).
-                        let enumerable = across!(descriptor_enumerable(descriptor_value));
-                        super::super::class_registry::class_prototype_method_set_enumerable(
-                            target_cid, name, enumerable,
-                        );
-                        define_class_prototype_method(
-                            target_cid,
-                            name,
-                            value_slot.get_nanbox_u64(),
-                        );
-                    }
-                }
-            }
-        }
         if !receiver_plain_object
             && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
         {

@@ -730,18 +730,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &obj_val), (crate::types::I32, is_async_str)],
             ))
         }
-        // Issue #838: `<Class>.prototype.<method> = <fn>` and the
-        // aliased `let p = <Class>.prototype; p.<method> = <fn>`
-        // shape. HIR recognises the assignment pattern and lowers it
-        // here; codegen emits `js_register_prototype_method(class_id,
-        // name_ptr, name_len, value)` so the runtime stores the
-        // closure into a per-class side-table consulted at dispatch
-        // time. The expression yields the closure value to match
-        // JS-spec `x.foo = bar`. If the class isn't in
-        // `ctx.class_ids` (cross-module imported class) we fall back
-        // to a generic field-set on `<Class>.prototype` so the value
-        // at least lands on the prototype proxy — the importer side
-        // typically owns the registration anyway.
+        // Legacy HIR ABI adapter. Source writes use PropertySet; the runtime
+        // entry performs ordinary Set on the class's prototype object.
         Expr::RegisterPrototypeMethod {
             class_name,
             method_name,
@@ -764,26 +754,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             Ok(val_double)
         }
-        // Issue #838 followup (b): the prototype's owner is a function
-        // declaration (Babel's `var Foo = function(){ function Foo(){…};
-        // Foo.prototype.x = fn; return Foo; }()`, also dayjs's minified
-        // form). Hand both the closure value and the method name to the
-        // runtime helper — it allocates (or reuses) a synthetic class id
-        // keyed by the closure's NaN-boxed bits and stores the method
-        // on `CLASS_PROTOTYPE_METHODS[synthetic_cid]`. The paired
-        // `new <FuncRef>(args)` lowering below stamps the same id on
-        // the instance so dispatch finds the method via the regular
-        // `(*obj).class_id` walk.
-        //
-        // #11635: `func` is evaluated FIRST and is live across the lowering
-        // of `value`, which is routinely a call (`proto.toIsoString =
-        // deprecate(msg, fn)` in moment). Holding it in a register let an
-        // evacuating minor inside that call move the closure while the
-        // register kept its from-space address, and the runtime then read
-        // the retired closure header in `synthetic_class_id_for_function`.
-        // Root it across the window and re-read it below. `value` is
-        // rooted across the registration call too, because that call is a
-        // `Reenters` runtime entry and the value is the expression result.
+        // Legacy function-prototype store. Keep the constructor rooted across
+        // the allocating RHS (#11635), and the result across the runtime Set.
         Expr::RegisterFunctionPrototypeMethod {
             func,
             method_name,
@@ -809,16 +781,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             group.reread(ctx, val_i)
         }),
-        // Read side of #838 followup (b): `<funcDecl>.prototype.<name>`
-        // (Ident or computed-string-literal form) lowered into a direct
-        // lookup of the prototype-method side-table. Returns the closure
-        // value stored at registration time, or `undefined` if no method
-        // by that name was registered. Pre-fix this would fall through
-        // to a generic PropertyGet on a `Function.prototype` object that
-        // never materialised (so the read was always `undefined`,
-        // making `typeof Foo.prototype.method` come back `'undefined'`
-        // even though `(new Foo()).method` correctly reached the
-        // registered closure via the dispatch path).
+        // Ordinary Get from the function's current prototype object.
         Expr::GetFunctionPrototypeMethod { func, method_name } => {
             let func_double = lower_expr(ctx, func)?;
             let key_idx = ctx.strings.intern(method_name);

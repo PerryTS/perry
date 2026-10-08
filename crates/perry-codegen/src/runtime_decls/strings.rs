@@ -1573,25 +1573,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // PutValue and synchronize function metadata only from the stored value.
     module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_set_prototype_property", DOUBLE, &[DOUBLE, DOUBLE, I32]);
-    // Issue #838: JS-classic prototype-method assignment.
-    // `Class.prototype.method = fn` (or the aliased
-    // `let p = Class.prototype; p.method = fn` shape) registers the
-    // closure into a per-class side table consulted by the
-    // `js_object_get_field_by_name` / `js_native_call_method` dispatch
-    // hot paths so `(new Class()).method()` reaches the closure with
-    // `this` bound to the receiver.
+    // Legacy HIR prototype-store ABI adapters; ordinary property storage.
     module.declare_function(
         "js_register_prototype_method",
         VOID,
         &[I32, PTR, I64, DOUBLE],
     );
-    // Issue #838 followup (b): function-classic prototype-method
-    // assignment for Babel's class-from-function emit pattern (and
-    // dayjs's identical minified shape). Takes the callable value
-    // directly — the runtime helper looks up / allocates a synthetic
-    // class id keyed by the closure's NaN-boxed bits, then stores
-    // the method on `CLASS_PROTOTYPE_METHODS[synthetic_cid]`.
-    // Returns the synthetic class id (codegen discards).
+    // Store on the function's actual prototype and return its synthetic id.
     module.declare_function(
         "js_register_function_prototype_method",
         I32,
@@ -1614,13 +1602,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // which the runtime construct path cannot tag-distinguish from pointers).
     module.declare_function("js_throw_not_a_constructor", DOUBLE, &[]);
     module.declare_function("js_new_target_value", DOUBLE, &[]);
-    // Read side of #838 followup (b): look up a previously-registered
-    // prototype method on a function value by name. Pairs with
-    // `js_register_function_prototype_method`. Returns the NaN-boxed
-    // closure value if the synthetic-class-id derived from the function
-    // has an entry under `name`, otherwise the NaN-boxed `undefined`
-    // tag. ramda's transducer pattern + `typeof Foo.prototype.method`
-    // introspection both reach this entry point.
+    // Ordinary Get of a property on the function's current prototype.
     module.declare_function(
         "js_get_function_prototype_method",
         DOUBLE,

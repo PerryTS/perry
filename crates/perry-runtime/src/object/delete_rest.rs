@@ -320,7 +320,6 @@ pub extern "C" fn js_object_delete_field(
                     if name == "constructor"
                         || super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
                         || super::native_module::class_has_own_method(cid, name)
-                        || super::class_registry::lookup_own_prototype_method(cid, name).is_some()
                     {
                         // The member's storage is this object's key (removed
                         // by the scan below) plus, for a runtime prototype
@@ -331,7 +330,6 @@ pub extern "C" fn js_object_delete_field(
                         if super::field_get_set::class_evaluation_prototype_class_id(obj as usize)
                             .is_none()
                         {
-                            super::class_registry::class_prototype_method_root_remove(cid, name);
                             // The shared class may itself be the first
                             // evaluation (#11759 c′). Its live key is deleted,
                             // but later evaluations still start from ClassBody.
@@ -837,13 +835,6 @@ fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
 }
 
 fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
-    let has_own = name == "constructor"
-        || super::class_registry::decl_prototype_own_accessor(class_id, name).is_some()
-        || super::native_module::class_has_own_method(class_id, name)
-        || super::class_registry::lookup_own_prototype_method(class_id, name).is_some();
-    if !has_own {
-        return 1;
-    }
     // The members are real properties of the class's prototype object
     // (materialized first): the delete happens there.
     let proto = super::class_registry::class_decl_prototype_value(class_id);

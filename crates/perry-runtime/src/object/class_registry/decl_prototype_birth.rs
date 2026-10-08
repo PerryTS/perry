@@ -12,14 +12,15 @@
 //! registry already holds every fact.
 //!
 //! The birth is therefore one allocation, N slot stores and ONE stamp of the
-//! final shape, which names the link. There is no birth-to-final
+//! final property shape, which names the link. Publishing the class link then
+//! gives the holder the existing private prototype lineage, like any marked
+//! chain hop. There is no birth-to-final
 //! key-add chain, no attribute claim per key, no relink restamp and no
 //! ConstFn relearn, and none of the by-name stores the general path makes
 //! (each of which asks whether the object is a class prototype).
 //!
 //! A class whose prototype holds anything else (an accessor, a method with
-//! no entry, a `C.prototype.m = f` registered before the object existed, a
-//! method named `constructor`), or whose parent prototype has no stable
+//! no entry, or a method named `constructor`), or whose parent prototype has no stable
 //! identity, takes the general path, which builds the same object key by key.
 
 use super::*;
@@ -39,8 +40,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         *accessor || name == "constructor" || class_method_entry(class_id, name).is_none()
-    }) || has_registered_prototype_methods(class_id)
-        || !class_own_symbol_member_keys(class_id, false).is_empty()
+    }) || !class_own_symbol_member_keys(class_id, false).is_empty()
     {
         return None;
     }
@@ -155,18 +155,4 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
 thread_local! {
     /// Prototypes this thread built born-final (tests prove which path ran).
     pub(super) static BORN_FINAL_BUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// Did the program assign `C.prototype.m = f` for `class_id` before its
-/// prototype object existed (`CLASS_PROTOTYPE_METHODS`, which the general path
-/// backfills as enumerable own properties)?
-fn has_registered_prototype_methods(class_id: u32) -> bool {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        table.read().is_ok_and(|guard| {
-            guard
-                .as_ref()
-                .and_then(|map| map.get(&class_id))
-                .is_some_and(|per_class| !per_class.is_empty())
-        })
-    })
 }

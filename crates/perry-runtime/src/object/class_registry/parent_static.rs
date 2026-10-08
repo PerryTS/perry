@@ -1083,16 +1083,6 @@ pub(crate) fn lookup_static_method_owner(
     None
 }
 
-pub(crate) unsafe fn class_instance_setter_apply(
-    class_id: u32,
-    name: &str,
-    receiver: f64,
-    value: f64,
-) -> bool {
-    // Charter step 3: the accessor is a property of the class prototype chain.
-    super::decl_accessors::class_chain_setter_apply(class_id, name, receiver, value).is_some()
-}
-
 /// Spec `Function.prototype.length` for a class method named `name` — the
 /// count of formal parameters, excluding a trailing rest param and the
 /// synthesized `arguments` slot (neither contributes to `.length`). Walks the

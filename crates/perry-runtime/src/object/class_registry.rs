@@ -88,7 +88,6 @@ pub(crate) use state::{
     class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
     class_own_static_field_value, class_own_string_member_names, class_parent_closure,
     class_parent_closure_root_store, class_proto_key_deleted, class_prototype_member_names,
-    class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
     class_prototype_method_value_cache_root_store, class_prototype_object_addr_index_contains,
     class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
     class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
@@ -102,11 +101,10 @@ pub(crate) use state::{
 };
 pub use state::{
     AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DYNAMIC_PARENT_VALUE,
-    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES,
-    CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS,
-    CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS,
-    CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS,
-    CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS,
+    CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS,
+    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
+    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -151,24 +149,21 @@ pub(crate) use prototype_methods::{
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
     class_prototype_fast_guard_invalidated_for_method, class_prototype_method_guard_slot,
-    class_prototype_method_root_remove, class_prototype_method_root_store,
-    class_prototype_relinked, invalidate_class_prototype_fast_guards,
-    invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
-    prototype_relink_may_retarget_direct_arms, retire_prototype_caches_without_direct_arms,
-    synthetic_class_id_for_function,
+    class_prototype_relinked, class_prototype_set, invalidate_class_prototype_fast_guards,
+    invalidate_class_prototype_fast_guards_for_method, prototype_relink_may_retarget_direct_arms,
+    retire_prototype_caches_without_direct_arms, synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
-    js_register_function_prototype_method, js_register_prototype_method, CLASS_PROTOTYPE_METHODS,
+    js_register_function_prototype_method, js_register_prototype_method,
 };
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
     bound_function_target_value, extends_target_must_throw, is_callable_function_value,
-    js_value_is_constructor, lookup_own_prototype_method, lookup_prototype_method,
-    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
-    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
-    promise_parent_in_chain,
+    js_value_is_constructor, nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs,
+    nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm,
+    nm_ctor_wasi, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,
@@ -189,11 +184,10 @@ pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut}
 #[cfg(test)]
 pub(crate) use gc_roots::{
     test_class_decl_prototype_object_root_addr, test_class_dynamic_prop_root_bits,
-    test_class_parent_closure_root_addr, test_class_prototype_method_root_bits,
-    test_class_prototype_method_value_root_bits, test_class_prototype_object_root_addr,
-    test_clear_class_side_table_roots, test_function_class_id_key_count,
-    test_function_class_id_key_for_class, test_seed_class_decl_prototype_object_root,
-    test_seed_class_dynamic_prop_root, test_seed_class_prototype_method_root,
+    test_class_parent_closure_root_addr, test_class_prototype_method_value_root_bits,
+    test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
+    test_function_class_id_key_count, test_function_class_id_key_for_class,
+    test_seed_class_decl_prototype_object_root, test_seed_class_dynamic_prop_root,
     test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
     test_seed_function_class_id_key,
 };
@@ -225,16 +219,15 @@ pub(crate) use dispatch::{
 pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method,
     class_dynamic_static_accessor_descriptor, class_has_own_static_method,
-    class_has_own_symbol_member, class_has_symbol_member_in_chain, class_instance_setter_apply,
-    class_method_bind_length, class_object_own_field_bytes, class_object_owns_key_bytes,
-    class_object_pinned_parent, class_own_static_method_code, class_own_static_method_entry,
-    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
-    class_private_instance_getter_value, class_private_instance_setter_apply,
-    class_static_accessor_getter_value, class_static_accessor_setter_apply,
-    class_symbol_getter_value, class_symbol_setter_apply, dynamic_value_class_id,
-    get_parent_class_id, instance_chain_parent_class_id, lookup_class_symbol_method_in_chain,
-    lookup_static_method_in_chain, lookup_static_method_owner, register_class,
-    register_class_dynamic_static_accessor, static_accessor_in_chain,
+    class_has_own_symbol_member, class_has_symbol_member_in_chain, class_method_bind_length,
+    class_object_own_field_bytes, class_object_owns_key_bytes, class_object_pinned_parent,
+    class_own_static_method_code, class_own_static_method_entry, class_own_symbol_accessor_ptrs,
+    class_own_symbol_member_keys, class_own_symbol_method, class_private_instance_getter_value,
+    class_private_instance_setter_apply, class_static_accessor_getter_value,
+    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
+    dynamic_value_class_id, get_parent_class_id, instance_chain_parent_class_id,
+    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, lookup_static_method_owner,
+    register_class, register_class_dynamic_static_accessor, static_accessor_in_chain,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,
@@ -309,31 +302,7 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             }
         }
     });
-    state::CLASS_PROTOTYPE_METHOD_NONENUM.with(|lock| {
-        if let Ok(g) = lock.read() {
-            if let Some(m) = g.as_ref() {
-                let inner: usize = m.iter().map(|(_, k)| k.capacity()).sum();
-                rows.push((
-                    "class.prototype_method_nonenum",
-                    m.len(),
-                    set_bytes(m) + inner,
-                ));
-            }
-        }
-    });
-    prototype_methods::CLASS_PROTOTYPE_METHODS.with(|lock| {
-        if let Ok(g) = lock.read() {
-            if let Some(m) = g.as_ref() {
-                let mut entries = 0usize;
-                let mut inner = 0usize;
-                for t in m.values() {
-                    entries += t.len();
-                    inner += map_bytes(t) + t.keys().map(|k| k.capacity()).sum::<usize>();
-                }
-                rows.push(("class.prototype_methods", entries, map_bytes(m) + inner));
-            }
-        }
-    });
+
     state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
         let slots = slots.borrow();
         let mut entries = 0usize;

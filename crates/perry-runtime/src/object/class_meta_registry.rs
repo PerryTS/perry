@@ -244,7 +244,7 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
     }
     // Arming the latch and adding the edge redirect BOTH prototype-object
     // readers (`class_prototype_object`, `class_decl_prototype_object`) and
-    // `lookup_prototype_method`'s chain hop to the generic's id, so a cached
+    // the ordinary prototype read's chain hop to the generic's id, so a cached
     // per-class-id chain verdict must retire (#10696).
     crate::object::class_lookup_surface_gen_bump();
     // A redirect that changes the holder retires the old one's ShapeId, as a

@@ -44,7 +44,7 @@ pub(crate) fn test_bump_vtable_generation() {
 ///   `CLASS_DECL_PROTOTYPE_OBJECTS` entry (any `C.prototype`, `instanceof`,
 ///   `Object.getPrototypeOf(instance)`, a `super` chain);
 /// * `js_register_class_generic_origin` — redirects BOTH prototype-object
-///   readers and `lookup_prototype_method`'s chain hop to another class id;
+///   readers and the ordinary prototype read's chain hop to another class id;
 ///
 /// Bumped INSIDE those three writers, after the store, so a new call site
 /// cannot forget it — the same enforced-funnel rule `prop_plan_epoch_bump`

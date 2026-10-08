@@ -199,7 +199,7 @@ fn probe_test_class_id(n: u32) -> u32 {
     0x7EEE_0000 | n
 }
 
-/// A non-pointer JS value: enough to make `lookup_prototype_method` answer
+/// A non-pointer JS value: enough to make the ordinary prototype read answer
 /// `Some`, and safe for the root store's write barrier.
 fn probe_test_method_bits() -> u64 {
     JSValue::int32(1).bits()
@@ -258,11 +258,10 @@ fn class_chain_tojson_memo_never_disagrees_with_the_uncached_walk() {
 fn a_late_prototype_method_retires_the_cached_chain_verdict() {
     let class_id = probe_test_class_id(0x21);
     assert!(!super::test_class_chain_may_have_to_json(class_id));
-    crate::object::class_prototype_method_root_store(
-        class_id,
-        "toJSON".to_string(),
-        probe_test_method_bits(),
-    );
+    unsafe {
+        crate::object::js_register_class_name(class_id, b"ProbeClass".as_ptr(), 10);
+    }
+    crate::object::class_prototype_set(class_id, "toJSON".to_string(), probe_test_method_bits());
     assert!(
         super::test_class_chain_may_have_to_json(class_id),
         "`C.prototype.toJSON = fn` after a first stringify must be observed"
@@ -310,25 +309,33 @@ fn a_late_generic_origin_edge_retires_the_cached_chain_verdict() {
     assert!(
         super::test_class_chain_may_have_to_json(specialization),
         "a generic-origin edge redirects both prototype-object readers and \
-         `lookup_prototype_method`'s chain hop, so it must retire the entry"
+         the ordinary prototype read's chain hop, so it must retire the entry"
     );
 }
 
 #[test]
 fn a_static_store_never_resurrects_a_deleted_prototype_key() {
     let class_id = probe_test_class_id(0x61);
-    crate::object::class_prototype_method_root_store(
-        class_id,
-        "toJSON".to_string(),
-        probe_test_method_bits(),
-    );
+    unsafe {
+        crate::object::js_register_class_name(class_id, b"ProbeClass".as_ptr(), 10);
+    }
+    crate::object::class_prototype_set(class_id, "toJSON".to_string(), probe_test_method_bits());
     assert!(super::test_class_chain_may_have_to_json(class_id));
-    // `delete C.prototype.toJSON` removes the runtime assignment's entry
-    // through `js_object_delete_field`, which bumps the semantic epoch; stand
-    // in for that here so the memo holds the post-delete `false`.
-    crate::object::class_prototype_method_root_remove(class_id, "toJSON");
-    crate::object::prop_plan::prop_plan_epoch_bump();
-    assert!(!super::test_class_chain_may_have_to_json(class_id));
+    // Delete the physical prototype property. The conservative chain probe
+    // may still defer for a materialized holder, but it must agree with
+    // its uncached walk and the property itself must stay absent.
+    let proto = crate::object::class_decl_prototype_value(class_id);
+    let key = crate::string::js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    unsafe {
+        crate::object::js_object_delete_field(
+            (proto.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader,
+            key,
+        );
+    }
+    assert_eq!(
+        super::test_class_chain_may_have_to_json(class_id),
+        super::test_class_chain_may_have_to_json_uncached(class_id)
+    );
     // The static side lives on the class function object, the prototype side
     // on the prototype: `C.toJSON = 1` cannot bring the prototype key back.
     crate::object::class_dynamic_prop_root_store(
@@ -337,7 +344,15 @@ fn a_static_store_never_resurrects_a_deleted_prototype_key() {
         f64::from_bits(probe_test_method_bits()),
     );
     assert!(
-        !super::test_class_chain_may_have_to_json(class_id),
+        unsafe {
+            crate::object::js_object_get_field_by_name(
+                (crate::object::class_decl_prototype_value(class_id).to_bits()
+                    & crate::value::POINTER_MASK)
+                    as *const crate::object::ObjectHeader,
+                key,
+            )
+            .is_undefined()
+        },
         "a static store must not re-expose a deleted prototype method"
     );
 }
@@ -501,11 +516,9 @@ fn a_late_prototype_to_json_retires_a_cached_plain_record_verdict() {
     let anon = probe_test_class_id(0x91);
     unsafe { crate::object::js_register_anon_shape_class_id(anon) };
     assert!(super::class_is_plain_record(anon));
-    crate::object::class_prototype_method_root_store(
-        anon,
-        "toJSON".to_string(),
-        probe_test_method_bits(),
-    );
+    let proto = crate::object::js_object_alloc(0, 1);
+    crate::object::test_seed_class_prototype_object_root(anon, proto as usize);
+    crate::object::class_prototype_set(anon, "toJSON".to_string(), probe_test_method_bits());
     assert!(
         !super::class_is_plain_record(anon),
         "a cached plain-record verdict must not outlive a prototype `toJSON`"
@@ -550,11 +563,9 @@ fn object_literal_shapes_reach_the_flat_emitter() {
 
         // And the anon shape stops qualifying once its class grows a `toJSON`.
         (*obj()).class_id = anon;
-        crate::object::class_prototype_method_root_store(
-            anon,
-            "toJSON".to_string(),
-            probe_test_method_bits(),
-        );
+        let proto = crate::object::js_object_alloc(0, 1);
+        crate::object::test_seed_class_prototype_object_root(anon, proto as usize);
+        crate::object::class_prototype_set(anon, "toJSON".to_string(), probe_test_method_bits());
         let bits = value.get_nanbox_f64().to_bits();
         assert!(super::super::stringify_flat::try_object(bits).is_none());
         assert!(super::super::stringify_record_output::try_object(bits).is_none());
