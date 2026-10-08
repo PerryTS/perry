@@ -103,6 +103,10 @@ pub struct LlModule {
     /// shared with every function's register counter; emitted by
     /// [`Self::emit_fn_infos`] once every function exists.
     fn_infos: Rc<RefCell<crate::fn_info::FnInfoState>>,
+    /// Whether this module's own thread-locals use the local-exec model
+    /// ([`Self::use_local_exec_tls`]). Module state: the output kind of the
+    /// compile that built this module decides it, never a process global.
+    local_exec_tls: bool,
 }
 
 /// The `source_filename` every Perry-emitted module records.
@@ -135,7 +139,7 @@ impl LlModule {
     pub(crate) fn thread_local_global_names(&self) -> std::collections::HashSet<String> {
         self.globals
             .iter()
-            .filter(|g| g.contains(" thread_local "))
+            .filter(|g| g.contains(" thread_local ") || g.contains(" thread_local("))
             .filter_map(|g| global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string()))
             .collect()
     }
@@ -162,6 +166,46 @@ impl LlModule {
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
             fn_infos: Rc::new(RefCell::new(crate::fn_info::FnInfoState::default())),
+            local_exec_tls: false,
+        }
+    }
+
+    /// Address the module's own thread-locals as fixed offsets from the
+    /// thread pointer: the local-exec model, exact only in an ELF executable,
+    /// whose TLS block is the static one every thread starts with.
+    ///
+    /// Module state is thread-local when the program starts a Worker (#10399),
+    /// and the units are compiled position-independent, where LLVM must assume
+    /// a thread-local can live in any loaded image: every access became a
+    /// general-dynamic `__tls_get_addr` call that the register allocator
+    /// treated as a call clobbering every caller-saved register.
+    ///
+    /// Every definition and declaration still at the default
+    /// (general-dynamic) model is rewritten; a runtime thread-local declared
+    /// with the model its definition needs (`PERRY_AGENT_PTRS` is
+    /// `initialexec`) keeps it. The model is written into the module itself,
+    /// so the IR text (and the object-cache key derived from it) states it,
+    /// and an emitter running on another thread needs no outside input.
+    pub(crate) fn use_local_exec_tls(&mut self) {
+        self.local_exec_tls = true;
+        let lines = self
+            .globals
+            .iter_mut()
+            .chain(self.declarations.iter_mut().map(|(_, line)| line));
+        for line in lines {
+            if let Some(rewritten) = crate::module::linkage::with_local_exec_tls(line) {
+                *line = rewritten;
+            }
+        }
+    }
+
+    /// The TLS specifier a declaration this module adds later must carry to
+    /// agree with its definitions ([`Self::use_local_exec_tls`]).
+    pub(crate) fn thread_local_specifier(&self) -> &'static str {
+        if self.local_exec_tls {
+            "thread_local(localexec)"
+        } else {
+            "thread_local"
         }
     }
 

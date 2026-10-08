@@ -40,6 +40,7 @@ fn options(target: Option<&str>) -> CompileOptions {
         imported_func_return_types: Default::default(),
         imported_vars: Default::default(),
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: true,

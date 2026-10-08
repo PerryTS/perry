@@ -12,6 +12,7 @@ fn fallback_ir(module_name: &str) -> String {
     let options = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..CompileOptions::default()
     };
     String::from_utf8(compile_module(&module, options).expect("fallback module compiles"))

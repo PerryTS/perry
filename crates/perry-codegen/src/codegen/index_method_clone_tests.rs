@@ -335,6 +335,7 @@ fn emit() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&fixture(), opts).expect("fixture compiles"))
@@ -348,6 +349,7 @@ fn emit_shaped_reader() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("shaped reader compiles"))
@@ -361,6 +363,7 @@ fn emit_shaped_push() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("shaped push compiles"))
@@ -376,6 +379,7 @@ fn emit_checked_reader() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("checked reader compiles"))
@@ -435,6 +439,7 @@ fn emit_bitset() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("bitset method compiles"))
@@ -498,6 +503,7 @@ fn emit_transition() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("transition method compiles"))
@@ -609,6 +615,7 @@ fn emit_versioned_checked_reader_loop() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("versioned loop compiles"))

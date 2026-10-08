@@ -138,6 +138,7 @@ fn compile_ir_for(module: &Module, target: Option<&str>) -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         target: target.map(str::to_string),
         ..Default::default()
     };

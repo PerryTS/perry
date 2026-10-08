@@ -497,6 +497,8 @@ fn compile_module_impl(
     let agent_strings_tls = program_has_worker() || thread_agents;
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
+    // ConstFn lanes are one decision for the whole compile, from its options.
+    let constfn_enabled = static_constfn::enabled(&opts);
     if let Some(refusal) = crate::target_layout::ilp32_codegen_refusal(&triple) {
         anyhow::bail!(refusal);
     }
@@ -2520,7 +2522,7 @@ fn compile_module_impl(
             &class_birth_reps_map,
             &class_ids,
         );
-        if static_constfn::enabled(&opts.output_type) {
+        if constfn_enabled {
             let reps = class_keys_globals_map
                 .iter()
                 .filter_map(|(name, keys)| {
@@ -2581,7 +2583,7 @@ fn compile_module_impl(
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
     );
-    if !static_constfn::enabled(&opts.output_type) {
+    if !constfn_enabled {
         static_shape_ids::disable_static_final_shapes();
     }
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
@@ -3983,7 +3985,7 @@ fn compile_module_impl(
     // after every function — and so every allocation site — exists.
     // Executables admit permanent ConstFn bodies unless explicitly disabled.
     // A dylib never advertises a permanent body, even with the knob set.
-    let constfn_body_metadata = static_constfn::enabled(&opts.output_type);
+    let constfn_body_metadata = constfn_enabled;
     if constfn_body_metadata {
         // Omitted/dead literals must not leave body-info relocations behind.
         static_constfn::emit_final_entries(
@@ -4049,6 +4051,11 @@ fn compile_module_impl(
     // the buffer's trailing NUL, and the closure-ABI rewrite needs the
     // module-wide set of closure bodies. Until then a large WASI module is
     // compiled as one unit.
+    // Every global exists now: fix the module's TLS model from this compile's
+    // own output kind before any emission path renders it.
+    if crate::expr::agent_ptr::program_tls_is_local_exec(&triple, &opts.output_type) {
+        llmod.use_local_exec_tls();
+    }
     let wasm32 = crate::target_layout::wasm32_lowering(&triple);
     let n_units = if opts.emit_ir_only || wasm32 {
         1
