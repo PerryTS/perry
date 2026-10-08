@@ -102,6 +102,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     let mut opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     opts.type_aliases.insert("Payload".to_string(), payload);
@@ -262,6 +263,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
@@ -353,6 +355,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
@@ -477,6 +480,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
@@ -665,6 +669,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     let mut opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     opts.type_aliases.insert("Payload".to_string(), payload);
@@ -902,6 +907,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     let mut opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     opts.type_aliases.insert("FlatNode".to_string(), flat_node);
@@ -1090,6 +1096,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))

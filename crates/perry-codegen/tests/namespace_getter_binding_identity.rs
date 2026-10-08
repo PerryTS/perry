@@ -5,6 +5,7 @@ fn empty_opts() -> CompileOptions {
     CompileOptions {
         emit_ir_only: true,
         output_type: "executable".into(),
+        disable_constfn_shapes: false,
         ..Default::default()
     }
 }

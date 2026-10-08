@@ -22,10 +22,6 @@ pub(super) fn optimize_and_emit(
         .verify()
         .map_err(|e| anyhow!("LLVM verifier rejected module:\n{}", e.to_string()))?;
 
-    if crate::expr::agent_ptr::program_tls_is_local_exec(effective_target) {
-        use_local_exec_tls(module);
-    }
-
     let triple = TargetTriple::create(effective_target);
     let target = Target::from_triple(&triple)
         .map_err(|e| anyhow!("no LLVM target for `{effective_target}`: {e}"))?;
@@ -208,81 +204,9 @@ pub(super) fn optimize_and_emit(
     Ok(pieces)
 }
 
-/// Address the program's own thread-locals as fixed offsets from the thread
-/// pointer.
-///
-/// Module state is thread-local when the program starts a Worker (#10399),
-/// and the units are compiled position-independent, where LLVM must assume a
-/// thread-local can live in any loaded image: every access became a
-/// general-dynamic `__tls_get_addr` call — 16 bytes of code that the linker
-/// later relaxes, but that the register allocator had already treated as a
-/// call clobbering every caller-saved register. In an executable every such
-/// global sits in the static TLS block, so local-exec is exact: one
-/// `%fs`-relative operand.
-///
-/// Only globals left at the default (general-dynamic) model change. Those are
-/// the program's own; a runtime thread-local is declared with the model its
-/// definition needs (`PERRY_AGENT_PTRS` is `initialexec`) and keeps it.
-fn use_local_exec_tls(module: &inkwell::module::Module<'_>) {
-    use inkwell::ThreadLocalMode;
-    let mut global = module.get_first_global();
-    while let Some(g) = global {
-        if g.is_thread_local()
-            && g.get_thread_local_mode() == Some(ThreadLocalMode::GeneralDynamicTLSModel)
-        {
-            g.set_thread_local_mode(Some(ThreadLocalMode::LocalExecTLSModel));
-        }
-        global = g.get_next_global();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The program's own thread-locals (left at the default model by the IR
-    /// text) become local-exec; a runtime thread-local declared with its own
-    /// model keeps it; a plain global stays a plain global.
-    #[test]
-    fn only_default_model_thread_locals_become_local_exec() {
-        let ir = "@module_state = thread_local global double 0.0\n\
-                  @other_unit = external thread_local global i8\n\
-                  @runtime_block = external thread_local(initialexec) global [8 x i64]\n\
-                  @plain = global i8 0\n";
-        let context = Context::create();
-        let module = parse_ir_text(&context, ir, "tls_models").expect("parses");
-        use_local_exec_tls(&module);
-        let mode = |name: &str| module.get_global(name).expect(name).get_thread_local_mode();
-        use inkwell::ThreadLocalMode::*;
-        assert_eq!(mode("module_state"), Some(LocalExecTLSModel));
-        assert_eq!(mode("other_unit"), Some(LocalExecTLSModel));
-        assert_eq!(mode("runtime_block"), Some(InitialExecTLSModel));
-        assert_eq!(mode("plain"), None);
-    }
-
-    /// Local-exec is only sound where the image's TLS block is the static
-    /// one: an ELF executable. Before any module compile sets the output type
-    /// nothing may be assumed.
-    #[test]
-    fn local_exec_is_only_chosen_for_elf_executables() {
-        crate::expr::agent_ptr::set_output_is_executable(true);
-        assert!(crate::expr::agent_ptr::program_tls_is_local_exec(
-            "x86_64-unknown-linux-gnu"
-        ));
-        assert!(crate::expr::agent_ptr::program_tls_is_local_exec(
-            "aarch64-unknown-linux-gnu"
-        ));
-        assert!(!crate::expr::agent_ptr::program_tls_is_local_exec(
-            "arm64-apple-macosx15.0.0"
-        ));
-        assert!(!crate::expr::agent_ptr::program_tls_is_local_exec(
-            "x86_64-pc-windows-msvc"
-        ));
-        crate::expr::agent_ptr::set_output_is_executable(false);
-        assert!(!crate::expr::agent_ptr::program_tls_is_local_exec(
-            "x86_64-unknown-linux-gnu"
-        ));
-    }
 
     fn relocation_results(ir: &str) -> std::collections::HashSet<&str> {
         ir.lines()

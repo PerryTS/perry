@@ -417,6 +417,14 @@ fn compute_object_cache_key_with_env(
     // Target + top-level shape.
     h.field("tgt", opts.target.as_deref().unwrap_or("host"));
     h.field("out", &opts.output_type);
+    h.field(
+        "constfn_off",
+        if opts.disable_constfn_shapes {
+            "1"
+        } else {
+            "0"
+        },
+    );
     h.field("entry", if opts.is_entry_module { "1" } else { "0" });
 
     // Feature flags that round-trip through opts. These influence which

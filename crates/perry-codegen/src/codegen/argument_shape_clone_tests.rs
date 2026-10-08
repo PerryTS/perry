@@ -9,6 +9,7 @@ fn opts() -> CompileOptions {
         emit_ir_only: true,
         is_entry_module: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         app_metadata: AppMetadata::default(),
         ..CompileOptions::default()
     }

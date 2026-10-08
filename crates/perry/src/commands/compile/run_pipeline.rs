@@ -5702,6 +5702,7 @@ pub fn run_with_parse_cache(
 
             // Feature plumbing
             output_type: args.output_type.clone(),
+            disable_constfn_shapes: std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0"),
             needs_stdlib: ctx.needs_stdlib,
             program_is_synchronous,
             needs_ui: ctx.needs_ui,

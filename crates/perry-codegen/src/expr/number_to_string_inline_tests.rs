@@ -16,6 +16,7 @@ fn ir_opts() -> CompileOptions {
     CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     }
 }

@@ -650,6 +650,7 @@ fn captures_this_field_ir() -> String {
     let opts = crate::CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(crate::compile_module(&module, opts).expect("fixture compiles"))
@@ -717,6 +718,7 @@ fn specialized_classes_install_the_declaring_private_brand() {
         emit_ir_only: true,
         is_entry_module: true,
         output_type: "executable".into(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();

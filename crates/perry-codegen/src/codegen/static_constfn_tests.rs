@@ -3,16 +3,6 @@ use super::*;
 use perry_hir::types::Type;
 use perry_hir::{Function, Param};
 
-static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-struct Pin(Option<std::ffi::OsString>);
-impl Drop for Pin {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(v) => std::env::set_var("PERRY_CONSTFN_SHAPE", v),
-            None => std::env::remove_var("PERRY_CONSTFN_SHAPE"),
-        }
-    }
-}
 fn closure(id: u32, this: bool) -> Expr {
     Expr::Closure {
         func_id: id,
@@ -43,26 +33,26 @@ fn opts(output: &str) -> CompileOptions {
     CompileOptions {
         emit_ir_only: true,
         output_type: output.into(),
+        disable_constfn_shapes: false,
         ..Default::default()
     }
 }
 
 #[test]
 fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_shapes() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
     let module = fixture();
     assert!(
         module.classes.is_empty(),
         "exercise a classless literal module"
     );
-    for setting in [None, Some("1"), Some("0")] {
-        match setting {
-            Some(value) => std::env::set_var("PERRY_CONSTFN_SHAPE", value),
-            None => std::env::remove_var("PERRY_CONSTFN_SHAPE"),
-        }
+    for disabled in [false, true] {
+        let setting = disabled;
+        let opts = |output: &str| CompileOptions {
+            disable_constfn_shapes: disabled,
+            ..opts(output)
+        };
         for output in ["executable", "dylib"] {
-            let admitted = output == "executable" && setting != Some("0");
+            let admitted = output == "executable" && !disabled;
             let births = crate::module_birth_shapes(&module, opts(output)).unwrap();
             assert_eq!(births.len(), usize::from(admitted), "{setting:?}/{output}");
             let mut options = opts(output);
@@ -88,9 +78,6 @@ fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_sh
 
 #[test]
 fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patches() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     let m = fixture();
     let births = crate::module_birth_shapes(&m, opts("executable")).unwrap();
     assert_eq!(
@@ -149,8 +136,11 @@ fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patc
         crate::stubs::static_shape_seed_ll(&[warm]),
         "cold and sidecar replay must have identical seed references"
     );
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "0");
-    let off = String::from_utf8(crate::compile_module(&m, opts("executable")).unwrap()).unwrap();
+    let off = CompileOptions {
+        disable_constfn_shapes: true,
+        ..opts("executable")
+    };
+    let off = String::from_utf8(crate::compile_module(&m, off).unwrap()).unwrap();
     let ordinary_atoms = off.matches("call i64 @js_string_pool_atom").count();
     assert!(
         ordinary_atoms > 0,
@@ -161,7 +151,6 @@ fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patc
         ordinary_atoms,
         "packed finalizer metadata must not allocate JavaScript string-pool atoms"
     );
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert!(!unloadable.contains("call i64 @js_object_finalize_constfn_static"));
@@ -331,9 +320,6 @@ fn anonymous_record_admission_uses_the_full_constructor_proof() {
 
 #[test]
 fn closed_literal_constructor_emits_a_separate_final_shape() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     let mut class = empty_class();
     class.fields.push(perry_hir::ClassField {
         name: "m".into(),
@@ -518,9 +504,6 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
 
 #[test]
 fn general_class_records_follow_registration_and_finalize_the_completed_result() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     let mut class = user_class("User", 7, 1);
     class.fields.push(perry_hir::ClassField {
         name: "effect".into(),
@@ -636,9 +619,6 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
 
 #[test]
 fn class_replacement_returns_never_produce_a_final_record() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     let mut class = user_class("Replacement", 7, 1);
     class.constructor = Some(constructor(vec![Stmt::Return(Some(Expr::Object(
         Vec::new(),
@@ -680,9 +660,6 @@ fn class_replacement_returns_never_produce_a_final_record() {
 
 #[test]
 fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
-    let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    let _pin = Pin(std::env::var_os("PERRY_CONSTFN_SHAPE"));
-    std::env::set_var("PERRY_CONSTFN_SHAPE", "1");
     let base = user_class("Base", 7, 1);
     let mut child = user_class("Child", 8, 2);
     child.extends = Some(base.id);

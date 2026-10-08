@@ -416,6 +416,11 @@ pub struct CompileOptions {
     /// Output type. "executable" emits a `main`, "dylib" emits a shared
     /// library plugin with no entrypoint.
     pub output_type: String,
+    /// `PERRY_CONSTFN_SHAPE=0` (A/B knob): build no ConstFn lanes and mark no
+    /// body permanent, even in an executable. The driver reads the variable
+    /// once; codegen reads only this field, so one compile decides from its
+    /// own options and parallel compiles cannot see each other's choice.
+    pub disable_constfn_shapes: bool,
     /// Whether the project needs `libperry_stdlib.a` linked in.
     pub needs_stdlib: bool,
     /// The whole program is proven unable to schedule asynchronous work

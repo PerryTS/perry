@@ -103,6 +103,7 @@ fn ir_opts() -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,
@@ -451,6 +452,75 @@ fn dispatch_tower_emission_is_run_to_run_deterministic() {
         first, second,
         "two compiles of the same module must emit byte-identical IR (#7622)"
     );
+}
+
+/// A compile's output depends only on its own inputs. Compiles of different
+/// output kinds (executable, dylib, executable with ConstFn shapes disabled)
+/// run concurrently and each must still equal its serial reference. Before
+/// the ConstFn knob and the TLS model became per-compile facts, a compile
+/// read them from process-wide state another test was flipping, and a body
+/// info's `FN_PERMANENT_IMAGE` bit (bit 12 of the flags word) flipped about
+/// once in two thousand suite runs.
+#[test]
+fn concurrent_compiles_of_different_output_kinds_are_deterministic() {
+    let kinds: [(&str, bool); 3] = [
+        ("executable", false),
+        ("dylib", false),
+        ("executable", true),
+    ];
+    let compile = |(output, constfn_off): (&str, bool)| {
+        let mut opts = ir_opts();
+        opts.target = Some("x86_64-unknown-linux-gnu".to_string());
+        opts.output_type = output.to_string();
+        opts.disable_constfn_shapes = constfn_off;
+        String::from_utf8(compile_module(&dispatch_tower_module(), opts).expect("codegen"))
+            .expect("LLVM IR should be UTF-8")
+    };
+    let reference: Vec<String> = kinds.iter().map(|k| compile(*k)).collect();
+    // Liveness: the kinds must really emit different IR, or a mixed-up
+    // result could never be observed.
+    let permanent_infos = |ir: &str| {
+        ir.lines()
+            .filter(|line| line.contains("$info = "))
+            .filter_map(|line| line.split(", i32 ").nth(1)?.parse::<u32>().ok())
+            .filter(|flags| flags & crate::runtime_abi::FN_PERMANENT_IMAGE != 0)
+            .count()
+    };
+    assert!(
+        permanent_infos(&reference[0]) > 0,
+        "an executable marks permanent bodies"
+    );
+    assert_eq!(
+        permanent_infos(&reference[1]),
+        0,
+        "a dylib marks no permanent body"
+    );
+    assert_eq!(
+        permanent_infos(&reference[2]),
+        0,
+        "disabled ConstFn marks no permanent body"
+    );
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| {
+                let reference = &reference[i];
+                scope.spawn(move || {
+                    for round in 0..24 {
+                        assert!(
+                            compile(*kind) == *reference,
+                            "{kind:?} round {round}: a concurrent compile of another \
+                             output kind changed this compile's IR"
+                        );
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("compile thread");
+        }
+    });
 }
 
 /// #9188 follow-up: the borrowing (`_static`) registration spelling lends the
