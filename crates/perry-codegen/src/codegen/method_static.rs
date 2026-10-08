@@ -47,7 +47,7 @@ pub(in crate::codegen) fn compile_static_method(
     let class_value_slot = format!("@{llvm_name}__classval");
     llmod.add_raw_global(format!(
         "{class_value_slot} = private {}global double 0.0, align 8",
-        if crate::codegen::program_has_worker() {
+        if llmod.program_has_worker {
             "thread_local "
         } else {
             ""
@@ -210,6 +210,8 @@ pub(in crate::codegen) fn compile_static_method(
     };
 
     let mut ctx = FnCtx {
+        program_has_worker: cross_module.program_has_worker,
+        program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("{}.{}", class.name, f.name),

@@ -1197,7 +1197,6 @@ pub fn run_with_parse_cache(
             });
             found
         });
-    perry_codegen::set_program_has_worker(program_has_worker);
     // Immutable module-global leaves (perry-codegen codegen/global_transfer.rs)
     // must be published by producer modules that never launch an agent
     // themselves, so the decision is whole-program, like the Worker flag.
@@ -1213,7 +1212,6 @@ pub fn run_with_parse_cache(
         });
         found
     });
-    perry_codegen::set_program_has_thread_agents(program_has_thread_agents);
     let thread_literal_module_prefixes: Vec<String> = if program_has_thread_agents {
         let mut prefixes: Vec<_> = ctx
             .native_modules
@@ -5703,6 +5701,8 @@ pub fn run_with_parse_cache(
             // Feature plumbing
             output_type: args.output_type.clone(),
             disable_constfn_shapes: std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0"),
+            program_has_worker,
+            program_has_thread_agents,
             needs_stdlib: ctx.needs_stdlib,
             program_is_synchronous,
             needs_ui: ctx.needs_ui,

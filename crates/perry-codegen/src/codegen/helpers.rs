@@ -428,45 +428,6 @@ pub(super) fn enable_module_init_shadow_frame(
     (shadow_slot_map, shadow_slot_clears_after_stmt)
 }
 
-/// Gen-GC write-barrier emission gate. Default ON: emit a
-/// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
-/// the compatibility wrapper, after every heap-store site. Set
-/// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
-/// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
-/// equivalent to the default.
-/// #10399: whether the program may construct a `worker_threads` Worker.
-/// Namespace and CommonJS constructors can be opaque to call-site lowering,
-/// so the driver also counts worker_threads use anywhere in the module graph.
-///
-/// When it does, the module-init once-guard (`__perry_init_done_*`) and the
-/// module-global value slots are emitted **thread-local**, so every worker
-/// thread runs its own module init and allocates its own objects in its own
-/// thread-local arena — the Node/bun Worker model, where each worker
-/// evaluates its own copy of the module graph.
-///
-/// Without this, the guard is a process-wide flag: a worker reaching
-/// `<mod>__init` finds the flag the MAIN thread already set, skips the body
-/// entirely, and then reads module-global slots pointing into the *main*
-/// thread's arena. `classify_heap_generation` returns `Unknown` there, so
-/// the object reads back with no keys at all.
-///
-/// Set once by the compile driver before any module codegen runs, and folded
-/// into the object-cache key (a cached `.o` from a worker-free build must not
-/// be served to a build that has one). Programs without worker_threads use
-/// keep process-wide globals and pay no TLS cost.
-static PROGRAM_HAS_WORKER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Record whether this program constructs a Worker. See [`program_has_worker`].
-pub fn set_program_has_worker(value: bool) {
-    PROGRAM_HAS_WORKER.store(value, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// See [`set_program_has_worker`].
-pub fn program_has_worker() -> bool {
-    PROGRAM_HAS_WORKER.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Every worker entry compiled into the program, as `(absolute path, module
 /// prefix)`. The entry module's `main` registers each with the runtime's
 /// worker entry table, which any Worker construction the compiler could not
@@ -483,21 +444,12 @@ pub fn worker_entries() -> Vec<(String, String)> {
     WORKER_ENTRIES.lock().unwrap().clone()
 }
 
-/// Whether any module of this program launches a perry/thread agent
-/// (`spawn`, `parallelMap`, `parallelFilter`). Separate from Worker
-/// module evaluation: perry/thread agents share user-module globals but each
-/// agent owns a separate moving heap. The driver sets it before module codegen.
-static PROGRAM_HAS_THREAD_AGENTS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub fn set_program_has_thread_agents(value: bool) {
-    PROGRAM_HAS_THREAD_AGENTS.store(value, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn program_has_thread_agents() -> bool {
-    PROGRAM_HAS_THREAD_AGENTS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
+/// Gen-GC write-barrier emission gate. Default ON: emit a
+/// `js_write_barrier_slot(parent_bits, slot_addr, child_bits)` call, or
+/// the compatibility wrapper, after every heap-store site. Set
+/// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
+/// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
+/// equivalent to the default.
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();

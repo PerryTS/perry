@@ -635,7 +635,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // main-thread import init and every later worker's entry would be
             // a no-op, leaving the spawned thread idle and the parent waiting
             // forever.
-            let init_name = if crate::codegen::program_has_worker() {
+            let init_name = if ctx.program_has_worker {
                 format!("{}__init", target_prefix)
             } else {
                 format!("{}__init_body", target_prefix)

@@ -263,6 +263,8 @@ fn compile_ir(module: &Module) -> String {
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
+        program_has_worker: false,
+        program_has_thread_agents: false,
         ..crate::CompileOptions::default()
     };
     String::from_utf8(crate::compile_module(module, options).expect("module compiles"))

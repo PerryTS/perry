@@ -152,6 +152,8 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
+        program_has_worker: false,
+        program_has_thread_agents: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,

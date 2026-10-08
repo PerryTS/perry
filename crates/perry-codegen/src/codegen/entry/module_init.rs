@@ -54,7 +54,7 @@ pub(super) fn compile_module_init(
     // `classify_heap_generation` is `Unknown`, so the object reads back
     // with no keys. Node and bun evaluate the module graph once per
     // worker; a thread-local flag is what makes that happen here.
-    if crate::codegen::program_has_worker() {
+    if llmod.program_has_worker {
         llmod.add_internal_thread_local_global(&done_global, I8, "0");
     } else {
         llmod.add_internal_global(&done_global, I8, "0");
@@ -250,6 +250,8 @@ pub(super) fn compile_module_init(
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
     }
     let mut ctx = FnCtx {
+        program_has_worker: cross_module.program_has_worker,
+        program_has_thread_agents: cross_module.program_has_thread_agents,
         func: init_fn,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: "module_init".to_string(),

@@ -43,7 +43,7 @@ pub(crate) fn emit_flag_globals<'a>(
     llmod: &mut crate::module::LlModule,
     templates: impl IntoIterator<Item = &'a String>,
 ) {
-    let tls = if crate::codegen::program_has_worker() {
+    let tls = if llmod.program_has_worker {
         "thread_local "
     } else {
         ""

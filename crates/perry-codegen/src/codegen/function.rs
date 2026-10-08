@@ -1175,6 +1175,8 @@ pub(super) fn compile_function(
     };
 
     let mut ctx = FnCtx {
+        program_has_worker: cross_module.program_has_worker,
+        program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: f.name.clone(),

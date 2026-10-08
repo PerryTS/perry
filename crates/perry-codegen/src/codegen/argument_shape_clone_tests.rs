@@ -10,6 +10,8 @@ fn opts() -> CompileOptions {
         is_entry_module: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,
+        program_has_worker: false,
+        program_has_thread_agents: false,
         app_metadata: AppMetadata::default(),
         ..CompileOptions::default()
     }

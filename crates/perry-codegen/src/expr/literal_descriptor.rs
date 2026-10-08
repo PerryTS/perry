@@ -153,7 +153,7 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
     // which is how three of prettier's plugins stopped linking. Fall back to
     // ordinary evaluation for worker-bearing programs; every other program
     // keeps this fast path untouched.
-    if crate::codegen::program_has_worker() {
+    if ctx.program_has_worker {
         return None;
     }
     let mut descriptor = Descriptor::default();

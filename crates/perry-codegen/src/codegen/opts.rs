@@ -421,6 +421,10 @@ pub struct CompileOptions {
     /// once; codegen reads only this field, so one compile decides from its
     /// own options and parallel compiles cannot see each other's choice.
     pub disable_constfn_shapes: bool,
+    /// Workers evaluate module state independently in each thread.
+    pub program_has_worker: bool,
+    /// perry/thread agents share module state but own their moving heaps.
+    pub program_has_thread_agents: bool,
     /// Whether the project needs `libperry_stdlib.a` linked in.
     pub needs_stdlib: bool,
     /// The whole program is proven unable to schedule asynchronous work
@@ -913,6 +917,8 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
+    pub program_has_worker: bool,
+    pub program_has_thread_agents: bool,
     pub namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.

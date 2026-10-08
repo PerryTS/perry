@@ -144,7 +144,7 @@ pub(super) fn compile_module_entry(
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
-    let entry_in_init = is_entry && crate::codegen::program_has_worker();
+    let entry_in_init = is_entry && llmod.program_has_worker;
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -728,6 +728,8 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            program_has_worker: cross_module.program_has_worker,
+            program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
             source_function: "module_init".to_string(),

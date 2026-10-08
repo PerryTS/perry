@@ -53,7 +53,7 @@ pub(crate) fn emit_static_call_guard(
     let site_name = crate::expr::inline_cache_global_name(ctx, site);
     let memo = format!("@{site_name}_smemo");
     let unarmed = format!("@{site_name}_sunarmed");
-    let tls = if crate::codegen::program_has_worker() {
+    let tls = if ctx.program_has_worker {
         "thread_local "
     } else {
         ""

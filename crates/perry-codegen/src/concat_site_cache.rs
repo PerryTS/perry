@@ -180,8 +180,7 @@ pub(crate) fn try_lower_concat_site_cached(
     // Both cached strings and their root registration belong to one agent.
     // A process-global hit can otherwise reuse a retired worker's heap, and
     // simultaneous workers can race to fill/register the same cell.
-    let tls = if crate::codegen::program_has_worker() || crate::codegen::program_has_thread_agents()
-    {
+    let tls = if ctx.program_has_worker || ctx.program_has_thread_agents {
         "thread_local "
     } else {
         ""

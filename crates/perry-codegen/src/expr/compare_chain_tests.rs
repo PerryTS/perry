@@ -57,6 +57,8 @@ fn ir(expr: Expr, extra: Vec<Stmt>) -> String {
                 emit_ir_only: true,
                 output_type: "executable".into(),
                 disable_constfn_shapes: false,
+                program_has_worker: false,
+                program_has_thread_agents: false,
                 ..Default::default()
             },
         )

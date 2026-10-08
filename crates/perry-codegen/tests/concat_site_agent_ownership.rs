@@ -1,8 +1,6 @@
 //! Cache cells containing heap handles must have the same agent ownership
 //! as literal pools, even in a helper module that imports no thread API.
-use perry_codegen::{
-    compile_module, set_program_has_thread_agents, set_program_has_worker, CompileOptions,
-};
+use perry_codegen::{compile_module, CompileOptions};
 use perry_hir::{BinaryOp, Expr, Module, Stmt};
 
 #[test]
@@ -13,12 +11,10 @@ fn concat_site_cells_and_fill_address_are_agent_local_in_worker_graphs() {
         left: Box::new(Expr::String("worker-".into())),
         right: Box::new(Expr::Integer(1)),
     }));
-    // This integration target has one test, so its process-wide compilation
-    // graph flags cannot race with unrelated compilation tests.
     for (workers, agents) in [(false, false), (true, false), (false, true)] {
-        set_program_has_worker(workers);
-        set_program_has_thread_agents(agents);
         let opts = CompileOptions {
+            program_has_worker: workers,
+            program_has_thread_agents: agents,
             emit_ir_only: true,
             is_entry_module: false,
             ..Default::default()
@@ -46,6 +42,73 @@ fn concat_site_cells_and_fill_address_are_agent_local_in_worker_graphs() {
             .lines()
             .any(|line| line.starts_with(symbol) && line.contains(" constant ")));
     }
-    set_program_has_worker(false);
-    set_program_has_thread_agents(false);
+}
+
+// A helper imports no launch API: only the whole-program compile options
+// determine ownership. All four combinations must match their serial IR.
+#[test]
+fn concurrent_compiles_have_independent_agent_ownership() {
+    let compile = |workers, agents| {
+        let mut module = Module::new("ownership_helper.ts");
+        module.init.push(Stmt::Expr(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::String("agent-".into())),
+            right: Box::new(Expr::Integer(1)),
+        }));
+        String::from_utf8(
+            compile_module(
+                &module,
+                CompileOptions {
+                    target: Some("x86_64-unknown-linux-gnu".into()),
+                    program_has_worker: workers,
+                    program_has_thread_agents: agents,
+                    emit_ir_only: true,
+                    is_entry_module: false,
+                    ..Default::default()
+                },
+            )
+            .expect("compile"),
+        )
+        .expect("IR")
+    };
+    let modes = [(false, false), (true, false), (false, true), (true, true)];
+    let references: Vec<_> = modes.iter().map(|&(w, a)| compile(w, a)).collect();
+    for (i, &(workers, agents)) in modes.iter().enumerate() {
+        let ir = &references[i];
+        let table = ir
+            .lines()
+            .find(|l| l.starts_with("@perry_concat_site_"))
+            .unwrap();
+        assert_eq!(table.contains("thread_local"), workers || agents);
+        let guard = ir
+            .lines()
+            .find(|l| l.starts_with("@__perry_init_done_"))
+            .unwrap();
+        assert_eq!(guard.contains("thread_local"), workers);
+        let literals = ir
+            .lines()
+            .find(|l| l.starts_with("@__perry_literals_ready_"))
+            .unwrap();
+        assert_eq!(literals.contains("thread_local"), workers);
+    }
+    assert_ne!(references[0], references[1]);
+    assert_ne!(references[0], references[2]);
+    assert_ne!(references[1], references[2]);
+    let barrier = std::sync::Barrier::new(modes.len());
+    std::thread::scope(|scope| {
+        for (i, &(workers, agents)) in modes.iter().enumerate() {
+            let reference = &references[i];
+            let barrier = &barrier;
+            scope.spawn(move || {
+                for round in 0..24 {
+                    barrier.wait();
+                    assert_eq!(
+                        &compile(workers, agents),
+                        reference,
+                        "workers={workers}, agents={agents}, round={round}"
+                    );
+                }
+            });
+        }
+    });
 }

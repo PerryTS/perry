@@ -102,11 +102,8 @@ pub use codegen::{
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
     ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
 };
-// #10399: whole-program Worker flag, set by the driver before module codegen.
-pub use codegen::{
-    program_has_thread_agents, program_has_worker, set_program_has_thread_agents,
-    set_program_has_worker, set_worker_entries, worker_entries,
-};
+// #10399: worker entries supplied by the driver before module codegen.
+pub use codegen::{set_worker_entries, worker_entries};
 pub use collectors::CjsPreambleCensus;
 // Function layout from a recorded first-execution order, set by the driver.
 pub use function_order::{

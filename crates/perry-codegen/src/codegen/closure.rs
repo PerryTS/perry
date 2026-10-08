@@ -1018,6 +1018,8 @@ pub(super) fn compile_closure(
     super::arguments::box_rooted_parameter_slots(lf, params, &closure_boxed_vars, &locals);
 
     let mut ctx = FnCtx {
+        program_has_worker: cross_module.program_has_worker,
+        program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("closure_{}", func_id),
