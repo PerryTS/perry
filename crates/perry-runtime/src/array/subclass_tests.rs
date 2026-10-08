@@ -1280,9 +1280,9 @@ fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
     }
 
     let left =
-        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 16);
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 65536);
     let right =
-        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 16);
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 65536);
     let wrong_kind =
         crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT32 as i32, 16);
     let short =

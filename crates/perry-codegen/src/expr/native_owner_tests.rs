@@ -52,6 +52,7 @@ fn loop_body(bound: Expr, body: Vec<Stmt>) -> Stmt {
     }
 }
 fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String {
+    let argc = params.len();
     let mut m = Module::new(name);
     m.functions.push(Function {
         id: 1,
@@ -79,6 +80,33 @@ fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String 
             arg: Some(Box::new(Expr::Integer(65536))),
         },
     ));
+    let args = match argc {
+        1 => vec![Expr::LocalGet(100)],
+        2 => vec![Expr::LocalGet(100), Expr::Integer(0)],
+        3 => {
+            m.init.push(local(
+                101,
+                Type::Any,
+                false,
+                Expr::TypedArrayNew {
+                    kind,
+                    arg: Some(Box::new(Expr::Integer(65536))),
+                },
+            ));
+            vec![
+                Expr::Array(vec![Expr::Integer(0), Expr::Integer(65535)]),
+                Expr::LocalGet(100),
+                Expr::LocalGet(101),
+            ]
+        }
+        _ => unreachable!(),
+    };
+    m.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args,
+        type_args: vec![],
+        byte_offset: 0,
+    }));
     String::from_utf8(
         crate::compile_module(
             &m,
@@ -130,12 +158,12 @@ fn native_f64_region_resolves_the_owner_data_word() {
 #[test]
 fn native_packed_columns_resolve_each_owner_data_word() {
     let key = || get(1, Expr::LocalGet(10));
-    let set = |dst, src| {
-        Stmt::Expr(Expr::IndexSet {
-            object: Box::new(Expr::LocalGet(dst)),
-            index: Box::new(key()),
-            value: Box::new(get(src, key())),
-        })
+    // Keep every entity read in the one leading statement admitted by B4.
+    // x[e] = y[e] = x[e] = y[e] gives both columns two receiver accesses.
+    let set = |dst, value| Expr::IndexSet {
+        object: Box::new(Expr::LocalGet(dst)),
+        index: Box::new(key()),
+        value: Box::new(value),
     };
     let output = compile(
         "native_packed_columns",
@@ -151,7 +179,7 @@ fn native_packed_columns_resolve_each_owner_data_word() {
                     property: "length".into(),
                     byte_offset: 0,
                 },
-                vec![set(2, 3), set(3, 2)],
+                vec![Stmt::Expr(set(2, set(3, set(2, get(3, key())))))],
             ),
             Stmt::Return(Some(Expr::Integer(0))),
         ],
