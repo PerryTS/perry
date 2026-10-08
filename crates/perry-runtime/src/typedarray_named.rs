@@ -70,8 +70,13 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
         return None;
     }
     let obj_type = crate::buffer::header::byte_cell_type(addr)?;
-    if crate::buffer::buffer_has_own_prop(addr, std::str::from_utf8(name).unwrap())
-        || crate::buffer::store::bag_get(addr, crate::buffer::store::PROTOTYPE_KEY).is_some()
+    // Shadow guard: own properties and a custom prototype live only in the
+    // bag, so a cell without one (an owner with link 0, a view linked straight
+    // to its owner) has neither; that is one load of the link.
+    let bag = crate::buffer::store::bag(addr);
+    if !bag.is_null()
+        && (crate::buffer::store::bag_holds(bag, name)
+            || crate::buffer::store::bag_holds(bag, crate::buffer::store::PROTOTYPE_KEY.as_bytes()))
     {
         return None;
     }

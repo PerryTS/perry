@@ -73,6 +73,8 @@ pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;
+/// `gc::GC_TYPE_OBJECT`: an ordinary object, e.g. a byte cell's property bag.
+pub const GC_TYPE_OBJECT: u8 = 2;
 /// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
 /// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
 /// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type
@@ -736,6 +738,12 @@ pub const BYTES_LEN: usize = 0;
 pub const BYTES_AUX: usize = 4;
 pub const BYTES_LINK: usize = 8;
 pub const BYTES_STORE: usize = 16;
+/// A view whose link is its property bag finds its owner, NaN-boxed, in the
+/// bag's first inline slot: the bag is born holding `#<perry:view-owner>` as
+/// its first key with one inline slot, so the owner sits right after the
+/// 16-byte `ObjectHeader` on every target. Emitted view resolution and
+/// `buffer::store::owner` read it with one load, never a key lookup.
+pub const BYTES_VIEW_BAG_OWNER: usize = 16;
 pub const BYTES_TYPE_BASE: u8 = 0x40;
 pub const BYTES_TYPE_VIEW: u8 = 0x20;
 pub const BYTES_TYPE_BRAND_MASK: u8 = 0x1f;
