@@ -62,19 +62,16 @@ impl IteratorRecordPlan {
         // candidate separately from every runtime representation proof.
         let numeric_candidate = matches!(&hint, Type::Array(element)
             if matches!(element.as_ref(), Type::Number));
-        let source = local(
-            ctx,
-            out,
-            hint,
-            false,
-            runtime("arrayRecordSource", vec![source]),
-        );
+        let source = local(ctx, out, hint, false, source);
         let use_iter = local(
             ctx,
             out,
             Type::Boolean,
             false,
-            runtime("arrayRecordNeedsIterator", vec![Expr::LocalGet(source)]),
+            runtime(
+                "arrayRecordEnter",
+                vec![Expr::LocalSet(source, Box::new(Expr::LocalGet(source)))],
+            ),
         );
         // The source already owns the record. Reusing its actual Any value
         // keeps indexed property lowering on runtime facts rather than an
@@ -759,7 +756,7 @@ mod tests {
             "function f(a: number[]) { for (const x of a) console.log('unique-body', x); }",
         ] {
             let ir = hir(source);
-            assert!(ir.contains("arrayRecordNeedsIterator"), "{ir}");
+            assert!(ir.contains("arrayRecordEnter"), "{ir}");
             assert!(
                 ir.contains("iteratorStep") && ir.contains("IndexGet"),
                 "{ir}"
@@ -893,7 +890,8 @@ mod tests {
         );
         let nested = hir("const [[x,y]] = [[1,2]];");
         assert_eq!(
-            nested.matches("arrayRecordNeedsIterator").count(),
+            nested.matches("arrayRecordNeedsIterator").count()
+                + nested.matches("arrayRecordEnter").count(),
             2,
             "{nested}"
         );
@@ -902,7 +900,7 @@ mod tests {
     #[test]
     fn array_record_destructure_uses_same_step_and_done() {
         let ir = hir("function f(a: any) { const [x,y,z] = a; return [x,y,z]; }");
-        assert_eq!(ir.matches("arrayRecordNeedsIterator").count(), 1, "{ir}");
+        assert_eq!(ir.matches("arrayRecordEnter").count(), 1, "{ir}");
         assert_eq!(ir.matches("method: \"iteratorStep\"").count(), 3, "{ir}");
         assert!(
             ir.contains("IndexGet") && ir.contains("arrayRecordClose"),

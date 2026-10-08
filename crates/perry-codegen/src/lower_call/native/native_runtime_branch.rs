@@ -18,9 +18,19 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
-            "arrayRecordSource" => {
-                let value = lower_expr(ctx, &args[0])?;
-                return Ok(ctx.block().call(DOUBLE, "js_array_record_source", &[(DOUBLE, &value)]));
+            "arrayRecordEnter" => {
+                let Expr::LocalSet(source_id, source_expr) = &args[0] else {
+                    return Err(anyhow::anyhow!("arrayRecordEnter requires its private source binding"));
+                };
+                let (values, roots) = super::lower_call_args_rooted(ctx, std::slice::from_ref(source_expr.as_ref()))?;
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                let needs = ctx.block().call(I32, "js_array_record_enter",
+                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot)]);
+                let source = ctx.block().load(DOUBLE, &slot);
+                roots.release(ctx);
+                crate::expr::invalidate_local_write_facts(ctx, *source_id);
+                crate::expr::bind_lowered_value_to_local(ctx, *source_id, &source, source_expr)?;
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
             }
             "arrayRecordForUpdate" => {
                 return lower_expr(ctx, &Expr::Conditional {

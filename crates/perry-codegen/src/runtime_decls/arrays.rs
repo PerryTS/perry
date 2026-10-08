@@ -348,7 +348,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #10524: `const [a, b] = <untyped>` — 0 when the source is an ordinary
     // Array whose iteration is unobservable (read it by index), 1 otherwise.
     module.declare_function("js_array_destructure_needs_iterator", I32, &[DOUBLE]);
-    module.declare_function("js_array_record_source", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR]);
     module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);
     module.declare_function("js_array_record_literal_needs_iterator", I32, &[]);
     module.declare_function("js_array_record_close_absent", I32, &[]);
