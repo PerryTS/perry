@@ -117,7 +117,7 @@ pub(crate) fn prepare_loop_accesses(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt
         } else {
             &brand[..]
         };
-        let mut access = super::byte_cell::access_for(ctx, id, brands);
+        let mut access = super::byte_cell::install_loop_access(ctx, id, brands);
         // Construction plus the existing single-definition/no-reassignment
         // proof makes this binding invariant. Calls still dirty its storage
         // proof, including detach, resize and moving collection.

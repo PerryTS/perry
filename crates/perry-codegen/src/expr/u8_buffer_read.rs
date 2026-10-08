@@ -471,7 +471,7 @@ pub(crate) fn byte_view_param_for(
             .byte_view_access(*id, brands)?
             .clone()
     } else {
-        super::byte_cell::access_for(ctx, *id, brands)
+        super::byte_cell::access_for(ctx, *id, brands)?
     };
     super::byte_cell::revalidate(ctx, &access, boxed);
     let state = ctx.block().load(crate::types::I8, &access.valid_slot);

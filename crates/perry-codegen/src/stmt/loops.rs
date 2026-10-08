@@ -6613,9 +6613,6 @@ fn is_packed_f64_loop_index(
 /// Anything else (NaN, infinities, fractional or out-of-i32-range bounds,
 /// non-numbers, a counter seeded past 2^31) leaves the flag false and runs the
 /// generic per-iteration comparison with full JS semantics.
-//  is supplied only after the Number tier proves a stable strict
-// bound and an increment-only body with that finite budget. It permits scoped
-// canonical storage, requires nonnegative entry, and preserves -0 on a miss.
 // `Some(extra)` is supplied only after the Number tier proves a stable strict
 // bound and an increment-only body with that finite budget. It permits scoped
 // canonical storage, requires nonnegative entry, and preserves -0 on a miss.
