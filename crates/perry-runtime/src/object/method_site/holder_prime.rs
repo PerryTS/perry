@@ -95,11 +95,18 @@ pub(super) unsafe fn prime_holder(
                 } else {
                     0
                 };
+                // The two ShapeIds may also answer the body's own lookups.
+                let code = match constfn {
+                    0 => info.code as u64,
+                    _ => crate::object::regex_proto_thunks::method_site_code(
+                        info, word, &shape, argc,
+                    ),
+                };
                 let entry = MethodEntry {
                     word,
                     slot: METHOD_SITE_INHERITED | constfn | native_args_tag(info) | u64::from(s),
                     info: info as *const crate::closure::JsFunctionInfo as u64,
-                    code: info.code as u64,
+                    code,
                     closure: next_addr,
                     gen: std::ptr::read(next_addr as *const u64),
                 };

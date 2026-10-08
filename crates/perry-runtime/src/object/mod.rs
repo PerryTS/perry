@@ -259,6 +259,8 @@ mod reserved_floor;
 pub(crate) use reserved_floor::{
     ensure_reserved_floor_keys, reserved_slot_floor_for_class_id, reserved_slot_floor_for_object,
 };
+#[cfg(all(test, feature = "regex-engine"))]
+mod regex_direct_test_tests;
 pub(crate) mod regex_proto_thunks;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod regex_read_sites;

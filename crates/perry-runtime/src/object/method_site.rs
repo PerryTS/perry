@@ -726,7 +726,9 @@ unsafe fn memo_hit(slot: *mut MethodSiteSlot, bits: u64) -> Option<(u64, u64)> {
                 if std::ptr::read(holder as *const u64) != e.gen {
                     return None;
                 }
-                return Some((field_bits(holder, index), e.code));
+                // Arguments run before the split call: the body, not `e.code`.
+                let body = (*(e.info as *const crate::closure::JsFunctionInfo)).code;
+                return Some((field_bits(holder, index), body as u64));
             }
             _ if s & METHOD_SITE_INHERITED != 0 => {
                 let holder = e.closure;

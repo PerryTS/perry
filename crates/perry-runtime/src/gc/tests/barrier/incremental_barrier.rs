@@ -323,7 +323,7 @@ fn test_store_outside_incremental_mark_keeps_generational_behavior_only() {
 fn test_incremental_barrier_shades_regexp_literal_birth_data() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
-    let site = Box::leak(Box::new(0u64)) as *mut u64;
+    let site = Box::leak(Box::new([0u64; 2])).as_mut_ptr();
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_string_ptr(crate::string::js_string_from_str("birth-shade"));
     let flags = scope.root_string_ptr(crate::string::js_string_from_str("g"));

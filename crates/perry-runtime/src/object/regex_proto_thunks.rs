@@ -287,6 +287,147 @@ pub(super) extern "C" fn regex_proto_test_thunk(
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
 }
 
+/// `RegExp.prototype.test` called by a method site whose entry proved, from
+/// the receiver's and the holder's ShapeIds alone, everything RegExpExec
+/// would look up before the search ([`method_site_test_code`]): the receiver
+/// is branded, `exec` is the builtin and `test` is this builtin. The site
+/// compares both ShapeIds immediately before the call, so with a heap string
+/// argument (ToString is the identity: nothing runs, nothing allocates)
+/// RegExpBuiltinExec starts at once. Any other argument is coerced by the
+/// generic thunk, which then re-reads `exec` as the spec orders.
+#[cfg(feature = "regex-engine")]
+pub(crate) extern "C" fn regex_proto_test_direct(
+    c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    let value = crate::value::JSValue::from_bits(arg.to_bits());
+    // A short (inline) string has no StringHeader to search in place; its
+    // materialization, like any other ToString, is the thunk's.
+    if value.is_short_string() || !value.is_string() {
+        return regex_proto_test_thunk(c, this, arg);
+    }
+    let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_proven(
+        (this.as_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+        value.as_string_ptr(),
+    ));
+    f64::from_bits(crate::value::JSValue::bool(matched).bits())
+}
+
+/// The code a method site's inherited ConstFn entry calls on a fused hit:
+/// the body's own, or a builtin's entry that skips lookups the receiver's
+/// and holder's ShapeIds already answer ([`method_site_test_code`]). A split
+/// site runs its arguments between the lookup and the call, so its call
+/// always takes the body's own code (`method_site::memo_hit`).
+///
+/// # Safety
+/// As [`method_site_test_code`].
+pub(crate) unsafe fn method_site_code(
+    info: &crate::closure::JsFunctionInfo,
+    word: u64,
+    holder: &crate::object::shapes::ShapeDescriptor,
+    argc: usize,
+) -> u64 {
+    #[cfg(feature = "regex-engine")]
+    return method_site_test_code(info, word, holder, argc);
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        let _ = (word, holder, argc);
+        info.code as u64
+    }
+}
+
+/// The code a method site's inherited ConstFn entry for `recv.test(s)` calls
+/// on a hit: [`regex_proto_test_direct`] when the receiver's shape and the
+/// holder's shape prove RegExpExec's `Get(R, "exec")` without running it,
+/// else the body itself.
+///
+/// The facts, each a property of one of the two ShapeIds the hit compares
+/// (shapes are immutable, so a fact true now is true for every hit):
+/// * receiver: the intrinsic private matcher at inline slot 0 and own data
+///   `lastIndex` at inline slot 1, both `Any` lanes (the direct entry reads
+///   them raw), and no own `exec`;
+/// * holder (the receiver's direct prototype): `exec` is a data slot whose
+///   ConstFn lane names the builtin exec's body. A store or delete of
+///   `exec` revokes the lane, which is a new holder ShapeId.
+///
+/// # Safety
+/// `word` is the receiver word the site is priming (class id | ShapeId << 32)
+/// and `holder` the descriptor of that receiver's direct prototype's shape.
+#[cfg(feature = "regex-engine")]
+pub(crate) unsafe fn method_site_test_code(
+    info: &crate::closure::JsFunctionInfo,
+    word: u64,
+    holder: &crate::object::shapes::ShapeDescriptor,
+    argc: usize,
+) -> u64 {
+    let body = info.code as u64;
+    if info.code != regex_proto_test_thunk as *const u8 || argc != 1 {
+        return body;
+    }
+    // The receiver word the site compares: class id | ShapeId << 32.
+    let Some(own) = crate::object::shapes::shape_descriptor_by_id((word >> 32) as u32) else {
+        return body;
+    };
+    let keys = own.keys as usize as *const crate::array::ArrayHeader;
+    let count = own.logical_key_count;
+    if keys.is_null()
+        || own.live_inline_slot_count < 2
+        || crate::regex::matcher_slot(keys, count) != Some(0)
+        || crate::object::keys_find_slot_by_bytes_resolved(keys, count, b"lastIndex") != Some(1)
+        || crate::object::key_attrs::key_is_accessor_at(keys, 1)
+        || crate::object::keys_find_slot_by_bytes_resolved(keys, count, b"exec").is_some()
+        || (0..2).any(|slot| {
+            crate::object::field_rep::slot_rep(own.rep, slot) != crate::object::field_rep::REP_ANY
+        })
+    {
+        return body;
+    }
+    let holder_keys = holder.keys as usize as *const crate::array::ArrayHeader;
+    if holder_keys.is_null() {
+        return body;
+    }
+    let Some(exec) = crate::object::keys_find_slot_by_bytes_resolved(
+        holder_keys,
+        holder.logical_key_count,
+        b"exec",
+    ) else {
+        return body;
+    };
+    if crate::object::key_attrs::key_is_accessor_at(holder_keys, exec)
+        || exec >= crate::object::field_rep::REP_SLOTS
+        || holder.special_constfn_mask & (1 << exec) == 0
+    {
+        return body;
+    }
+    let builtin_exec = holder
+        .constfn_infos()
+        .iter()
+        .find(|entry| u32::from(entry.slot) == exec)
+        .is_some_and(|entry| {
+            (*(entry.info as usize as *const crate::closure::JsFunctionInfo)).code
+                == regex_proto_exec_thunk as *const u8
+        });
+    if builtin_exec {
+        regex_proto_test_direct as *const () as u64
+    } else {
+        body
+    }
+}
+
+/// Whether `bits` is this agent's builtin `exec` or `test` function object:
+/// the RegExp.prototype slots whose bodies its shape names (ConstFn lanes).
+#[cfg(feature = "regex-engine")]
+pub(super) fn is_builtin_exec_or_test(bits: u64) -> bool {
+    let value = f64::from_bits(bits);
+    crate::value::JSValue::from_bits(bits).is_pointer() && {
+        let code = crate::closure::get_valid_func_ptr(
+            crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader
+        );
+        code == regex_proto_exec_thunk as *const u8 || code == regex_proto_test_thunk as *const u8
+    }
+}
+
 /// `RegExp.prototype.compile(pattern, flags)` (Annex B §B.2.5.1) — brand-checks
 /// `this` has a `[[RegExpMatcher]]` internal slot (a registered RegExp; a
 /// non-Object or non-RegExp receiver throws `TypeError`), then re-initializes
@@ -384,14 +525,14 @@ pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(
         proto_obj,
         "exec",
-        crate::fn_info!(regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         1,
     );
     #[cfg(feature = "regex-engine")]
     ipm(
         proto_obj,
         "test",
-        crate::fn_info!(regex_proto_test_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(regex_proto_test_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         1,
     );
     // Annex B `compile` re-initializes the receiver in place. It needs a real

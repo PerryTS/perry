@@ -16,7 +16,7 @@ mod escape;
 #[cfg(feature = "regex-engine")]
 mod flags;
 #[cfg(feature = "regex-engine")]
-mod instance;
+pub(crate) mod instance;
 #[cfg(feature = "regex-engine")]
 pub(crate) use instance::intrinsic_prototype;
 #[cfg(feature = "regex-engine")]
@@ -192,6 +192,19 @@ pub(crate) const REGEXP_MATCHER: &str = "[[RegExpMatcher]]";
 crate::perry_thread_local! {
     static MATCHER_READ: crate::object::IntrinsicPrivateReadSite =
         const { crate::object::IntrinsicPrivateReadSite::new(REGEXP_MATCHER) };
+}
+
+/// The slot of the intrinsic private matcher in a shape's key list: the
+/// brand as a fact of that shape.
+///
+/// # Safety
+/// `keys` is a live canonical key list with `count` logical keys.
+#[cfg(feature = "regex-engine")]
+pub(crate) unsafe fn matcher_slot(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+) -> Option<u32> {
+    MATCHER_READ.with(|site| site.slot_in(keys, count))
 }
 
 /// Read an already branded receiver's immutable data before the next

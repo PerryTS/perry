@@ -524,6 +524,20 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
                 unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
             }
+            // After the fit (its live-bound transition keeps no ConstFn
+            // lane): the shape names the builtin exec and test bodies, as an
+            // ordinary key-add of those function objects would. The holder
+            // ShapeId alone then proves both, and any store or delete of
+            // either revokes its lane (a new ShapeId).
+            #[cfg(feature = "regex-engine")]
+            if name == "RegExp" {
+                // SAFETY: the live, just-populated prototype.
+                unsafe {
+                    crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, bits| {
+                        super::super::regex_proto_thunks::is_builtin_exec_or_test(bits)
+                    });
+                }
+            }
         }
         let name_bytes = name.as_bytes();
         let name_key =

@@ -3,7 +3,7 @@ use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{js_nanbox_pointer, js_nanbox_string};
 
 fn word() -> *mut u64 {
-    Box::leak(Box::new(0u64))
+    Box::leak(Box::new([0u64; 2])).as_mut_ptr()
 }
 fn literal<'s>(scope: &'s RuntimeHandleScope, site: *mut u64, pattern: &str) -> RuntimeHandle<'s> {
     let source = scope.root_string_ptr(super::super::js_string_from_str(pattern));
@@ -111,7 +111,7 @@ fn literal_worker_never_reads_or_publishes_the_primary_site_word() {
     let _lock = crate::gc::global_side_table_test_lock();
     // A deliberately invalid foreign heap address proves the worker guard
     // runs before even reading/dereferencing the site's cached data.
-    let site = Box::leak(Box::new(u64::MAX)) as *mut u64 as usize;
+    let site = Box::leak(Box::new([u64::MAX; 2])).as_mut_ptr() as usize;
     std::thread::spawn(move || {
         let agent = crate::agent::enter_worker_agent();
         let scope = RuntimeHandleScope::new();
@@ -127,6 +127,7 @@ fn literal_worker_never_reads_or_publishes_the_primary_site_word() {
             b.with_const_ptr::<RegExpHeader, _>(|p| p)
         );
         assert_eq!(unsafe { *(site as *mut u64) }, u64::MAX);
+        assert_eq!(unsafe { *(site as *mut u64).add(1) }, u64::MAX);
         crate::agent::retire_agent(agent);
     })
     .join()
@@ -148,4 +149,32 @@ fn two_literal_sites_with_equal_length_patterns_keep_their_own_data() {
             assert_eq!(super::super::string_as_str(source), expected);
         }
     }
+}
+
+/// Word 1 is the header word generated code stamps on its inline births: the
+/// first evaluation publishes exactly the runtime birth's own header word,
+/// after word 0, and later evaluations leave it alone.
+#[test]
+fn literal_site_publishes_the_inline_birth_header_word() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    let site = word();
+    assert_eq!(unsafe { *site.add(1) }, 0);
+    let a = literal(&scope, site, "header");
+    let header = a.with_const_ptr::<RegExpHeader, _>(|re| unsafe { (re as *const u64).read() });
+    assert_ne!(unsafe { *site }, 0, "word 0 holds the data");
+    assert_eq!(
+        unsafe { *site.add(1) },
+        header,
+        "word 1 is the birth's header word"
+    );
+    let shape = (header >> 32) as u32;
+    let descriptor = crate::object::shapes::shape_descriptor_by_id(shape).expect("a live shape");
+    assert_eq!(descriptor.live_inline_slot_count, 2);
+    let b = literal(&scope, site, "header");
+    assert_eq!(
+        b.with_const_ptr::<RegExpHeader, _>(|re| unsafe { (re as *const u64).read() }),
+        header,
+        "every birth of the site carries the published header word"
+    );
 }

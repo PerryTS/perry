@@ -6,8 +6,9 @@ use super::{RegExpData, RegExpHeader};
 use crate::gc::RuntimeHandleScope;
 use crate::string::StringHeader;
 
-/// `site_word` is an immortal, aligned, zero-initialized codegen global unique
-/// to this literal. Only the primary JS agent accesses it. On first use it
+/// `site_word` is an immortal, aligned, zero-initialized codegen global of two
+/// words unique to this literal: word 0 the data root, word 1 the inline
+/// birth's header word. Only the primary JS agent accesses it. On first use it
 /// becomes an existing global root; subsequent evaluations allocate a fresh
 /// ordinary object with its own lastIndex around the same immutable data.
 #[no_mangle]
@@ -25,9 +26,23 @@ pub extern "C" fn js_regexp_literal(
     }
     // The word is a registered global root: after the birth's allocation it
     // holds the data cell's current address.
-    super::instance::new(|| unsafe {
+    let re = super::instance::new(|| unsafe {
         (word.read() & crate::value::POINTER_MASK) as *const RegExpData
-    })
+    });
+    // Word 1: the header word generated code stamps on its inline births of
+    // this site (`perry-codegen/src/expr/regex_literal.rs`). Published only
+    // after word 0, and only for a birth shape whose slots that code may
+    // initialize raw; the shape is then externally carried (never pruned).
+    unsafe {
+        let header_word = word.add(1);
+        if header_word.read() == 0 {
+            if let Some(image) = super::instance::inline_birth_header_word(re) {
+                // GC_STORE_AUDIT(POINTER_FREE): a class id and ShapeId, never a heap reference.
+                header_word.write(image);
+            }
+        }
+    }
+    re
 }
 
 #[cold]
