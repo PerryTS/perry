@@ -1925,47 +1925,37 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-container-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-container-
-      - name: Run and await all hermetic container suites
-        shell: bash
-        run: |
-          set -euo pipefail
-          suite_logs="$RUNNER_TEMP/container-hermetic-logs"
-          mkdir -p "$suite_logs"
-          pids=()
-          labels=()
-          run_suite() {
-            local label="$1"
-            shift
-            "$@" > "$suite_logs/$label.log" 2>&1 &
-            pids+=("$!")
-            labels+=("$label")
-          }
-          run_suite compose-lib cargo test -p perry-container-compose --lib
-          run_suite functional cargo test -p perry-container-compose \
-            --features test-utils --test functional_orchestration -- --test-threads=2
-          run_suite fixtures cargo test -p perry-container-compose \
-            --test fixtures_tests --test round_trip -- --test-threads=2
-          run_suite workspace-invariants cargo test -p perry-stdlib \
-            --features container --test container_workspace_invariants
-          run_suite ffi-regressions cargo test -p perry-stdlib --features container \
-            --test container_capability_tests --test container_extra_tests \
-            --test container_ffi_tests --test container_props --test container_verification_tests
-          run_suite smoke cargo test -p perry-stdlib --features container --lib container::smoke_tests
-          failed=0
-          for index in "${!pids[@]}"; do
-            label="${labels[$index]}"
-            if wait "${pids[$index]}"; then
-              echo "::group::$label passed"
-            else
-              echo "::error::$label failed"
-              echo "::group::$label failed"
-              failed=1
-            fi
-            cat "$suite_logs/$label.log"
-            echo "::endgroup::"
-          done
-          exit "$failed"
-
+      - parallel:
+          - name: A.0 — perry-container-compose lib + protocol args
+            run: cargo test -p perry-container-compose --lib
+          - name: A.1 — Functional tests (MockBackend, hermetic)
+            run: |
+              cargo test -p perry-container-compose \
+                --features test-utils \
+                --test functional_orchestration \
+                -- --test-threads=2
+          - name: A.2 — Fixture + property tests
+            run: |
+              cargo test -p perry-container-compose \
+                --test fixtures_tests \
+                --test round_trip \
+                -- --test-threads=2
+          - name: A.3 — Workspace invariants
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_workspace_invariants
+          - name: B — FFI bug regressions
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_capability_tests \
+                --test container_extra_tests \
+                --test container_ffi_tests \
+                --test container_props \
+                --test container_verification_tests
+          - name: stdlib container::smoke_tests
+            run: cargo test -p perry-stdlib --features container --lib container::smoke_tests
     needs:
       - route-integration
     env:

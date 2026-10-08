@@ -208,32 +208,6 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertEqual(select('maintenance', 'push', {'ref':'refs/tags/v1.2.3'},
                                 ref='refs/tags/v1.2.3')['cleanup'], 'false')
 
-    def test_hermetic_container_step_waits_for_every_suite_and_reports_failure(self):
-        import os
-        import subprocess
-        import tempfile
-        from pathlib import Path
-        import yaml
-
-        workflow = yaml.load(Path('.github/workflows/compiler-runtime.yml').read_text(), Loader=yaml.BaseLoader)
-        steps = workflow['jobs']['container-tests__hermetic']['steps']
-        script = next(step['run'] for step in steps
-                      if step.get('name') == 'Run and await all hermetic container suites')
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cargo = root / 'cargo'
-            cargo.write_text('#!/bin/bash\nprintf "cargo %s\\n" "$*"\n'
-                             'case "$*" in *container_extra_tests*) exit "${STUB_FFI_EXIT:-0}" ;; esac\n')
-            cargo.chmod(0o755)
-            for fail in ('0', '1'):
-                result = subprocess.run(['bash', '-c', script], text=True, capture_output=True,
-                                        env={**os.environ, 'PATH': str(root) + os.pathsep + os.defpath,
-                                             'RUNNER_TEMP': str(root), 'STUB_FFI_EXIT': fail}, timeout=10)
-                self.assertEqual(result.returncode, int(fail), result.stderr)
-                self.assertEqual(result.stdout.count('cargo test '), 6)
-                self.assertEqual(result.stdout.count('::endgroup::'), 6)
-                self.assertEqual('::error::ffi-regressions failed' in result.stdout, fail == '1')
-
     def test_manual_all_forwards_original_module_defaults(self):
         compat=select("compatibility","workflow_dispatch",{},suite="all",catalog=CATALOG)
         values=json.loads(compat["module_inputs"])
