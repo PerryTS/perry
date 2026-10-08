@@ -25,12 +25,10 @@
 //!   - `getOwnPropertyDescriptor(proto, "next")` reads the recorded builtin
 //!     attrs off the prototype object (it's a regular `GC_TYPE_OBJECT` field).
 //!
-//! The `next` closures are thin thunks: they take the receiver as `this` and
-//! route by the receiver's class id to the existing
-//! `dispatch_{array,map,set,string}_iterator_method`. This is the ONLY behaviour
-//! addition for `proto.next.call(it)` / value-read `it.next()`; the class-id CALL
-//! fast path in `native_call_method.rs` is untouched, so `for-of`, spread, and
-//! `Array.from` keep driving `.next()` directly.
+//! Each `next` thunk checks its receiver's iterator brand, then invokes the
+//! existing built-in advance algorithm. The family-specific checks also make
+//! the function bodies distinct under release identical-code folding, so the
+//! canonical code-pointer proofs below retain their meaning.
 
 use super::{js_object_alloc, set_builtin_property_attrs, ObjectHeader, PropertyAttrs};
 use crate::value::JSValue;
@@ -163,8 +161,8 @@ pub(crate) fn note_iterator_prototype_exposed(value: f64) {
 }
 
 /// Resolve and validate the `this` object shared by the family
-/// prototype thunks. Keeping the raw-address probe here gives both the generic
-/// family dispatcher and the helper-specific brand check one audited path.
+/// prototype thunks. Keeping the raw-address probe here gives the
+/// family-specific brand checks one audited path.
 unsafe fn this_iterator_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
     let this = this.as_f64();
     let jv = JSValue::from_bits(this.to_bits());
@@ -178,48 +176,6 @@ unsafe fn this_iterator_object(this: crate::closure::JsThis) -> Option<*mut Obje
     Some(obj)
 }
 
-/// Dispatch `method` on the `this` iterator instance, routing by class
-/// id to the matching existing iterator dispatcher. Shared by the per-family
-/// `next` thunks (read as a value or invoked via `.call`) and the parent
-/// `[Symbol.iterator]` thunk. Returns a `{ value:undefined, done:true }`-ish
-/// throw when `this` is not a recognized iterator (test262 `this-not-object` /
-/// `does-not-have-...-internal-slots` brand checks).
-unsafe fn dispatch_on_this(this: crate::closure::JsThis, method: &str) -> f64 {
-    let Some(obj) = this_iterator_object(this) else {
-        return brand_type_error(method);
-    };
-    let class_id = (*obj).class_id;
-    // The `_builtin` variants skip the own-`next` override probe (#9019):
-    // these thunks ARE the canonical prototype `next` functions, so invoking
-    // one directly (`proto.next.call(it)`, or a `.bind(it)` taken before a
-    // patch landed) must run the builtin algorithm — probing here would send
-    // a patch that delegates to its bound original into infinite recursion.
-    match class_id {
-        crate::array::ARRAY_ITERATOR_CLASS_ID => {
-            crate::array::dispatch_array_iterator_method_builtin(obj, method)
-        }
-        crate::buffer::BUFFER_ITERATOR_CLASS_ID => {
-            crate::buffer::dispatch_buffer_iterator_method_builtin(obj, method)
-        }
-        crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => {
-            crate::collection_iter_object::dispatch_map_iterator_method_builtin(obj, method)
-        }
-        crate::collection_iter_object::SET_ITERATOR_CLASS_ID => {
-            crate::collection_iter_object::dispatch_set_iterator_method_builtin(obj, method)
-        }
-        crate::string::STRING_ITERATOR_CLASS_ID => {
-            crate::string::dispatch_string_iterator_method_builtin(obj, method)
-        }
-        crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => {
-            match crate::regex::hooked_iterator_method_builtin(obj, method) {
-                Some(value) => value,
-                None => brand_type_error(method),
-            }
-        }
-        _ => brand_type_error(method),
-    }
-}
-
 /// TypeError thrown by an iterator-prototype method invoked on an incompatible
 /// receiver (test262's brand-check cases).
 fn brand_type_error(method: &str) -> f64 {
@@ -231,35 +187,78 @@ fn brand_type_error(method: &str) -> f64 {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-// --- `next` thunks, one per family (all take `this`, dispatch by id) ---
+// --- `next` thunks: the receiver's class is the iterator brand. ---
+//
+// Call the built-in dispatchers after validation: a saved canonical next must
+// skip own-next overrides, including overrides that delegate to the saved next.
+// Do not replace these checks with a receiver-wide dispatcher: that both accepts
+// foreign brands and lets release code folding collapse canonical identities.
 
 extern "C" fn array_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_this(this, "next") }
+    unsafe {
+        let Some(obj) = this_iterator_object(this) else {
+            return brand_type_error("next");
+        };
+        // Buffer/typed-array values use the ECMAScript Array Iterator brand.
+        match (*obj).class_id {
+            crate::array::ARRAY_ITERATOR_CLASS_ID => {
+                crate::array::dispatch_array_iterator_method_builtin(obj, "next")
+            }
+            crate::buffer::BUFFER_ITERATOR_CLASS_ID => {
+                crate::buffer::dispatch_buffer_iterator_method_builtin(obj, "next")
+            }
+            _ => brand_type_error("next"),
+        }
+    }
 }
 extern "C" fn map_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_this(this, "next") }
+    unsafe {
+        let Some(obj) = this_iterator_object(this) else {
+            return brand_type_error("next");
+        };
+        if (*obj).class_id != crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+            return brand_type_error("next");
+        }
+        crate::collection_iter_object::dispatch_map_iterator_method_builtin(obj, "next")
+    }
 }
 extern "C" fn set_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_this(this, "next") }
+    unsafe {
+        let Some(obj) = this_iterator_object(this) else {
+            return brand_type_error("next");
+        };
+        if (*obj).class_id != crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+            return brand_type_error("next");
+        }
+        crate::collection_iter_object::dispatch_set_iterator_method_builtin(obj, "next")
+    }
 }
 extern "C" fn string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    unsafe { dispatch_on_this(this, "next") }
+    unsafe {
+        let Some(obj) = this_iterator_object(this) else {
+            return brand_type_error("next");
+        };
+        if (*obj).class_id != crate::string::STRING_ITERATOR_CLASS_ID {
+            return brand_type_error("next");
+        }
+        crate::string::dispatch_string_iterator_method_builtin(obj, "next")
+    }
 }
 extern "C" fn regexp_string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -273,7 +272,8 @@ extern "C" fn regexp_string_iterator_next_thunk(
         if (*obj).class_id != crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID {
             return brand_type_error("next");
         }
-        dispatch_on_this(this, "next")
+        crate::regex::hooked_iterator_method_builtin(obj, "next")
+            .unwrap_or_else(|| brand_type_error("next"))
     }
 }
 
@@ -1082,6 +1082,168 @@ mod native_step_tests {
             crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
             crate::string::STRING_ITERATOR_CLASS_ID,
         ]
+    }
+
+    #[test]
+    fn iterator_next_brands_and_release_code_identities() {
+        unsafe {
+            let _stable = crate::gc::GcSuppressScope::new();
+            let families = [
+                (
+                    crate::array::ARRAY_ITERATOR_CLASS_ID,
+                    crate::fn_info!(array_iterator_next_thunk, 1),
+                ),
+                (
+                    crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+                    crate::fn_info!(map_iterator_next_thunk, 1),
+                ),
+                (
+                    crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+                    crate::fn_info!(set_iterator_next_thunk, 1),
+                ),
+                (
+                    crate::string::STRING_ITERATOR_CLASS_ID,
+                    crate::fn_info!(string_iterator_next_thunk, 1),
+                ),
+                (
+                    crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID,
+                    crate::fn_info!(regexp_string_iterator_next_thunk, 1),
+                ),
+                (
+                    crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID,
+                    crate::fn_info!(iterator_helper_next_thunk, 1),
+                ),
+            ];
+            let closures: Vec<_> = families
+                .iter()
+                .map(|(_, info)| crate::closure::js_closure_alloc(*info, 0))
+                .collect();
+            // Read the actual allocated closures' code words. Run this test in
+            // release: source-level function names cannot prove linker identity.
+            for (i, closure) in closures.iter().enumerate() {
+                for other in &closures[..i] {
+                    assert_ne!(
+                        (**closure).code(),
+                        (**other).code(),
+                        "different iterator brands must retain different code pointers"
+                    );
+                }
+            }
+            for ((brand, _), closure) in families.iter().zip(&closures) {
+                for receiver_brand in kinds() {
+                    let receiver = fixture(receiver_brand);
+                    let result = crate::exception::js_call_catching(|| {
+                        crate::closure::js_closure_call1(
+                            *closure,
+                            crate::closure::JsThis::from_f64(receiver),
+                            f64::from_bits(crate::value::TAG_UNDEFINED),
+                        )
+                    });
+                    let matches = brand == &receiver_brand
+                        || (*brand == crate::array::ARRAY_ITERATOR_CLASS_ID
+                            && receiver_brand == crate::buffer::BUFFER_ITERATOR_CLASS_ID);
+                    assert_eq!(
+                        result.is_ok(),
+                        matches,
+                        "next brand {brand:x}, receiver {receiver_brand:x}"
+                    );
+                    if let Err(error) = result {
+                        let name = super::super::js_object_get_field_by_name_f64(
+                            crate::value::js_nanbox_get_pointer(error) as *const ObjectHeader,
+                            crate::string::intern_ascii_literal(b"name"),
+                        );
+                        assert_eq!(
+                            crate::string::string_as_str(crate::value::js_jsvalue_to_string(name)),
+                            "TypeError"
+                        );
+                    }
+                }
+                for receiver in [
+                    js_nanbox_pointer(js_object_alloc(0, 0) as i64),
+                    f64::from_bits(crate::value::TAG_NULL),
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    1.0,
+                ] {
+                    assert!(
+                        crate::exception::js_call_catching(|| {
+                            crate::closure::js_closure_call1(
+                                *closure,
+                                crate::closure::JsThis::from_f64(receiver),
+                                0.0,
+                            )
+                        })
+                        .is_err(),
+                        "brand {brand:x} must reject non-iterators"
+                    );
+                }
+            }
+            build_iterator_prototypes();
+        }
+    }
+
+    #[test]
+    fn native_step_foreign_next_never_proves_canonical_or_advances() {
+        unsafe {
+            let _stable = crate::gc::GcSuppressScope::new();
+            let brands = [
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+                crate::string::STRING_ITERATOR_CLASS_ID,
+            ];
+            for target in brands {
+                for source in brands {
+                    if target == source {
+                        continue;
+                    }
+                    let foreign_iter = fixture(source);
+                    let foreign = crate::array::js_iterator_next_method(foreign_iter);
+                    let foreign_info =
+                        crate::closure::closure_info(crate::value::js_nanbox_get_pointer(foreign)
+                            as *const crate::closure::ClosureHeader)
+                        .unwrap();
+                    let iter = fixture(target);
+                    let obj = crate::value::js_nanbox_get_pointer(iter) as *mut ObjectHeader;
+                    let proto = crate::value::js_nanbox_get_pointer(f64::from_bits(
+                        super::super::shapes::object_prototype_word(obj),
+                    )) as *mut ObjectHeader;
+                    let original = crate::array::js_iterator_next_method(iter);
+                    let canonical = (*(crate::value::js_nanbox_get_pointer(original)
+                        as *const crate::closure::ClosureHeader))
+                        .code();
+                    assert!(iterator_step_is_builtin(obj), "pristine premise");
+                    super::super::global_this::install_proto_method(proto, "next", foreign_info, 0);
+                    // Preserve the canonical-shaped ConstFn premise: the body
+                    // proof itself must distinguish the foreign function.
+                    super::super::shapes::learn_object_constfn_lanes(proto, |slot, _| slot == 0);
+                    assert!(
+                        !prototype_next_is_canonical(proto, canonical),
+                        "foreign next must defeat the ordinary advance proof"
+                    );
+                    assert!(
+                        !iterator_step_is_builtin(obj),
+                        "foreign next must defeat native-step admission"
+                    );
+                    let next = crate::array::js_iterator_next_method(iter);
+                    let mut value = 0.0;
+                    assert!(
+                        crate::exception::js_call_catching(|| {
+                            crate::array::js_iterator_step(iter, next, &mut value) as f64
+                        })
+                        .is_err(),
+                        "foreign next must throw before advancing"
+                    );
+                    assert_eq!(
+                        crate::array::js_iterator_step(iter, original, &mut value),
+                        0
+                    );
+                    if target != crate::string::STRING_ITERATOR_CLASS_ID {
+                        assert_eq!(value, 0.0, "failed foreign next must not consume a value");
+                    }
+                }
+            }
+            build_iterator_prototypes();
+        }
     }
 
     #[test]
