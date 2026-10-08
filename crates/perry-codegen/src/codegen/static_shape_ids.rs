@@ -345,6 +345,41 @@ impl ProgramClassShapeIds {
     }
 }
 
+/// The module's class ids keyed the way a class keys global names its class.
+///
+/// The global is `perry_class_keys_<modprefix>__<sanitized class>`. Several
+/// names can sanitize alike; the smallest name wins so the choice is
+/// deterministic (the pre-pass and codegen must agree). Built once from
+/// `class_ids` per pass over the keys globals: resolving each global by
+/// rescanning and re-sanitizing every class name made each pass quadratic in
+/// the class count, which on a bundle with tens of thousands of classes and
+/// object-literal shapes was minutes of serial compile time.
+pub(crate) struct ClassIdsByKeysName(HashMap<String, (String, u32)>);
+
+impl ClassIdsByKeysName {
+    pub(crate) fn new(class_ids: &HashMap<String, u32>) -> Self {
+        let mut by_name: HashMap<String, (String, u32)> = HashMap::with_capacity(class_ids.len());
+        for (name, &id) in class_ids {
+            match by_name.entry(super::helpers::sanitize(name)) {
+                std::collections::hash_map::Entry::Occupied(mut slot) => {
+                    if name < &slot.get().0 {
+                        slot.insert((name.clone(), id));
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert((name.clone(), id));
+                }
+            }
+        }
+        Self(by_name)
+    }
+
+    /// The class id a keys global's sanitized class name resolves to, 0 = none.
+    pub(crate) fn get(&self, sanitized_class: &str) -> u32 {
+        self.0.get(sanitized_class).map_or(0, |&(_, id)| id)
+    }
+}
+
 /// One class keys global's birth, as the string pool mints it.
 pub(crate) struct ClassBirth {
     /// The class id the mint names (0 = none; such a birth has no content).
@@ -369,20 +404,12 @@ pub(crate) fn class_birth(
     entry: &ClassKeysInit,
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
     class_birth_reps: &HashMap<String, u64>,
-    class_ids: &HashMap<String, u32>,
+    class_ids: &ClassIdsByKeysName,
 ) -> ClassBirth {
     let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
-    // The global is `perry_class_keys_<modprefix>__<sanitized class>`. Several
-    // names can sanitize alike; take the smallest name so the choice is
-    // deterministic (the pre-pass and codegen must agree).
     let prefix = format!("perry_class_keys_{}__", module_prefix);
     let sanitized_class = global_name.strip_prefix(&prefix).unwrap_or("");
-    let class_id = class_ids
-        .iter()
-        .filter(|(k, _)| super::helpers::sanitize(k) == sanitized_class)
-        .min_by(|a, b| a.0.cmp(b.0))
-        .map(|(_, &v)| v)
-        .unwrap_or(0);
+    let class_id = class_ids.get(sanitized_class);
     let image = class_header_image_inits.get(global_name);
     let wide_live = match image {
         Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
@@ -458,6 +485,7 @@ pub(crate) fn set_module_static_ids(
     let map: HashMap<String, (u32, BirthShape)> = if by_content.is_empty() {
         HashMap::new()
     } else {
+        let class_ids = &ClassIdsByKeysName::new(class_ids);
         class_keys_init_data
             .iter()
             .filter_map(|entry| {
@@ -916,6 +944,7 @@ pub(crate) fn module_births(
     class_birth_reps: &HashMap<String, u64>,
     class_ids: &HashMap<String, u32>,
 ) -> Vec<ModuleBirth> {
+    let class_ids = &ClassIdsByKeysName::new(class_ids);
     class_keys_init_data
         .iter()
         .enumerate()

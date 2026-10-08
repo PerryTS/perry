@@ -454,15 +454,16 @@ pub(crate) fn declare_line_for(f: &LlFunction) -> String {
 /// Render a function with external linkage forced, promoting an `internal` /
 /// `private` definition so cross-unit calls can bind to it. Names are
 /// module-prefixed and unique, so promotion never collides.
-pub(crate) fn render_fn_external(f: &LlFunction) -> String {
-    render_fn_external_with_gc_leaf_callees(f, &HashSet::new())
-}
-
 pub(crate) fn render_fn_external_with_gc_leaf_callees(
     f: &LlFunction,
     gc_leaf_callees: &HashSet<String>,
 ) -> String {
-    let ir = f.to_ir_with_gc_leaf_callees(gc_leaf_callees);
+    force_external_linkage(f, f.to_ir_with_gc_leaf_callees(gc_leaf_callees))
+}
+
+/// `ir`, `f`'s rendering, with an `internal` / `private` definition promoted
+/// to external linkage (see [`render_fn_external_with_gc_leaf_callees`]).
+pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
     if f.linkage == "internal" || f.linkage == "private" {
         return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
     }

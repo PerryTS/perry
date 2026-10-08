@@ -740,6 +740,7 @@ pub(super) fn emit_string_pool(
         .filter(|class| class.name.starts_with("__AnonShape_"))
         .filter_map(|class| class_ids.get(&class.name).copied())
         .collect();
+    let class_ids_by_keys_name = super::static_shape_ids::ClassIdsByKeysName::new(class_ids);
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
@@ -748,7 +749,7 @@ pub(super) fn emit_string_pool(
             &class_keys_init_data[idx],
             class_header_image_inits,
             class_birth_reps,
-            class_ids,
+            &class_ids_by_keys_name,
         );
         // Only synthetic ordinary-object layouts are safe before dependency
         // bodies. User-class keys, prototypes and methods stay in the late phase.
@@ -1763,13 +1764,14 @@ pub(super) fn emit_string_pool(
             .iter()
             .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
             .collect();
+        let class_ids_by_keys_name = super::static_shape_ids::ClassIdsByKeysName::new(class_ids);
         for entry in class_keys_init_data {
             let birth = super::static_shape_ids::class_birth(
                 module_prefix,
                 entry,
                 class_header_image_inits,
                 class_birth_reps,
-                class_ids,
+                &class_ids_by_keys_name,
             );
             let Some(ordinary) = birth.shape else {
                 continue;
@@ -1831,13 +1833,14 @@ pub(super) fn emit_string_pool(
             .iter()
             .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
             .collect();
+        let class_ids_by_keys_name = super::static_shape_ids::ClassIdsByKeysName::new(class_ids);
         for entry in class_keys_init_data {
             let birth = super::static_shape_ids::class_birth(
                 module_prefix,
                 entry,
                 class_header_image_inits,
                 class_birth_reps,
-                class_ids,
+                &class_ids_by_keys_name,
             );
             let Some(ordinary) = birth.shape else {
                 continue;

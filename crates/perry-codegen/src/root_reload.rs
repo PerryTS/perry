@@ -688,10 +688,61 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     let mut group_keys: Vec<((usize, usize), String)> = groups.keys().cloned().collect();
     group_keys.sort_unstable();
 
+    // Where, in instruction order, each fact the walk below asks about sits.
+    // The walk runs once per root load, so it must not rescan the function's
+    // instructions per load: on a bundle's entry function that rescan was
+    // O(loads × instructions) and the single largest serial phase of the
+    // compile. Every question it asks — "did a collecting call run in this
+    // block before index i", "did a store to `slot` run in this block between
+    // two indices", "which instructions read this register" — is a range query
+    // over one of these sorted position lists, so each answer is the same
+    // boolean the scan computed.
+    let collect_at: Vec<Vec<usize>> = facts
+        .iter()
+        .map(|fb| {
+            fb.iter()
+                .enumerate()
+                .filter(|(_, f)| f.collecting)
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+    let mut store_at: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+    let mut use_at: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+    for (b, fb) in facts.iter().enumerate() {
+        for (i, f) in fb.iter().enumerate() {
+            if let Some(slot) = f.stores_to.as_deref() {
+                store_at.entry(slot).or_default().push((b, i));
+            }
+            for u in &f.uses {
+                use_at.entry(u.as_str()).or_default().push((b, i));
+            }
+        }
+    }
+    // Any position in `positions` (sorted) inside block `b` with index in `lo..hi`.
+    fn any_in_block(positions: &[(usize, usize)], b: usize, lo: usize, hi: usize) -> bool {
+        if lo >= hi {
+            return false;
+        }
+        let first = positions.partition_point(|&p| p < (b, lo));
+        positions
+            .get(first)
+            .is_some_and(|&(pb, pi)| pb == b && pi < hi)
+    }
+    fn any_collect(collect_at: &[Vec<usize>], b: usize, lo: usize, hi: usize) -> bool {
+        if lo >= hi {
+            return false;
+        }
+        let at = &collect_at[b];
+        let first = at.partition_point(|&i| i < lo);
+        at.get(first).is_some_and(|&i| i < hi)
+    }
+
     for key in group_keys {
         let members = &groups[&key];
         let (lb, li) = key.0;
         let slot = key.1;
+        let stores: &[(usize, usize)] = store_at.get(slot.as_str()).map_or(&[], Vec::as_slice);
         let by_use: HashMap<&str, usize> = members
             .iter()
             .map(|&m| (values[m].reg.as_str(), m))
@@ -708,12 +759,9 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
         let mut queue: VecDeque<usize> = VecDeque::new();
 
         // Tail of the load's own block, from just after the load.
-        let mut c = false;
-        let mut s = false;
-        for f in facts[lb].iter().skip(li + 1) {
-            c |= f.collecting;
-            s |= f.stores_to.as_deref() == Some(slot.as_str());
-        }
+        let tail_end = facts[lb].len();
+        let c = any_collect(&collect_at, lb, li + 1, tail_end);
+        let s = any_in_block(stores, lb, li + 1, tail_end);
         for &succ in &succs[lb] {
             if succ == lb {
                 continue;
@@ -726,12 +774,9 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
             }
         }
         while let Some(b) = queue.pop_front() {
-            let mut oc = collect_in[b];
-            let mut os = store_in[b];
-            for f in &facts[b] {
-                oc |= f.collecting;
-                os |= f.stores_to.as_deref() == Some(slot.as_str());
-            }
+            let end = facts[b].len();
+            let oc = collect_in[b] || any_collect(&collect_at, b, 0, end);
+            let os = store_in[b] || any_in_block(stores, b, 0, end);
             for &succ in &succs[b] {
                 if succ == lb {
                     continue;
@@ -746,50 +791,68 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
             }
         }
 
-        for (ub, fb) in facts.iter().enumerate() {
+        // Every instruction that reads a member, in (block, index) order —
+        // the order a whole-function scan would reach them in.
+        let mut sites: Vec<(usize, usize)> = members
+            .iter()
+            .filter_map(|&m| use_at.get(values[m].reg.as_str()))
+            .flatten()
+            .copied()
+            .collect();
+        sites.sort_unstable();
+        sites.dedup();
+        for (ub, ui) in sites {
             // Only blocks the load can reach without re-entering its own block,
             // plus the load's own block below the load.
-            if ub != lb && !seen[ub] {
+            if ub == lb {
+                if ui <= li {
+                    continue;
+                }
+            } else if !seen[ub] {
                 continue;
             }
-            let (mut c, mut s) = if ub == lb {
-                (false, false)
+            // Has a collecting call / a store to `slot` run between the load
+            // and this instruction (exclusive)?
+            let (c, s) = if ub == lb {
+                (
+                    any_collect(&collect_at, ub, li + 1, ui),
+                    any_in_block(stores, ub, li + 1, ui),
+                )
             } else {
-                (collect_in[ub], store_in[ub])
+                (
+                    collect_in[ub] || any_collect(&collect_at, ub, 0, ui),
+                    store_in[ub] || any_in_block(stores, ub, 0, ui),
+                )
             };
-            let start = if ub == lb { li + 1 } else { 0 };
-            for (ui, f) in fb.iter().enumerate().skip(start) {
-                if c && !s && !f.is_phi {
-                    // One instruction can read several values of the same root
-                    // — `js_object_set_field_by_name(recv, key, …)` when both
-                    // came out of one slot. Each gets its own recipe; the
-                    // application phase renames every operand of an instruction
-                    // before inserting any of them.
-                    let mut seen_here: Vec<&str> = Vec::new();
-                    for u in &f.uses {
-                        let m = match by_use.get(u.as_str()) {
-                            Some(&m) => m,
-                            None => continue,
-                        };
-                        if seen_here.contains(&u.as_str()) {
-                            continue;
-                        }
-                        seen_here.push(u.as_str());
-                        let recipe: Vec<LlInst> = values[m]
-                            .recipe
-                            .iter()
-                            .map(|&(rb, ri)| blocks[rb].insts()[ri].clone())
-                            .collect();
-                        rewrites.push(Rewrite {
-                            blk: ub,
-                            insn: ui,
-                            from: values[m].reg.clone(),
-                            recipe,
-                        });
+            let f = &facts[ub][ui];
+            if c && !s && !f.is_phi {
+                // One instruction can read several values of the same root
+                // — `js_object_set_field_by_name(recv, key, …)` when both
+                // came out of one slot. Each gets its own recipe; the
+                // application phase renames every operand of an instruction
+                // before inserting any of them.
+                let mut seen_here: Vec<&str> = Vec::new();
+                for u in &f.uses {
+                    let m = match by_use.get(u.as_str()) {
+                        Some(&m) => m,
+                        None => continue,
+                    };
+                    if seen_here.contains(&u.as_str()) {
+                        continue;
                     }
+                    seen_here.push(u.as_str());
+                    let recipe: Vec<LlInst> = values[m]
+                        .recipe
+                        .iter()
+                        .map(|&(rb, ri)| blocks[rb].insts()[ri].clone())
+                        .collect();
+                    rewrites.push(Rewrite {
+                        blk: ub,
+                        insn: ui,
+                        from: values[m].reg.clone(),
+                        recipe,
+                    });
                 }
-                c |= f.collecting;
-                s |= f.stores_to.as_deref() == Some(slot.as_str());
             }
         }
     }

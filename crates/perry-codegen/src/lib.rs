@@ -90,6 +90,7 @@ pub mod types;
 pub mod unit_cache;
 #[cfg(feature = "target-wasi")]
 mod wasm32;
+pub mod workers;
 
 pub use codegen::{
     assign_static_shape_ids, compile_module, context_free_ctor_abi, context_free_ctor_param_count,

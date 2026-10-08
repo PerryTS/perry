@@ -194,15 +194,91 @@ impl FrozenUnit {
     }
 }
 
+/// One function of a unit, frozen the moment the unit layout rendered it
+/// (`LlModule::into_codegen_unit_parts_with`).
+struct FrozenEntry {
+    name: String,
+    estimated_ir_bytes: usize,
+    body: Result<FrozenBody>,
+}
+
+enum FrozenBody {
+    /// Windows SEH funclets (`catchswitch`/`catchpad`/`catchret`) have no
+    /// inkwell builders. LLVM's in-process assembly parser builds only these
+    /// exceptional functions, from this forced-external text in the skeleton;
+    /// all ordinary bodies remain on the typed C-API path.
+    Skeleton(String),
+    /// A body the worker constructs, with the declaration the skeleton
+    /// carries for it.
+    Constructed {
+        declaration: String,
+        function: FrozenFunction,
+    },
+}
+
+/// Freeze one function into its worker payload. `text` is the function's
+/// final rendering (`to_ir_with_gc_leaf_callees`), which the unit layout
+/// produced for its reference scan; the function is dropped on return.
+fn freeze_function(
+    f: crate::function::LlFunction,
+    text: &str,
+    estimated_ir_bytes: usize,
+) -> FrozenEntry {
+    let body = (|| -> Result<FrozenBody> {
+        if f.personality.is_some() {
+            return Ok(FrozenBody::Skeleton(crate::module::force_external_linkage(
+                &f,
+                text.to_string(),
+            )));
+        }
+        let mut items = Vec::new();
+        if f.stack_map_requested() {
+            // `to_ir` is where precise roots are lowered. Freeze its body as
+            // owned lines so worker threads still receive an immutable payload
+            // and the module-scale text graph is never retained.
+            items.extend(
+                text.lines()
+                    .skip(1)
+                    .filter(|line| *line != "}")
+                    .map(|line| FrozenItem::Text(line.to_string())),
+            );
+        } else {
+            f.for_each_final_item::<anyhow::Error>(&mut |item| {
+                use crate::function::FinalItem as FI;
+                items.push(match item {
+                    FI::Label(s) => FrozenItem::Label(s.to_string()),
+                    FI::Blank => FrozenItem::Blank,
+                    FI::Text(s) => FrozenItem::Text(s.to_string()),
+                    FI::Inst(i) => FrozenItem::Inst(i.clone()),
+                });
+                Ok(())
+            })?;
+        }
+        Ok(FrozenBody::Constructed {
+            declaration: crate::module::declare_line_for(&f),
+            function: FrozenFunction {
+                name: f.name.clone(),
+                header: synth_define_header(&f, true),
+                items,
+            },
+        })
+    })();
+    FrozenEntry {
+        name: f.name.clone(),
+        estimated_ir_bytes,
+        body,
+    }
+}
+
+/// Assemble one unit's worker payload from its frozen functions: the
+/// skeleton text LLVM parses (`pre`, `post`, the module's external table and
+/// one declaration per constructed body) and the bodies themselves.
 fn freeze_unit(
-    part: &crate::module::OwnedCodegenUnitPart,
+    part: crate::module::OwnedCodegenUnitPart<FrozenEntry>,
     external_declarations: &[(String, String)],
 ) -> Result<FrozenUnit> {
     let crate::module::OwnedCodegenUnitPart {
-        pre,
-        post,
-        funcs,
-        gc_leaf_callees,
+        pre, post, funcs, ..
     } = part;
     let mut skeleton = format!("{pre}{post}");
     // Text units minimize declarations with a rendered-reference scan. Typed
@@ -228,50 +304,21 @@ fn freeze_unit(
     }
     let function_count = funcs.len();
     let mut functions = Vec::with_capacity(function_count);
-    for f in funcs {
-        if f.personality.is_some() {
-            // Windows SEH funclets (`catchswitch`/`catchpad`/`catchret`) have
-            // no inkwell builders. Let LLVM's in-process assembly parser build
-            // only these exceptional functions; all ordinary bodies remain on
-            // the typed C-API path and never become text.
-            skeleton.push_str(&crate::module::render_fn_external_with_gc_leaf_callees(
-                &f,
-                &gc_leaf_callees,
-            ));
-            skeleton.push('\n');
-            continue;
+    for entry in funcs {
+        match entry.body? {
+            FrozenBody::Skeleton(text) => {
+                skeleton.push_str(&text);
+                skeleton.push('\n');
+            }
+            FrozenBody::Constructed {
+                declaration,
+                function,
+            } => {
+                skeleton.push_str(&declaration);
+                skeleton.push('\n');
+                functions.push(function);
+            }
         }
-        skeleton.push_str(&crate::module::declare_line_for(f));
-        skeleton.push('\n');
-        let mut items = Vec::new();
-        if f.stack_map_requested() {
-            // `to_ir` is where precise roots are lowered. Freeze its body as
-            // owned lines so worker threads still receive an immutable payload
-            // and the module-scale text graph is never retained.
-            items.extend(
-                f.to_ir_with_gc_leaf_callees(&gc_leaf_callees)
-                    .lines()
-                    .skip(1)
-                    .filter(|line| *line != "}")
-                    .map(|line| FrozenItem::Text(line.to_string())),
-            );
-        } else {
-            f.for_each_final_item::<anyhow::Error>(&mut |item| {
-                use crate::function::FinalItem as FI;
-                items.push(match item {
-                    FI::Label(s) => FrozenItem::Label(s.to_string()),
-                    FI::Blank => FrozenItem::Blank,
-                    FI::Text(s) => FrozenItem::Text(s.to_string()),
-                    FI::Inst(i) => FrozenItem::Inst(i.clone()),
-                });
-                Ok(())
-            })?;
-        }
-        functions.push(FrozenFunction {
-            name: f.name.clone(),
-            header: synth_define_header(f, true),
-            items,
-        });
     }
     Ok(FrozenUnit {
         skeleton,
@@ -356,37 +403,25 @@ fn dump_dialect_failure(f: &FrozenFunction, e: anyhow::Error) -> anyhow::Error {
 /// ~whole/n, same bound as the per-unit clang model), functions stream with
 /// external linkage forced (mirror of `render_fn_external`), and the unit
 /// objects partial-link exactly like the text path.
-/// Default number of concurrent LLVM unit workers when `PERRY_CODEGEN_UNIT_JOBS`
-/// is unset.
-///
-/// This was a hard-coded `2` (#8017), chosen conservatively for Windows
-/// pagefile pressure and applied on every platform. On a large real bundle
-/// that left most cores idle: the Claude Code `cli.js` lowers to ~84 codegen
-/// units and, with the giant entry function's roots spilled (#8583) so no unit
-/// carries an unbounded RS4GC fan-out, per-unit peak RSS is a bounded ~1-2 GiB,
-/// so the two-worker cap — not memory — was the wall (a ~440s unit × dozens,
-/// two at a time, is hours). Each worker still holds one whole translation
-/// unit, so the count stays bounded, not one-thread-per-unit.
-///
-/// Non-Windows: half the machine's logical CPUs, clamped to `[2, 8]`. The 8
-/// ceiling keeps peak at ~8 × per-unit against a 64 GiB-class host with margin;
-/// projects that know their headroom raise it with `PERRY_CODEGEN_UNIT_JOBS`.
-/// Windows keeps the conservative `2` until its pagefile behavior under higher
-/// fan-out is measured — the platform the original cap was chosen for.
-fn default_unit_workers() -> usize {
-    if cfg!(target_os = "windows") {
-        return 2;
-    }
-    std::thread::available_parallelism()
-        .map(|p| (p.get() / 2).clamp(2, 8))
-        .unwrap_or(2)
-}
-
 pub fn compile_module_units_native(
     llmod: &mut LlModule,
     n: usize,
     target: Option<&str>,
     module_prefix: &str,
+) -> Result<Vec<u8>> {
+    let workers = crate::workers::unit_workers();
+    compile_module_units_native_with_workers(llmod, n, target, module_prefix, workers)
+}
+
+/// [`compile_module_units_native`] with an explicit worker count. Results are
+/// slotted by unit index and merged in that order, so the merged object is the
+/// same for every `workers`.
+fn compile_module_units_native_with_workers(
+    llmod: &mut LlModule,
+    n: usize,
+    target: Option<&str>,
+    module_prefix: &str,
+    workers: usize,
 ) -> Result<Vec<u8>> {
     if llmod.deduped_function_refs().len() <= 1 || n <= 1 {
         return compile_module_native(llmod, target, module_prefix);
@@ -417,12 +452,11 @@ pub fn compile_module_units_native(
         .collect();
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));
-    // Keep at most a bounded window of lowering-owned units alive after they
-    // are frozen. A pre- or post-RS4GC budget miss needs that source graph exactly
-    // once so the named functions can switch root lowering and be frozen
-    // again; successful units are still dropped immediately (#8679).
-    let mut parts: Vec<Option<crate::module::OwnedCodegenUnitPart>> = owned_module
-        .into_codegen_unit_parts(n)
+    // Every function is frozen as the unit layout renders it, and its
+    // lowering-owned graph is released right there; what the units retain
+    // until their worker takes them is the immutable payload alone.
+    let mut parts: Vec<Option<crate::module::OwnedCodegenUnitPart<FrozenEntry>>> = owned_module
+        .into_codegen_unit_parts_with(n, workers, freeze_function)
         .into_iter()
         .map(Some)
         .collect();
@@ -438,7 +472,7 @@ pub fn compile_module_units_native(
     let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     if show_progress {
         eprintln!(
-            "[perry] codegen: {module_prefix}: freezing {unit_total} codegen units for worker threads"
+            "[perry] codegen: {module_prefix}: {unit_total} codegen units frozen for worker threads"
         );
     }
     // Freeze the lowering-owned Rc/RefCell graph before sharing work. Worker
@@ -532,12 +566,7 @@ pub fn compile_module_units_native(
         Ok(obj)
     };
 
-    let jobs = std::env::var("PERRY_CODEGEN_UNIT_JOBS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or_else(default_unit_workers)
-        .min(parts.len());
+    let jobs = workers.max(1).min(parts.len());
     if show_progress {
         let estimated_mib: f64 = parts
             .iter()
@@ -548,7 +577,7 @@ pub fn compile_module_units_native(
                     + part
                         .funcs
                         .iter()
-                        .map(|f| f.estimated_ir_bytes())
+                        .map(|f| f.estimated_ir_bytes)
                         .sum::<usize>()) as f64
                     / 1_048_576.0
             })
@@ -559,10 +588,9 @@ pub fn compile_module_units_native(
     }
     let frozen = std::sync::atomic::AtomicUsize::new(0);
     let mut slots: Vec<Option<Result<Vec<u8>>>> = (0..parts.len()).map(|_| None).collect();
-    // The producer alone touches lowering-owned LlFunction/Rc state. Workers
-    // return their result through a second channel. Once submitted, the
-    // producer releases that graph. The bounded in-flight window keeps the
-    // retained lowering state proportional to worker count.
+    // The producer assembles each unit's skeleton as a worker frees up, so
+    // only a bounded window of assembled skeletons exists at once. Workers
+    // return their result through a second channel.
     let (sender, receiver) =
         std::sync::mpsc::sync_channel::<(usize, Result<FrozenUnit>)>(jobs.max(1));
     let (result_sender, result_receiver) =
@@ -603,20 +631,20 @@ pub fn compile_module_units_native(
         drop(result_sender);
         let freeze_started = std::time::Instant::now();
         let report_step = (unit_total / 20).max(1);
-        let enqueue = |i: usize, part: &crate::module::OwnedCodegenUnitPart| -> bool {
+        let enqueue = |i: usize, part: crate::module::OwnedCodegenUnitPart<FrozenEntry>| -> bool {
             if unit_timings {
                 // Name the widest body before LLVM ever sees it: the one
                 // irreducible function in a bundle is the one that sets the
                 // unit's time and memory, and a stuck unit number alone does
                 // not say which (#8583).
-                if let Some(widest) = part.funcs.iter().max_by_key(|f| f.estimated_ir_bytes()) {
+                if let Some(widest) = part.funcs.iter().max_by_key(|f| f.estimated_ir_bytes) {
                     eprintln!(
                         "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns, ~{:.1} MiB estimated IR, widest {} (~{:.1} MiB)",
                         i + 1,
                         part.funcs.len(),
-                        part.funcs.iter().map(|f| f.estimated_ir_bytes()).sum::<usize>() as f64 / 1_048_576.0,
+                        part.funcs.iter().map(|f| f.estimated_ir_bytes).sum::<usize>() as f64 / 1_048_576.0,
                         widest.name,
-                        widest.estimated_ir_bytes() as f64 / 1_048_576.0
+                        widest.estimated_ir_bytes as f64 / 1_048_576.0
                     );
                 }
             }
@@ -639,21 +667,18 @@ pub fn compile_module_units_native(
             true
         };
 
-        // One source unit per worker. Retrying requires retaining that source
-        // until LLVM answers, but there is no reason to retain a second queued
-        // source per worker too; freezing the next unit after one completes is
-        // only a small producer step and keeps the extra peak tightly bounded.
+        // One assembled unit per worker; assembling the next one after a
+        // unit completes is a small producer step.
         let max_in_flight = jobs.clamp(1, unit_total);
         let mut next = 0usize;
         let mut in_flight = 0usize;
         while next < max_in_flight {
             let part = parts[next]
-                .as_ref()
-                .expect("an undispatched native unit still owns its lowering graph");
+                .take()
+                .expect("an undispatched native unit still holds its frozen functions");
             if !enqueue(next, part) {
                 break;
             }
-            parts[next] = None;
             next += 1;
             in_flight += 1;
         }
@@ -670,10 +695,6 @@ pub fn compile_module_units_native(
                 }
             }
             slots[i] = Some(out);
-
-            // A final result no longer needs its Rc/RefCell lowering graph.
-            // Drop it now, not after every unit and LLVM worker has finished.
-            parts[i].take();
             done += 1;
             in_flight -= 1;
             if show_progress {
@@ -696,10 +717,9 @@ pub fn compile_module_units_native(
 
             if next < unit_total {
                 let part = parts[next]
-                    .as_ref()
-                    .expect("an undispatched native unit still owns its lowering graph");
+                    .take()
+                    .expect("an undispatched native unit still holds its frozen functions");
                 if enqueue(next, part) {
-                    parts[next] = None;
                     next += 1;
                     in_flight += 1;
                 }
@@ -852,16 +872,17 @@ mod tests {
 
     #[test]
     fn default_unit_workers_are_bounded_and_platform_aware() {
-        let n = super::default_unit_workers();
+        let n = crate::workers::default_unit_workers();
         if cfg!(target_os = "windows") {
             assert_eq!(
                 n, 2,
                 "Windows keeps the conservative 2-worker default (#8017)"
             );
         } else {
+            let cpus = std::thread::available_parallelism().map_or(1, |p| p.get());
             assert!(
-                (2..=8).contains(&n),
-                "non-Windows default must stay in [2, 8], got {n}"
+                (1..=cpus).contains(&n),
+                "non-Windows default must be in [1, available cores = {cpus}], got {n}"
             );
         }
     }
@@ -877,13 +898,27 @@ mod tests {
 
     fn precise_root_fixture_for(triple: &str, extra_plain_function: bool) -> LlModule {
         let mut module = LlModule::new(triple);
+        declare_precise_root_helpers(&mut module);
+        add_precise_root_function(&mut module, "native_root_diff_fixture");
+        if extra_plain_function {
+            let plain = module.define_function("native_root_diff_plain", VOID, vec![]);
+            plain.create_block("entry").ret_void();
+        }
+        module
+    }
+
+    fn declare_precise_root_helpers(module: &mut LlModule) {
         module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
         module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
         module.declare_function("js_map_alloc", I64, &[I32]);
         module.declare_function("may_collect", I64, &[]);
+    }
 
-        let function = module.define_function("native_root_diff_fixture", I64, vec![]);
+    /// One function whose roots live across a collection: its text goes
+    /// through the precise-root lowering (`TextFinish`) before LLVM sees it.
+    fn add_precise_root_function(module: &mut LlModule, name: &str) {
+        let function = module.define_function(name, I64, vec![]);
         function.enable_shadow_frame(0);
         let mut constant_roots = Vec::new();
         let mut dynamic_roots = Vec::new();
@@ -928,11 +963,6 @@ mod tests {
             observed = entry.xor(I64, &observed, &value);
         }
         entry.ret(I64, &observed);
-        if extra_plain_function {
-            let plain = module.define_function("native_root_diff_plain", VOID, vec![]);
-            plain.create_block("entry").ret_void();
-        }
-        module
     }
 
     fn assert_dynamic_root_survives_rs4gc(module: &LlModule, label: &str) {
@@ -1348,6 +1378,74 @@ mod tests {
             native, text,
             "split native workers must preserve the producer's shadow-stack backend decision"
         );
+    }
+
+    /// A module whose first function is far larger than the rest, so the
+    /// largest-first partition puts it alone in unit 0 and it finishes LAST
+    /// whenever more than one worker runs.
+    fn uneven_units_fixture() -> LlModule {
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        declare_precise_root_helpers(&mut module);
+        module.declare_function("consume", I64, &[I64]);
+        let big = module.define_function("uneven_fixture_big", I64, vec![(I64, "%a".to_string())]);
+        let entry = big.create_block("entry");
+        let mut acc = "%a".to_string();
+        for i in 0..4000 {
+            let mixed = entry.xor(I64, &acc, &(i * 7919 + 1).to_string());
+            let called = entry.call(I64, "consume", &[(I64, &mixed)]);
+            acc = entry.add(I64, &called, &acc);
+        }
+        entry.ret(I64, &acc);
+        for f in 0..11 {
+            let small = module.define_function(
+                format!("uneven_fixture_small_{f}"),
+                I64,
+                vec![(I64, "%a".to_string())],
+            );
+            let entry = small.create_block("entry");
+            let v = entry.add(I64, "%a", &f.to_string());
+            entry.ret(I64, &v);
+        }
+        // Bodies the unit layout finishes on its text workers.
+        for f in 0..6 {
+            add_precise_root_function(&mut module, &format!("uneven_fixture_roots_{f}"));
+        }
+        module
+    }
+
+    /// The merged object must not depend on how many unit workers ran or in
+    /// which order they finished. One worker finishes units (and the texts of
+    /// the precise-root bodies) in index order; six finish the big unit 0
+    /// last. Every count must also equal the trusted text units compiled one
+    /// at a time on this thread.
+    #[test]
+    fn split_units_merge_identically_for_any_worker_count() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let text_module = uneven_units_fixture();
+        let units = text_module.render_codegen_units(6);
+        assert_eq!(units.len(), 6, "fixture must exercise six real units");
+        let text = compile_text_units_on_producer(&units);
+
+        let mut objects = Vec::new();
+        for workers in [1, 6, 3] {
+            let mut module = uneven_units_fixture();
+            let object = compile_module_units_native_with_workers(
+                &mut module,
+                6,
+                None,
+                "uneven_units_fixture",
+                workers,
+            )
+            .expect("split native units emit and partial-link");
+            objects.push((workers, object));
+        }
+        for (workers, object) in &objects {
+            assert_eq!(
+                object, &text,
+                "{workers} unit worker(s) must merge the same object as the \
+                 trusted sequential text units"
+            );
+        }
     }
 
     #[test]

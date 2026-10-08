@@ -1193,18 +1193,8 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
     // Concurrency is BOUNDED rather than one-thread-per-unit: each job parses
     // a multi-hundred-megabyte translation unit, so unbounded fan-out trades
     // wall time for an OOM (and would undo the peak-memory win the split was
-    // introduced for). Default is a quarter of the machine's parallelism,
-    // clamped to [1, 4]; `PERRY_CODEGEN_UNIT_JOBS` overrides.
-    let jobs = std::env::var("PERRY_CODEGEN_UNIT_JOBS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|p| (p.get() / 4).clamp(1, 4))
-                .unwrap_or(1)
-        })
-        .min(units.len());
+    // introduced for). See [`crate::workers::unit_workers`].
+    let jobs = crate::workers::unit_workers().min(units.len());
 
     // The root backend is a per-module decision stored on the producer thread.
     // Unit workers must receive it explicitly: fresh threads start with the

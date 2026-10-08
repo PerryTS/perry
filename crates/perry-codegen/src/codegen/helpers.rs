@@ -1528,20 +1528,23 @@ pub(super) fn emit_callee_binding_resolutions(
     if !callee_binding_resolution_enabled() {
         return;
     }
+    // Captures and module globals are admitted only with a module-wide
+    // reassignment oracle. The maps are passed as they are: collecting the
+    // module's global ids into a fresh set here, once per function, made this
+    // quadratic in a bundle's size.
     let empty = std::collections::HashSet::new();
+    let no_captures = std::collections::HashMap::new();
+    let no_globals = std::collections::HashMap::new();
     let (capture_ids, module_global_ids) = if module_reassigned.is_some() {
-        (
-            ctx.closure_captures.keys().copied().collect(),
-            ctx.module_globals.keys().copied().collect(),
-        )
+        (&ctx.closure_captures, ctx.module_globals)
     } else {
-        (empty.clone(), empty.clone())
+        (&no_captures, &no_globals)
     };
     let candidates = crate::collectors::collect_loop_called_callee_bindings(
         body,
         param_ids,
-        &capture_ids,
-        &module_global_ids,
+        capture_ids,
+        module_global_ids,
         module_reassigned.unwrap_or(&empty),
     );
     for (id, arity) in candidates {

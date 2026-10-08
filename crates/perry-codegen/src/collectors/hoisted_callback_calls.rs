@@ -280,8 +280,8 @@ pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCa
 pub(crate) fn collect_loop_called_callee_bindings(
     body: &[Stmt],
     param_ids: &std::collections::HashSet<u32>,
-    capture_ids: &std::collections::HashSet<u32>,
-    module_global_ids: &std::collections::HashSet<u32>,
+    capture_ids: &std::collections::HashMap<u32, u32>,
+    module_global_ids: &std::collections::HashMap<u32, String>,
     module_reassigned: &std::collections::HashSet<u32>,
 ) -> Vec<(u32, usize)> {
     let body_reassigned = super::reassigned_locals(body);
@@ -405,7 +405,9 @@ pub(crate) fn collect_loop_called_callee_bindings(
     in_loop
         .into_iter()
         .filter(|(id, _)| {
-            (param_ids.contains(id) || capture_ids.contains(id) || module_global_ids.contains(id))
+            (param_ids.contains(id)
+                || capture_ids.contains_key(id)
+                || module_global_ids.contains_key(id))
                 && !body_reassigned.contains(id)
                 && !module_reassigned.contains(id)
         })

@@ -55,7 +55,7 @@ fn owned_codegen_units_move_each_function_exactly_once() {
         function.create_block("entry").ret_void();
     }
 
-    let units = module.into_codegen_unit_parts(2);
+    let units = module.into_codegen_unit_parts_with(2, 1, |function, _text, _bytes| function);
     assert_eq!(units.len(), 2);
     let mut names: Vec<String> = units
         .iter()

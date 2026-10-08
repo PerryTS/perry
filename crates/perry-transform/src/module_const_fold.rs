@@ -344,7 +344,12 @@ fn collect_local_string_consts(stmts: &[Stmt], out: &mut HashMap<LocalId, String
         }
         perry_hir::walker::walk_expr_children(expr, &mut |child| visit_expr(child, out));
     }
-    for stmt in stmts {
+    // `walk_stmt_exprs` already reaches every expression of the statements
+    // nested in `stmt`, so the nested statement lists are only searched for
+    // their `Let`s. Re-walking them through this function instead visited each
+    // expression once per enclosing statement list — quadratic in the nesting
+    // depth, which a minified bundle's `else if` chains make hundreds deep.
+    fn collect_lets(stmt: &Stmt, out: &mut HashMap<LocalId, String>) {
         if let Stmt::Let {
             id,
             mutable: false,
@@ -354,10 +359,15 @@ fn collect_local_string_consts(stmts: &[Stmt], out: &mut HashMap<LocalId, String
         {
             out.insert(*id, lit.clone());
         }
-        walk_stmt_exprs(stmt, &mut |expr| visit_expr(expr, out));
         for inner in nested_stmt_lists_shared(stmt) {
-            collect_local_string_consts(inner, out);
+            for stmt in inner {
+                collect_lets(stmt, out);
+            }
         }
+    }
+    for stmt in stmts {
+        collect_lets(stmt, out);
+        walk_stmt_exprs(stmt, &mut |expr| visit_expr(expr, out));
     }
 }
 

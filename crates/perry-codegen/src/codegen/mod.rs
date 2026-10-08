@@ -184,6 +184,7 @@ mod artifacts;
 pub(crate) mod boxed_locals;
 mod cjs_exports;
 mod class_artifacts;
+pub(crate) mod class_hierarchy;
 #[cfg(test)]
 mod clone_suffix_tests;
 mod closure;
@@ -2659,6 +2660,7 @@ fn compile_module_impl(
     let mut cross_module = CrossModuleCtx {
         program_has_worker: opts.program_has_worker,
         program_has_thread_agents: thread_agents,
+        class_hierarchy: class_hierarchy::ClassHierarchy::default(),
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -3004,6 +3006,8 @@ fn compile_module_impl(
         &imported_class_source_name,
         &module_prefix,
     );
+    cross_module.class_hierarchy =
+        class_hierarchy::ClassHierarchy::new(&class_table, &method_names);
 
     // Representation-selection Phase 5a: now that the method registry exists,
     // drop any proven-`this` clone whose pair never made it into it. (Symbol
