@@ -185,6 +185,17 @@ pub(crate) fn plan_for_unproven_source(
 /// else. Holes are rejected: a hole is a genuinely ABSENT index whose read walks
 /// the prototype chain, which substituting `undefined` would not do.
 pub(crate) fn spread_free_array_literal(expr: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+    let mut expr = expr;
+    loop {
+        expr = match expr {
+            ast::Expr::Paren(inner) => &inner.expr,
+            ast::Expr::TsAs(inner) => &inner.expr,
+            ast::Expr::TsTypeAssertion(inner) => &inner.expr,
+            ast::Expr::TsNonNull(inner) => &inner.expr,
+            ast::Expr::TsSatisfies(inner) => &inner.expr,
+            _ => break,
+        };
+    }
     let ast::Expr::Array(arr) = expr else {
         return None;
     };

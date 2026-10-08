@@ -203,13 +203,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     else_expr: Box::new(Expr::Compare {
                         op: perry_hir::CompareOp::Lt,
                         left: left.clone(),
-                        right: Box::new(Expr::NativeMethodCall {
-                            module: "__perry_runtime".into(),
-                            class_name: None,
-                            object: None,
-                            method: "arrayRecordLength".into(),
-                            args: vec![args[1].clone()],
-                        }),
+                        right: Box::new(args[1].clone()),
                     }),
                 };
                 let value = lower_expr(ctx, &predicate)?;

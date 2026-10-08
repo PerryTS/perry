@@ -39,9 +39,22 @@ pub(super) fn lower(
     {
         return Ok(false);
     }
-    let Expr::LocalGet(array) = args[1] else {
+    let Expr::NativeMethodCall {
+        module,
+        method,
+        args: length_args,
+        ..
+    } = &args[1]
+    else {
         return Ok(false);
     };
+    if module != "__perry_runtime" || method != "arrayRecordLength" {
+        return Ok(false);
+    }
+    let [Expr::LocalGet(array)] = length_args.as_slice() else {
+        return Ok(false);
+    };
+    let array = *array;
     if !matches!(args[2], Expr::LocalGet(id) if id == *counter) || body.len() < 2 {
         return Ok(false);
     }
@@ -224,7 +237,20 @@ mod tests {
             init: Some(init),
         }
     }
+    #[test]
+    fn array_record_literal_bound_is_a_number_not_a_receiver() {
+        let ir = emit_record_bound(Type::Array(Box::new(Type::Number)), Some(Expr::Integer(2)));
+        assert!(
+            ir.lines().any(|line| line.contains("fcmp")
+                && line.contains("double")
+                && line.ends_with(", 2.0")),
+            "literal length is the numeric bound: {ir}"
+        );
+    }
     fn emit_record(ty: Type) -> String {
+        emit_record_bound(ty, None)
+    }
+    fn emit_record_bound(ty: Type, bound: Option<Expr>) -> String {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_counted");
         let mode = Expr::Compare {
@@ -269,7 +295,9 @@ mod tests {
                         "arrayRecordForBound",
                         vec![
                             mode.clone(),
-                            Expr::LocalGet(0),
+                            bound.unwrap_or_else(|| {
+                                rt("arrayRecordLength", vec![Expr::LocalGet(0)])
+                            }),
                             Expr::LocalGet(2),
                             rt(
                                 "iteratorStep",

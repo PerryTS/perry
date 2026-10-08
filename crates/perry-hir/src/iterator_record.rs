@@ -455,7 +455,7 @@ impl IteratorRecordPlan {
             "arrayRecordForBound",
             vec![
                 self.iterator_mode(),
-                Expr::LocalGet(self.array),
+                self.length(),
                 Expr::LocalGet(self.index),
                 crate::lower::iterator_step_call(iter_id, next, value_id),
                 Expr::LocalSet(state, Box::new(Expr::Number(2.0))),
@@ -660,6 +660,37 @@ mod tests {
             plan.release(&[99, 100]).len(),
             5,
             "private source, step bindings, and scalar owners must be cleared"
+        );
+    }
+
+    #[test]
+    fn array_record_forof_literal_uses_scalar_custody_and_constant_bound() {
+        let ir = hir("for (const value of [11, 22]) { console.log(value); }");
+        assert!(ir.contains("__iterator_literal_"), "{ir}");
+        assert!(!ir.contains("init: Some(Array("), "{ir}");
+        assert!(
+            ir.contains("arrayRecordNeedsIterator") && ir.contains("args: []"),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("arrayRecordForBound") && ir.contains("Integer(2)"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("arrayRecordLength") && !ir.contains("IndexGet"),
+            "{ir}"
+        );
+        assert_eq!(ir.matches("method: \"iteratorStep\"").count(), 1, "{ir}");
+        let cast = hir("for (const value of ([11,22] as number[])) { console.log(value); }");
+        assert!(
+            cast.contains("__iterator_literal_") && !cast.contains("arrayRecordLength"),
+            "{cast}"
+        );
+        let holes = hir("for (const value of ([1,,3] as number[])) { console.log(value); }");
+        assert!(!holes.contains("__iterator_literal_"), "{holes}");
+        assert!(
+            holes.contains("arrayRecordLength") && holes.contains("IndexGet"),
+            "{holes}"
         );
     }
 

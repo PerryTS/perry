@@ -71,10 +71,7 @@
                         then_expr: Box::new(args[2].clone()),
                         else_expr: Box::new(Expr::Number(f64::INFINITY)),
                     }),
-                    else_expr: Box::new(Expr::NativeMethodCall {
-                        module: "__perry_runtime".into(), class_name: None, object: None,
-                        method: "arrayRecordLength".into(), args: vec![args[1].clone()],
-                    }),
+                    else_expr: Box::new(args[1].clone()),
                 }]));
             }
             "arrayRecordCloseAbsent" => {
