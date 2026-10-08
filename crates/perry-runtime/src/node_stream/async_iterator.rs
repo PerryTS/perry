@@ -691,7 +691,7 @@ fn settle_iterator_return_value(value: f64) {
 }
 
 pub(super) fn call_source_iterator_return(stream: f64) {
-    let Some(source_iterator) = get_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+    let Some(source_iterator) = get_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY)
     else {
         return;
     };
@@ -727,7 +727,7 @@ extern "C" fn ns_readable_iterator_next(
     if !readable_chunks_nonempty(stream.get_nanbox_f64()) {
         if let Some(source_iterator) = get_hidden_value(
             stream.get_nanbox_f64(),
-            hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+            READABLE_SOURCE_ITERATOR_KEY,
         ) {
             let source_iterator = scope.root_nanbox_f64(source_iterator);
             let next = match catch_pipeline_throw(|| unsafe {
@@ -1112,9 +1112,13 @@ pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
 pub(crate) fn mark_foreign_readable_ended(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        STREAM_END_EMITTED_KEY,
+        f64::from_bits(TAG_TRUE),
+    );
+    set_hidden_value(stream.get_nanbox_f64(), STREAM_ENDED_KEY, f64::from_bits(TAG_TRUE));
     for (key, bits) in [
-        (STREAM_END_EMITTED_KEY, TAG_TRUE),
-        (STREAM_ENDED_KEY, TAG_TRUE),
         (b"readable".as_slice(), TAG_FALSE),
         (b"readableEnded".as_slice(), TAG_TRUE),
     ] {

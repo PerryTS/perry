@@ -1,7 +1,7 @@
 use super::*;
 
-pub(super) fn hidden_readable_from_promise_pending_key() -> *mut crate::string::StringHeader {
-    hidden_key(b"__perryReadableFromPromisePending")
+pub(super) fn hidden_readable_from_promise_pending_key() -> Slot {
+    Slot::ReadableFromPromisePending
 }
 
 pub(super) fn attach_readable_from_promise_chunk(stream: f64, chunk: f64) -> bool {

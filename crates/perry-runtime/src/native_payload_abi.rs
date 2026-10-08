@@ -103,11 +103,10 @@ unsafe fn family_cell(
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
     let obj = crate::native_payload::any_object(value)?;
     let meta = (*obj).meta;
-    if meta.is_null() || !crate::native_payload::is_payload_state_word((*meta).native_state) {
+    if meta.is_null() {
         return None;
     }
-    let cell = ((*meta).native_state & crate::value::POINTER_MASK)
-        as *mut crate::native_handle::NativeHandleHeader;
+    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
     // The attached cell brands subclasses as well as direct instances.
     ((*cell).type_id == family_type_id(family)
         && crate::native_handle::cell_vtable(cell)? as *const _ == family.vtable)
@@ -623,11 +622,10 @@ unsafe fn attached_cell(
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
     let obj = crate::native_payload::any_object(value)?;
     let meta = (*obj).meta;
-    if meta.is_null() || !crate::native_payload::is_payload_state_word((*meta).native_state) {
+    if meta.is_null() {
         return None;
     }
-    let cell = ((*meta).native_state & crate::value::POINTER_MASK)
-        as *mut crate::native_handle::NativeHandleHeader;
+    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
     (crate::native_handle::cell_vtable(cell)? as *const _ == vtable).then_some(cell)
 }
 /// # Safety

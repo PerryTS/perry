@@ -462,6 +462,29 @@ pub(crate) fn is_payload_state_word(word: u64) -> bool {
         && word & crate::value::POINTER_MASK != 0
 }
 
+/// The payload cell a `native_state` word leads to: the cell itself, or,
+/// for a runtime stream, the cell its state record holds
+/// (`node_stream::state_record`: `native_state` -> record -> cell). A weak
+/// collection's storage uses the same edge encoding and names no cell.
+#[inline(always)]
+pub(crate) fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
+    if !is_payload_state_word(word) {
+        return None;
+    }
+    let target = word & crate::value::POINTER_MASK;
+    // SAFETY: a pointer-tagged `native_state` word is a traced edge to a live
+    // GC cell.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(target as usize) }?;
+    match header.obj_type {
+        crate::gc::GC_TYPE_NATIVE_HANDLE => Some(target as *mut NativeHandleHeader),
+        crate::gc::GC_TYPE_ARRAY => {
+            let cell = crate::node_stream::record_payload_cell(word);
+            (cell != 0).then(|| (cell & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
+        }
+        _ => None,
+    }
+}
+
 /// Allocate an instance of `family` owning `payload`.
 ///
 /// `external_bytes` is the native memory the payload really retains (heap
@@ -686,11 +709,7 @@ fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, Pa
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
-    let word = unsafe { (*meta).native_state };
-    if !is_payload_state_word(word) {
-        return Err(PayloadMiss::Foreign);
-    }
-    Ok((word & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
+    payload_cell_of_word(unsafe { (*meta).native_state }).ok_or(PayloadMiss::Foreign)
 }
 
 /// The stream hooks of `value`'s attached payload, and its cell, when its
@@ -709,11 +728,7 @@ pub(crate) fn stream_hooks_of(
         return None;
     }
     // SAFETY: the meta record of a live object.
-    let word = unsafe { (*meta).native_state };
-    if !is_payload_state_word(word) {
-        return None;
-    }
-    let cell = (word & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let cell = payload_cell_of_word(unsafe { (*meta).native_state })?;
     // SAFETY: a payload state word names the object's live payload cell.
     let vtable = unsafe { crate::native_handle::cell_vtable(cell)? };
     Some((vtable.stream?, cell))
@@ -758,10 +773,10 @@ pub unsafe fn payload_mut_attached<'a, T: 'static>(
 ) -> Result<&'a mut T, PayloadMiss> {
     let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
     let meta = (*obj).meta;
-    if meta.is_null() || !is_payload_state_word((*meta).native_state) {
+    if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
-    let cell = ((*meta).native_state & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let cell = payload_cell_of_word((*meta).native_state).ok_or(PayloadMiss::Foreign)?;
     if (*cell).type_id != type_tag::<T>(family.class_id) {
         return Err(PayloadMiss::Foreign);
     }
@@ -1649,11 +1664,12 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
         return false;
     };
     let meta = unsafe { (*obj).meta };
-    if meta.is_null() || !is_payload_state_word(unsafe { (*meta).native_state }) {
+    if meta.is_null() {
         return false;
     }
-    let cell =
-        (unsafe { (*meta).native_state } & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let Some(cell) = payload_cell_of_word(unsafe { (*meta).native_state }) else {
+        return false;
+    };
     unsafe { crate::native_handle::native_handle_release_rust_payload(cell) }
 }
 

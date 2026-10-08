@@ -70,6 +70,7 @@ mod native_payload;
 mod native_payload_buffer;
 mod native_payload_callbacks;
 mod native_payload_streams;
+mod stream_state_record;
 mod native_this_alias;
 mod noncollecting_root_lock;
 mod object_create;

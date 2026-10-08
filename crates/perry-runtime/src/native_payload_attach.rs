@@ -45,16 +45,26 @@ pub(super) fn attach_to_object_with<T: 'static>(
     }
     let previous = unsafe { (*meta).native_state };
     if is_payload_state_word(previous) {
-        let cell = (previous & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
-        return attach_cell(
-            obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64)),
-            cell,
-            family,
-            payload,
-            vtable,
-            external_bytes,
-        )
-        .is_ok();
+        match payload_cell_of_word(previous) {
+            Some(cell) => {
+                return attach_cell(
+                    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+                        crate::value::js_nanbox_pointer(obj as i64)
+                    }),
+                    cell,
+                    family,
+                    payload,
+                    vtable,
+                    external_bytes,
+                )
+                .is_ok();
+            }
+            // A stream's state record without a payload takes the new cell
+            // (`attach_external_rooted`); a weak collection's storage is not
+            // a place for one.
+            None if crate::node_stream::is_stream_record_word(previous) => {}
+            None => return false,
+        }
     }
     attach_rooted(&obj, family, Some(payload), vtable, external_bytes);
     true
@@ -116,6 +126,9 @@ pub(crate) fn attach_external_rooted(
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         let meta = (*obj).meta;
         debug_assert!(!meta.is_null(), "object_meta_ensure ran above");
+        if crate::node_stream::store_record_payload_cell((*meta).native_state, word) {
+            return;
+        }
         (*meta).native_state = word;
         crate::gc::runtime_write_barrier_slot(
             meta as usize,

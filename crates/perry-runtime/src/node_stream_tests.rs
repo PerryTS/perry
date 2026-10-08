@@ -1039,7 +1039,7 @@ fn compose_snapshot_read_throw_returns_errored_composite() {
     let composite = scope.root_nanbox_f64(composite);
     assert!(!has_truthy_hidden(
         composite.get_nanbox_f64(),
-        hidden_key(b"__perryStreamComposePriming")
+        Slot::ComposePriming
     ));
 
     let listener =
