@@ -254,7 +254,7 @@ unsafe fn compiled_target_call(
         }
     };
     let this_arg = arg(0);
-    if !receiver_passes_unchanged(closure, info, this_arg.to_bits()) {
+    if !receiver_passes_unchanged(recv, closure, info, this_arg) {
         return None;
     }
     let this = crate::closure::JsThis::from_f64(this_arg);
@@ -348,19 +348,20 @@ unsafe fn enter_compiled_body(
 /// body), and no `this` capture `rebind_explicit_this` would clone.
 #[inline(always)]
 unsafe fn receiver_passes_unchanged(
+    recv: f64,
     closure: *const crate::closure::ClosureHeader,
     info: &crate::closure::JsFunctionInfo,
-    this_bits: u64,
+    this_arg: f64,
 ) -> bool {
     use crate::closure::{FN_ARROW, FN_STRICT};
     use crate::codegen_abi::FN_COMPILED_BODY;
     if info.flags & FN_COMPILED_BODY == 0 {
         return false;
     }
-    let this_unchanged = this_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        || this_bits == crate::value::TAG_UNDEFINED
-        || this_bits == crate::value::TAG_NULL
-        || info.flags & FN_STRICT != 0;
+    // The explicit-`this` forwarder's own boxing test, so a Symbol receiver
+    // of a sloppy body is boxed here exactly as on every other path.
+    let this_unchanged =
+        info.flags & FN_STRICT != 0 || !crate::closure::receiver_may_box(recv, this_arg);
     let count = (*closure).capture_count;
     let rebinds = count
         & (crate::closure::CAPTURES_THIS_FLAG | crate::closure::NO_THIS_REBIND_FLAG)
