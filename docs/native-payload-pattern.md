@@ -51,11 +51,43 @@ object is the only owner of its payload, and the collector sees that edge.
 4. `external_bytes` counts memory the payload really retains (heap buffers it
    owns), re-stated when that changes. Do not count transient work buffers or
    bytes that were already handed to JS (#11549).
+   A payload's working buffers come from `PayloadBuffer` (below), whose
+   owner counts them exactly; add `owner.bytes()` into the stated bytes.
 5. Do not hold the `&mut T` from `payload_mut` across `close` or `attach` of the same
    object or across a call that can re-enter the family on the same object. If
    the method allocates or calls JS while holding it, root the receiver first
    (`RuntimeHandleScope::root_nanbox_f64`) and return `this` from the root.
 6. Decode and validate arguments before borrowing when you can.
+
+## Working buffers (`PayloadBuffer`)
+
+Code: `perry-runtime/src/native_payload_buffer.rs`; binding crates use
+perry-ffi `native_payload::buffer`. A codec's large working memory (a
+window, hash tables, an output scratch) is raw bytes owned by the payload:
+never traced, never a JS value or a GC pointer.
+
+* `PayloadBuffer::alloc(owner, len) -> (ptr, len)`, `grow`, `shrink`,
+  `release`. Blocks are zeroed and 16-byte aligned. The
+  `PayloadBufferOwner` lives in `T` and counts the exact bytes of its live
+  buffers; the family adds `owner.bytes()` into every external-bytes
+  statement (`alloc`, `set_external_bytes`, `StepOut::external_bytes`).
+  perry-ffi's `BufferOwner` keeps the owner behind an `Rc`, and its
+  `PayloadBuffer` frees itself on drop.
+* `Drop for T` frees the buffers. `close` (a stream's `destroy()`) drops
+  `T` at once, so the bytes return before any collection; the sweep or
+  worker teardown is the backstop for a payload nobody closed.
+* A C codec with a custom allocator hook gets the owner as
+  `alloc(opaque, size)` / `free(opaque, ptr)` (`BufferOwner::hook()`,
+  brotli's `CAllocator` shape; the size rides in a 16-byte prefix). Keep an
+  owner clone in the codec state so `opaque` outlives every block.
+* Every byte comes from one internal function, `backing`, today the global
+  allocator (mimalloc on 64-bit). The region page-run allocator replaces
+  that function only.
+* zlib (`perry-ext-zlib`): brotli's state and every brotli allocation (both
+  directions), the inflate state with its 32 KiB window, and the output
+  scratch are buffers. The deflate compressor's arrays are boxed inside
+  miniz_oxide and zstd allocates in C without a hook here, so those stay
+  on their own allocators with their sizes stated as before.
 
 ## Per-family conversion checklist (Codex lanes)
 

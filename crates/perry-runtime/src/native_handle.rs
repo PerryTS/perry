@@ -481,6 +481,12 @@ pub(crate) unsafe fn native_handle_release_rust_payload(handle: *mut NativeHandl
     {
         return false;
     }
+    // Sabotage: leave the payload (and its buffers) to the sweep's drop.
+    #[cfg(test)]
+    if std::env::var("PERRY_TEST_PAYLOAD_BUFFER_SABOTAGE").as_deref() == Ok("release_on_drop_only")
+    {
+        return true;
+    }
     (*handle).flags |= crate::native_payload::CLOSING;
     if (*handle).ownership == OWNERSHIP_OWNED {
         if let Some(finalizer) = cell_drop_fn(handle) {

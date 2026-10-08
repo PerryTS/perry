@@ -67,6 +67,7 @@ mod map_store;
 mod mark_slot_hoists;
 mod minor_fixed_cost;
 mod native_payload;
+mod native_payload_buffer;
 mod native_payload_callbacks;
 mod native_payload_streams;
 mod native_this_alias;
