@@ -81,6 +81,27 @@ unsafe fn native_call_value_this_impl(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    let args = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    super::explicit_this::call_with_explicit_this(
+        func_value,
+        this.as_f64(),
+        args,
+        super::explicit_this::ReceiverBinding::AsGiven,
+    )
+}
+
+/// Dispatch a call whose receiver and capture binding have already been
+/// prepared by the single explicit-this forwarder.
+pub(super) unsafe fn dispatch_explicit_this_call(
+    func_value: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     use crate::value::JSValue;
 
     let jsval = JSValue::from_bits(func_value.to_bits());

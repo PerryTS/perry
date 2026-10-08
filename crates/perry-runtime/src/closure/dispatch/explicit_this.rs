@@ -1,6 +1,6 @@
 //! Forwarding a call with an explicit `this`: the one mechanism behind
 //! `Function.prototype.call` / `apply` (as values and as methods), bound
-//! functions and `Reflect.apply`.
+//! functions, `Reflect.apply` and generic receiver-bearing value calls.
 //!
 //! Before the callee runs, two steps can allocate: OrdinaryCallBindThis boxes
 //! a primitive receiver for a sloppy callee (`coerce_call_this`), and a
@@ -66,7 +66,7 @@ pub(crate) unsafe fn forward_with_explicit_this<R>(
     call: impl FnOnce(ExplicitThisCall<'_>) -> R,
 ) -> R {
     let may_box = binding == ReceiverBinding::Coerce && receiver_may_box(target, this_arg);
-    if !may_box && !rebind_explicit_this_allocates(target) {
+    if !may_box && !rebind_explicit_this_allocates(target, this_arg) {
         return call(ExplicitThisCall {
             target,
             this: this_arg,
@@ -123,7 +123,7 @@ pub(crate) unsafe fn call_with_explicit_this(
         } else {
             call.args.as_ptr()
         };
-        super::value_call::native_call_value_this(
+        super::value_call::dispatch_explicit_this_call(
             call.target,
             crate::closure::JsThis::from_f64(call.this),
             args_ptr,

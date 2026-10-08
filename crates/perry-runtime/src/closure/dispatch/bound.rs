@@ -464,7 +464,7 @@ pub(crate) fn callee_boxes_primitive_this(target: f64) -> bool {
 /// Kept in step with `clone_closure_rebind_this`'s early-outs by
 /// `rebind_predicate_tests` below, which asserts the two agree on every shape.
 #[inline]
-pub(crate) fn rebind_explicit_this_allocates(target: f64) -> bool {
+pub(crate) fn rebind_explicit_this_allocates(target: f64, this_arg: f64) -> bool {
     let bits = target.to_bits();
     if bits & 0xFFFF_0000_0000_0000 != 0x7FFD_0000_0000_0000 {
         return false;
@@ -478,17 +478,23 @@ pub(crate) fn rebind_explicit_this_allocates(target: f64) -> bool {
         return false;
     }
     let raw_count = unsafe { (*header).capture_count };
-    raw_count & CAPTURES_THIS_FLAG != 0
-        && raw_count & NO_THIS_REBIND_FLAG == 0
-        && crate::closure::real_capture_count(raw_count) > 0
+    if raw_count & CAPTURES_THIS_FLAG == 0 || raw_count & NO_THIS_REBIND_FLAG != 0 {
+        return false;
+    }
+    let count = crate::closure::real_capture_count(raw_count) as usize;
+    count > 0
+        && crate::closure::js_closure_get_capture_bits(header, (count - 1) as u32)
+            != this_arg.to_bits()
 }
 
 #[inline]
 pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
-    let bits = target.to_bits();
-    if bits & 0xFFFF_0000_0000_0000 != 0x7FFD_0000_0000_0000 {
+    // The forwarder is the only call-time rebind point. Once a method's
+    // captured receiver matches, dispatch it without allocating another clone.
+    if !rebind_explicit_this_allocates(target, this_arg) {
         return target;
     }
+    let bits = target.to_bits();
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     // Reject the `[0, 0x100000)` native-handle band BEFORE probing the pointer:
     // Fetch/http/axios/fastify ids (`0x40000+`) are NaN-boxed with POINTER_TAG
@@ -1009,7 +1015,25 @@ mod rebind_predicate_tests {
         // The one shape that clones, and the shapes that look like it but
         // return the target untouched.
         let method = closure_value(method_body, CAPTURES_THIS_FLAG | 1);
+        let already_bound = closure_value(method_body, CAPTURES_THIS_FLAG | 1);
+        unsafe {
+            crate::closure::js_closure_set_capture_f64(
+                crate::value::js_nanbox_get_pointer(method) as *mut ClosureHeader,
+                0,
+                42.0,
+            );
+            crate::closure::js_closure_set_capture_f64(
+                crate::value::js_nanbox_get_pointer(already_bound) as *mut ClosureHeader,
+                0,
+                receiver,
+            );
+        }
         let cases = [
+            (
+                "method whose captured receiver already matches",
+                already_bound,
+                false,
+            ),
             ("concise method with a reserved `this`", method, true),
             (
                 "arrow with a captured this",
@@ -1044,7 +1068,7 @@ mod rebind_predicate_tests {
                 if clones { "" } else { "not" }
             );
             assert_eq!(
-                rebind_explicit_this_allocates(value),
+                rebind_explicit_this_allocates(value, receiver),
                 rebound_differs,
                 "{what}: the predicate and the rebind must agree"
             );

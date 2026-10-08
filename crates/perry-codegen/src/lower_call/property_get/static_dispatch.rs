@@ -378,48 +378,13 @@ pub(crate) fn try_lower_static_dispatch(
                 }
                 fc = ctx.classes.get(&c).and_then(|cc| cc.extends_name.clone());
             }
-            if let Some(owner) = field_owner {
-                // #11789 sweep: the callee is read before the arguments and is
-                // held across every one of them, each of which is in turn held
-                // across the ones after it.
-                let callee_expr = Expr::StaticFieldGet {
-                    class_name: owner,
-                    field_name: property.to_string(),
-                };
-                let (callee_val, lowered_args, callee_group) =
-                    crate::lower_call::lower_operands_rooted(ctx, &callee_expr, args)?;
-                let (args_ptr_i64, args_len) = if lowered_args.is_empty() {
-                    ("0".to_string(), "0".to_string())
-                } else {
-                    let n = lowered_args.len();
-                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-                    for (i, v) in lowered_args.iter().enumerate() {
-                        let slot = ctx
-                            .block()
-                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        ctx.block().store(DOUBLE, v, &slot);
-                    }
-                    let ptr_reg = ctx.block().next_reg();
-                    ctx.block().emit_raw(format!(
-                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                        ptr_reg, n, buf_reg
-                    ));
-                    let ptr_i64 = ctx.block().ptrtoint(&ptr_reg, I64);
-                    (ptr_i64, n.to_string())
-                };
-                let result = ctx.block().call(
-                    DOUBLE,
-                    "js_native_call_value",
-                    &[
-                        (DOUBLE, &callee_val),
-                        // A plain call, as it has always been lowered here.
-                        (I64, crate::expr::body_call::JS_THIS_UNDEFINED),
-                        (I64, &args_ptr_i64),
-                        (I64, &args_len),
-                    ],
+            if field_owner.is_some() {
+                // Use the existing property Reference call: read before args,
+                // retain the original receiver (also for an inherited field),
+                // and let arrows/bound functions keep their own this.
+                return crate::lower_call::console_promise::try_lower_closure_call_fallthrough(
+                    ctx, callee, args,
                 );
-                callee_group.release(ctx);
-                return Ok(Some(result));
             }
         }
         // No static method resolved through the class's statically-visible

@@ -1490,7 +1490,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
                 if !fv.is_undefined() && !fv.is_null() {
                     return crate::closure::js_native_call_value(
                         v,
-                        crate::closure::plain_call_receiver(),
+                        crate::closure::JsThis::from_f64(receiver),
                         args_ptr,
                         args_len,
                     );
@@ -1640,14 +1640,6 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // not a real inherited member.
             && member.to_bits() != closure_val.to_bits()
         {
-            // The inherited object-literal method can keep this in a capture
-            // slot. Apply the same rebinding as Function.call/apply, retaining
-            // lexical this for arrows and already-bound functions.
-            let member = scope.root_nanbox_f64(member);
-            let member = crate::closure::rebind_explicit_this(
-                member.get_nanbox_f64(),
-                receiver.get_nanbox_f64(),
-            );
             let member = scope.root_nanbox_f64(member);
             let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
             let result = crate::closure::native_call_value_this(
