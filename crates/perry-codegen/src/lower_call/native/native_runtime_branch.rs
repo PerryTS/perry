@@ -18,6 +18,24 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            "arrayRecordLiteral" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let buffer = if values.is_empty() {
+                    "null".to_owned()
+                } else {
+                    let buffer = ctx.func.alloca_entry_array(DOUBLE, values.len());
+                    for (i, value) in values.iter().enumerate() {
+                        let slot = ctx.block().gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
+                        ctx.block().store(DOUBLE, value, &slot);
+                    }
+                    buffer
+                };
+                // The callee roots the whole argument pack before allocating.
+                let array = ctx.block().call(DOUBLE, "js_array_record_literal",
+                    &[(crate::types::PTR, &buffer), (I32, &values.len().to_string())]);
+                roots.release(ctx);
+                return Ok(array);
+            }
             "arrayRecordNeedsIterator" if matches!(args.first(), Some(Expr::LocalSet(..))) => {
                 let Expr::LocalSet(source_id, source_expr) = &args[0] else {
                     return Err(anyhow::anyhow!("arrayRecordEnter requires its private source binding"));

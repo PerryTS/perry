@@ -141,6 +141,26 @@ pub unsafe extern "C-unwind" fn js_iterator_step_rest_to_array(
 static KEEP_ITERATOR_STEP_REST: unsafe extern "C-unwind" fn(f64, f64, f64) -> f64 =
     js_iterator_step_rest_to_array;
 
+/// Materialize already evaluated dense literal values only when the protocol
+/// or an observable close needs their receiver. Root the entire pack before
+/// the first allocation; no borrowed caller word crosses a collection.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_literal(values: *const f64, count: u32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let values: Vec<_> = (0..count as usize)
+        .map(|i| scope.root_nanbox_f64(*values.add(i)))
+        .collect();
+    let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(count));
+    for value in values {
+        let next =
+            array.with_mut_ptr(|a| crate::array::js_array_push_f64(a, value.get_nanbox_f64()));
+        array.set_raw_mut_ptr(next);
+    }
+    array.with_const_ptr::<crate::array::ArrayHeader, _>(|a| {
+        crate::value::js_nanbox_pointer(a as i64)
+    })
+}
+
 /// Entry proof for the array representation of an IteratorRecord. Own array
 /// keys/reparenting are already described by the array's header shape word.
 /// The prototype shape describes the iteration member and its ConstFn body.

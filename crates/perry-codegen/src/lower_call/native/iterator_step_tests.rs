@@ -91,3 +91,32 @@ fn native_step_output_is_an_unknown_value_rooted_before_the_body() {
         );
     });
 }
+
+#[test]
+fn array_record_literal_materialization_is_an_outlined_rooted_call() {
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let value = Expr::NativeMethodCall {
+            module: "__perry_runtime".into(),
+            class_name: None,
+            object: None,
+            method: "arrayRecordLiteral".into(),
+            args: vec![Expr::Number(1.0), Expr::String("kept".into())],
+        };
+        let ir = crate::temp_root_coverage::main_ir_for(
+            "literal_materialization",
+            vec![crate::temp_root_coverage::console_log(vec![value])],
+        );
+        assert_eq!(
+            ir.lines()
+                .filter(|l| l.contains("call double @js_array_record_literal("))
+                .count(),
+            1,
+            "{mode}: {ir}"
+        );
+        assert!(
+            !ir.lines()
+                .any(|l| l.contains("call ") && l.contains("@js_array_alloc(")),
+            "{mode}: cold array construction must stay in the shared callee: {ir}"
+        );
+    });
+}

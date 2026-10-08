@@ -341,8 +341,9 @@ pub(crate) use iter_object::dispatch_array_iterator_step;
 mod iterator_step;
 pub use iterator_step::{
     js_array_record_close, js_array_record_close_absent, js_array_record_enter,
-    js_array_record_literal_needs_iterator, js_array_record_needs_iterator,
-    js_iterator_next_method, js_iterator_step, js_iterator_step_rest_to_array,
+    js_array_record_literal, js_array_record_literal_needs_iterator,
+    js_array_record_needs_iterator, js_iterator_next_method, js_iterator_step,
+    js_iterator_step_rest_to_array,
 };
 
 #[cfg(test)]

@@ -427,3 +427,33 @@ fn array_record_entry_repairs_only_its_private_source() {
         assert_eq!(record, 42.0);
     }
 }
+
+#[test]
+fn array_record_literal_preserves_dense_values_and_order() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = scope.root_string_ptr(crate::string::js_string_from_bytes(b"kept".as_ptr(), 4));
+        let text = text.with_const_ptr::<crate::StringHeader, _>(|s| {
+            crate::value::JSValue::string_ptr(s as *mut crate::StringHeader).bits()
+        });
+        let values = [
+            7.0,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(text),
+        ];
+        let result =
+            scope.root_nanbox_f64(crate::array::js_array_record_literal(values.as_ptr(), 3));
+        let array = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        assert_eq!(crate::array::js_array_length(array), 3);
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(
+                crate::array::js_array_get_f64(array, index as u32).to_bits(),
+                value.to_bits()
+            );
+        }
+        let empty = crate::array::js_array_record_literal(std::ptr::null(), 0);
+        let empty = crate::value::js_nanbox_get_pointer(empty) as *const crate::array::ArrayHeader;
+        assert_eq!(crate::array::js_array_length(empty), 0);
+    }
+}
