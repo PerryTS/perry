@@ -6,6 +6,11 @@ pub(super) enum DescriptorRoute {
 }
 #[inline]
 pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
+    // The ordinary holder is already its descriptor storage. Keep its shape
+    // reads out of closure, byte-owner and exotic admission paths.
+    if super::key_attrs::attrs_live_in_keys(owner) {
+        return DescriptorRoute::Keys(owner as *const ObjectHeader);
+    }
     let bag = if crate::closure::is_closure_ptr(owner) {
         crate::closure::props::bag_of(owner)
     } else if crate::buffer::header::is_owned_byte_cell(owner) {

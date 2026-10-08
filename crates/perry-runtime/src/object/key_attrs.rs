@@ -892,12 +892,17 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_BLOCKS_STORE == 0 {
+    let summary = object_summary(obj);
+    if summary & SUMMARY_BLOCKS_STORE == 0 {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("read.store_check_summary_clear");
         return false;
     }
-    !entry_is_plain_writable_data(object_key_entry_filtered(obj, key, false))
+    // If every data property is writable, only an accessor can intercept.
+    // Use the existing accessor filter: non-enumerable prototype methods
+    // need no lookup for a store merely because another key is an accessor.
+    let accessor_only = summary & SUMMARY_NON_WRITABLE == 0;
+    !entry_is_plain_writable_data(object_key_entry_filtered(obj, key, accessor_only))
 }
 
 // ---------------------------------------------------------------------------
