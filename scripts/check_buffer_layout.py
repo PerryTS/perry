@@ -18,7 +18,7 @@ STRINGS = re.compile(r'//[^\n]*|/\*.*?\*/|\'(?:\\.|[^\'\\])\'|'
                      r'r(?P<hashes>\#{0,255})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"', re.S)
 PATTERNS = [
     re.compile(r'size_of\s*::\s*<\s*(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\s*>\s*\(\s*\)'),
-    re.compile(r'\b(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)'),
+    re.compile(r'(?:\b(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s*|\(\s*(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s+as\s+\*\s*(?:const|mut)\s+u8\s*\))\.add\(\s*(?:8|16)\s*\)'),
     re.compile(r'\(\*(?:buf(?:fer)?(?:_ptr)?|ta|view|result|backing)\)\.(?:length|capacity)\s*=(?!=)'),
     re.compile(r'(?<!fn )\b(?:buffer_data(?:_mut)?|typed_array_bytes(?:_mut)?|js_value_buffer_or_typedarray_data|js_native_buffer_data_ptr)\s*\('),
     re.compile(r'\btypedarray::data_ptr(?:_mut)?\s*\('),
@@ -49,13 +49,18 @@ def inventory(root=ROOT):
         else:
             names = set(re.findall(r'\b(\w+)\s*:\s*\*\s*(?:mut|const)\s+(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\b', code))
             names.update(re.findall(r'\blet\s+(?:mut\s+)?(\w+)[^;=\n]*=\s*[^;\n]*?\bas\s*\*\s*(?:mut|const)\s+(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\b', code))
-        for _ in range(len(names) + 1):
-            aliases = {alias for alias, src in re.findall(r'\blet\s+(?:mut\s+)?(\w+)\s*=\s*\(?\s*(\w+)\s*(?:as\s+\*\s*(?:const|mut)\s+u8)?\s*\)?\s*;', code) if src in names}
-            if aliases <= names: break
-            names.update(aliases)
+            names.update(re.findall(r'\blet\s+(?:mut\s+)?(\w+)[^;=]*=\s*[^;]*?\b(?:as_pointer|get_raw_mut_ptr|get_raw_const_ptr|cast)\s*::\s*<\s*(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\s*>', code))
+        names.update(re.findall(r'\blet\s+(?:mut\s+)?(\w+)(?:\s*:\s*[^=;]+)?\s*=\s*(?:[\w:]+::)?(?:buffer_alloc|typed_array_alloc|store_alloc|js_buffer_alloc|js_uint8array_alloc|js_array_buffer_new|js_shared_array_buffer_new|new_view)\b', code))
+        if names:
+            alias_pairs = re.findall(r'\blet\s+(?:mut\s+)?(\w+)\s*=\s*\(?\s*(\w+)\s*(?:as\s+\*\s*(?:const|mut)\s+u8)?\s*\)?\s*;', code)
+            alias_pairs += re.findall(r'\blet\s+(?:mut\s+)?(\w+)\s*=\s*(\w+)\s*\.(?:cast(?:\s*::\s*<\s*u8\s*>)?|cast_mut|cast_const)\s*\(\s*\)\s*;', code)
+            while True:
+                aliases = {alias for alias, src in alias_pairs if src in names}
+                if aliases <= names: break
+                names.update(aliases)
         if names:
             receiver = r'(?:' + '|'.join(re.escape(n) for n in sorted(names)) + ')'
-            matches.extend(re.finditer(r'\b'+receiver+r'\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)', code))
+            matches.extend(re.finditer(r'(?:\b'+receiver+r'\s*|\(\s*'+receiver+r'\s+as\s+\*\s*(?:const|mut)\s+u8\s*\))\.add\(\s*(?:8|16)\s*\)', code))
             matches.extend(re.finditer(r'\(\*\s*'+receiver+r'\s*\)\s*\.(?:length|capacity)\s*=(?!=)', code))
         if '/perry-codegen/' in relative:
             for m in EMITTED.finditer(source):
@@ -78,7 +83,11 @@ def self_test():
         'std::mem::size_of::<TypedArrayHeader>()',
         'let n = std::mem::size_of::<\n crate::typedarray::TypedArrayHeader\n>();',
         'fn f(p: *mut BufferHeader) { (*p).length = 1; }',
+        'let p = crate::buffer::buffer_alloc(8); (*p).capacity = 4;',
+        'let p = typed_array_alloc(1, 8); let a = p; let b = a; let c = b; let d = c; (d as *const u8).add(16);',
         'fn f(p: *const TypedArrayHeader) { let bytes = (p as *const u8); bytes.add(16); }',
+        'let p = value.as_pointer::<crate::buffer::BufferHeader>(); let bytes = p.cast::<u8>(); bytes.add(16);',
+        'let p = roots.get_raw_mut_ptr::<TypedArrayHeader>(); let alias = p.cast_const(); alias.add(8);',
         'let ptr = crate::buffer::buffer_data(buffer);',
         'let data = typed_array_bytes(ta);',
         'let data = js_value_buffer_or_typedarray_data(value, &mut len);',
@@ -104,7 +113,9 @@ def self_test():
             path.unlink()
         fixture.write_text('// buffer_data(buffer);\nlet n = array.length;\n'
                            'let ir = "call ptr @js_native_buffer_data_ptr(double %v)";\n'
-                           'let text = r#"buffer_data(buffer)"#;\n')
+                           'let text = r#"buffer_data(buffer)"#;\n'
+                           'let owner = buffer_alloc(32); let p = store::data(owner as usize); p.add(8);\n'
+                           'let window = data_ptr(owner).add(8);\n')
         assert not inventory(root), 'unrelated arrays, comments and strings must stay outside the gate'
         allowed = root / 'crates/perry-runtime/src/buffer/store/fixture.rs'
         allowed.parent.mkdir(parents=True); allowed.write_text('\n'.join(fixtures))

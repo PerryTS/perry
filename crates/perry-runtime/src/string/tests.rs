@@ -583,7 +583,7 @@ fn test_string_append_inplace() {
     let result = js_string_append(a, b);
     assert_eq!(string_as_str(result), "hello world");
     assert_eq!(unsafe { (*result).refcount }, 1); // uniquely owned
-    assert!(unsafe { crate::buffer::store::capacity(result as usize) } >= 22); // 2x capacity
+    assert!(unsafe { (*result).capacity } >= 22); // 2x capacity
 
     // Second append: should reuse same allocation (in-place)
     let c = js_string_from_bytes(b"!".as_ptr(), 1);

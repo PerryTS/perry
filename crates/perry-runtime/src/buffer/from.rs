@@ -407,7 +407,7 @@ fn buffer_from_array_with_brand(arr_ptr: *const ArrayHeader, brand: u8) -> *mut 
     // sized buffer. It also validates the header and materializes lazy arrays.
     let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
     if arr_ptr.is_null() {
-        return super::pool::copy(0);
+        return super::pool::place(brand, super::pool::Init::PoolCopy, 0);
     }
 
     unsafe {

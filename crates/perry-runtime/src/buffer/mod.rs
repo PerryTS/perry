@@ -208,6 +208,18 @@ pub(crate) use iter::{dispatch_buffer_iterator_method_builtin, dispatch_buffer_i
 mod tests {
     use super::*;
 
+    #[test]
+    fn null_array_factories_keep_their_final_brand() {
+        let array = std::ptr::null();
+        let bytes = js_uint8array_from_array(array);
+        assert!(is_uint8array_buffer(bytes as usize));
+        assert!(!is_node_buffer(bytes as usize));
+        assert_eq!(js_buffer_length(bytes), 0);
+        let buffer = js_buffer_from_array(array);
+        assert!(is_node_buffer(buffer as usize));
+        assert_eq!(js_buffer_length(buffer), 0);
+    }
+
     /// The GC buffer sweep must drop the CryptoKey/secret-key side tables
     /// along with the buffer identity ones. They are plain `addr -> metadata`
     /// maps that never rooted the `BufferHeader`, so leaving them behind both

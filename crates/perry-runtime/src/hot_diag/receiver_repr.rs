@@ -544,7 +544,7 @@ mod tests {
                 1,
             ),
             (
-                "crates/perry-runtime/src/buffer/header.rs",
+                "crates/perry-runtime/src/buffer/store/layout.rs",
                 "ExternalBuffer",
                 1,
             ),
