@@ -86,6 +86,8 @@ pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_
 pub(crate) use block::block_pool_bytes;
 pub(crate) use page_meta::page_meta_census;
 pub(crate) use region::contains as region_contains;
+#[cfg(target_os = "linux")]
+pub(crate) use region::reservation::classify as region_classify;
 pub(crate) use stats::arena_free_list_bytes;
 pub(crate) use walk::arena_space_census;
 

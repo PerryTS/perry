@@ -1,17 +1,27 @@
 //! Measurement prototype: OS backing beneath the existing per-agent block pool.
-//! No pointer registry, cache, collector callback or object-layout change.
+//! Linux uses one reserved range and persistent in-band descriptors.
+//! Other targets retain their existing backing and registry.
 //! Production in-band descriptors and byte-store ownership are in REGION-DESIGN.
 
 use super::HeapGeneration;
+#[cfg(not(target_os = "linux"))]
 use std::collections::BTreeMap;
+#[cfg(not(target_os = "linux"))]
 use std::sync::RwLock;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod reservation;
+#[cfg(target_os = "linux")]
+pub(crate) use reservation::contains;
 
 /// Every live region's extent (start -> end), process-wide. `map` and `unmap`
 /// are the only OS backing of arena blocks, nursery, old and large alike, so
 /// this answers "is this word inside Perry's GC memory" for any thread
 /// without per-thread metadata. Pooled blocks stay mapped and stay listed.
+#[cfg(not(target_os = "linux"))]
 static REGIONS: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::new());
 
+#[cfg(not(target_os = "linux"))]
 fn extent_len(len: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
@@ -24,6 +34,7 @@ fn extent_len(len: usize) -> usize {
 }
 
 /// Does one live region hold all of `[addr, addr + len)`?
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn contains(addr: usize, len: usize) -> bool {
     let Some(end) = addr.checked_add(len) else {
         return false;
@@ -42,6 +53,12 @@ pub(crate) enum Kind {
     NurseryBlock,
     OldBlock,
     LargeObject,
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)] // Reserved for the byte-store integration slice.
+    ByteStore,
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)] // Reserved for native payload-region integration.
+    Payload,
 }
 
 pub(super) fn kind_for(generation: HeapGeneration, len: usize) -> Kind {
@@ -109,33 +126,10 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
         let Some(mapped) = mapped_len(len) else {
             return std::ptr::null_mut();
         };
-        let Some(reserved) = mapped.checked_add(ALIGN) else {
-            return std::ptr::null_mut();
-        };
-        let raw = libc::mmap(
-            std::ptr::null_mut(),
-            reserved,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        );
-        if raw == libc::MAP_FAILED {
-            return std::ptr::null_mut();
+        let data = reservation::map(kind, mapped);
+        if !data.is_null() {
+            advise(data, len, kind);
         }
-        let address = raw as usize;
-        let aligned = (address + ALIGN - 1) & !(ALIGN - 1);
-        let prefix = aligned - address;
-        let suffix = reserved - prefix - mapped;
-        if prefix != 0 {
-            assert_eq!(libc::munmap(raw, prefix), 0);
-        }
-        if suffix != 0 {
-            assert_eq!(libc::munmap((aligned + mapped) as *mut _, suffix), 0);
-        }
-        let data = aligned as *mut u8;
-        advise(data, len, kind);
-        register(data, len);
         data
     }
     #[cfg(not(target_os = "linux"))]
@@ -149,6 +143,7 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn register(data: *mut u8, len: usize) {
     let start = data as usize;
     REGIONS
@@ -160,16 +155,13 @@ fn register(data: *mut u8, len: usize) {
 /// Physical destruction, used by pool overflow, pool drain and TLS teardown.
 /// Callers remove page metadata and external owners before destruction.
 pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
+    #[cfg(not(target_os = "linux"))]
     REGIONS
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&(data as usize));
     #[cfg(target_os = "linux")]
-    assert_eq!(
-        libc::munmap(data.cast(), mapped_len(len).expect("invalid extent")),
-        0,
-        "region unmap failed"
-    );
+    reservation::unmap(data, mapped_len(len).expect("invalid extent"));
     #[cfg(not(target_os = "linux"))]
     std::alloc::dealloc(data, std::alloc::Layout::from_size_align(len, 16).unwrap());
 }
@@ -227,7 +219,9 @@ mod tests {
                 *data = 42;
                 assert_eq!(*data, 42);
                 unmap(data, 2 * ALIGN);
-                assert_eq!(libc::mincore(data.cast(), 4096, resident.as_mut_ptr()), -1);
+                assert!(!contains(data as usize, 4096));
+                assert_eq!(libc::mincore(data.cast(), 4096, resident.as_mut_ptr()), 0);
+                assert_eq!(resident[0] & 1, 0);
             }
         }
     }

@@ -109,34 +109,36 @@ pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
 /// block. For a caller that already loaded `obj_type` from a plain header read
 /// of a word that may not be a GC cell.
 ///
-/// Every byte cell is an old-arena cell, and the process-wide region registry
-/// (`arena::region_contains`) owns all arena memory whichever thread
-/// allocated it, so the proof holds on any thread. This thread's tracked
-/// header read answers first: it is the cheaper probe for its own cells.
-///
-/// Out of line: [`byte_cell_type`] is inlined into every generic receiver
-/// probe (`lookup_typed_array_kind` on each dynamic index get and set,
-/// `is_registered_buffer`), and only a byte-family type byte reaches the
-/// proof. Inlined there, the allocator walk grew those probes past LLVM's
-/// inlining budget, so every non-byte receiver paid an out-of-line call for
-/// a test it answers with one load.
-#[inline(never)]
+/// Every byte cell is an old-arena cell. Linux proves it through the one
+/// reservation descriptor regardless of its allocating thread. The caller
+/// must still hold the cell lifetime; classification is not a payload pin.
+/// Other targets retain their existing tracked-header and region proof.
+#[inline]
 pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
     #[cfg(test)]
     if byte_cell_proof_sabotaged() {
         return true;
     }
-    (crate::gc::gc_type_is_known(obj_type)
-        && unsafe { crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, obj_type) }
+    #[cfg(target_os = "linux")]
+    {
+        byte_cell_in_any_region(addr, obj_type)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        (crate::gc::gc_type_is_known(obj_type)
+            && unsafe {
+                crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, obj_type)
+            }
             .is_some())
-        || byte_cell_in_any_region(addr, obj_type)
+            || byte_cell_in_any_region(addr, obj_type)
+    }
 }
 
 /// The process-wide arm of [`byte_cell_is_owned`]: a cell of another thread's
 /// arena (its header and extent inside one live region, arena-flagged, of the
 /// type the caller read), or a process-global SharedArrayBuffer block.
-#[cold]
-#[inline(never)]
+#[cfg_attr(not(target_os = "linux"), cold)]
+#[inline]
 fn byte_cell_in_any_region(addr: usize, obj_type: u8) -> bool {
     if obj_type == GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER && crate::shared_sab::is_shared_sab(addr) {
         return true;
@@ -148,15 +150,38 @@ fn byte_cell_in_any_region(addr: usize, obj_type: u8) -> bool {
     let Some(header_addr) = addr.checked_sub(GC_HEADER_SIZE) else {
         return false;
     };
+    if !header_addr.is_multiple_of(std::mem::align_of::<GcHeader>()) {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    let Some(region) = crate::arena::region_classify(header_addr) else {
+        return false;
+    };
+    #[cfg(target_os = "linux")]
+    if !(1..=3).contains(&region.kind) || header_addr + GC_HEADER_SIZE > region.end {
+        return false;
+    }
+    #[cfg(not(target_os = "linux"))]
     if !crate::arena::region_contains(header_addr, GC_HEADER_SIZE) {
         return false;
     }
-    // SAFETY: the header word lies inside a live arena region.
+    // SAFETY: allocator provenance plus the caller's live-cell capability.
+    // Descriptor classification itself does not prevent concurrent owner death.
     let header = unsafe { &*(header_addr as *const GcHeader) };
-    header.obj_type == obj_type
+    let valid = header.obj_type == obj_type
         && header.gc_flags & crate::gc::GC_FLAG_ARENA != 0
-        && header.size as usize >= GC_HEADER_SIZE
-        && crate::arena::region_contains(header_addr, header.size as usize)
+        && header.size as usize >= GC_HEADER_SIZE;
+    #[cfg(target_os = "linux")]
+    {
+        valid
+            && header_addr
+                .checked_add(header.size as usize)
+                .is_some_and(|end| end <= region.end)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        valid && crate::arena::region_contains(header_addr, header.size as usize)
+    }
 }
 
 /// `PERRY_B4_SABOTAGE=byte_cell_proof` admits every byte-family type byte
