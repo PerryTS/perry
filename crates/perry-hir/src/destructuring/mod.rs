@@ -26,6 +26,7 @@ use crate::lower_patterns::*;
 use crate::lower_types::*;
 
 mod array_fast;
+pub(crate) use array_fast::spread_free_array_literal;
 mod assignment_expr;
 mod assignment_stmt;
 mod helpers;
