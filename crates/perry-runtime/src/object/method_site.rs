@@ -96,6 +96,8 @@ use crate::object::ObjectHeader;
 
 pub(crate) mod chain_memo;
 mod function_intrinsic;
+mod miss_entry;
+pub use miss_entry::js_method_site_miss;
 pub(crate) mod own_slot_memo;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -369,13 +371,9 @@ fn stats_report_enabled() -> bool {
     on
 }
 
-/// The miss entry: prime the site when the facts hold, then dispatch as the
-/// universal method dispatcher always has.
-///
-/// # Safety
-/// `slot` is null or a live method-site slot; `args_ptr` holds `argc` values.
-#[no_mangle]
-pub unsafe extern "C-unwind" fn js_method_site_miss(
+/// [`js_method_site_miss`] for a heap object: prime the site, then dispatch.
+#[inline(never)]
+unsafe fn method_site_miss_object(
     slot: *mut MethodSiteSlot,
     site_id: u64,
     recv: f64,
