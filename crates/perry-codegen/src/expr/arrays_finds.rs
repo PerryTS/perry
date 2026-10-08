@@ -964,12 +964,10 @@ pub(crate) fn lower(
                 let reason = buffer_access_materialization_reason(ctx, array);
                 return Ok(materialize_js_value(ctx, value, reason));
             }
-            // #9342: untracked-but-class-proven receiver (module-global /
-            // param `Uint8Array`) — guarded inline byte read via the
-            // buffer-lane admission cache; guard misses defer to the priming
-            // memory-safe helper.
-            if let Some(value) = super::u8_buffer_read::try_lower_u8_buffer_read(ctx, array, index)?
-            {
+            // All numeric byte cells use the same checked element read,
+            // including an unknown/fractional key. Strong tracked views above
+            // keep their native proof; misses keep the boxed [[Get]] protocol.
+            if let Some(value) = super::ta_element_read::try_lower(ctx, array, index, false)? {
                 return Ok(value);
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
@@ -1028,6 +1026,9 @@ pub(crate) fn lower(
             {
                 let reason = buffer_access_materialization_reason(ctx, buffer);
                 return Ok(materialize_js_value(ctx, value, reason));
+            }
+            if let Some(value) = super::ta_element_read::try_lower(ctx, buffer, index, false)? {
+                return Ok(value);
             }
             // #6088: out-of-range → `undefined`, not the `0` byte-sentinel the
             // native `js_buffer_get` accessor is forced to return.

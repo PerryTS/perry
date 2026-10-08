@@ -210,38 +210,10 @@ pub fn collect_pointer_typed_locals(
             Expr::Undefined => Some(Type::Void),
             Expr::Null => Some(Type::Null),
             Expr::Bool(_) | Expr::Compare { .. } => Some(Type::Boolean),
-            // #6998: `Uint8ArrayGet` is NOT unconditionally numeric, and it is
-            // reachable — `const it = u8[Symbol.iterator]` lowers to
-            // `Uint8ArrayGet { array: LocalGet(u8), index: SymbolFor(…) }`
-            // (`lower/expr_member/member_tail.rs` folds every non-STRING key on
-            // a `Uint8Array`/`Buffer`-typed local onto this node, and a symbol
-            // key is not a string). Three of its lowerings hand back a heap
-            // value: a symbol key goes to `js_object_get_symbol_property`, an
-            // unproven key in JS-value context to
-            // `js_typed_array_index_get_dynamic`, and a non-numeric key in i32
-            // context to `js_object_get_index_polymorphic` — the last two fall
-            // through to string-keyed property lookup, and an expando holds
-            // anything. Typed `Number` here, such a local is classified
-            // non-pointer, gets NO shadow slot, and the value is live in the
-            // program and invisible to the collector (#6951's class).
-            //
-            // The proof is the same STRUCTURAL one the `IndexGet` typed-array
-            // arm below already uses, and it is structural on purpose: a
-            // `number`-declared index local is not evidence, because Perry does
-            // not enforce annotations (CLAUDE.md, *Known Limitations*), and
-            // `expr_is_known_non_pointer_shadow_value`'s sharper test needs an
-            // `FnCtx` this collector runs before. Answering `None` for an
-            // unproven key is the conservative direction: the local keeps a
-            // slot the collector rewrites harmlessly.
-            Expr::Uint8ArrayGet { index, .. } if index_is_definitely_numeric(index) => {
-                Some(Type::Number)
-            }
-            Expr::Uint8ArrayGet { .. } => None,
             Expr::Number(_)
             | Expr::Integer(_)
             | Expr::Uint8ArrayLength(_)
             | Expr::BufferLength(_)
-            | Expr::BufferIndexGet { .. }
             | Expr::MathFloor(_)
             | Expr::MathCeil(_)
             | Expr::MathRound(_)
@@ -406,7 +378,15 @@ pub fn collect_pointer_typed_locals(
                 expr_value_type(last, local_types, local_value_types, non_pointer_locals)
             }),
             Expr::Array(_) => Some(pointer_analysis_array_type()),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index }
+            | Expr::Uint8ArrayGet {
+                array: object,
+                index,
+            }
+            | Expr::BufferIndexGet {
+                buffer: object,
+                index,
+            } => {
                 match expr_value_type(object, local_types, local_value_types, non_pointer_locals)? {
                     // An element's type is unknown here: the analysis sees the
                     // writes to the LOCAL, not to its elements (see
@@ -1279,6 +1259,46 @@ mod tests {
              nothing to protect; got slots for {:?}",
             slots.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn an_annotated_byte_receiver_cannot_drop_the_result_root() {
+        for buffer in [false, true] {
+            let params = vec![Param {
+                id: 0,
+                name: "bytes".into(),
+                ty: Type::Named(if buffer { "Buffer" } else { "Uint8Array" }.into()),
+                default: None,
+                decorators: vec![],
+                is_rest: false,
+                arguments_object: None,
+            }];
+            let object = Box::new(Expr::LocalGet(0));
+            let index = Box::new(Expr::Integer(0));
+            let read = if buffer {
+                Expr::BufferIndexGet {
+                    buffer: object,
+                    index,
+                }
+            } else {
+                Expr::Uint8ArrayGet {
+                    array: object,
+                    index,
+                }
+            };
+            let stmts = vec![Stmt::Let {
+                id: 1,
+                name: "held".into(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(read),
+            }];
+            let slots = collect_pointer_typed_locals(&params, &stmts, &HashSet::new());
+            assert!(
+                slots.contains_key(&1),
+                "a boxed receiver miss may yield a heap value"
+            );
+        }
     }
 
     /// #11179 roots every boxed local, including number-valued ones the

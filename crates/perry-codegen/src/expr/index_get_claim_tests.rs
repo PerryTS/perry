@@ -838,17 +838,19 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
             && view.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_OBJECT))
             && view.contains(&format!(", {}", crate::runtime_abi::BYTES_VIEW_BAG_OWNER))
             && view.contains("select i1")
-            && view.contains("arrlike.ic.miss"),
-        "view misses must guard the pointer layout before reaching the load: {view}"
+            && view.contains("arrlike.ic.miss")
+            && view.contains(", 15")
+            && view.contains(", 18"),
+        "one view admission must select the owner link, guard its layout, and exclude shared/native owners: {view}"
     );
     let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")
         .expect("the view byte load exists");
     assert!(
-        load.contains("asm sideeffect \"movzbl ($1), $0\"")
-            && load.contains("~{memory}")
-            && load.contains("gc-leaf-function")
+        load.contains("load i8")
+            && load.contains("uitofp i8")
+            && !load.contains("asm")
             && !load.contains("call double @"),
-        "shared views must load their resolved pointer atomically: {load}"
+        "admitted regular views share the ordinary byte load: {load}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the
     // dense-tail family token now live behind that exit rather than at every

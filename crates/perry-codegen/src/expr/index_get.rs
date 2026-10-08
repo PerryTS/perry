@@ -952,16 +952,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // element in-bounds, `TAG_UNDEFINED` OOB), replacing the per-read
                 // runtime call. Gated on a proven integer index; guard misses
                 // (view/detached/wrong-kind) defer to the memory-safe helper.
-                // #9342: buffer-lane twin for an untracked "Uint8Array"-proven
-                // receiver — MUST run before the typed-array checked load: a
-                // perry `Uint8Array` is a `BufferHeader` the TA kind cache can
-                // never admit, so the TA lane's guard would miss forever and
-                // pin every read to its slow helper.
-                if let Some(value) =
-                    super::u8_buffer_read::try_lower_u8_buffer_read(ctx, object, index)?
-                {
-                    return Ok(value);
-                }
                 if let Some(value) =
                     super::ta_param_f64_read::try_lower_ta_param_f64_read(ctx, object, index)?
                 {
@@ -999,6 +989,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     attach_buffer_view_pointer_state_for_expr(ctx, object);
                     Ok(result)
                 });
+            }
+            if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, false)? {
+                return Ok(value);
             }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
                 if let Some(value) =

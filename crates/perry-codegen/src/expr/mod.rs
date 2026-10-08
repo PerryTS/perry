@@ -4625,3 +4625,7 @@ pub(crate) use compare::try_lower_chain as try_lower_compare_chain;
 
 #[cfg(test)]
 mod compare_chain_tests;
+
+#[cfg(test)]
+mod byte_scanning_tests;
+

@@ -1,6 +1,6 @@
 //! Kind-specialized checked reads of numeric typed arrays. Immutable loop
-//! parameters validate their receiver at entry; other locals use the existing
-//! kind cache. Length and storage remain live, including after `.buffer`,
+//! parameters and constructed module bindings use B4's access proof.
+//! Other receivers use the same common owner header. Length and storage remain live, including after `.buffer`,
 //! resize, detach and a traced backing rewrite. Native arenas keep their
 //! disposal-aware runtime path.
 use super::FnCtx;
@@ -37,6 +37,7 @@ pub(crate) fn receiver_kind(ctx: &FnCtx<'_>, object: &Expr) -> Option<u8> {
             _ => None,
         })?;
     match class.as_str() {
+        "Uint8Array" | "Buffer" if super::u8_buffer_read::u8_inline_read_enabled() => Some(1),
         "Int8Array" => Some(0),
         "Int16Array" => Some(2),
         "Uint16Array" => Some(3),
@@ -50,8 +51,93 @@ pub(crate) fn receiver_kind(ctx: &FnCtx<'_>, object: &Expr) -> Option<u8> {
     }
 }
 
+fn byte_type(ty: &perry_hir::types::Type) -> bool {
+    use perry_hir::types::Type;
+    match ty {
+        Type::Named(name) => matches!(name.as_str(), "Uint8Array" | "Buffer"),
+        Type::Union(types) => !types.is_empty() && types.iter().all(byte_type),
+        _ => false,
+    }
+}
+
+/// An annotation selects a checked access, never the value's numeric type.
+/// A stable construction or a dominating byte-brand guard proves that a
+/// numeric key can only read a byte or undefined.
+pub(crate) fn byte_receiver_is_proven(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    let Expr::LocalGet(id) = object else {
+        return false;
+    };
+    if ctx.reassigned_locals.contains(id) {
+        return false;
+    }
+    ctx.stable_local_type_proof(id).is_some_and(byte_type)
+        || ctx
+            .module_global_proven_types
+            .get(id)
+            .is_some_and(byte_type)
+}
+
+pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    let (object, index) = match expr {
+        Expr::Uint8ArrayGet { array, index } => (array, index),
+        Expr::BufferIndexGet { buffer, index } => (buffer, index),
+        _ => return false,
+    };
+    byte_receiver_is_proven(ctx, object)
+        && crate::type_analysis::is_numeric_expr(ctx, index)
+        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, index)
+}
+
+/// Register B4's loop proofs before any body call is emitted. In particular,
+/// a callback before the first global-table read must dirty that proof on
+/// every iteration, including iterations after its initial admission.
+pub(crate) fn prepare_loop_accesses(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt]) {
+    if ctx.is_async_fn || ctx.disable_buffer_fast_path {
+        return;
+    }
+    let mut declared = std::collections::HashSet::new();
+    crate::collectors::collect_let_ids(body, &mut declared);
+    let mut referenced = std::collections::HashSet::new();
+    crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
+    let ids: std::collections::BTreeSet<u32> = referenced.into_iter().collect();
+    for id in ids {
+        if ctx.boxed_vars.contains(&id)
+            || (!ctx.module_global_proven_types.contains_key(&id) && !ctx.locals.contains_key(&id))
+            || (!ctx.module_globals.contains_key(&id) && declared.contains(&id))
+            || !super::u8_buffer_read::loop_param_is_read(body, id)
+        {
+            continue;
+        }
+        let Some(kind) = receiver_kind(ctx, &Expr::LocalGet(id)) else {
+            continue;
+        };
+        let brand = [super::byte_cell::brand_for_kind(kind)];
+        let brands = if kind == 1 {
+            &super::u8_buffer_read::U8_BRANDS[..]
+        } else {
+            &brand[..]
+        };
+        let mut access = super::byte_cell::access_for(ctx, id, brands);
+        // Construction plus the existing single-definition/no-reassignment
+        // proof makes this binding invariant. Calls still dirty its storage
+        // proof, including detach, resize and moving collection.
+        if ctx.module_globals.contains_key(&id) && ctx.module_global_proven_types.contains_key(&id)
+        {
+            access.fixed_receiver = true;
+            ctx.receiver_descriptors
+                .materialize_byte_view_param(id, access);
+        }
+    }
+}
+
 pub(crate) fn materialize_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str, kind: u8) {
-    super::byte_cell::materialize_param(ctx, id, boxed, &[super::byte_cell::brand_for_kind(kind)]);
+    let brand = [super::byte_cell::brand_for_kind(kind)];
+    let brands = if kind == 1 {
+        &super::u8_buffer_read::U8_BRANDS[..]
+    } else {
+        &brand[..]
+    };
+    super::byte_cell::materialize_param(ctx, id, boxed, brands);
 }
 
 pub(crate) fn try_lower(
@@ -70,8 +156,13 @@ pub(crate) fn try_lower(
     }
     let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
-        let brands = [super::byte_cell::brand_for_kind(kind)];
-        let proof = super::u8_buffer_read::byte_view_param_for(ctx, object, &values[0], &brands);
+        let brand = [super::byte_cell::brand_for_kind(kind)];
+        let brands = if kind == 1 {
+            &super::u8_buffer_read::U8_BRANDS[..]
+        } else {
+            &brand[..]
+        };
+        let proof = super::u8_buffer_read::byte_view_param_for(ctx, object, &values[0], brands);
         Ok(Some(emit_get(
             ctx,
             &values[0],
@@ -109,6 +200,12 @@ fn emit_get(
     let oob_l = ctx.block_label(oob);
     let slow_l = ctx.block_label(slow);
     let done_l = ctx.block_label(done);
+    let brand = [super::byte_cell::brand_for_kind(kind)];
+    let brands = if kind == 1 {
+        &super::u8_buffer_read::U8_BRANDS[..]
+    } else {
+        &brand[..]
+    };
     let access = if let Some(param) = proof {
         let admitted = ctx.new_block("ta.read.hoisted");
         let admitted_l = ctx.block_label(admitted);
@@ -123,12 +220,7 @@ fn emit_get(
             len,
         }
     } else {
-        super::byte_cell::resolve(
-            ctx,
-            object,
-            &[super::byte_cell::brand_for_kind(kind)],
-            &slow_l,
-        )
+        super::byte_cell::resolve(ctx, object, brands, &slow_l)
     };
     let admitted_storage = "true".to_owned();
     ctx.block().br(&guard_l);
@@ -170,8 +262,7 @@ fn emit_get(
         .shl(I64, &idx, &width.trailing_zeros().to_string());
     let addr = ctx.block().add(I64, &data, &off);
     let ptr = ctx.block().inttoptr(I64, &addr);
-    let target = ctx.target_triple.to_owned();
-    let value = emit_element(ctx.block(), &target, &ptr, kind);
+    let value = emit_element(ctx.block(), &ptr, kind);
     let load_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
     ctx.current_block = oob;
@@ -211,21 +302,14 @@ fn emit_get(
 
 /// The header guard excludes shared owners. Read one ordinary lane of the
 /// exact element width; shared storage uses the atomic runtime arm.
-fn emit_element(blk: &mut crate::block::LlBlock, target: &str, ptr: &str, kind: u8) -> String {
-    let (ty, width) = match kind {
-        0 | 1 | 8 => (I8, 1),
-        2 | 3 | 11 => (I16, 2),
-        4 | 5 | 6 => (I32, 4),
-        _ => (I64, 8),
+pub(super) fn emit_element(blk: &mut crate::block::LlBlock, ptr: &str, kind: u8) -> String {
+    let ty = match kind {
+        0 | 1 | 8 => I8,
+        2 | 3 | 11 => I16,
+        4 | 5 | 6 => I32,
+        _ => I64,
     };
-    let lane = if target.starts_with("x86_64") && width <= 2 {
-        let reg = blk.next_reg();
-        let instruction = if width == 1 { "movzbl" } else { "movzwl" };
-        blk.emit_raw(format!("{reg} = call i32 asm sideeffect \"{instruction} ($1), $0\", \"=r,r,~{{memory}}\"(ptr {ptr}) \"gc-leaf-function\""));
-        blk.trunc(I32, &reg, ty)
-    } else {
-        blk.load(ty, ptr)
-    };
+    let lane = blk.load(ty, ptr);
     match kind {
         0 | 2 | 4 => blk.sitofp(ty, &lane, DOUBLE),
         1 | 3 | 5 | 8 => blk.uitofp(ty, &lane, DOUBLE),
@@ -401,31 +485,20 @@ mod tests {
 
     #[test]
     fn element_loads_keep_width_sign_and_leaf_conversion() {
-        for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
-            for kind in [0, 2, 3, 4, 5, 6, 7, 8, 11] {
-                let mut blk = LlBlock::new("entry.0", Rc::new(RegCounter::new()));
-                emit_element(&mut blk, target, "%data", kind);
-                let ir = blk.to_ir();
-                if matches!(kind, 0 | 2 | 4) {
-                    assert!(ir.contains("sitofp"));
-                }
-                if matches!(kind, 3 | 5 | 8) {
-                    assert!(ir.contains("uitofp"));
-                }
-                if kind == 11 {
-                    assert!(ir.contains("shl i64") && !ir.contains("call double"));
-                }
-                if target.starts_with("x86_64") && matches!(kind, 0 | 2 | 3 | 8 | 11) {
-                    assert!(ir.contains(if matches!(kind, 0 | 8) {
-                        "movzbl"
-                    } else {
-                        "movzwl"
-                    }));
-                    assert!(ir.contains("gc-leaf-function") && ir.contains("~{memory}"));
-                } else {
-                    assert!(ir.contains("load ") && !ir.contains("load atomic"));
-                }
+        for kind in [0, 1, 2, 3, 4, 5, 6, 7, 8, 11] {
+            let mut blk = LlBlock::new("entry.0", Rc::new(RegCounter::new()));
+            emit_element(&mut blk, "%data", kind);
+            let ir = blk.to_ir();
+            if matches!(kind, 0 | 2 | 4) {
+                assert!(ir.contains("sitofp"));
             }
+            if matches!(kind, 1 | 3 | 5 | 8) {
+                assert!(ir.contains("uitofp"));
+            }
+            if kind == 11 {
+                assert!(ir.contains("shl i64") && !ir.contains("call double"));
+            }
+            assert!(ir.contains("load ") && !ir.contains("load atomic") && !ir.contains("asm"));
         }
     }
 }

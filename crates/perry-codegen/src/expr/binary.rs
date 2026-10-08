@@ -837,8 +837,11 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // generic read inline with one compare + select — never a call — which
     // is exact because the only non-double this node can yield is the
     // `undefined` box.
-    if let Expr::Uint8ArrayGet { index, .. } = expr {
-        if is_numeric_expr(ctx, index) {
+    if matches!(
+        expr,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
+    ) {
+        if super::ta_element_read::byte_read_is_numeric(ctx, expr) {
             // Deliberately NOT routed through
             // `ta_param_f64_read::try_lower_ta_f64_read_for_number_context`:
             // its checked load reads the length at `handle + 0` and the

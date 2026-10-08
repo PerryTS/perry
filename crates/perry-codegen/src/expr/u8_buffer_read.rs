@@ -3,17 +3,14 @@
 //! flattened owner. Bagged, resizable, detached and shared stores use the
 //! runtime arm. Loop parameters hoist data/length and root receiver/owner.
 
-use anyhow::Result;
 use perry_hir::Expr;
 
-use super::index_get::numeric_index_has_integer_array_index_proof;
-use super::{lower_expr, lower_expr_as_i32, FnCtx};
+use super::FnCtx;
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
-use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue};
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// `PERRY_U8_INLINE_READ=0` kill switch (default on).
-fn u8_inline_read_enabled() -> bool {
+pub(crate) fn u8_inline_read_enabled() -> bool {
     match std::env::var("PERRY_U8_INLINE_READ") {
         Ok(v) => !matches!(v.as_str(), "0" | "off" | "false" | "OFF" | "FALSE"),
         Err(_) => true,
@@ -22,7 +19,7 @@ fn u8_inline_read_enabled() -> bool {
 
 /// Static receiver eligibility: a plain local/module-global read whose class
 /// proves `Uint8Array`, not owned by the (stronger) tracked-view path. The
-/// runtime guard is the safety net — a stale proof merely misses the cache —
+/// runtime header guard is the safety net — a stale hint takes the runtime arm —
 /// but reassigned bindings are excluded anyway, mirroring
 /// `ta_param_f64_read::checked_typed_array_f64_kind`'s reasoning.
 pub(crate) fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -71,179 +68,17 @@ pub(crate) fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> boo
     class.as_deref() == Some("Uint8Array")
 }
 
-/// If `object[index]` is a proven-integer-index read of an untracked
-/// `Uint8Array` receiver, emit the guarded inline byte load and return its
-/// DOUBLE SSA value; otherwise `Ok(None)` so the caller keeps its existing
-/// fallback. Records CheckedNative access-mode evidence, mirroring the
-/// typed-array sibling.
-pub(crate) fn try_lower_u8_buffer_read(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    index: &Expr,
-) -> Result<Option<String>> {
-    if ctx.disable_buffer_fast_path || !u8_inline_read_enabled() {
-        return Ok(None);
-    }
-    // Fractional / unproven indices stay on the runtime helper: the inline
-    // path lowers `index` via ToInt32, but JS reads `buf[3.9]` as `undefined`.
-    if !numeric_index_has_integer_array_index_proof(ctx, index) {
-        return Ok(None);
-    }
-    if !u8_buffer_receiver_eligible(ctx, object) {
-        return Ok(None);
-    }
-    let value = lower_u8_buffer_checked_load(ctx, object, index)?;
-    let lowered = LoweredValue::js_value(value.clone());
-    ctx.record_lowered_value_with_access_mode(
-        "Uint8ArrayGet",
-        None,
-        "Uint8ArrayGet.checked_u8_inline",
-        &lowered,
-        Some(BoundsState::Unknown),
-        None,
-        Some(BufferAccessMode::CheckedNative),
-        Some(super::buffer_views::buffer_access_materialization_reason(
-            ctx, object,
-        )),
-        false,
-        false,
-        vec!["u8_buffer_read=checked_inline".to_string()],
-    );
-    Ok(Some(value))
-}
-
-fn lower_u8_buffer_checked_load(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    index: &Expr,
-) -> Result<String> {
-    let obj_box = lower_expr(ctx, object)?;
-    let idx_i32 = lower_expr_as_i32(ctx, index)?;
-    let param_access = byte_view_param_for(ctx, object, &obj_box, &U8_BRANDS);
-
-    let chk_idx = ctx.new_block("u8b.get.chk");
-    let load_idx = ctx.new_block("u8b.get.load");
-    let oob_idx = ctx.new_block("u8b.get.oob");
-    let slow_idx = ctx.new_block("u8b.get.slow");
-    let merge_idx = ctx.new_block("u8b.get.merge");
-    let chk_label = ctx.block_label(chk_idx);
-    let load_label = ctx.block_label(load_idx);
-    let oob_label = ctx.block_label(oob_idx);
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
-    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let access = if let Some(param) = &param_access {
-        let admitted = ctx.new_block("u8b.hoisted");
-        let admitted_l = ctx.block_label(admitted);
-        ctx.block()
-            .cond_br(&param.valid_i1, &admitted_l, &slow_label);
-        ctx.current_block = admitted;
-        let len = ctx.block().load(I32, &param.length_slot);
-        super::byte_cell::Access {
-            word: String::new(),
-            raw: raw.clone(),
-            owner: raw.clone(),
-            data: param.data_i64.clone(),
-            len,
-        }
-    } else {
-        super::byte_cell::resolve(
-            ctx,
-            &obj_box,
-            &[
-                crate::runtime_abi::GC_TYPE_BUFFER,
-                crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
-            ],
-            &slow_label,
-        )
-    };
-    ctx.block().br(&chk_label);
-
-    // ---- chk: bounds against `BufferHeader.length` (u32 at offset 0) ----
-    ctx.current_block = chk_idx;
-    {
-        let blk = ctx.block();
-        let len = &access.len;
-        // `ult` also rejects a negative index (wraps huge unsigned) — JS
-        // `buf[-1]` is undefined; the oob arm merges `TAG_UNDEFINED`.
-        let in_bounds = blk.icmp_ult(I32, &idx_i32, len);
-        blk.cond_br(&in_bounds, &load_label, &oob_label);
-    }
-
-    // ---- load: resolved owner data plus index, widened to f64 ----
-    ctx.current_block = load_idx;
-    let (load_val, load_end) = {
-        let blk = ctx.block();
-        let data_base = &access.data;
-        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-        let addr = blk.add(I64, &data_base, &idx_i64);
-        let ptr = blk.inttoptr(I64, &addr);
-        let byte = blk.load(I8, &ptr);
-        let val = blk.uitofp(I8, &byte, DOUBLE);
-        let end = blk.label.clone();
-        blk.br(&merge_label);
-        (val, end)
-    };
-
-    // ---- oob: `undefined`, matching `js_buffer_index_get_value` ----
-    ctx.current_block = oob_idx;
-    let (oob_val, oob_end) = {
-        let blk = ctx.block();
-        let end = blk.label.clone();
-        blk.br(&merge_label);
-        (double_literal(f64::from_bits(TAG_UNDEFINED)), end)
-    };
-
-    // A cache miss may be a pointer-backed byte view. Its cell carries the
-    // resolved data pointer; it must never enter the owning-storage cache.
-    ctx.current_block = slow_idx;
-    let fallback_idx = ctx.new_block("u8b.get.fallback");
-    let fallback_label = ctx.block_label(fallback_idx);
-    let (view_val, view_end) = emit_u8_view_get_value(
-        ctx,
-        &obj_box,
-        &raw,
-        &idx_i32,
-        &fallback_label,
-        &merge_label,
-        param_access.as_ref(),
-    );
-    ctx.current_block = fallback_idx;
-    let slow_val = ctx.block().call(
-        DOUBLE,
-        "js_u8_buffer_read_f64",
-        &[(I64, &raw), (I32, &idx_i32)],
-    );
-    let slow_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    // ---- merge ----
-    ctx.current_block = merge_idx;
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (load_val.as_str(), load_end.as_str()),
-            (view_val.as_str(), view_end.as_str()),
-            (oob_val.as_str(), oob_end.as_str()),
-            (slow_val.as_str(), slow_end.as_str()),
-        ],
-    ))
-}
-
 // ---------------------------------------------------------------------------
-// #10515: the same admission cache, for the i32-ABI reads and for WRITES.
+// The common byte-cell admission, for i32-ABI reads and for writes.
 //
-// The cache contract (`perry-runtime/src/buffer/header.rs`) is that an entry
+// The header contract (`perry-runtime/src/buffer/header.rs`) is that a proof
 // admits a Buffer/Uint8Array owner or fixed view through its common header.
 // Views resolve the current owner state and byteOffset; no propagation or
 // address cache is needed. Unsupported owner states, property bags and
 // invalid receivers take the runtime accessor.
 // ---------------------------------------------------------------------------
 
-/// Pointer tag + full-address admission hit for `obj_box`. Returns
-/// `(hit, raw_address)`, both in the current block.
+/// Resolve `obj_box` through its current byte-cell header.
 fn emit_u8_header_admission(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
@@ -593,8 +428,7 @@ fn emit_u8_view_get_value(
     let offset = ctx.block().zext(I32, idx, I64);
     let addr = ctx.block().add(I64, &data, &offset);
     let ptr = ctx.block().inttoptr(I64, &addr);
-    let target = ctx.target_triple.to_owned();
-    let val = emit_u8_atomic_load_f64(ctx.block(), &target, &ptr);
+    let val = super::ta_element_read::emit_element(ctx.block(), &ptr, 1);
     let load_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
     ctx.current_block = oob_idx;
@@ -610,50 +444,35 @@ fn emit_u8_view_get_value(
     (value, end)
 }
 
-/// A relaxed byte load is one indivisible memory operation. On x86 LLVM 22
-/// lowers `uitofp (load atomic i8)` to a partial-register load followed by
-/// zero extension, making the byte load depend on the preceding length load.
-/// MOVZX reads exactly one byte and clears the destination in one instruction.
-/// Its memory clobber and sideeffect retain concurrent reads; no fence is
-/// required for relaxed ordering on x86. Other targets keep LLVM atomics.
-pub(crate) fn emit_u8_atomic_load_f64(
-    blk: &mut crate::block::LlBlock,
-    target: &str,
-    ptr: &str,
-) -> String {
-    let byte = if target.starts_with("x86_64") {
-        let byte = blk.next_reg();
-        blk.emit_raw(format!(
-            "{byte} = call i32 asm sideeffect \"movzbl ($1), $0\", \"=r,r,~{{memory}}\"(ptr {ptr}) \"gc-leaf-function\""
-        ));
-        byte
-    } else {
-        let byte = blk.load_atomic_monotonic(I8, ptr, 1);
-        blk.zext(I8, &byte, I32)
-    };
-    blk.uitofp(I32, &byte, DOUBLE)
-}
-
 /// The hoisted access proof for a byte read or write on local `object`,
 /// revalidated for the current receiver `boxed` when it is dirty or was
-/// resolved for another value. Captured (boxed) locals and module globals
-/// keep the per-access header resolution.
+/// resolved for another value. Construction-proven module bindings use the
+/// same proof as locals; only the constructed binding is invariant, not storage.
+/// Captured (boxed) locals keep the per-access header resolution.
 pub(crate) fn byte_view_param_for(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     boxed: &str,
     brands: &[u8],
 ) -> Option<crate::collectors::ByteViewParamAccess> {
+    if ctx.is_async_fn {
+        return None;
+    }
     let Expr::LocalGet(id) = object else {
         return None;
     };
-    if ctx.boxed_vars.contains(id)
-        || ctx.module_globals.contains_key(id)
-        || !ctx.locals.contains_key(id)
-    {
+    let constructed_global =
+        ctx.module_globals.contains_key(id) && ctx.module_global_proven_types.contains_key(id);
+    if ctx.boxed_vars.contains(id) || (!ctx.locals.contains_key(id) && !constructed_global) {
         return None;
     }
-    let mut access = super::byte_cell::access_for(ctx, *id, brands);
+    let mut access = if constructed_global {
+        ctx.receiver_descriptors
+            .byte_view_access(*id, brands)?
+            .clone()
+    } else {
+        super::byte_cell::access_for(ctx, *id, brands)
+    };
     super::byte_cell::revalidate(ctx, &access, boxed);
     let state = ctx.block().load(crate::types::I8, &access.valid_slot);
     access.valid_i1 = ctx.block().icmp_eq(crate::types::I8, &state, "1");
@@ -681,6 +500,7 @@ pub(crate) fn loop_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
         }
         if matches!(expr,
             Expr::IndexGet { object, .. } | Expr::Uint8ArrayGet { array: object, .. }
+                | Expr::BufferIndexGet { buffer: object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))
         {
             return true;
@@ -769,27 +589,6 @@ pub(crate) fn emit_u8_view_param_or_guard(
 mod byte_loop_proof_tests {
     use super::*;
     use perry_hir::Stmt;
-
-    #[test]
-    fn relaxed_byte_reads_are_one_byte_and_zero_extended() {
-        use crate::block::{LlBlock, RegCounter};
-        use std::rc::Rc;
-        for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
-            let mut blk = LlBlock::new("entry.0", Rc::new(RegCounter::new()));
-            emit_u8_atomic_load_f64(&mut blk, target, "%data");
-            let ir = blk.to_ir();
-            if target.starts_with("x86_64") {
-                assert!(ir.contains("movzbl ($1), $0"));
-                assert!(ir.contains("asm sideeffect") && ir.contains("~{memory}"));
-                assert!(ir.contains("gc-leaf-function"));
-            } else {
-                assert!(ir.contains("load atomic i8, ptr %data monotonic, align 1"));
-                assert!(!ir.contains("asm"));
-            }
-            assert!(ir.contains("uitofp i32"));
-            assert!(!ir.contains("load i32"));
-        }
-    }
 
     #[test]
     fn entry_resolution_requires_a_loop_read_of_this_parameter() {

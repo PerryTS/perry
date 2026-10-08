@@ -159,8 +159,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // whether `u8[Symbol.iterator]` is a number — which matters wherever a
         // `true` here means "a raw double": `fcmp`-based truthiness, `fadd`
         // operands, the non-BigInt bitwise fast path.
-        Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
-        Expr::BufferIndexGet { .. } | Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
+            crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
+        }
+        Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
         Expr::IndexGet { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
@@ -896,8 +898,9 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // #7700: a byte read only with a numeric key. With any other key this
         // is a property read, and an expando holds anything — `u8.n = 1n;
         // const k: any = "n"; u8[k]` IS a BigInt.
-        Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
-        Expr::BufferIndexGet { .. } => true,
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
+            crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
+        }
         Expr::IndexGet { object, .. } => receiver_class_name(ctx, object)
             .as_deref()
             .is_some_and(is_numeric_typed_array_class),
@@ -994,9 +997,9 @@ fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: boo
         Expr::Integer(v) => Some(crate::collectors::ceil_log2_abs(*v)),
         // A byte value — #7700: only with a numeric key. A property read has no
         // magnitude bound at all.
-        Expr::Uint8ArrayGet { index, .. } if is_numeric_expr(ctx, index) => Some(8),
-        Expr::Uint8ArrayGet { .. } => None,
-        Expr::BufferIndexGet { .. } => Some(8),
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
+            crate::expr::ta_element_read::byte_read_is_numeric(ctx, e).then_some(8)
+        }
         Expr::LocalGet(id) | Expr::Update { id, .. } => {
             if ctx.integer_locals.contains(id) {
                 Some(31)

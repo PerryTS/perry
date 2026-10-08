@@ -112,42 +112,12 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
                 Expr::LocalGet(arr_id) if packed_loop_counter_read_is_numeric(ctx, *arr_id, index)
             ) || super::is_proven_u32_view_read(ctx, expr)
         }
-        // #6996: a typed-array / Buffer element read is a number (or
-        // `undefined` out of range) BY CONSTRUCTION -- `lower_buffer_load`'s
-        // inline byte load, `js_uint8array_index_get_value` and
-        // `js_buffer_index_get_value` can only ever produce one. It is never a
-        // heap reference, so #6951's argument-temporary rooting has nothing to
-        // protect and its push/re-read/truncate trio is pure TLS traffic in
-        // exactly the loops that can least afford it (`buf[i] + packet.tag`
-        // rooted the byte across the property get, once per iteration).
-        //
-        // The proof is about the LOWERING, not the declared type: annotations
-        // are unenforced, so `buf: Buffer` holding something else must not be
-        // load-bearing -- and it isn't, because both runtime accessors answer
-        // `undefined` for a receiver that is not a Uint8Array/Buffer.
-        //
-        // The three lowerings of this node that CAN yield a heap value are
-        // excluded by construction, one condition each:
-        //   * a symbol key (`u8[Symbol.iterator]`) goes to
-        //     `js_object_get_symbol_property`, which returns the accessor;
-        //   * in JS-value context, a key without the integer-array-index proof
-        //     goes to `js_typed_array_index_get_dynamic`, which falls through
-        //     to string-keyed property lookup (an expando holds anything);
-        //   * in i32 context (`lower_uint8array_get_i32`), a key that is not
-        //     numeric-proven goes to `js_object_get_index_polymorphic`, which
-        //     dispatches a string key to that same property path. That arm is
-        //     gated on `is_numeric_expr`, NOT on the index proof, so testing
-        //     the proof alone would not cover it -- both conditions are
-        //     required. `is_numeric_expr` is used here only to NARROW: a wrong
-        //     `true` from it still leaves a byte read on every arm it admits.
-        // `BufferIndexGet` has none of these paths -- every arm coerces the key
-        // to i32 and reads a byte -- so it needs no condition.
-        Expr::Uint8ArrayGet { index, .. } => {
-            !matches!(index.as_ref(), Expr::SymbolFor(_))
-                && crate::type_analysis::is_numeric_expr(ctx, index)
-                && super::index_get::numeric_index_has_integer_array_index_proof(ctx, index)
+        // Checked byte reads can use boxed property lookup on a lying
+        // receiver. Only construction/B4 admission plus a numeric key
+        // rules out heap results, including through the slow arm.
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
+            super::ta_element_read::byte_read_is_numeric(ctx, expr)
         }
-        Expr::BufferIndexGet { .. } => true,
         Expr::Conditional {
             then_expr,
             else_expr,
