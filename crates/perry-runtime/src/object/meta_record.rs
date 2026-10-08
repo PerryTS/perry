@@ -203,7 +203,8 @@ pub struct ObjectMeta {
     /// object. Class objects cannot also be native decoders or Sets.
     ///
     /// Native payload families and WeakMap/WeakSet store their object-owned
-    /// GC cell here as a POINTER_TAG word. The GC descriptor traces and
+    /// GC cell here as a POINTER_TAG word, and a plain runtime stream its
+    /// state record (`node_stream::state_record`). The GC descriptor traces and
     /// rewrites that edge. Other families store untagged POD and no edge.
     ///
     /// LAST FIELD ON PURPOSE: this record carries `offset_of!` assertions for

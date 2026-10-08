@@ -937,7 +937,7 @@ fn install_web_writable_adapter(node_stream: f64, web_stream: f64) -> bool {
     );
     set_hidden_value(
         node_stream,
-        hidden_key(STREAM_DESTROY_KEY),
+        STREAM_DESTROY_KEY,
         closure_value(destroy),
     );
     true
@@ -1107,7 +1107,7 @@ pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
     if writable_ok {
         set_hidden_value(
             duplex,
-            hidden_key(b"writableCustomSink"),
+            Slot::WritableCustomSink,
             f64::from_bits(TAG_TRUE),
         );
     }

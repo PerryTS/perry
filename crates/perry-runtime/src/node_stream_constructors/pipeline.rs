@@ -3,7 +3,6 @@
 //! file-size gate, #1987).
 use super::*;
 use crate::closure::{js_closure_get_capture_f64, ClosureHeader};
-use crate::object::{js_object_set_field_by_name, ObjectHeader};
 
 fn attach_duplex_readable_source(duplex: f64, source: f64) -> Result<(), f64> {
     // Collecting the source runs its iterator or `_read`, which can collect.
@@ -75,14 +74,13 @@ pub(super) extern "C" fn duplex_from_writable_final_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// Store the rooted closure `closure` in `target`'s hidden field `key`.
+/// Store the rooted closure `closure` in `target`'s state slot `key`.
 fn set_hidden_closure(
     target: &crate::gc::RuntimeHandle<'_>,
-    key: *mut crate::string::StringHeader,
+    key: Slot,
     closure: &crate::gc::RuntimeHandle<'_>,
 ) {
-    let obj = raw_ptr_from_value(target.get_nanbox_f64()) as *mut ObjectHeader;
-    js_object_set_field_by_name(obj, key, closure.get_nanbox_f64());
+    set_hidden_value(target.get_nanbox_f64(), key, closure.get_nanbox_f64());
 }
 
 fn install_duplex_from_writable(duplex: f64, writable: f64) {
@@ -113,7 +111,7 @@ fn install_duplex_from_writable(duplex: f64, writable: f64) {
     );
     set_hidden_value(
         duplex.get_nanbox_f64(),
-        hidden_key(b"writableCustomSink"),
+        Slot::WritableCustomSink,
         f64::from_bits(TAG_TRUE),
     );
 }
@@ -425,12 +423,12 @@ fn install_duplex_pair_endpoint(endpoint: f64, peer: f64) {
 
     set_hidden_value(
         endpoint.get_nanbox_f64(),
-        hidden_key(b"duplexPairPeer"),
+        Slot::DuplexPairPeer,
         peer.get_nanbox_f64(),
     );
     set_hidden_value(
         endpoint.get_nanbox_f64(),
-        hidden_key(b"writableCustomSink"),
+        Slot::WritableCustomSink,
         f64::from_bits(TAG_TRUE),
     );
 }

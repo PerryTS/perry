@@ -116,8 +116,8 @@ pub(super) fn reduce_missing_initial_error() -> f64 {
 }
 
 #[inline]
-pub(super) fn hidden_signal_key() -> *mut crate::string::StringHeader {
-    hidden_key(READABLE_SIGNAL_KEY)
+pub(super) fn hidden_signal_key() -> Slot {
+    READABLE_SIGNAL_KEY
 }
 
 /// The `AbortSignal` carried in `opts.signal`, if any.
@@ -1214,7 +1214,7 @@ pub(super) extern "C" fn ns_take_source_next(
     let source = scope.root_nanbox_f64(source);
     let Some(source_iterator) = get_hidden_value(
         source.get_nanbox_f64(),
-        hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+        READABLE_SOURCE_ITERATOR_KEY,
     ) else {
         finish_take_source(iterator.get_nanbox_f64(), None, false);
         return take_source_done_result();
@@ -1337,7 +1337,7 @@ pub(super) extern "C" fn ns_iter_take(
     if !readable_chunks_nonempty(this.get_nanbox_f64()) {
         if get_hidden_value(
             this.get_nanbox_f64(),
-            hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+            READABLE_SOURCE_ITERATOR_KEY,
         )
         .is_some()
         {
@@ -1355,7 +1355,7 @@ pub(super) extern "C" fn ns_iter_take(
             );
             set_hidden_value(
                 result.get_nanbox_f64(),
-                hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                READABLE_SOURCE_ITERATOR_KEY,
                 iterator,
             );
             return result.get_nanbox_f64();
@@ -1459,12 +1459,12 @@ mod take_tests {
         let source = box_pointer(build_object(&methods, 0x7FFF_FF72) as *const u8);
         let chunks = crate::array::js_array_alloc(0);
         let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
-        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        set_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY, source);
         let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
         let result = ns_iter_take(take, crate::closure::JsThis::UNDEFINED, 2.0);
-        let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
+        let iterator = get_hidden_value(result, READABLE_SOURCE_ITERATOR_KEY).unwrap();
 
         assert!(!has_truthy_hidden(source, hidden_key(b"returned")));
         assert!(!stream_destroyed(stream));
@@ -1487,12 +1487,12 @@ mod take_tests {
         set_hidden_value(source, hidden_key(b"doneAfter"), 1.0);
         let chunks = crate::array::js_array_alloc(0);
         let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
-        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        set_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY, source);
         let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
         let result = ns_iter_take(take, crate::closure::JsThis::UNDEFINED, 2.0);
-        let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
+        let iterator = get_hidden_value(result, READABLE_SOURCE_ITERATOR_KEY).unwrap();
 
         assert!(!stream_destroyed(stream));
         assert_eq!(pull(iterator), (false, 1.0));
@@ -1513,7 +1513,7 @@ mod take_tests {
         ) as *const u8);
         let stream =
             js_node_stream_readable_from(box_pointer(crate::array::js_array_alloc(0) as *const u8));
-        set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+        set_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY, source);
         set_hidden_value(stream, hidden_error_key(), 7.0);
         set_hidden_value(stream, hidden_signal_key(), 8.0);
         let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
@@ -1547,7 +1547,7 @@ mod take_tests {
             }
             let chunks = crate::array::js_array_alloc(0);
             let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
-            set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
+            set_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY, source);
             let result = readable_from_chunks(crate::array::js_array_alloc(0));
             let iterator = take_source_iterator(stream, result, 2);
 

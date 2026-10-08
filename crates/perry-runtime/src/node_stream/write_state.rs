@@ -18,20 +18,20 @@
 
 use super::*;
 
-pub(super) const WRITABLE_WRITING_KEY: &[u8] = b"__perryWritableWriting";
-pub(super) const WRITABLE_SYNC_KEY: &[u8] = b"__perryWritableSync";
-pub(super) const WRITABLE_BUFFER_PROCESSING_KEY: &[u8] = b"__perryWritableBufferProcessing";
+pub(super) const WRITABLE_WRITING_KEY: Slot = Slot::WritableWriting;
+pub(super) const WRITABLE_SYNC_KEY: Slot = Slot::WritableSync;
+pub(super) const WRITABLE_BUFFER_PROCESSING_KEY: Slot = Slot::WritableBufferProcessing;
 /// A Transform's held write completion (node's `kCallback`): a closure that
 /// finishes the write when the readable side has room again.
-pub(super) const TRANSFORM_HELD_CALLBACK_KEY: &[u8] = b"__perryTransformHeldCallback";
+pub(super) const TRANSFORM_HELD_CALLBACK_KEY: Slot = Slot::TransformHeldCallback;
 
 #[inline]
-fn flag(stream: f64, key: &'static [u8]) -> bool {
-    has_truthy_hidden(stream, hidden_key(key))
+fn flag(stream: f64, key: Slot) -> bool {
+    has_truthy_hidden(stream, key)
 }
 
 #[inline]
-fn set_flag(stream: f64, key: &'static [u8], on: bool) {
+fn set_flag(stream: f64, key: Slot, on: bool) {
     set_internal_value(
         stream,
         key,
@@ -491,7 +491,7 @@ pub(super) fn readable_maybe_read_more(stream: f64) {
     if rlen >= hwm {
         return;
     }
-    if let Some(held) = get_hidden_value(stream, hidden_key(TRANSFORM_HELD_CALLBACK_KEY))
+    if let Some(held) = get_hidden_value(stream, TRANSFORM_HELD_CALLBACK_KEY)
         .filter(|v| is_callable_value(*v))
     {
         set_internal_value(

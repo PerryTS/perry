@@ -153,10 +153,10 @@ pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     Some(raw as *mut ObjectHeader)
 }
 
-/// The runtime's private stream state (`__perry…` keys) is written only on
-/// the object it describes, never on a prototype, so it is read as an own
-/// property: a missing private key must not walk the stream's prototype
-/// chain. Public names (`destroyed`, `autoDestroy`, …) keep ordinary [[Get]],
+/// A helper object's private keys (`__perry…`: an async iterator's queue, a
+/// state view's owner) are written only on the object they describe, never
+/// on a prototype, so they are read as own properties: a missing private key
+/// must not walk the prototype chain. Public names (`destroyed`, `autoDestroy`, …) keep ordinary [[Get]],
 /// since a subclass or an options object may supply them by inheritance.
 fn is_private_key(key: *const crate::string::StringHeader) -> bool {
     const PRIVATE: &[u8] = b"__perry";
@@ -173,29 +173,53 @@ fn is_private_key(key: *const crate::string::StringHeader) -> bool {
     }
 }
 
-pub(super) fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option<f64> {
-    let obj = object_ptr_from_value(value)?;
-    let value = if is_private_key(key) {
-        let own = unsafe { crate::object::own_data_field_by_name(obj, key) }?;
-        f64::from_bits(own.bits())
-    } else {
-        js_object_get_field_by_name_f64(obj as *const ObjectHeader, key)
-    };
-    if value.to_bits() == TAG_UNDEFINED {
-        None
-    } else {
-        Some(value)
+/// A key of a stream's runtime state: a [`Slot`] of its state record, or the
+/// name of an ordinary property (`destroyed`, `readableEnded`, … which node
+/// shows on the stream, and the private keys of non-stream helper objects
+/// such as async iterators).
+pub(super) trait StateKey: Copy {
+    fn read(self, value: f64) -> Option<f64>;
+    fn write(self, value: f64, field_value: f64);
+}
+
+impl StateKey for Slot {
+    #[inline]
+    fn read(self, value: f64) -> Option<f64> {
+        read_slot(value, self)
+    }
+    #[inline]
+    fn write(self, value: f64, field_value: f64) {
+        write_slot(value, self, field_value)
     }
 }
 
-pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
-    let Some(obj) = object_ptr_from_value(value) else {
-        return false;
-    };
-    unsafe {
-        own_field_by_key_bytes(obj, READABLE_FLAG_KEY).is_some()
-            || own_field_by_key_bytes(obj, WRITABLE_FLAG_KEY).is_some()
+impl StateKey for *mut crate::string::StringHeader {
+    fn read(self, value: f64) -> Option<f64> {
+        let obj = object_ptr_from_value(value)?;
+        let value = if is_private_key(self) {
+            let own = unsafe { crate::object::own_data_field_by_name(obj, self) }?;
+            f64::from_bits(own.bits())
+        } else {
+            js_object_get_field_by_name_f64(obj as *const ObjectHeader, self)
+        };
+        if value.to_bits() == TAG_UNDEFINED {
+            None
+        } else {
+            Some(value)
+        }
     }
+    fn write(self, value: f64, field_value: f64) {
+        set_named_hidden_value(value, self, field_value)
+    }
+}
+
+#[inline]
+pub(super) fn get_hidden_value(value: f64, key: impl StateKey) -> Option<f64> {
+    key.read(value)
+}
+
+pub(crate) fn is_classic_stream_instance_value(value: f64) -> bool {
+    read_slot(value, READABLE_FLAG_KEY).is_some() || read_slot(value, WRITABLE_FLAG_KEY).is_some()
 }
 
 pub(crate) fn is_classic_stream_instance_of(value: f64, constructor_name: &str) -> bool {
@@ -221,18 +245,19 @@ pub(crate) fn is_classic_stream_instance_of(value: f64, constructor_name: &str) 
     }
 }
 
-/// Write a stream's runtime state. The state is the object's own, but never
-/// node-visible as an own key (node keeps it in `_readableState` /
-/// `_writableState` and reads it through prototype getters), so a key the
-/// object does not have yet is DEFINED non-enumerable: `Object.keys`,
-/// `JSON.stringify` and `for…in` skip it structurally (the attribute lives in
-/// the shape's key entry, so later instances reuse the transition). An
-/// existing key keeps its attributes and is stored to as usual.
-pub(super) fn set_hidden_value(
-    value: f64,
-    key: *mut crate::string::StringHeader,
-    field_value: f64,
-) {
+/// Write a stream's runtime state: a record slot, or a named property.
+#[inline]
+pub(super) fn set_hidden_value(value: f64, key: impl StateKey, field_value: f64) {
+    key.write(value, field_value)
+}
+
+/// A named non-enumerable own property the runtime keeps on an object
+/// (node's prototype-getter names such as `destroyed`, which Perry stores on
+/// the stream, and helper objects' private keys). A key the object does not
+/// have yet is DEFINED non-enumerable: `Object.keys`, `JSON.stringify` and
+/// `for…in` skip it structurally. An existing key keeps its attributes and
+/// is stored to as usual.
+fn set_named_hidden_value(value: f64, key: *mut crate::string::StringHeader, field_value: f64) {
     let Some(obj) = object_ptr_from_value(value) else {
         return;
     };
@@ -245,104 +270,14 @@ pub(super) fn set_hidden_value(
     define_internal_field(obj, key, field_value);
 }
 
-/// Every runtime-internal key a classic stream can carry, in one fixed order.
-/// [`install_stream_state_layout`] defines them all at construction, so a
-/// stream's own key list is complete (and the same for every stream of a
-/// kind) from birth: later writes only store into existing slots, whatever
-/// order the stream's life sets them in. A list that grew key by key in
-/// event order would give streams divergent key lists, and every distinct
-/// list is a layout the shape table keeps.
-const STREAM_STATE_LAYOUT: &[&[u8]] = &[
-    READABLE_FLAG_KEY,
-    WRITABLE_FLAG_KEY,
-    TRANSFORM_FLAG_KEY,
-    READABLE_CHUNKS_KEY,
-    READABLE_SOURCE_ITERATOR_KEY,
-    READABLE_ERROR_KEY,
-    READABLE_SIGNAL_KEY,
-    READABLE_READ_KEY,
-    READABLE_READ_INVOKED_KEY,
-    READABLE_DEFAULT_READ_ERROR_KEY,
-    READABLE_BUFFERED_KEY,
-    READABLE_HWM_KEY,
-    READABLE_PENDING_KEY,
-    READABLE_RESUME_SCHEDULED_KEY,
-    READABLE_BASE64_REMAINDER_KEY,
-    READABLE_UTF8_REMAINDER_KEY,
-    STREAM_DRAIN_SCHEDULED_KEY,
-    STREAM_READABLE_SCHEDULED_KEY,
-    STREAM_END_SCHEDULED_KEY,
-    STREAM_END_EMITTED_KEY,
-    STREAM_ENDED_KEY,
-    STREAM_CAPTURE_REJECTIONS_KEY,
-    STREAM_DISTURBED_KEY,
-    STREAM_PIPES_KEY,
-    STREAM_PIPE_NO_END_KEY,
-    STREAM_PIPE_END_PENDING_KEY,
-    STREAM_AUTO_DESTROY_KEY,
-    STREAM_EMIT_CLOSE_KEY,
-    STREAM_PIPELINE_CALLBACK_DONE_KEY,
-    STREAM_READABLE_LIVE_PUSH_KEY,
-    STREAM_CONSTRUCT_KEY,
-    STREAM_DESTROY_KEY,
-    WRITABLE_WRITE_KEY,
-    WRITABLE_WRITEV_KEY,
-    WRITABLE_FINISH_SCHEDULED_KEY,
-    WRITABLE_FINISH_EMITTED_KEY,
-    WRITABLE_CORKED_KEY,
-    WRITABLE_BUFFERED_KEY,
-    WRITABLE_LENGTH_KEY,
-    WRITABLE_NEED_DRAIN_KEY,
-    WRITABLE_OBJECT_MODE_KEY,
-    WRITABLE_DECODE_STRINGS_KEY,
-    WRITABLE_DEFAULT_ENCODING_KEY,
-    WRITABLE_PENDING_FINISH_CALLBACK_KEY,
-    WRITABLE_FINAL_KEY,
-    WRITABLE_FINAL_INVOKED_KEY,
-    WRITABLE_FINAL_PENDING_KEY,
-    TRANSFORM_CALLBACK_KEY,
-    TRANSFORM_FLUSH_KEY,
-    TRANSFORM_PASSTHROUGH_KEY,
-    TRANSFORM_FINISHING_KEY,
-    TRANSFORM_END_PENDING_KEY,
-    super::write_state::WRITABLE_WRITING_KEY,
-    super::write_state::WRITABLE_SYNC_KEY,
-    super::write_state::WRITABLE_BUFFER_PROCESSING_KEY,
-    super::write_state::TRANSFORM_HELD_CALLBACK_KEY,
-    super::state_view::STREAM_CLOSE_EMITTED_KEY,
-    b"__perryReadableFromPromisePending",
-    b"writableCustomSink",
-    b"duplexPairPeer",
-];
-
-/// Define the whole [`STREAM_STATE_LAYOUT`] on a stream being constructed
-/// (non-enumerable, `undefined`: absent to every runtime read). A key the
-/// object already has (a subclass field of the same name, or a second
-/// constructor body on the same object) is left as it is.
+/// Give a stream being constructed its state record (`state_record.rs`).
 pub(super) fn install_stream_state_layout(stream: f64) {
-    let Some(obj) = object_ptr_from_value(stream) else {
-        return;
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
-    for &key in STREAM_STATE_LAYOUT {
-        let key = hidden_key(key);
-        let present = obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe {
-            crate::object::object_ops::own_key_present(o, key)
-        });
-        if !present {
-            define_internal_field(
-                obj.get_raw_mut_ptr::<ObjectHeader>(),
-                key,
-                f64::from_bits(TAG_UNDEFINED),
-            );
-        }
-    }
+    ensure_record(stream);
 }
 
-/// [`set_hidden_value`] by key bytes.
-pub(super) fn set_internal_value(value: f64, key: &'static [u8], field_value: f64) {
-    set_hidden_value(value, hidden_key(key), field_value);
+/// [`set_hidden_value`] for a record slot.
+pub(super) fn set_internal_value(value: f64, key: Slot, field_value: f64) {
+    write_slot(value, key, field_value);
 }
 
 /// An own data property node shows as an ENUMERABLE own key of a stream
@@ -363,11 +298,6 @@ fn define_internal_field(
     key: *mut crate::string::StringHeader,
     value: f64,
 ) {
-    #[cfg(test)]
-    if super::native_hooks::stream_sabotage("enumerable_state") {
-        js_object_set_field_by_name(obj, key, value);
-        return;
-    }
     let entry = crate::object::key_attrs::attr_bits_to_entry(
         crate::object::PropertyAttrs::new(true, false, true).bits,
     );
@@ -390,7 +320,7 @@ fn define_internal_field(
     }
 }
 
-pub(super) fn has_truthy_hidden(stream: f64, key: *mut crate::string::StringHeader) -> bool {
+pub(super) fn has_truthy_hidden(stream: f64, key: impl StateKey) -> bool {
     get_hidden_value(stream, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
@@ -473,7 +403,7 @@ pub(super) fn set_readable_flowing(stream: f64, value: f64) {
     }
 }
 
-pub(super) fn ensure_hidden_array(stream: f64, key: *mut crate::string::StringHeader) -> f64 {
+pub(super) fn ensure_hidden_array(stream: f64, key: impl StateKey) -> f64 {
     if let Some(value) = get_hidden_value(stream, key) {
         return value;
     }
@@ -1392,7 +1322,7 @@ pub(super) fn install_common_lifecycle_callbacks(stream: f64, opts: f64) {
     if let Some(destroy) = destroy_callback_from_options(opts) {
         set_hidden_value(
             stream,
-            hidden_key(STREAM_DESTROY_KEY),
+            STREAM_DESTROY_KEY,
             rebind_callback_this(destroy, stream),
         );
     }
@@ -1423,7 +1353,7 @@ pub(super) fn invoke_construct_callback(stream: f64, opts: f64) {
         return;
     };
     let construct = rebind_callback_this(construct, stream);
-    set_hidden_value(stream, hidden_key(STREAM_CONSTRUCT_KEY), construct);
+    set_hidden_value(stream, STREAM_CONSTRUCT_KEY, construct);
     let cb = js_closure_alloc(crate::fn_info!(ns_construct_callback_done, 1), 1);
     js_closure_set_capture_f64(cb, 0, stream);
     let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());

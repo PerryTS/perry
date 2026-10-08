@@ -229,18 +229,18 @@ unsafe impl Sync for StreamHooks {}
 
 // ─── hidden runner slots (non-enumerable stream state) ─────────────────────
 
-const NATIVE_OP_KEY: &[u8] = b"__perryNativeOp";
-const NATIVE_CHUNK_KEY: &[u8] = b"__perryNativeChunk";
-const NATIVE_LEN_KEY: &[u8] = b"__perryNativeLen";
-const NATIVE_CB_KEY: &[u8] = b"__perryNativeCb";
-const NATIVE_CONSUMED_KEY: &[u8] = b"__perryNativeConsumed";
-const NATIVE_FLUSH_KIND_KEY: &[u8] = b"__perryNativeFlushKind";
+const NATIVE_OP_KEY: Slot = Slot::NativeOp;
+const NATIVE_CHUNK_KEY: Slot = Slot::NativeChunk;
+const NATIVE_LEN_KEY: Slot = Slot::NativeLen;
+const NATIVE_CB_KEY: Slot = Slot::NativeCb;
+const NATIVE_CONSUMED_KEY: Slot = Slot::NativeConsumed;
+const NATIVE_FLUSH_KIND_KEY: Slot = Slot::NativeFlushKind;
 /// The record's input is fully consumed but its completion is held because
 /// the readable side is full (node's Transform `kCallback`).
-const NATIVE_DONE_KEY: &[u8] = b"__perryNativeDone";
-const NATIVE_PARKED_KEY: &[u8] = b"__perryNativeParked";
-const NATIVE_SCHEDULED_KEY: &[u8] = b"__perryNativeScheduled";
-const NATIVE_RUNNING_KEY: &[u8] = b"__perryNativeRunning";
+const NATIVE_DONE_KEY: Slot = Slot::NativeDone;
+const NATIVE_PARKED_KEY: Slot = Slot::NativeParked;
+const NATIVE_SCHEDULED_KEY: Slot = Slot::NativeScheduled;
+const NATIVE_RUNNING_KEY: Slot = Slot::NativeRunning;
 
 /// Op slot values (0 = no record in flight).
 const REC_NONE: f64 = 0.0;
@@ -275,19 +275,19 @@ pub(crate) fn begin_prototype_step(stream: f64, chunk: f64, callback: f64, final
 }
 
 #[inline]
-fn number_slot(stream: f64, key: &'static [u8]) -> f64 {
-    get_hidden_value(stream, hidden_key(key))
+fn number_slot(stream: f64, key: Slot) -> f64 {
+    get_hidden_value(stream, key)
         .and_then(jsvalue_as_f64)
         .unwrap_or(0.0)
 }
 
 #[inline]
-fn flag(stream: f64, key: &'static [u8]) -> bool {
-    has_truthy_hidden(stream, hidden_key(key))
+fn flag(stream: f64, key: Slot) -> bool {
+    has_truthy_hidden(stream, key)
 }
 
 #[inline]
-fn set_flag(stream: f64, key: &'static [u8], on: bool) {
+fn set_flag(stream: f64, key: Slot, on: bool) {
     super::set_internal_value(
         stream,
         key,
@@ -589,7 +589,7 @@ pub(crate) fn run_native_steps(stream: f64) {
             break;
         }
         let consumed = number_slot(st(), NATIVE_CONSUMED_KEY) as usize;
-        let chunk = get_hidden_value(st(), hidden_key(NATIVE_CHUNK_KEY))
+        let chunk = get_hidden_value(st(), NATIVE_CHUNK_KEY)
             .unwrap_or(f64::from_bits(TAG_UNDEFINED));
         // Strings may need materialization, which precedes the no_gc borrow.
         let string = if op == REC_WRITE && JSValue::from_bits(chunk.to_bits()).is_any_string() {
@@ -750,7 +750,7 @@ fn complete_record(stream: f64) {
     let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
     let len = number_slot(s.get_nanbox_f64(), NATIVE_LEN_KEY);
     let cb = scope.root_nanbox_f64(
-        get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
+        get_hidden_value(s.get_nanbox_f64(), NATIVE_CB_KEY)
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     clear_record(s.get_nanbox_f64());
@@ -774,7 +774,7 @@ fn finish_final(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
     let cb = scope.root_nanbox_f64(
-        get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
+        get_hidden_value(s.get_nanbox_f64(), NATIVE_CB_KEY)
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
@@ -815,7 +815,7 @@ fn fail_record(stream: f64, hooks: &'static StreamHooks, code: u32) {
     let op = operation(number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY));
     let len = number_slot(s.get_nanbox_f64(), NATIVE_LEN_KEY);
     let cb = scope.root_nanbox_f64(
-        get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
+        get_hidden_value(s.get_nanbox_f64(), NATIVE_CB_KEY)
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     clear_record(s.get_nanbox_f64());
@@ -875,13 +875,18 @@ pub(super) fn release_on_destroy(stream: f64) {
 /// a shipped binary).
 #[cfg(test)]
 pub(crate) fn stream_sabotage(fault: &str) -> bool {
-    std::env::var("PERRY_TEST_STREAM_SABOTAGE").as_deref() == Ok(fault)
+    // Read once: the GC's cell descriptor asks on every visit.
+    static FAULT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAULT
+        .get_or_init(|| std::env::var("PERRY_TEST_STREAM_SABOTAGE").ok())
+        .as_deref()
+        == Some(fault)
 }
 
 /// The chunk of the write in flight (Z9's witness reads whether it moved).
 #[cfg(test)]
 pub(crate) fn test_inflight_chunk(stream: f64) -> f64 {
-    get_hidden_value(stream, hidden_key(NATIVE_CHUNK_KEY)).unwrap_or(f64::from_bits(TAG_UNDEFINED))
+    get_hidden_value(stream, NATIVE_CHUNK_KEY).unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
 #[cfg(test)]
