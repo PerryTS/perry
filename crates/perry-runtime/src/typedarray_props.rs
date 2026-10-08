@@ -708,6 +708,16 @@ unsafe fn typed_array_get_numeric_index_for(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let index = index as u32;
+    // The common typed-array accessor validates NativeArena liveness before
+    // bounds. A disposed view has length zero; a duplicate bounds check here
+    // would hide its disposal error by returning undefined.
+    #[cfg(test)]
+    let use_unvalidated_bounds = crate::buffer::bytes::b4_sabotage("native_bounds");
+    #[cfg(not(test))]
+    let use_unvalidated_bounds = false;
+    if matches!(kind, TypedArrayOwnerKind::TypedArray) && !use_unvalidated_bounds {
+        return typed_array_owner_get_for(owner, kind, index);
+    }
     if index < typed_array_owner_length_for(owner, kind) {
         typed_array_owner_get_for(owner, kind, index)
     } else {
