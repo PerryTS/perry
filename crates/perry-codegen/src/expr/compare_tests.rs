@@ -351,27 +351,45 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
             },
         ],
     );
-    // A proven-Number left operand lowers the whole comparison inline: every
-    // non-Number NaN-box reads as a NaN double, so `fcmp oeq` answers `false`
-    // for the object exactly as `js_eq` would, and no helper call remains.
     assert!(
         !ir.contains("@js_eq(") && !ir.contains("@js_strict_eq("),
         "a proven-Number left operand must not pay a runtime equality call:\n{ir}"
     );
-    let fcmp = ir
+    // The raw-encoding comparison consumes the dynamic object first and the
+    // proven Number second. Trace every input through pure normalization ops,
+    // so a reload after the allocation cannot hide behind a select or bitcast.
+    let comparison = ir
         .lines()
         .map(str::trim)
-        .find(|line| line.contains("fcmp oeq double"))
-        .unwrap_or_else(|| panic!("no inline numeric strict-equality compare in:\n{ir}"));
-    let left = super::class_field_barrier_tests::operand(fcmp, 1).expect("fcmp left operand");
-    let right = super::class_field_barrier_tests::operand(fcmp, 2).expect("fcmp right operand");
-    let left_producer = producer_line(&ir, &left);
-    let right_producer = producer_line(&ir, &right);
+        .find(|line| {
+            line.contains("icmp eq i64")
+                && super::class_field_barrier_tests::operand(line, 2).is_some()
+        })
+        .unwrap_or_else(|| panic!("no raw numeric equality comparison in:\n{ir}"));
+    fn origin(ir: &str, reg: &str) -> usize {
+        let (idx, line) = ir
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.trim_start().starts_with(&format!("{reg} = ")))
+            .unwrap();
+        let rhs = line.split_once(" = ").unwrap().1;
+        if rhs.starts_with("load ") || rhs.contains("call ") || rhs.starts_with("phi ") {
+            return idx;
+        }
+        (1..)
+            .map_while(|n| super::class_field_barrier_tests::operand(line, n))
+            .map(|input| origin(ir, &input))
+            .max()
+            .unwrap_or(idx)
+    }
+    let right = super::class_field_barrier_tests::operand(comparison, 1).unwrap();
+    let left = super::class_field_barrier_tests::operand(comparison, 2).unwrap();
+    let left_producer = origin(&ir, &left);
+    let right_producer = origin(&ir, &right);
     assert!(
         left_producer < right_producer,
-        "a non-pointer numeric operand cannot become stale, so it should stay in the \
-         register produced at line {left_producer}, above the right allocation at line \
-         {right_producer}. Rooting/re-reading it adds traffic without protecting anything.\n{ir}"
+        "a non-pointer numeric operand must remain in its pre-allocation register: \
+         numeric origin {left_producer}, allocating operand {right_producer}.\n{ir}"
     );
 }
 
@@ -676,7 +694,7 @@ fn nonliteral_typeof_comparison_keeps_runtime_string_semantics() {
 }
 
 #[test]
-fn dynamic_strict_eq_against_number_normalizes_int32_without_js_eq() {
+fn dynamic_strict_eq_against_number_compares_both_encodings_without_js_eq() {
     let ir = cmp_ir(
         "dynamic_strict_eq_number",
         CompareOp::Eq,
@@ -698,7 +716,7 @@ fn dynamic_strict_eq_against_number_normalizes_int32_without_js_eq() {
 }
 
 #[test]
-fn reversed_dynamic_strict_ne_against_number_uses_unordered_numeric_compare() {
+fn reversed_dynamic_strict_ne_against_number_rejects_nan_before_inverting_equality() {
     let ir = cmp_ir(
         "dynamic_strict_ne_number_reversed",
         CompareOp::Ne,
@@ -706,7 +724,7 @@ fn reversed_dynamic_strict_ne_against_number_uses_unordered_numeric_compare() {
         Expr::LocalGet(X),
     );
     assert!(
-        ir.contains("fcmp une double"),
+        ir.contains("fcmp oeq double") && ir.contains("xor i1"),
         "strict !== must treat NaN and every non-number tag as unequal:\n{ir}"
     );
     assert!(!ir.contains(JS_EQ_CALL), "{ir}");
@@ -822,6 +840,59 @@ fn dynamic_string_order_checks_bounds_and_ascii_before_word_ordering() {
                 .count(),
             4,
             "{words}"
+        );
+    }
+}
+
+#[test]
+fn strict_number_equality_keeps_the_varying_operand_out_of_float_conversion() {
+    for (op, reverse) in [(CompareOp::Eq, false), (CompareOp::Ne, true)] {
+        let (left, right) = if reverse {
+            (Expr::Number(92.0), Expr::LocalGet(X))
+        } else {
+            (Expr::LocalGet(X), Expr::Number(92.0))
+        };
+        let ir = cmp_ir("number_equality_dependency", op, left, right);
+        for conversion in ir.lines().filter(|line| line.contains("sitofp i32")) {
+            let input = conversion
+                .split("sitofp i32 ")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap();
+            let Some(truncate) = ir
+                .lines()
+                .find(|line| line.trim().starts_with(&format!("{input} = trunc i64 ")))
+            else {
+                continue;
+            };
+            let bits = truncate
+                .split("trunc i64 ")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap();
+            if !bits.starts_with('%') {
+                continue;
+            }
+            let producer = ir
+                .lines()
+                .find(|line| line.trim().starts_with(&format!("{bits} = ")))
+                .unwrap();
+            let literal = producer
+                .split("bitcast double ")
+                .nth(1)
+                .is_some_and(|value| !value.starts_with('%'));
+            assert!(
+                literal,
+                "the varying JS value must not feed integer-to-float conversion: {ir}"
+            );
+        }
+        assert!(
+            !ir.contains(JS_EQ_CALL),
+            "strict equality must remain noncoercing: {ir}"
         );
     }
 }
