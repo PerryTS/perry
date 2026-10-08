@@ -3,18 +3,34 @@ use super::FnCtx;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// Install the hoisted access proof of `id` for exactly `brands`. Every slot
-/// is initialized in the entry block, and the proof starts dirty: the first
-/// use resolves it, so installation order never matters.
+/// is initialized in the entry block, and the proof starts dirty. Installation
+/// must precede body lowering so every call edge can invalidate the proof.
 pub(crate) fn materialize_param(ctx: &mut FnCtx<'_>, id: u32, _boxed: &str, brands: &[u8]) {
-    let mut access = access_for(ctx, id, brands);
+    let mut access = install_loop_access(ctx, id, brands);
     // Callers install only parameters that are never reassigned or mutated.
     access.fixed_receiver = true;
     ctx.receiver_descriptors
         .materialize_byte_view_param(id, access);
 }
 
-/// The proof of `id` for `brands`, installing it on first request.
+/// Look up a proof installed by the pre-pass. An unregistered access must
+/// resolve its header each time: earlier calls cannot dirty a later install.
 pub(crate) fn access_for(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    brands: &[u8],
+) -> Option<crate::collectors::ByteViewParamAccess> {
+    #[cfg(test)]
+    if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("lazy_install") {
+        return Some(install_loop_access(ctx, id, brands));
+    }
+    ctx.receiver_descriptors
+        .byte_view_access(id, brands)
+        .cloned()
+}
+
+/// Install only during parameter/loop preparation, before lowering calls.
+pub(super) fn install_loop_access(
     ctx: &mut FnCtx<'_>,
     id: u32,
     brands: &[u8],
@@ -388,7 +404,11 @@ fn plain_owner(blk: &mut crate::block::LlBlock, ho: &str) -> String {
     let arena = blk.icmp_eq(I64, &owner_brand, "18");
     let special = blk.or(I1, &shared, &arena);
     let regular = blk.icmp_eq(I1, &special, "false");
-    blk.and(I1, &admitted, &regular)
+    #[cfg(test)]
+    let shared_admit = std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("shared_admit");
+    #[cfg(not(test))]
+    let shared_admit = false;
+    blk.and(I1, &admitted, if shared_admit { "true" } else { &regular })
 }
 
 /// Stores additionally reject a frozen receiver before deriving a writable access.
@@ -555,6 +575,21 @@ mod native_owner_tests;
 mod tests {
     use perry_hir::{types::Type, Expr, Stmt};
 
+    fn add_indexed_loop_read(function: &mut perry_hir::Function) {
+        let mut body = std::mem::take(&mut function.body);
+        body.insert(
+            0,
+            Stmt::Expr(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(0)),
+            }),
+        );
+        function.body = vec![Stmt::While {
+            condition: Expr::Bool(true),
+            body,
+        }];
+    }
+
     #[test]
     fn tracked_local_keeps_receiver_and_owner_roots_across_a_collecting_call() {
         crate::temp_root_coverage::under_both_lowerings(|mode| {
@@ -670,6 +705,9 @@ mod tests {
                 was_plain_async: false,
                 was_unrolled: false,
             });
+            // A loop indexed read registers the proof before any call. A
+            // numeric intrinsic alone deliberately keeps per-access resolution.
+            add_indexed_loop_read(&mut module.functions[0]);
             let ir = String::from_utf8(
                 crate::compile_module(
                     &module,
@@ -789,6 +827,7 @@ mod tests {
             was_plain_async: false,
             was_unrolled: false,
         });
+        add_indexed_loop_read(&mut module.functions[0]);
         let ir = String::from_utf8(
             crate::compile_module(
                 &module,
@@ -800,24 +839,37 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let marker = ir
+        let states: Vec<String> = ir
             .lines()
-            .find(|line| line.contains("; bytes.hoist.roots "))
-            .expect("the Buffer parameter installs a proof");
-        let state = format!(
-            "%{}",
-            marker
-                .split("state=")
-                .nth(1)
-                .unwrap()
-                .split_whitespace()
-                .next()
-                .unwrap()
-        );
+            .filter(|line| line.contains("; bytes.hoist.roots "))
+            .map(|marker| {
+                format!(
+                    "store i8 0, ptr %{}",
+                    marker
+                        .split("state=")
+                        .nth(1)
+                        .unwrap()
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                )
+            })
+            .collect();
+        assert!(!states.is_empty(), "the Buffer parameter installs a proof");
         let lines: Vec<&str> = ir.lines().map(str::trim).collect();
-        let dirty = format!("store i8 0, ptr {state}");
-        let dirtied_call = lines.windows(2).any(|pair| {
-            pair[0] == dirty && (pair[1].starts_with("call ") || pair[1].contains(" = call "))
+        let dirtied_call = lines.iter().enumerate().any(|(index, line)| {
+            if !line.contains("call double @js_closure_call0(") {
+                return false;
+            }
+            let dirty_run: Vec<&str> = lines[..index]
+                .iter()
+                .rev()
+                .copied()
+                .take_while(|line| line.starts_with("store i8 0, ptr "))
+                .collect();
+            states
+                .iter()
+                .all(|state| dirty_run.contains(&state.as_str()))
         });
         assert!(
             dirtied_call,

@@ -4629,3 +4629,6 @@ mod compare_chain_tests;
 #[cfg(test)]
 mod byte_scanning_tests;
 
+#[cfg(test)]
+mod byte_prepass_tests;
+

@@ -443,6 +443,11 @@ pub(crate) fn emit_module_globals(
         counts
     });
     let reassigned = crate::collectors::reassigned_locals_in_module(hir);
+    #[cfg(test)]
+    let admit_reassigned =
+        std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("reassigned_admit");
+    #[cfg(not(test))]
+    let admit_reassigned = false;
     let mut module_global_transfers: HashMap<u32, super::global_transfer::GlobalTransfer> =
         HashMap::new();
     // The same plans in slot order: their entries in the module's per-agent block.
@@ -462,7 +467,9 @@ pub(crate) fn emit_module_globals(
             }
             if let Some(proven) = init
                 .as_ref()
-                .filter(|_| let_counts.get(id) == Some(&1) && !reassigned.contains(id))
+                .filter(|_| {
+                    let_counts.get(id) == Some(&1) && (admit_reassigned || !reassigned.contains(id))
+                })
                 .and_then(|init| module_global_runtime_type(init, shared_array_buffer_is_intrinsic))
             {
                 module_global_proven_types.insert(*id, proven);

@@ -456,7 +456,8 @@ impl LlBlock {
                 // The declaration's existing memory-effect contract is also
                 // the receiver proof's contract: no writes or collection can
                 // change its backing, bounds or JS-visible state.
-                || (matches!(crate::module::helper_decl_attrs(callee), " #2" | " #3")
+                || (matches!(crate::module::helper_memory_effect(callee),
+                    crate::module::HelperMemoryEffect::None | crate::module::HelperMemoryEffect::ReadOnly)
                     && crate::gc_call_effects::classify_direct_callee(callee)
                         == crate::gc_call_effects::GcCallEffect::CannotCollect)
         }) {
