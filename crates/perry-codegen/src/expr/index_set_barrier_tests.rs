@@ -539,8 +539,9 @@ fn the_fast_arm_layout_note_is_gated_on_the_pointer_classification_and_shape_bit
 /// written. The fast arm tests the F64 bits (0x1080) of the live head's
 /// `_reserved`; an F64 array takes a plain double canonicalized inline (NaN ->
 /// the canonical NaN, a select), and a NaN-boxed value reaches the cold arm,
-/// whose `js_array_note_numeric_write` clears the kind before `kind.done`
-/// writes the slot. No note call is left after the store.
+/// whose one call, `js_array_note_numeric_write_value`, clears the kind (and
+/// answers the value to write) before `kind.done` writes the slot. No note
+/// call is left after the store.
 #[test]
 fn the_store_settles_the_f64_kind_before_the_value() {
     let ir = ir();
@@ -567,8 +568,14 @@ fn the_store_settles_the_f64_kind_before_the_value() {
     );
     let cold = block_body(&ir, "idxset.recv_prop.kind.cold.").expect("kind.cold block");
     let note_at = cold
-        .find("call void @js_array_note_numeric_write(")
+        .find("call double @js_array_note_numeric_write_value(")
         .expect("the cold arm clears the kind through the runtime note");
+    assert_eq!(
+        cold.matches("call ").count(),
+        1,
+        "the cold arm is one runtime call:
+{cold}"
+    );
     assert!(
         !cold[..note_at].contains("store "),
         "the kind is cleared before anything is stored:\n{cold}"

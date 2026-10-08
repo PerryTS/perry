@@ -249,6 +249,8 @@ const NON_COLLECTING: &[&str] = &[
     "js_tdz_suppress_begin",
     "js_tdz_suppress_end",
     "js_array_note_numeric_write",
+    // The note plus a header read and a leaf conversion: the same audit.
+    "js_array_note_numeric_write_value",
     "js_array_declare_all_pointer_elements",
     "js_array_live_head",
     // #11522: only the leaf fast lane. `js_array_length` itself runs Proxy

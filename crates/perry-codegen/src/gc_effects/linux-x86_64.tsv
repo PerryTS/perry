@@ -133,6 +133,7 @@ js_array_map_discard	Reenters
 js_array_mark_arguments_object	Leaf
 js_array_mark_numeric_f64_layout	Reenters
 js_array_note_numeric_write	Reenters
+js_array_note_numeric_write_value	Reenters
 js_array_numeric_get_f64_unboxed	Reenters
 js_array_numeric_push_f64_unboxed	Reenters
 js_array_numeric_range_add	Reenters

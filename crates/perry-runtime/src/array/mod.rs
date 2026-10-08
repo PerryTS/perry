@@ -72,6 +72,8 @@ mod hole_tail_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
 #[cfg(test)]
+mod numeric_write_value_tests;
+#[cfg(test)]
 mod push_pop_tests;
 #[cfg(test)]
 mod refresh_traversal_evidence_tests;
@@ -158,7 +160,8 @@ pub(crate) use self::header::{
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,
     js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
-    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
+    js_array_mark_numeric_f64_layout, js_array_note_numeric_write,
+    js_array_note_numeric_write_value, js_tagged_template_get_or_init,
     js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
     scan_template_raw_roots_mut, ArrayHeader,
 };

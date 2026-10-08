@@ -44,7 +44,7 @@ use super::write_barrier::{
     emit_layout_note_slot_aware_on_block, emit_layout_pointer_bearing_check,
 };
 use super::{
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_write_barrier_slot_value_and_generation_tested, FnCtx,
 };
 
@@ -102,7 +102,8 @@ pub(super) fn emit_array_reserved(blk: &mut crate::block::LlBlock, handle: &str)
 ///   test, `reserved & 0x1080` and one branch.
 /// * kind F64, `val_double` a plain double: the double with any NaN collapsed
 ///   to the canonical one (a select, no call).
-/// * kind F64, anything NaN-boxed: the cold arm. `js_array_note_numeric_write`
+/// * kind F64, anything NaN-boxed: the cold arm, ONE call,
+///   `js_array_note_numeric_write_value`. Its note
 ///   runs BEFORE the store, so a non-Number clears the F64 bits before its
 ///   bits land in a slot a raw-f64 reader trusts; a Number (an `INT32` box)
 ///   keeps the kind and is written as its double.
@@ -152,20 +153,16 @@ pub(super) fn emit_array_store_kind_value(
     ctx.current_block = cold_idx;
     super::store_census::bump(ctx, super::store_census::ELEM_STORE_F64_COLD);
     let cold_value = {
+        // The note (the header write comes first: it clears both F64 bits
+        // unless the value is a Number), the kind re-read and the conversion,
+        // in one runtime call: the arm used to emit both calls, the re-read
+        // and a select at every store site.
         let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(val_double);
-        // The header write comes first: this clears both F64 bits unless the
-        // value is a Number.
-        emit_array_numeric_write_note_on_block(blk, arr_handle, &bits);
-        let reserved = emit_array_reserved(blk, arr_handle);
-        let kind_bits = blk.and(I16, &reserved, ARRAY_F64_KIND_BITS_I16);
-        let still_f64 = blk.icmp_ne(I16, &kind_bits, "0");
-        let as_double = blk.call(
+        let v = blk.call(
             DOUBLE,
-            "js_array_numeric_value_to_raw_f64",
-            &[(DOUBLE, val_double)],
+            "js_array_note_numeric_write_value",
+            &[(I64, arr_handle), (DOUBLE, val_double)],
         );
-        let v = blk.select(I1, &still_f64, DOUBLE, &as_double, val_double);
         blk.br(&done_label);
         v
     };

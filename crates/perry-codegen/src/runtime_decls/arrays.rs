@@ -112,6 +112,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // re-boxed live head (identity for everything else).
     module.declare_function("js_array_refresh_local_head", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
+    // The F64-kind cold arm of an element store, whole: the note, then the
+    // value the store writes (`index_set_guarded::emit_array_store_kind_value`).
+    module.declare_function("js_array_note_numeric_write_value", DOUBLE, &[I64, DOUBLE]);
     // #7469: at-allocation all-pointer element-layout declaration for a
     // proven `[]` + push-loop array. Emitted once per allocation site; the
     // per-push layout note it retires is re-armed by the header test in

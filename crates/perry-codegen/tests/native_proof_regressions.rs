@@ -7091,8 +7091,11 @@ fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
         !ir.contains("for.packed_f64_fast"),
         "nonnumeric store/read body must not be emitted under the packed-f64 fast clone:\n{ir}"
     );
+    // The guarded store's F64-kind cold arm notes through
+    // `js_array_note_numeric_write_value` (the note and the stored value).
     assert!(
-        ir.contains("call void @js_array_note_numeric_write"),
+        ir.contains("call void @js_array_note_numeric_write(")
+            || ir.contains("call double @js_array_note_numeric_write_value("),
         "nonnumeric store into a numeric array must invalidate the raw-f64 layout:\n{ir}"
     );
     assert!(
