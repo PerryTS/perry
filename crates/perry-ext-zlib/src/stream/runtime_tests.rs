@@ -543,6 +543,10 @@ fn codec_sabotages_turn_their_runtime_witnesses_red() {
             "brotli_destroy_inside_data_releases_before_gc_and_closes_once_later",
         ),
         (
+            "release_in_finalizer_only",
+            "destroy_mid_stream_returns_payload_buffers_before_any_collection",
+        ),
+        (
             "keep_handle_field",
             "eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion",
         ),
@@ -710,4 +714,125 @@ fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
         driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
         (expected, expected)
     );
+}
+
+fn collections() -> u64 {
+    let mut count = 0;
+    perry_runtime::gc::js_gc_stats(&mut count, std::ptr::null_mut(), std::ptr::null_mut());
+    count
+}
+/// Compressible, not trivially so: brotli's and inflate's windows fill.
+fn words(len: usize) -> Vec<u8> {
+    let mut seed = 0x2545_f491_u32;
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        let word = (seed >> 16) % 4096;
+        out.extend_from_slice(format!("w{word} ").as_bytes());
+    }
+    out.truncate(len);
+    out
+}
+/// Each buffered codec, with the first half of an input it can consume.
+fn mid_stream_inputs() -> Vec<(&'static str, Vec<u8>)> {
+    let plain = words(256 * 1024);
+    let half = |v: Vec<u8>| v[..v.len() / 2].to_vec();
+    vec![
+        ("BrotliCompress", plain.clone()),
+        ("BrotliDecompress", half(brotli_compress_bytes(&plain))),
+        ("Gzip", plain.clone()),
+        ("Gunzip", half(crate::gzip_bytes(&plain).unwrap())),
+        ("Deflate", plain.clone()),
+        ("Inflate", half(crate::deflate_bytes(&plain).unwrap())),
+        (
+            "InflateRaw",
+            half(crate::deflate_raw_bytes_with(&plain, Compression::default()).unwrap()),
+        ),
+        ("Unzip", half(crate::gzip_bytes(&plain).unwrap())),
+    ]
+}
+/// Write without end, let the deferred steps run, then destroy: the payload's
+/// buffers (brotli state and blocks, inflate window, scratch) are back before
+/// any collection, and the cell states zero external bytes.
+fn destroy_mid_stream(roots: &TransientRootScope, opts: f64, name: &str, input: &[u8], full: bool) {
+    let base = perry_ffi::native_payload::buffer::live_bytes();
+    let owner = roots.root_nanbox(factory(name, opts));
+    listen(owner.get(), 0.0);
+    let chunk = roots.root_nanbox(value_bytes(input));
+    unsafe { method(owner.get(), "write", &[chunk.get()]) };
+    pump();
+    let held = perry_ffi::native_payload::buffer::live_bytes() - base;
+    assert!(
+        held >= 1024,
+        "{name}: premise, buffers held mid-stream ({held})"
+    );
+    if full && (name.starts_with("Brotli") || name.starts_with("Inflate") || name == "Gunzip") {
+        assert!(
+            held > 32 * 1024,
+            "{name}: codec state is in buffers ({held})"
+        );
+    }
+    assert!(
+        native_bytes(owner.get()) >= held,
+        "{name}: buffers are counted"
+    );
+    let gcs = collections();
+    unsafe { method(owner.get(), "destroy", &[]) };
+    assert_eq!(collections(), gcs, "{name}: premise, no collection ran");
+    assert_eq!(
+        native_bytes(owner.get()),
+        0,
+        "{name}: external bytes at destroy"
+    );
+    assert_eq!(
+        perry_ffi::native_payload::buffer::live_bytes(),
+        base,
+        "{name}: buffers freed at destroy"
+    );
+    pump();
+}
+#[test]
+fn destroy_mid_stream_returns_payload_buffers_before_any_collection() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    for (name, input) in mid_stream_inputs() {
+        clear();
+        destroy_mid_stream(&roots, opts.get(), name, &input, true);
+        assert!(
+            EVENTS.with(|v| v.borrow().iter().any(|e| e == "close")),
+            "{name}: closed"
+        );
+    }
+}
+#[test]
+fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    let inputs = mid_stream_inputs();
+    let short: Vec<_> = inputs
+        .iter()
+        .map(|(name, input)| (*name, input[..input.len().min(16 * 1024)].to_vec()))
+        .collect();
+    let mut samples = Vec::new();
+    for batch in 0..8 {
+        for _ in 0..40 {
+            for (name, input) in &short {
+                clear();
+                let scope = TransientRootScope::enter();
+                destroy_mid_stream(&scope, opts.get(), name, input, false);
+            }
+        }
+        perry_runtime::gc::js_gc_collect();
+        if batch >= 2 {
+            samples.push(rss());
+        }
+    }
+    let (low, high) = (
+        *samples.iter().min().unwrap(),
+        *samples.iter().max().unwrap(),
+    );
+    eprintln!("buffer churn rss samples {samples:?}");
+    assert!(high - low < 4 << 20, "RSS drifted: {samples:?}");
 }
