@@ -1,0 +1,1 @@
+Keep queued async resource destruction pending until all active execution scopes have emitted their after hooks. This preserves timer callback lifecycle order when an interval clears itself or a collection queues destruction during a nested scope. Add a regression that checks both nested checkpoints, resource retention, the final drain and duplicate-drain prevention.
