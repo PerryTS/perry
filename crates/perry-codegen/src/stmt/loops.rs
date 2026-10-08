@@ -197,20 +197,20 @@ struct LengthHoistRejection {
 /// fast loop or the generic per-iteration comparison. The `fptosi` is emitted
 /// only on a guard-passing block so NaN, infinities, fractional values, and
 /// out-of-i32-range values keep JS comparison semantics.
-struct DynamicI32Bound {
-    op: perry_hir::CompareOp,
+pub(super) struct DynamicI32Bound {
+    pub(super) op: perry_hir::CompareOp,
     /// `i1` slot: true when the guard proved, at loop entry, that the whole
     /// `icmp` loop stays inside i32 — see [`emit_guarded_i32_bound`].
-    flag_slot: String,
+    pub(super) flag_slot: String,
     /// `i32` slot holding `fptosi(n)` (valid only when `flag_slot` is true).
-    bound_i32_slot: String,
+    pub(super) bound_i32_slot: String,
     /// `i32` slot the fast cond block compares against `bound_i32_slot`.
-    counter_i32_slot: String,
+    pub(super) counter_i32_slot: String,
     /// True when `counter_i32_slot` is loop-private: allocated here and
-    /// deliberately NOT published in `ctx.i32_counter_slots`, so the loop body
-    /// and the slow cond keep reading the counter's f64 slot (#6072). The
-    /// update block bumps it by hand in that case.
-    counter_is_private: bool,
+    /// initially outside `ctx.i32_counter_slots`. Ordinary dynamic-bound loops
+    /// keep it private (#6072). A range-guarded canonical clone can publish it
+    /// only inside its admitted branch and resynchronize on normal exits.
+    pub(super) counter_is_private: bool,
 }
 
 #[derive(Clone)]
@@ -6613,7 +6613,13 @@ fn is_packed_f64_loop_index(
 /// Anything else (NaN, infinities, fractional or out-of-i32-range bounds,
 /// non-numbers, a counter seeded past 2^31) leaves the flag false and runs the
 /// generic per-iteration comparison with full JS semantics.
-fn emit_guarded_i32_bound(
+//  is supplied only after the Number tier proves a stable strict
+// bound and an increment-only body with that finite budget. It permits scoped
+// canonical storage, requires nonnegative entry, and preserves -0 on a miss.
+// `Some(extra)` is supplied only after the Number tier proves a stable strict
+// bound and an increment-only body with that finite budget. It permits scoped
+// canonical storage, requires nonnegative entry, and preserves -0 on a miss.
+pub(super) fn emit_guarded_i32_bound(
     ctx: &mut FnCtx<'_>,
     counter_id: u32,
     bound_id: u32,
@@ -6621,6 +6627,7 @@ fn emit_guarded_i32_bound(
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
     label_prefix: &str,
+    extra_body_increments: Option<u32>,
 ) -> Option<DynamicI32Bound> {
     let bound_slot = ctx.locals.get(&bound_id).cloned()?;
     // Repsel Phase 1: a canonical-i32 counter has no double slot — only the
@@ -6639,7 +6646,10 @@ fn emit_guarded_i32_bound(
         None => return None,
     };
     let counter_is_private = shared_counter_i32.is_none();
-    if counter_is_private && !dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body) {
+    if counter_is_private
+        && extra_body_increments.is_none()
+        && !dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body)
+    {
         return None;
     }
     let counter_i32_slot = match shared_counter_i32 {
@@ -6649,10 +6659,9 @@ fn emit_guarded_i32_bound(
 
     // `i <= n` bumps the counter one past the bound on the last iteration, so
     // the largest bound it can carry without overflowing is `INT32_MAX - 1`.
-    let max_bound = match op {
-        perry_hir::CompareOp::Le => "2147483646.0",
-        _ => "2147483647.0",
-    };
+    let margin = extra_body_increments.unwrap_or(0) as i64
+        + i64::from(matches!(op, perry_hir::CompareOp::Le));
+    let max_bound = format!("{}.0", i32::MAX as i64 - margin);
 
     let flag_slot = ctx.func.alloca_entry(I1);
     let bound_i32_slot = ctx.func.alloca_entry(I32);
@@ -6675,7 +6684,7 @@ fn emit_guarded_i32_bound(
 
     ctx.current_block = number_idx;
     let ge_min = ctx.block().fcmp("oge", &n_dbl, "-2147483648.0");
-    let le_max = ctx.block().fcmp("ole", &n_dbl, max_bound);
+    let le_max = ctx.block().fcmp("ole", &n_dbl, &max_bound);
     let in_i32_range = ctx.block().and(I1, &ge_min, &le_max);
     ctx.block()
         .cond_br(&in_i32_range, &convert_label, &merge_label);
@@ -6713,7 +6722,12 @@ fn emit_guarded_i32_bound(
 
     ctx.current_block = counter_idx;
     let c_dbl = ctx.block().load(DOUBLE, &counter_slot);
-    let c_ge_min = ctx.block().fcmp("oge", &c_dbl, "-2147483648.0");
+    let c_min = if extra_body_increments.is_some() {
+        "0.0"
+    } else {
+        "-2147483648.0"
+    };
+    let c_ge_min = ctx.block().fcmp("oge", &c_dbl, c_min);
     let c_le_max = ctx.block().fcmp("ole", &c_dbl, "2147483647.0");
     let c_in_range = ctx.block().and(I1, &c_ge_min, &c_le_max);
     ctx.block()
@@ -6722,7 +6736,13 @@ fn emit_guarded_i32_bound(
     ctx.current_block = counter_conv_idx;
     let c_i32 = ctx.block().fptosi(DOUBLE, &c_dbl, I32);
     let c_roundtrip = ctx.block().sitofp(I32, &c_i32, DOUBLE);
-    let c_is_integral = ctx.block().fcmp("oeq", &c_roundtrip, &c_dbl);
+    let mut c_is_integral = ctx.block().fcmp("oeq", &c_roundtrip, &c_dbl);
+    if extra_body_increments.is_some() {
+        // An empty loop must preserve an observable -0 counter.
+        let bits = ctx.block().bitcast_double_to_i64(&c_dbl);
+        let not_negative_zero = ctx.block().icmp_ne(I64, &bits, "9223372036854775808");
+        c_is_integral = ctx.block().and(I1, &c_is_integral, &not_negative_zero);
+    }
     ctx.block().store(I32, &c_i32, &counter_i32_slot);
     ctx.block().store(I1, &c_is_integral, &flag_slot);
     ctx.block().br(&merge_label);
@@ -7335,7 +7355,16 @@ fn lower_for_after_init_impl(
         condition
             .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
             .and_then(|(counter_id, bound_id, op)| {
-                emit_guarded_i32_bound(ctx, counter_id, bound_id, op, update, body, label_prefix)
+                emit_guarded_i32_bound(
+                    ctx,
+                    counter_id,
+                    bound_id,
+                    op,
+                    update,
+                    body,
+                    label_prefix,
+                    None,
+                )
             })
     } else {
         None

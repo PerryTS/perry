@@ -36,8 +36,10 @@
 //! loop runs in a clone whose 5L Number scope
 //! (`ReceiverDescriptorTable::materialize_number_locals`) holds the admitted
 //! locals; `local_is_number` answers from it, so their bitwise operators lower
-//! natively and their writes carry no pointer protocol; each lives in a plain
-//! F64 alloca for the clone's duration and is written back to its slot on
+//! natively and their writes carry no pointer protocol. They use raw Number
+//! storage: normally F64, or the existing canonical i32 slot when a stable
+//! bound and integral entry prove the entire increment budget cannot wrap.
+//! Each is written back to its ordinary slot on
 //! every exit that can observe it. When the test fails, the ordinary loop
 //! runs. A Number's representation is its raw double, so neither clone ever
 //! puts a non-Number bit pattern where the other expects a JS value.
@@ -47,6 +49,8 @@
 //! proves the loop-carried Number; byte-result numeric facts additionally require
 //! B4 receiver admission.
 //! Other receiver accesses belong to the region tier that follows.
+
+mod bounded_counter;
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -367,6 +371,7 @@ pub(super) fn lower(
         return Ok(false);
     };
     trace(&format!("admitted {} local(s)", numbers.len()));
+    let int_plan = bounded_counter::match_plan(ctx, &numbers, condition, update, body);
 
     // The induction base: one Number test per admitted local, read through
     // the ordinary `LocalGet` lowering so every storage protocol is honoured.
@@ -402,6 +407,25 @@ pub(super) fn lower(
         receiver_proofs.push((id, ctx.snapshot_guarded_proof(&id)));
     }
 
+    let int_guard = if let Some(plan) = &int_plan {
+        let guard = super::loops::emit_guarded_i32_bound(
+            ctx,
+            plan.counter,
+            plan.bound,
+            perry_hir::CompareOp::Lt,
+            update,
+            body,
+            "for.number_locals",
+            Some(plan.extra_increments),
+        )
+        .expect("bounded Number counter has plain storage");
+        let integral = ctx.block().load(I1, &guard.flag_slot);
+        all_numbers = ctx.block().and(I1, &all_numbers, &integral);
+        Some(guard)
+    } else {
+        None
+    };
+
     let fast_idx = ctx.new_block("for.number_locals.fast.preheader");
     let slow_idx = ctx.new_block("for.number_locals.slow.preheader");
     let merge_idx = ctx.new_block("for.number_locals.merge");
@@ -434,7 +458,16 @@ pub(super) fn lower(
     // site (`flush_packed_accumulator_locals`). A `return` leaves the
     // function, and no closure can read these locals (admission rule 3).
     let mut redirected: Vec<(u32, String, String)> = Vec::with_capacity(entry_values.len());
+    let int_active = int_plan
+        .as_ref()
+        .zip(int_guard.as_ref())
+        .map(|(plan, guard)| {
+            bounded_counter::Active::begin(ctx, plan, guard.counter_i32_slot.clone())
+        });
     for (id, value) in &entry_values {
+        if int_plan.as_ref().is_some_and(|plan| plan.counter == *id) {
+            continue;
+        }
         let Some(real_slot) = ctx.locals.get(id).cloned() else {
             continue;
         };
@@ -444,8 +477,26 @@ pub(super) fn lower(
             .insert(*id, alloca.clone());
         redirected.push((*id, alloca, real_slot));
     }
-    let fast = lower_for_after_init(ctx, init, condition, update, body, "for.number_locals_fast");
+    let int_bound = int_plan
+        .as_ref()
+        .zip(int_guard.as_ref())
+        .map(|(plan, guard)| {
+            let bound = ctx.block().load(crate::types::I32, &guard.bound_i32_slot);
+            (plan.counter, bound)
+        });
+    let fast = super::loops::lower_for_after_init_with_i32_bound(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.number_locals_fast",
+        int_bound,
+    );
     if fast.is_ok() && !ctx.block().is_terminated() {
+        if let Some(active) = &int_active {
+            active.sync(ctx);
+        }
         for (_, alloca, real_slot) in &redirected {
             // Same argument as the packed tiers' `finish`: a Number's bits
             // are its NaN-box and carry no heap edge, so no barrier.
@@ -455,6 +506,9 @@ pub(super) fn lower(
     }
     for (id, _, _) in &redirected {
         ctx.numeric_accumulator_f64_slots.remove(id);
+    }
+    if let Some(active) = int_active {
+        active.finish(ctx);
     }
     ctx.receiver_descriptors.dematerialize_scope(scope_id);
     for (id, previous) in receiver_proofs {
@@ -493,7 +547,8 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
             }
             _ => return false,
         };
-        matches!(index.as_ref(), Expr::LocalGet(id) if ctx.numeric_accumulator_f64_slots.contains_key(id))
+        matches!(index.as_ref(), Expr::LocalGet(id) if ctx.numeric_accumulator_f64_slots.contains_key(id)
+            || (ctx.i32_counter_slots.contains_key(id) && ctx.receiver_descriptors.local_is_number_in_scope(*id)))
     }
     let mut found = false;
     crate::collectors::for_each_expr_in_stmts(body, &mut |e| found |= guarded(ctx, e));

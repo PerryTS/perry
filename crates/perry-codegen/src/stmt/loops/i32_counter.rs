@@ -58,6 +58,7 @@ pub(super) fn lower(
         update,
         body,
         "for.iv",
+        None,
     ) else {
         return Ok(false);
     };
