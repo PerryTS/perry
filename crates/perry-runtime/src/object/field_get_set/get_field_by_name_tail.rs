@@ -169,6 +169,49 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                         "ERR_INVALID_ARG_TYPE",
                     );
                 }
+                if name_str == "prototype" {
+                    // An own data slot remains present when its value is
+                    // undefined. Use the existing shape verdict before the
+                    // lazy intrinsic fallback can synthesize a prototype.
+                    let own_verdict = crate::closure::shape::closure_own_prototype_by_shape(
+                        obj as *const crate::closure::ClosureHeader,
+                    );
+                    let own_accessor = own_verdict.is_none()
+                        && crate::object::get_accessor_descriptor(obj as usize, name_str).is_some();
+                    let own_proto = own_verdict.unwrap_or_else(|| {
+                        if own_accessor {
+                            None
+                        } else {
+                            crate::closure::closure_get_own_dynamic_prop(obj as usize, name_str)
+                        }
+                    });
+                    if let Some(proto) = own_proto {
+                        return JSValue::from_bits(proto.to_bits());
+                    }
+                    // An accessor can collect and move its receiver. Retain
+                    // that receiver before Get, and reload it for lazy lookup.
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let receiver =
+                        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+                    let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
+                    if val.to_bits() != crate::value::TAG_UNDEFINED || own_accessor {
+                        return JSValue::from_bits(val.to_bits());
+                    }
+                    let receiver_value = receiver.get_nanbox_f64();
+                    let receiver_addr =
+                        crate::value::js_nanbox_get_pointer(receiver_value) as usize;
+                    if let Some(proto) =
+                        crate::object::generator_function_prototype_of(receiver_addr)
+                    {
+                        return JSValue::from_bits(proto.to_bits());
+                    }
+                    if let Some(proto) =
+                        super::super::ordinary_function_prototype_value_for_read(receiver_value)
+                    {
+                        return JSValue::from_bits(proto.to_bits());
+                    }
+                    return JSValue::undefined();
+                }
                 let val = crate::closure::closure_get_dynamic_prop(obj as usize, name_str);
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
@@ -187,19 +230,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                         super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
                     if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                         return JSValue::from_bits(ctor.to_bits());
-                    }
-                }
-                if name_str == "prototype" {
-                    if let Some(proto) =
-                        crate::object::generator_function_prototype_of(obj as usize)
-                    {
-                        return JSValue::from_bits(proto.to_bits());
-                    }
-                    let func_value = crate::value::js_nanbox_pointer(obj as i64);
-                    if let Some(proto) =
-                        super::super::ordinary_function_prototype_value_for_read(func_value)
-                    {
-                        return JSValue::from_bits(proto.to_bits());
                     }
                 }
                 if name_str == "length" {

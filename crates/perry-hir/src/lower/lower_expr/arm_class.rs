@@ -395,16 +395,10 @@ pub(crate) fn lower_class_expr(
             static_init_order,
             captured_args,
             shared_first_evaluation: None,
-            evaluated_parent: None,
+            evaluated_parent: parent_expr,
+            definition_steps: computed_name_evaluations,
         };
         let mut seq: Vec<Expr> = Vec::new();
-        if let Some(p) = parent_expr {
-            seq.push(Expr::RegisterClassParentDynamic {
-                class_name: synthetic_name,
-                parent_expr: p,
-            });
-        }
-        seq.extend(computed_name_evaluations);
         let fresh_expr = if let Some(owner) = capture_owner {
             Expr::Sequence(vec![
                 Expr::LocalSet(owner, Box::new(fresh_expr)),

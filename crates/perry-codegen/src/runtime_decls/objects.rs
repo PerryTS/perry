@@ -115,6 +115,16 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_mark_class", VOID, &[I64]);
     // #6438: pin a per-evaluation class object's own parent edge.
     module.declare_function("js_class_evaluation_object", I64, &[I32, I32, I32, PTR]);
+    module.declare_function(
+        "js_class_evaluation_parent_prototype",
+        DOUBLE,
+        &[I32, DOUBLE],
+    );
+    module.declare_function(
+        "js_class_evaluation_object_with_prototype",
+        I64,
+        &[I32, I32, I32, PTR, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_class_object_set_ctor_caps", VOID, &[I64, DOUBLE, PTR]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,
     // so subsequent field stores can use index-based set_field (skipping the

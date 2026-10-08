@@ -1155,6 +1155,9 @@ pub fn fresh_export_dynamic_heritage_factories(module: &mut Module) {
         let Expr::ClassRef(template) = parts.remove(1) else {
             unreachable!("matched Expr::ClassRef(_) above");
         };
+        let Expr::RegisterClassParentDynamic { parent_expr, .. } = parts.remove(0) else {
+            unreachable!("matched heritage registration above");
+        };
         parts.push(Expr::ClassExprFresh {
             template,
             evaluation_owner: None,
@@ -1164,7 +1167,8 @@ pub fn fresh_export_dynamic_heritage_factories(module: &mut Module) {
             static_init_order: Vec::new(),
             captured_args: Vec::new(),
             shared_first_evaluation: None,
-            evaluated_parent: None,
+            evaluated_parent: Some(parent_expr),
+            definition_steps: Vec::new(),
         });
     }
 }

@@ -137,14 +137,18 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
 /// VALUE stash below applies the same rejection (`is_self_heritage_value`).
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: f64) {
-    register_class_parent_dynamic(class_id, parent_value);
+    register_class_parent_dynamic(class_id, parent_value, true);
     // ClassDefinitionEvaluation fixes the instance prototype edge now,
     // before a later assignment can replace the superclass's prototype.
     // Store that edge on the existing prototype object, not a second table.
     class_decl_prototype_value(class_id);
 }
 
-fn register_class_parent_dynamic(class_id: u32, parent_value: f64) {
+pub(crate) fn register_class_parent_dynamic(
+    class_id: u32,
+    parent_value: f64,
+    publish_shared: bool,
+) {
     // Stash the parent VALUE keyed by child class id so `super()` can read it
     // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
     // expression inside the constructor scope. The decl-time call here runs in
@@ -257,7 +261,8 @@ fn register_class_parent_dynamic(class_id: u32, parent_value: f64) {
         // A native superclass is also the constructor's actual [[Prototype]].
         // Keep this edge on the class function shape, alongside instance
         // heritage, so static reads and their receivers use ordinary lookup.
-        if !crate::object::class_value::class_value_is_first_evaluation(class_id) {
+        if publish_shared && !crate::object::class_value::class_value_is_first_evaluation(class_id)
+        {
             let scope = crate::gc::RuntimeHandleScope::new();
             let parent = scope.root_nanbox_f64(parent_value);
             // Materialize the child before passing a raw parent to the store.
@@ -314,7 +319,9 @@ fn register_class_parent_dynamic(class_id: u32, parent_value: f64) {
     // method/`new`/instanceof dispatch on the existing fast path.
     // #11759 (c′): a later evaluation pins its parent on its own class object;
     // the template's static parent stays the first evaluation's.
-    if tag == POINTER_TAG && !crate::object::class_value::class_value_is_first_evaluation(class_id)
+    if publish_shared
+        && tag == POINTER_TAG
+        && !crate::object::class_value::class_value_is_first_evaluation(class_id)
     {
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
         if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
@@ -371,8 +378,17 @@ pub(crate) unsafe fn class_object_define_members(
         super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
         let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
         let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let key = scope.root_string_ptr(key);
         class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
-            crate::object::js_object_set_field_by_name(obj, key, parent.get_nanbox_f64())
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::define_builtin_data_property(
+                    obj,
+                    key,
+                    parent.get_nanbox_f64(),
+                    CLASS_OBJECT_PARENT_KEY.to_string(),
+                    PropertyAttrs::new(true, true, true),
+                )
+            })
         });
     }
     class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
