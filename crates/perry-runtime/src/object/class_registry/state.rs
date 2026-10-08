@@ -1554,7 +1554,28 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                 };
                 class_parent_prototype_bits(f64::from_bits(parent_proto.bits()))
             } else {
-                None
+                let parent = JSValue::from_bits(parent_value.to_bits());
+                if parent.is_pointer()
+                    && crate::closure::is_closure_ptr(parent.as_pointer::<u8>() as usize)
+                {
+                    // The evaluated superclass, including a native constructor,
+                    // owns this edge. Its actual .prototype must precede the
+                    // declared class-id fallback, which cannot identify a
+                    // function-valued parent's property storage.
+                    let parent_proto =
+                        super::function_prototype::js_function_prototype_value_for_read(
+                            dynamic_parent.get_nanbox_f64(),
+                        );
+                    Some(
+                        class_parent_prototype_bits(parent_proto).unwrap_or_else(|| {
+                            super::super::object_ops::throw_object_type_error(
+                                b"Class extends value does not have valid prototype property",
+                            )
+                        }),
+                    )
+                } else {
+                    None
+                }
             }
         };
         let parent_proto = evaluated_parent_proto.or_else(|| {
@@ -1581,41 +1602,7 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                     reserved_native_parent_prototype_bits(parent_id)
                 })
         });
-        if parent_proto.is_some() {
-            parent_proto
-        } else {
-            // A runtime function-valued superclass (including Intl service
-            // constructors) has no class-id edge. Link the declared prototype
-            // to the parent's own `.prototype` exactly once, while this fresh
-            // class prototype is initialized. Construction must never rewrite
-            // this edge after user code mutates it.
-            let parent = JSValue::from_bits(dynamic_parent.get_nanbox_f64().to_bits());
-            if parent.is_pointer() {
-                let parent_addr = parent.as_pointer::<u8>() as usize;
-                if crate::closure::is_closure_ptr(parent_addr) {
-                    // Use the same observable `.prototype` read as ordinary
-                    // property access. Plain functions and bound native-module
-                    // constructor exports materialize this object lazily, while
-                    // explicit, deleted, and generator prototypes must retain
-                    // their own semantics.
-                    let parent_proto =
-                        super::function_prototype::js_function_prototype_value_for_read(
-                            dynamic_parent.get_nanbox_f64(),
-                        );
-                    if let Some(bits) = class_parent_prototype_bits(parent_proto) {
-                        Some(bits)
-                    } else {
-                        super::super::object_ops::throw_object_type_error(
-                            b"Class extends value does not have valid prototype property",
-                        );
-                    }
-                } else {
-                    global_object_prototype_bits()
-                }
-            } else {
-                global_object_prototype_bits()
-            }
-        }
+        parent_proto.or_else(global_object_prototype_bits)
     }
 }
 
