@@ -387,6 +387,13 @@ fn compute_object_cache_key_with_env(
     // toggling the flag would serve the previously-cached object and the
     // source locations would silently not appear.
     h.field("dbgloc", if opts.debug_locations { "1" } else { "0" });
+    // `--record-function-order` instruments every function and
+    // `--function-order` moves listed ones into ranked sections; both change
+    // the emitted object (`perry_codegen::function_order`).
+    h.field(
+        "function_layout",
+        &perry_codegen::program_function_layout_key(),
+    );
     h.field(
         "verify_native_regions",
         if opts.verify_native_regions { "1" } else { "0" },

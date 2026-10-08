@@ -182,6 +182,14 @@ pub(super) fn optimize_and_emit(
         }
     }
 
+    // Last change to the module before emission, so it sees exactly the
+    // functions that become symbols (see `crate::function_order`).
+    super::function_layout::apply(
+        module,
+        &crate::function_order::program_function_layout(),
+        effective_target,
+    );
+
     let kind = if emit_asm {
         FileType::Assembly
     } else {

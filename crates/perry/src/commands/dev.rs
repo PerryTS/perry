@@ -308,6 +308,8 @@ fn build_once(
         no_auto_optimize: false,
         debug_symbols: false,
         report_size: false,
+        record_function_order: false,
+        function_order: None,
         function_source: None,
         no_cache: false,
         // `perry dev` has no `--cache-dir` flag of its own; the resolver

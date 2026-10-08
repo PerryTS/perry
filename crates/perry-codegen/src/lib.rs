@@ -18,6 +18,7 @@ pub mod expr;
 pub mod ext_registry;
 pub(crate) mod fn_info;
 pub mod function;
+pub mod function_order;
 pub(crate) mod gc_call_effects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
@@ -107,6 +108,11 @@ pub use codegen::{
     set_program_has_worker, set_worker_entries, worker_entries,
 };
 pub use collectors::CjsPreambleCensus;
+// Function layout from a recorded first-execution order, set by the driver.
+pub use function_order::{
+    program_function_layout, program_function_layout_key, set_program_function_layout,
+    FunctionLayout, FunctionOrder,
+};
 // #9843: the segment-view for-of matcher's counter. Exported so the
 // driver can run it at the HIR-trace point — after every transform, on
 // exactly the statements codegen consumes — instead of only inside a

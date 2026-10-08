@@ -1449,6 +1449,7 @@ js_fs_writev_sync	f64	f64,f64,f64
 js_function_apply_proxy	f64	f64,f64,f64
 js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
+js_function_order_first_call	void	ptr
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
 js_gc_enter_unsafe_zone	void	
