@@ -244,19 +244,21 @@ impl IteratorRecordPlan {
         };
         let state = *state;
         body.extend(user);
-        let condition = Expr::Sequence(vec![
-            Expr::LocalSet(state, Box::new(Expr::Number(2.0))),
-            Expr::Conditional {
-                condition: Box::new(
-                    self.step(crate::lower::iterator_step_call(iter_id, next, value_id)),
-                ),
-                then_expr: Box::new(Expr::Bool(false)),
-                else_expr: Box::new(Expr::Sequence(vec![
-                    Expr::LocalSet(state, Box::new(Expr::Number(0.0))),
-                    Expr::Bool(true),
-                ])),
+        // IteratorStepValue is the first segment of the one consumer body.
+        // The ordinary loop-body safepoint then covers both step and consumer,
+        // just as it covers an indexed read in a hand-written indexed loop.
+        // Keep completion state closed until Step succeeds: exhaustion and
+        // getters/next that throw must not invoke IteratorClose.
+        let mut stepped_body = vec![
+            Stmt::Expr(Expr::LocalSet(state, Box::new(Expr::Number(2.0)))),
+            Stmt::If {
+                condition: self.step(crate::lower::iterator_step_call(iter_id, next, value_id)),
+                then_branch: vec![Stmt::Break],
+                else_branch: None,
             },
-        ]);
+            Stmt::Expr(Expr::LocalSet(state, Box::new(Expr::Number(0.0)))),
+        ];
+        stepped_body.extend(body);
         vec![
             Stmt::Let {
                 id: next,
@@ -275,9 +277,9 @@ impl IteratorRecordPlan {
                         mutable: true,
                         init: Some(Expr::Undefined),
                     })),
-                    condition: Some(condition),
+                    condition: Some(Expr::Bool(true)),
                     update: None,
-                    body,
+                    body: stepped_body,
                 }],
                 catch,
                 finally,
@@ -486,6 +488,64 @@ mod tests {
             assert!(!ir.contains("ArrayIterationPatched"), "{ir}");
             assert!(ir.contains("arrayRecordClose"), "{ir}");
         }
+    }
+
+    #[test]
+    fn array_record_step_is_the_first_body_segment() {
+        let mut ctx = LoweringContext::new("array_record.ts");
+        let mut setup = Vec::new();
+        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![]), &mut setup);
+        let state = ctx.fresh_local();
+        let lowered = plan.drive(
+            &mut ctx,
+            99,
+            100,
+            vec![Stmt::Try {
+                body: vec![
+                    Stmt::Let {
+                        id: state,
+                        name: "completion".into(),
+                        ty: Type::Number,
+                        mutable: true,
+                        init: Some(Expr::Number(0.0)),
+                    },
+                    Stmt::Continue,
+                ],
+                catch: None,
+                finally: None,
+            }],
+        );
+        let Stmt::Try { body: outer, .. } = &lowered[2] else {
+            panic!()
+        };
+        let Stmt::For {
+            condition, body, ..
+        } = &outer[0]
+        else {
+            panic!()
+        };
+        assert!(
+            matches!(condition, Some(Expr::Bool(true))),
+            "Step belongs to the body, covered by the existing body safepoint"
+        );
+        assert!(matches!(&body[0], Stmt::Expr(Expr::LocalSet(id, value))
+            if *id == state && matches!(value.as_ref(), Expr::Number(2.0))));
+        assert!(
+            matches!(&body[1], Stmt::If { condition: Expr::Conditional { .. },
+            then_branch, else_branch: None } if matches!(then_branch.as_slice(), [Stmt::Break]))
+        );
+        assert!(matches!(&body[2], Stmt::Expr(Expr::LocalSet(id, value))
+            if *id == state && matches!(value.as_ref(), Expr::Number(0.0))));
+        assert!(
+            matches!(&body[3], Stmt::Continue),
+            "continue must execute Step again on the next body entry"
+        );
+        assert_eq!(
+            format!("{lowered:?}")
+                .matches("method: \"iteratorStep\"")
+                .count(),
+            1
+        );
     }
 
     #[test]
