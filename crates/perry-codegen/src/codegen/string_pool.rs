@@ -1929,7 +1929,7 @@ pub(super) fn emit_string_pool(
     // also reaches this guarded preparation without allocating a second pool.
     let prepare_name = format!("__perry_prepare_literals_{}", module_prefix);
     let prepared = format!("__perry_literals_ready_{}", module_prefix);
-    if super::program_has_worker() {
+    if llmod.program_has_worker {
         llmod.add_internal_thread_local_global(&prepared, I8, "0");
     } else {
         llmod.add_internal_global(&prepared, I8, "0");

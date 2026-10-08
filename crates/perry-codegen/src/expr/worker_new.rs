@@ -111,7 +111,7 @@ pub(super) fn lower_candidates(
             // empty, so `Flag.OPENCODE_AUTO_HEAP_SNAPSHOT` read a property
             // whose NAME was the empty string and threw
             // "Cannot read properties of undefined (reading '')".
-            let init = if crate::codegen::program_has_worker() {
+            let init = if ctx.program_has_worker {
                 format!("{target}__init")
             } else {
                 // Process-wide guard: the wrapper would no-op after the first

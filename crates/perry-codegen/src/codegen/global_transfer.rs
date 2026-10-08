@@ -97,8 +97,8 @@ fn cache_entry(
 
 /// Whether the transfer applies to this module's compilation: perry/thread
 /// agents can run its code and no Worker evaluates modules per thread.
-pub(crate) fn enabled(thread_agents: bool) -> bool {
-    thread_agents && !crate::codegen::program_has_worker()
+pub(crate) fn enabled(thread_agents: bool, workers: bool) -> bool {
+    thread_agents && !workers
 }
 
 /// Can a single-assignment binding with this initializer hold a heap String or

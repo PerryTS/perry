@@ -51,6 +51,8 @@ fn push_statepoint_declarations(ir: &mut String) {
 }
 
 pub struct LlModule {
+    /// Per-compile module-state ownership, copied from CompileOptions.
+    pub(crate) program_has_worker: bool,
     pub target_triple: String,
     declarations: Vec<(String, String)>, // (name, full "declare …" line)
     declared_names: HashSet<String>,
@@ -151,6 +153,7 @@ impl LlModule {
     pub fn new_with_fp_flags(target_triple: impl Into<String>, fp_flags: FpFlags) -> Self {
         Self {
             target_triple: target_triple.into(),
+            program_has_worker: false,
             declarations: Vec::new(),
             declared_names: HashSet::new(),
             functions: Vec::new(),
@@ -546,7 +549,7 @@ impl LlModule {
     /// External linkage is preserved: module-global slots are deliberately
     /// non-`internal` so clang cannot constant-fold reads to 0.0 across TUs.
     pub fn add_module_state_global(&mut self, name: &str, ty: LlvmType, init: &str) {
-        if crate::codegen::program_has_worker() {
+        if self.program_has_worker {
             self.add_thread_local_global(name, ty, init);
         } else {
             self.add_global(name, ty, init);
@@ -555,7 +558,7 @@ impl LlModule {
 
     /// `internal`-linkage sibling of [`Self::add_module_state_global`].
     pub fn add_internal_module_state_global(&mut self, name: &str, ty: LlvmType, init: &str) {
-        if crate::codegen::program_has_worker() {
+        if self.program_has_worker {
             self.add_internal_thread_local_global(name, ty, init);
         } else {
             self.add_internal_global(name, ty, init);
@@ -567,7 +570,7 @@ impl LlModule {
     /// must match the definition or the link fails with
     /// "TLS definition ... mismatches non-TLS reference".
     pub fn add_external_module_state_global(&mut self, name: &str, ty: LlvmType) {
-        if crate::codegen::program_has_worker() {
+        if self.program_has_worker {
             // Same collection as `add_external_global`. Pushing to
             // `declarations` instead put the line outside the owner/dedup
             // bookkeeping that `globals` gets, and `freeze_unit` then copied

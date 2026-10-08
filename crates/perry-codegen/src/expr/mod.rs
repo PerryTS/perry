@@ -34,7 +34,7 @@ pub(crate) fn emit_class_value_cached(ctx: &mut FnCtx<'_>, class_id: u32) -> Str
     let site = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let slot = format!("@{}_classval", inline_cache_global_name(ctx, site));
-    let tls = if crate::codegen::program_has_worker() {
+    let tls = if ctx.program_has_worker {
         "thread_local "
     } else {
         ""
@@ -352,6 +352,8 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    pub program_has_worker: bool,
+    pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
     /// Stable slug for native-region ids derived from this module.
