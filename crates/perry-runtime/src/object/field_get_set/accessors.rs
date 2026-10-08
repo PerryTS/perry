@@ -125,7 +125,9 @@ enum OwnSlot {
     Data(JSValue),
     /// The slot holds an accessor pair, never a data value: its getter
     /// (0 when it has none), read from the holder's slot.
-    Accessor { getter: u64 },
+    Accessor {
+        getter: u64,
+    },
 }
 
 impl OwnSlot {

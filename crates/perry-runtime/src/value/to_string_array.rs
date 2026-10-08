@@ -143,13 +143,9 @@ pub(crate) fn call_array_prototype_to_string_method(
             );
         }
 
-        let receiver = receiver_handle.get_nanbox_f64();
-        let rebound =
-            crate::closure::rebind_explicit_this(method_handle.get_nanbox_f64(), receiver);
-        let rebound_handle = scope.root_nanbox_f64(rebound);
         let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
         crate::closure::native_call_value_this(
-            rebound_handle.get_nanbox_f64(),
+            method_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
             args.as_ptr(),
             args.len(),
@@ -181,12 +177,9 @@ pub(crate) fn array_prototype_to_string(value: f64) -> f64 {
         return unsafe { crate::object::js_object_to_string(receiver_handle.get_nanbox_f64()) };
     }
 
-    let receiver = receiver_handle.get_nanbox_f64();
-    let rebound = crate::closure::rebind_explicit_this(join_handle.get_nanbox_f64(), receiver);
-    let rebound_handle = scope.root_nanbox_f64(rebound);
     unsafe {
         crate::closure::native_call_value_this(
-            rebound_handle.get_nanbox_f64(),
+            join_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
             std::ptr::null(),
             0,

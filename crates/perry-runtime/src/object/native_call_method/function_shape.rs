@@ -123,10 +123,8 @@ unsafe fn patched_slot_call(
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_h = scope.root_nanbox_f64(object);
     let value_h = scope.root_nanbox_f64(value);
-    let callee =
-        crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
     Some(crate::closure::native_call_value_this(
-        callee,
+        value_h.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(receiver_h.get_nanbox_f64()),
         args_ptr,
         args_len,
@@ -354,10 +352,8 @@ unsafe fn dictionary_function_proto_method_call(
     }
     // A user callable inherited from the recorded prototype: an ordinary
     // method call with the function as `this`.
-    let callee =
-        crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
     Some(crate::closure::native_call_value_this(
-        callee,
+        value_h.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(receiver_h.get_nanbox_f64()),
         args_ptr,
         args_len,
