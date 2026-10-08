@@ -113,10 +113,20 @@ fn array_record_literal_materialization_is_an_outlined_rooted_call() {
             1,
             "{mode}: {ir}"
         );
+        let call = ir.find(" = call double @js_array_record_literal(").unwrap();
         assert!(
-            !ir.lines()
+            !ir[..call]
+                .lines()
                 .any(|l| l.contains("call ") && l.contains("@js_array_alloc(")),
-            "{mode}: cold array construction must stay in the shared callee: {ir}"
+            "{mode}: literal construction must stay in the shared callee: {ir}"
+        );
+        let result =
+            crate::testing::temp_slots::first_call_result(&ir, "js_array_record_literal").unwrap();
+        crate::testing::temp_slots::assert_rooted_across(
+            &ir,
+            &result,
+            "js_array_push_f64",
+            "the materialized literal must survive the console argument-pack allocation",
         );
     });
 }
