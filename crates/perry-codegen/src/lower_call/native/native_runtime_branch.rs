@@ -42,8 +42,24 @@
                 };
                 let (values, roots) = super::lower_call_args_rooted(ctx, std::slice::from_ref(source_expr.as_ref()))?;
                 let slot = ctx.func.alloca_entry(DOUBLE);
-                let needs = ctx.block().call(I32, "js_array_record_enter",
+                // A counted consumer also asks for the packed-f64 admission of
+                // the live head the proof resolves (bit 1); its loop consumes
+                // that bit instead of classifying the receiver again.
+                let counted = matches!(args.get(1), Some(Expr::Bool(true)));
+                let verdict = ctx.block().call(I32,
+                    if counted { "js_array_record_enter_counted" } else { "js_array_record_enter" },
                     &[(DOUBLE, &values[0]), (crate::types::PTR, &slot)]);
+                let needs = if counted {
+                    let admission = ctx.record_packed_admissions.get(source_id).cloned()
+                        .unwrap_or_else(|| ctx.func.alloca_entry(crate::types::I1));
+                    let bit = ctx.block().and(I32, &verdict, "2");
+                    let admitted = ctx.block().icmp_ne(I32, &bit, "0");
+                    ctx.block().store(crate::types::I1, &admitted, &admission);
+                    ctx.record_packed_admissions.insert(*source_id, admission);
+                    ctx.block().and(I32, &verdict, "1")
+                } else {
+                    verdict
+                };
                 let source = ctx.block().load(DOUBLE, &slot);
                 roots.release(ctx);
                 crate::expr::invalidate_local_write_facts(ctx, *source_id);

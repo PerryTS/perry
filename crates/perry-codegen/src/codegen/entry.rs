@@ -868,6 +868,7 @@ pub(super) fn compile_module_entry(
             region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
+            record_packed_admissions: std::collections::HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
             transition_cache_base_slot: None,
             receiver_descriptors: Default::default(),
