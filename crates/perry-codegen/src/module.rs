@@ -473,8 +473,10 @@ impl LlModule {
     /// the module graph the way Node and bun do. A program with no worker
     /// keeps the process-wide form and pays nothing.
     ///
-    /// The TLS model is left to LLVM: these are `internal`/hidden symbols in
-    /// the program being linked, so it relaxes them to local-exec on its own.
+    /// The TLS model is not spelled here: the units are compiled
+    /// position-independent, where LLVM must assume the general-dynamic model.
+    /// In an executable the in-process emitter switches every such global to
+    /// local-exec (`inprocess::optimize_emit::use_local_exec_tls`).
     pub fn add_thread_local_global(&mut self, name: &str, ty: LlvmType, init: &str) {
         self.globals
             .push(format!("@{} = thread_local global {} {}", name, ty, init));
