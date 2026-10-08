@@ -881,6 +881,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(if *prefix { new } else { old });
                 }
             }
+            // Unboxed Number scopes redirect every read and write to this
+            // F64 slot. Updating the tagged slot instead leaves the induction
+            // value unchanged and makes the guarded loop repeat forever.
+            if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+                let blk = ctx.block();
+                let old = blk.load(DOUBLE, &slot);
+                let new = match op {
+                    UpdateOp::Increment => blk.fadd(&old, "1.0"),
+                    UpdateOp::Decrement => blk.fsub(&old, "1.0"),
+                };
+                // GC_STORE_AUDIT(STACK): this admitted Number slot has no heap edge.
+                blk.store(DOUBLE, &new, &slot);
+                super::record_int_facts_for_update(ctx, *id, *op);
+                return Ok(if *prefix { new } else { old });
+            }
             // Repsel Phase 1: canonical-i32 local — the whole update happens
             // in the i32 slot (`load` / `add ±1` / `store`), which post-`-O3`
             // promotes to a clean `phi i32` induction variable. The boxed

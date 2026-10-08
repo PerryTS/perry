@@ -280,6 +280,32 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     .unwrap_or(ir.len());
                 let fast = &ir[start..end];
                 assert!(fast.contains("fcmp olt double") && fast.contains("fadd double"));
+                let condition_value = fast
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once("fcmp olt double ")
+                            .map(|(_, rest)| rest.split(',').next().unwrap().trim())
+                    })
+                    .expect("native induction comparison");
+                let definition = format!("{condition_value} = load double, ptr ");
+                let slot = ir
+                    .lines()
+                    .find_map(|line| line.trim().strip_prefix(&definition))
+                    .expect("the comparison reads the Number scope slot")
+                    .split(',')
+                    .next()
+                    .unwrap()
+                    .trim();
+                assert!(
+                    fast.lines().map(str::trim).any(|line| {
+                        line.starts_with("store double ")
+                            && line.split_once(", ptr ").is_some_and(|(_, target)| {
+                                target.split(',').next().unwrap().trim() == slot
+                            })
+                    }),
+                    "{mode}: ++ must update the same unboxed slot the loop reads"
+                );
+
                 assert!(
                     fast.contains("load volatile i32, ptr @PERRY_GC_POLL_ARMED"),
                     "scanner back edges keep the armed GC poll"
