@@ -98,20 +98,18 @@ struct Inflate {
     zlib_header: bool,
 }
 impl Inflate {
-    fn new(input: Input, zlib_header: bool, buffers: &BufferOwner) -> Self {
-        Self {
+    fn new(input: Input, zlib_header: bool, buffers: &BufferOwner) -> io::Result<Self> {
+        let format = if zlib_header {
+            miniz_oxide::DataFormat::Zlib
+        } else {
+            miniz_oxide::DataFormat::Raw
+        };
+        Ok(Self {
             input,
-            engine: Placed::new(
-                buffers,
-                miniz_oxide::inflate::stream::InflateState::new(if zlib_header {
-                    miniz_oxide::DataFormat::Zlib
-                } else {
-                    miniz_oxide::DataFormat::Raw
-                }),
-            ),
+            engine: allocation::inflate_state(buffers, format)?,
             finished: false,
             zlib_header,
-        }
+        })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if self.finished {
@@ -331,7 +329,7 @@ impl Gzip {
                     header.read(input)?;
                     let old = std::mem::replace(&mut self.stage, GzipStage::Done(Input::default()));
                     if let GzipStage::Header(_, input) = old {
-                        self.stage = GzipStage::Body(Inflate::new(input, false, &self.buffers));
+                        self.stage = GzipStage::Body(Inflate::new(input, false, &self.buffers)?);
                     }
                 }
                 GzipStage::Body(body) => {
@@ -396,17 +394,18 @@ struct Brotli {
     finished: bool,
 }
 impl Brotli {
-    fn new(input: Input, buffers: &BufferOwner) -> Self {
+    fn new(input: Input, buffers: &BufferOwner) -> io::Result<Self> {
         let alloc = allocation::BufferAlloc::new(buffers);
-        Self {
+        Ok(Self {
             input,
-            state: Placed::new(
+            state: Placed::try_new(
                 buffers,
                 BrotliState::new(alloc.clone(), alloc.clone(), alloc),
-            ),
+            )
+            .ok_or_else(allocation::out_of_memory)?,
             total_out: 0,
             finished: false,
-        }
+        })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if self.finished {
@@ -527,17 +526,18 @@ enum Decoder {
     Sniff(Input),
 }
 impl Decoder {
-    fn new(codec: Codec, buffers: &BufferOwner) -> Option<Self> {
+    /// `Ok(None)` when `codec` is an encoder.
+    fn new(codec: Codec, buffers: &BufferOwner) -> io::Result<Option<Self>> {
         let input = Input::default();
-        Some(match codec {
+        Ok(Some(match codec {
             Codec::Gunzip => Self::Gzip(Gzip::new(input, buffers)),
-            Codec::Inflate => Self::Zlib(Inflate::new(input, true, buffers)),
-            Codec::InflateRaw => Self::Raw(Inflate::new(input, false, buffers)),
-            Codec::BrotliDecompress => Self::Brotli(Brotli::new(input, buffers)),
-            Codec::ZstdDecompress => Self::Zstd(Zstd::new(input).ok()?),
+            Codec::Inflate => Self::Zlib(Inflate::new(input, true, buffers)?),
+            Codec::InflateRaw => Self::Raw(Inflate::new(input, false, buffers)?),
+            Codec::BrotliDecompress => Self::Brotli(Brotli::new(input, buffers)?),
+            Codec::ZstdDecompress => Self::Zstd(Zstd::new(input)?),
             Codec::Unzip => Self::Sniff(input),
-            _ => return None,
-        })
+            _ => return Ok(None),
+        }))
     }
     fn input(&mut self) -> &mut Input {
         match self {
@@ -585,7 +585,7 @@ impl Decoder {
             *self = if gzip {
                 Self::Gzip(Gzip::new(input, buffers))
             } else {
-                Self::Zlib(Inflate::new(input, true, buffers))
+                Self::Zlib(Inflate::new(input, true, buffers)?)
             };
         }
         match self {
@@ -618,12 +618,13 @@ impl Encoder {
                 Self::Flate(super::zlib_encoder::Encoder::new(codec, level)?)
             }
             Codec::BrotliCompress => {
-                let mut state = Placed::new(
+                let mut state = Placed::try_new(
                     buffers,
                     brotli::enc::encode::BrotliEncoderStateStruct::new(
                         allocation::BufferAlloc::new(buffers),
                     ),
-                );
+                )
+                .ok_or_else(allocation::out_of_memory)?;
                 state.params.quality = 11;
                 state.params.lgwin = 22;
                 Self::Brotli(state)
@@ -742,7 +743,8 @@ impl Drop for Payload {
     }
 }
 /// Only codec state and scratch: the runtime owns all records and queues.
-/// `buffers` is declared last so it outlives every buffer the fields hold.
+/// `buffers` is the payload's buffer ledger, which `external_bytes` reads;
+/// every buffer and brotli block keeps its own clone of it.
 pub(super) struct Payload {
     codec: Codec,
     level: Compression,
@@ -763,14 +765,14 @@ impl Payload {
             chunk_size
         };
         let buffers = BufferOwner::new();
-        let decoder = Decoder::new(codec, &buffers);
+        let decoder = Decoder::new(codec, &buffers)?;
         let encoder = if decoder.is_none() {
             Some(Encoder::new(codec, level, &buffers)?)
         } else {
             None
         };
-        let scratch = PayloadBuffer::alloc(&buffers, chunk_size)
-            .ok_or_else(|| io::Error::new(ErrorKind::OutOfMemory, "zlib scratch"))?;
+        let scratch =
+            PayloadBuffer::alloc(&buffers, chunk_size).ok_or_else(allocation::out_of_memory)?;
         #[cfg(test)]
         PAYLOAD_COUNTS.with(|n| {
             let (created, dropped) = n.get();
@@ -860,6 +862,11 @@ impl Payload {
             self.scratch.as_mut_slice()[start] ^= 1;
         }
         out.external_bytes = self.external_bytes();
+    }
+    /// This payload's own buffer ledger (tests read its count race-free).
+    #[cfg(test)]
+    pub(super) fn buffer_owner(&self) -> BufferOwner {
+        self.buffers.clone()
     }
     pub(super) fn bytes_written(&self) -> usize {
         self.bytes_written

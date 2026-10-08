@@ -271,6 +271,13 @@ unsafe extern "C" fn release(owner: f64) {
     if sabotage("release_in_finalizer_only") {
         return;
     }
+    // Skip only the close-time drop: the stream looks released, and the
+    // payload and its buffers wait for the sweep's drop.
+    #[cfg(test)]
+    if sabotage("buffers_on_drop_only") {
+        np::own(owner, "_handle", f64::from_bits(JsValue::NULL.bits()));
+        return;
+    }
     np::close_attached(owner, &CODEC_VTABLE);
     #[cfg(test)]
     if sabotage("keep_handle_field") {

@@ -6,6 +6,7 @@ thread_local! {
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static RELEASE: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
+    static RELEASED_BUFFERS: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
     static BOMB: std::cell::Cell<(usize, bool, usize)> = const { std::cell::Cell::new((0, true, 0)) };
     static BOMB_CRC: RefCell<flate2::Crc> = RefCell::new(flate2::Crc::new());
     static BOMB_BOUNDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
@@ -93,6 +94,7 @@ fn clear() {
     OUTPUT.with(|v| v.borrow_mut().clear());
     EVENTS.with(|v| v.borrow_mut().clear());
     RELEASE.with(|v| *v.borrow_mut() = None);
+    RELEASED_BUFFERS.with(|v| *v.borrow_mut() = None);
 }
 fn undefined() -> f64 {
     f64::from_bits(UNDEFINED)
@@ -172,8 +174,11 @@ extern "C" fn data(c: *const RawClosureHeader, _: JsThis, chunk: f64) -> f64 {
     }
     if action == 2.0 {
         let before = native_bytes(owner.get());
+        let buffers = ledger(owner.get());
+        let held = buffers.bytes();
         unsafe { method(owner.get(), "destroy", &[]) };
         RELEASE.with(|v| *v.borrow_mut() = Some((before, native_bytes(owner.get()))));
+        RELEASED_BUFFERS.with(|v| *v.borrow_mut() = Some((held, buffers.bytes())));
     }
     undefined()
 }
@@ -472,6 +477,14 @@ fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
     let (before, after) = RELEASE.with(|v| v.borrow().unwrap());
     assert!(before > 1000000);
     assert_eq!(after, 0);
+    // Destroyed from a data listener while the step runner is mid-record:
+    // the brotli buffers are back inside destroy(), not after the runner.
+    let (held, left) = RELEASED_BUFFERS.with(|v| v.borrow().unwrap());
+    assert!(
+        held > 1_000_000,
+        "premise: brotli state in buffers ({held})"
+    );
+    assert_eq!(left, 0, "buffers freed inside destroy()");
     let events = EVENTS.with(|v| v.borrow().clone());
     assert_eq!(events.iter().filter(|e| *e == "data").count(), 1);
     assert_eq!(events.iter().filter(|e| *e == "close").count(), 1);
@@ -751,17 +764,24 @@ fn mid_stream_inputs() -> Vec<(&'static str, Vec<u8>)> {
         ("Unzip", half(crate::gzip_bytes(&plain).unwrap())),
     ]
 }
+/// This stream's own buffer ledger. The clone outlives the payload, so it
+/// still reads the count after destroy; nothing here is process-wide.
+fn ledger(owner: f64) -> perry_ffi::native_payload::buffer::BufferOwner {
+    unsafe { payload(owner) }
+        .expect("open payload")
+        .buffer_owner()
+}
 /// Write without end, let the deferred steps run, then destroy: the payload's
 /// buffers (brotli state and blocks, inflate window, scratch) are back before
 /// any collection, and the cell states zero external bytes.
 fn destroy_mid_stream(roots: &TransientRootScope, opts: f64, name: &str, input: &[u8], full: bool) {
-    let base = perry_ffi::native_payload::buffer::live_bytes();
     let owner = roots.root_nanbox(factory(name, opts));
+    let buffers = ledger(owner.get());
     listen(owner.get(), 0.0);
     let chunk = roots.root_nanbox(value_bytes(input));
     unsafe { method(owner.get(), "write", &[chunk.get()]) };
     pump();
-    let held = perry_ffi::native_payload::buffer::live_bytes() - base;
+    let held = buffers.bytes();
     assert!(
         held >= 1024,
         "{name}: premise, buffers held mid-stream ({held})"
@@ -784,11 +804,7 @@ fn destroy_mid_stream(roots: &TransientRootScope, opts: f64, name: &str, input: 
         0,
         "{name}: external bytes at destroy"
     );
-    assert_eq!(
-        perry_ffi::native_payload::buffer::live_bytes(),
-        base,
-        "{name}: buffers freed at destroy"
-    );
+    assert_eq!(buffers.bytes(), 0, "{name}: buffers freed at destroy");
     pump();
 }
 #[test]
@@ -829,10 +845,41 @@ fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
             samples.push(rss());
         }
     }
-    let (low, high) = (
-        *samples.iter().min().unwrap(),
-        *samples.iter().max().unwrap(),
-    );
+    // Flat means no upward drift: the later samples stay within 4 MiB of the
+    // early ones (allocator purges may lower RSS; that is not drift).
+    let early = *samples[..3].iter().min().unwrap();
+    let late = *samples[3..].iter().max().unwrap();
     eprintln!("buffer churn rss samples {samples:?}");
-    assert!(high - low < 4 << 20, "RSS drifted: {samples:?}");
+    assert!(late < early + (4 << 20), "RSS drifted up: {samples:?}");
+}
+
+/// M2: the zlib-side "free only on drop" sabotage. `release` skips the
+/// close-time drop, so the payload's buffers wait for the sweep; the
+/// mid-stream destroy witness must go red.
+#[test]
+fn buffers_on_drop_only_sabotage_turns_the_witness_red() {
+    if std::env::var("PERRY_TEST_ZLIB_SABOTAGE").is_ok() {
+        return;
+    }
+    let witness =
+        "stream::runtime_tests::destroy_mid_stream_returns_payload_buffers_before_any_collection";
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", witness, "--nocapture", "--test-threads=1"])
+        .env("PERRY_TEST_ZLIB_SABOTAGE", "buffers_on_drop_only")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "missing witness: {stdout}"
+    );
+    assert!(
+        !result.status.success(),
+        "buffers_on_drop_only must turn {witness} red"
+    );
+    assert!(
+        stdout.contains("at destroy") || stderr.contains("at destroy"),
+        "red for the wrong reason: {stdout}{stderr}"
+    );
 }

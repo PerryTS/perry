@@ -27,6 +27,13 @@
   `ZSTD_customMem` needs zstd-sys's experimental API, and zstd keeps
   reporting `sizeof`.
 
+  If the backing runs out of memory, codec construction reports
+  `ErrorKind::OutOfMemory`. The brotli decoder fails the stream with its
+  `BROTLI_DECODER_ERROR_ALLOC_*` code, and the encoder aborts, as it does on
+  its stock allocator. The inflate state is built in place in its zeroed
+  buffer, with no 43 KB stack copy. Brotli's zero-fill shortcut is a
+  type-level `HookFill` marker, and every brotli block holds its owner.
+
   Tests: a runtime witness checks that close returns buffer bytes and
   external bytes with no collection in between. A child-process sabotage
   (`release_on_drop_only`) turns that witness red. There is also a sweep
