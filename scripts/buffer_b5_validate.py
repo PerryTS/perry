@@ -72,10 +72,17 @@ def main():
     ap.add_argument('--programs', default=DEFAULT)
     ap.add_argument('--runs', type=int, default=5)
     ap.add_argument('--thp-off', action='store_true')
+    ap.add_argument('--compile-timeout', type=int, default=7200)
+    ap.add_argument('--compile-jobs', type=int, choices=range(1, 9), default=4)
     args = ap.parse_args()
     (args.hostdir/'tmp').mkdir(parents=True, exist_ok=True)
     names = args.programs.split(',')
-    if args.mode.startswith('compile-'): compile_arm(args.hostdir, args.mode.removeprefix('compile-'), names)
+    if args.mode.startswith('compile-'):
+        # Worker count changes scheduling only: keep the logical units and
+        # optimization settings identical between arms. Four per arm lets the
+        # full TypeScript package compile within an eight-worker lane budget.
+        compile_arm(args.hostdir, args.mode.removeprefix('compile-'), names,
+                    compile_timeout=args.compile_timeout, unit_jobs=args.compile_jobs)
     else: measure(args.hostdir, names, args.runs, args.thp_off)
 
 

@@ -78,8 +78,9 @@ def normalize_kernel(data):
 def normalize_effect(data):
     return re.sub(rb'(construct2000|decode20000)=\d+ms', rb'\1=<time>ms', data)
 
-def compile_arm(root, arm, names):
+def compile_arm(root, arm, names, *, compile_timeout=1800, unit_jobs=1):
     source, target, env = environment(root, arm)
+    env['PERRY_CODEGEN_UNIT_JOBS'] = str(unit_jobs)
     status = {}
     for name in names:
         if name in KERNELS:
@@ -89,7 +90,7 @@ def compile_arm(root, arm, names):
             cwd = root/'drivers'/('pk' if package else '')
         out = root/'measure'/arm
         compiled = run([str(target/'release/perry'), 'compile', relative, '-o', str(out/name)],
-                       cwd, env, out/f'{name}.compile')
+                       cwd, env, out/f'{name}.compile', timeout=compile_timeout)
         if compiled.returncode:
             status[name] = {'compile': compiled.returncode}
             print(f'{arm}/{name}: compile failed', flush=True)
@@ -112,6 +113,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_TRACE='1')
     trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
     prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
+    prefix.parent.mkdir(parents=True, exist_ok=True)
     huge = []
     peak = {}
     stop = threading.Event()
