@@ -22,4 +22,17 @@ with tempfile.TemporaryDirectory(prefix='perry-bounded-counter-') as td:
  assert any('2147483646.0' in b for b in bodies), 'entry guard must reserve the body increment before the outer ++'
  assert any('9223372036854775808' in b for b in bodies), 'entry guard must preserve observable negative zero on a miss'
  assert any('load volatile i32' in b and '@js_gc_loop_safepoint' in b for b in bodies), 'integer representation must keep the armed back-edge poll'
+ offsets=re.findall(r'^define [^\n]*@[^\s(]*(?:scanOffset|scanStep)[^\s(]*\([^\n]*\{\n.*?^\}',ir,re.M|re.S)
+ assert offsets, 'missing computed-index scanner'
+ for b in offsets:
+  chunks=re.split(r'^([^\s:]+):\n',b,flags=re.M)
+  blocks={chunks[j]:chunks[j+1] for j in range(1,len(chunks),2)}
+  queue=[label for label in blocks if label.startswith('for.number_locals.fast.preheader.')];seen=set()
+  while queue:
+   label=queue.pop()
+   if label in seen or label.startswith('for.number_locals.merge.'):continue
+   seen.add(label);queue += re.findall(r'label %([^,\s]+)',blocks.get(label,''))
+  fast='\n'.join(blocks[label] for label in blocks if label in seen)
+  if seen:
+   assert 'load volatile i32' in fast and '@js_gc_loop_safepoint' in fast, 'computed scanner index must retain its armed back-edge poll'
  print('bounded byte counter IR: PASS')
