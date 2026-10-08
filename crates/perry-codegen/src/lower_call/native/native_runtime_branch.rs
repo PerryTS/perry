@@ -18,7 +18,7 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
-            "arrayRecordEnter" => {
+            "arrayRecordNeedsIterator" if matches!(args.first(), Some(Expr::LocalSet(..))) => {
                 let Expr::LocalSet(source_id, source_expr) = &args[0] else {
                     return Err(anyhow::anyhow!("arrayRecordEnter requires its private source binding"));
                 };
