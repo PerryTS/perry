@@ -273,6 +273,25 @@ pub struct CompileArgs {
     #[arg(long)]
     pub report_size: bool,
 
+    /// Build a binary that records the order in which its compiled functions
+    /// first run. Run it with `PERRY_FUNCTION_ORDER_OUT=<file>` set: each
+    /// function's name is appended to that file the first time it executes
+    /// (one name per line; delete the file before a fresh recording). Feed
+    /// the file to `--function-order` for the real build. The instrumentation
+    /// exists only in this build; normal builds carry none.
+    #[arg(long, conflicts_with = "function_order")]
+    pub record_function_order: bool,
+
+    /// Lay out compiled functions in the order a recording build wrote
+    /// (`--record-function-order`): the listed functions are placed first and
+    /// together, in list order, so the code a program runs at startup shares
+    /// pages. Unlisted functions keep the default order; names the program
+    /// does not define are ignored, so a stale or partial list is harmless.
+    /// ELF via `.text.sorted.*` sections (GNU ld) and `--symbol-ordering-file`
+    /// (lld); Mach-O via ld64's `-order_file`.
+    #[arg(long, value_name = "FILE")]
+    pub function_order: Option<PathBuf>,
+
     /// How much `Function.prototype.toString` source to keep in the binary
     /// (#10574). `full` (default) stores interned original source — nested
     /// functions share one module blob, so this is already the 18 MB

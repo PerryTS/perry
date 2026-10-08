@@ -645,6 +645,22 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Function layout (`perry_codegen::function_order`): a recording build or
+    // a recorded order, program-wide like the Worker flag. Set before module
+    // codegen; the object-cache key and the link read it back.
+    let function_layout = if args.record_function_order {
+        perry_codegen::FunctionLayout::Record
+    } else if let Some(path) = &args.function_order {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading --function-order {}", path.display()))?;
+        perry_codegen::FunctionLayout::Order(std::sync::Arc::new(
+            perry_codegen::FunctionOrder::parse(&text),
+        ))
+    } else {
+        perry_codegen::FunctionLayout::Default
+    };
+    perry_codegen::set_program_function_layout(function_layout);
+
     // `--report-size` needs a symbol table to attribute size by crate, but not
     // full DWARF — reuse the lighter `PERRY_KEEP_SYMBOLS` strip-skip knob
     // rather than `PERRY_DEBUG_SYMBOLS`, so asking for a size report doesn't

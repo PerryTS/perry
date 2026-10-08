@@ -1026,6 +1026,22 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
             ),
         }
     }
+    // `--function-order` names a file that a new recording rewrites in place:
+    // the layout follows its content, not its path.
+    if let Some(order) = &args.function_order {
+        match fs::read(order) {
+            Ok(bytes) => hash_field(
+                &mut hasher,
+                "function-order",
+                &perry_hex::encode(Sha256::digest(bytes)),
+            ),
+            Err(error) => hash_field(
+                &mut hasher,
+                "function-order-absent",
+                &format!("{:?}", error.kind()),
+            ),
+        }
+    }
     hash_field(
         &mut hasher,
         "target",

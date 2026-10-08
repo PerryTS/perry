@@ -133,6 +133,7 @@ pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
 pub mod fs;
+pub mod function_order;
 pub mod gc;
 pub mod hot_diag;
 pub mod intl;

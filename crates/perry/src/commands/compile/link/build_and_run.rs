@@ -231,6 +231,40 @@ pub(crate) fn build_and_run_link(
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }
+        // `--function-order`: ELF objects already carry ranked
+        // `.text.sorted.*` sections, which GNU ld's default script sorts; lld
+        // does not, and ld64 orders atoms only through `-order_file`. The file
+        // is named by the list's digest so the link cache keys on its content.
+        if let perry_codegen::FunctionLayout::Order(order) =
+            perry_codegen::program_function_layout()
+        {
+            let lld = is_android || is_harmonyos || (is_linux && !cfg!(target_os = "linux"));
+            let mach_o = !(is_android || is_linux || is_harmonyos);
+            if lld || mach_o {
+                let dir = ctx.cache_dir.join("function-order");
+                fs::create_dir_all(&dir)?;
+                let file = dir.join(format!(
+                    "{:016x}.{}.txt",
+                    order.digest(),
+                    if mach_o { "ld64" } else { "lld" }
+                ));
+                fs::write(&file, order.linker_ordering_file(mach_o))?;
+                let file = file.display().to_string();
+                if lld {
+                    cmd.arg(format!("-Wl,--symbol-ordering-file={file}"));
+                    cmd.arg("-Wl,--no-warn-symbol-ordering");
+                } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
+                    cmd.arg("-order_file").arg(&file);
+                } else if is_watchos || is_visionos {
+                    cmd.arg("-Xlinker")
+                        .arg("-order_file")
+                        .arg("-Xlinker")
+                        .arg(&file);
+                } else {
+                    cmd.arg(format!("-Wl,-order_file,{file}"));
+                }
+            }
+        }
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
         // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
