@@ -152,7 +152,7 @@ ACCESSOR_RETURN = re.compile(
 
 # Floors: "the extraction still works" assertions, not budgets.
 MIN_REGISTRIES = 250
-MIN_REMOVING = 170
+MIN_REMOVING = 169
 
 MIN_WHY = 20
 

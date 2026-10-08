@@ -1429,15 +1429,6 @@
    "hook": "release_closure_side_table_owners_in_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "PERRY_TA_KIND_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); Arena::drop clears every slot naming a freed block with a compare-exchange (#11463/#11467).",
-   "hook": "invalidate_caches_in_range"
-  },
-  {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
    "names": [
     "LIVE"
@@ -1857,15 +1848,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
-    "PERRY_U8_INLINE_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Inline Uint8Array address cache read by codegen guards; each slot is compare-exchanged to 0 at thread exit if it names freed memory.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/gc/heap_budget.rs",
@@ -3627,15 +3609,6 @@
    "why": "Process-wide byte total of pooled free arena blocks (a size counter for the pool cap), not an address."
   },
   {
-   "file": "crates/perry-runtime/src/buffer/own_props.rs",
-   "names": [
-    "PROPS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Buffer expando records keyed by buffer address; records whose buffer or any stored value is freed are dropped at thread exit.",
-   "hook": "release_buffer_own_props_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/ios_game_loop.rs",
    "names": [
     "CONNECTED_SCENE"
@@ -3901,6 +3874,15 @@
    ],
    "verdict": "no_heap_address",
    "why": "Monotonic scalar ClassDefinitionEvaluation identity, initialized to 1. Its only update is checked integer increment via AtomicU64::try_update, rejecting u64::MAX (the template namespace); zero is reserved for intrinsic private names. The returned integer is copied to class metadata native_state and used to qualify private storage keys. No pointer is stored in this atomic, and it is never dereferenced. Checked exhaustion replaces fetch_add, so the mechanical counter-only recognizer no longer admits it."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/region.rs",
+   "names": [
+    "REGIONS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "hook": "unmap",
+   "why": "Maps each live arena region's start to its end. `unmap` removes the entry before it frees the backing, and `impl Drop for Arena` calls `unmap` for every block. A pooled block stays mapped, so its entry stays true."
   }
  ]
 }
