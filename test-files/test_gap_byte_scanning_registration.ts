@@ -117,3 +117,20 @@ export function fastLength(b: Uint8Array, i: number, end: number, cb: (i: number
 const lengthOwner = new ArrayBuffer(4);
 console.log("fast-length-detach", fastLength(new Uint8Array(lengthOwner), 0, 4,
   (i) => { if (i === 1) { lengthOwner.transfer(); } }));
+
+// The initializer can return the same view on every iteration. Its callback
+// must dirty the previously admitted storage proof before detaching that view.
+function initializerAlias(count: number, cb: () => Uint8Array): void {
+    for (let i = 0; i < count; i++) {
+        const view: Uint8Array = cb();
+        view[0] = i + 19;
+        console.log("initializer alias", i, view.length, view[0]);
+    }
+}
+const initializerOwner = new ArrayBuffer(4096);
+const initializerView = new Uint8Array(initializerOwner, 16, 4);
+let initializerCalls = 0;
+initializerAlias(3, () => {
+    if (initializerCalls++ === 1) initializerOwner.transfer();
+    return initializerView;
+});

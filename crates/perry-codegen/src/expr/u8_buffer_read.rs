@@ -486,21 +486,22 @@ pub(crate) const U8_BRANDS: [u8; 2] = [
     crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
 ];
 
-/// Amortize entry validation only for indexed reads in loops. Single-read
+/// Amortize entry validation only for indexed accesses in loops. Single-access
 /// helpers retain their existing owning-cache hit and add no entry calls.
 /// Nested closures get their own receiver guards when they are lowered.
-pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
-    u8_inline_read_enabled() && loop_param_is_read(body, id)
+pub(crate) fn byte_view_param_is_used(body: &[perry_hir::Stmt], id: u32) -> bool {
+    u8_inline_read_enabled() && loop_param_is_accessed(body, id)
 }
 
-pub(crate) fn loop_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
+pub(crate) fn loop_param_is_accessed(body: &[perry_hir::Stmt], id: u32) -> bool {
     fn reads(expr: &Expr, id: u32) -> bool {
         if matches!(expr, Expr::Closure { .. }) {
             return false;
         }
         if matches!(expr,
-            Expr::IndexGet { object, .. } | Expr::Uint8ArrayGet { array: object, .. }
-                | Expr::BufferIndexGet { buffer: object, .. }
+            Expr::IndexGet { object, .. } | Expr::IndexSet { object, .. }
+                | Expr::Uint8ArrayGet { array: object, .. } | Expr::Uint8ArraySet { array: object, .. }
+                | Expr::BufferIndexGet { buffer: object, .. } | Expr::BufferIndexSet { buffer: object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))
         {
             return true;
@@ -596,29 +597,29 @@ mod byte_loop_proof_tests {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(0)),
         });
-        assert!(!byte_view_param_is_read(&[read.clone()], 1));
+        assert!(!byte_view_param_is_used(&[read.clone()], 1));
         let loop_read = Stmt::For {
             init: None,
             condition: None,
             update: None,
             body: vec![read.clone()],
         };
-        assert!(byte_view_param_is_read(&[loop_read.clone()], 1));
-        assert!(!byte_view_param_is_read(&[loop_read], 2));
+        assert!(byte_view_param_is_used(&[loop_read.clone()], 1));
+        assert!(!byte_view_param_is_used(&[loop_read], 2));
         let init_only = Stmt::For {
             init: Some(Box::new(read)),
             condition: None,
             update: None,
             body: vec![],
         };
-        assert!(!byte_view_param_is_read(&[init_only], 1));
+        assert!(!byte_view_param_is_used(&[init_only], 1));
         // The HIR specializes `bytes[i]` to Uint8ArrayGet before codegen.
         let native_read = Stmt::Expr(Expr::Uint8ArrayGet {
             array: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(0)),
         });
-        assert!(!byte_view_param_is_read(&[native_read.clone()], 1));
-        assert!(byte_view_param_is_read(
+        assert!(!byte_view_param_is_used(&[native_read.clone()], 1));
+        assert!(byte_view_param_is_used(
             &[Stmt::For {
                 init: None,
                 condition: None,
