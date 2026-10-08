@@ -987,7 +987,7 @@
       "file": "crates/perry-runtime/src/object/native_this_alias.rs",
       "name": "IN_SERVER_RESPONSE_FORWARD",
       "verdict": "not_a_gc_pointer",
-      "why": "Per-thread Cell<bool> re-entrancy latch for the ServerResponse.prototype method thunk (#10454). Only false/true are stored; the receiver and the aliased handle live in the traced alias table and the caller's frame."
+      "why": "Per-thread Cell<bool> re-entrancy latch for the ServerResponse.prototype method thunk (#10454). Only false/true are stored; the receiver lives in the caller's frame and its aliased handle id in its own ObjectMeta.native_state word."
     },
     {
       "file": "crates/perry-runtime/src/object/null_stub.rs",
@@ -3895,14 +3895,6 @@
     {
       "file": "crates/perry-runtime/src/object/native_module/class_method_bind.rs",
       "name": "TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
-      "name": "ALIAS_ACTIVE"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
-      "name": "SCANNER_REGISTERED"
     },
     {
       "file": "crates/perry-runtime/src/object/prop_plan.rs",

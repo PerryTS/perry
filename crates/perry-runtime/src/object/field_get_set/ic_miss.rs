@@ -37,14 +37,12 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     // a read that missed every layer forwards to the aliased native handle
     // so `server.listen` / `server.address` resolve to bound callables on
     // the codegen static-typed read-then-call path.
-    if value.bits() == crate::value::TAG_UNDEFINED
-        && super::super::native_this_alias::alias_active()
-        && !key.is_null()
-    {
+    if value.bits() == crate::value::TAG_UNDEFINED && !key.is_null() {
         if let Some(name) = unsafe { super::super::has_own_helpers::str_from_string_header(key) } {
-            if let Some(fwd) =
-                super::super::native_this_alias::alias_forward_property_read(obj as usize, name)
-            {
+            if let Some(fwd) = super::super::native_this_alias::alias_forward_property_read(
+                f64::from_bits(obj as u64),
+                name,
+            ) {
                 return fwd;
             }
         }
@@ -721,16 +719,6 @@ pub(super) fn get_field_ic_miss_impl(
     packed: *const std::sync::atomic::AtomicU64,
 ) -> f64 {
     use crate::hot_diag::IcMissReason as R;
-    // #11725: an explicit-this native subclass reads missing properties
-    // from its aliased handle. The ordinary IC ladder bypasses the f64
-    // getter (and may cache an absent key), so preserve that getter's alias
-    // semantics before consulting or priming shape-based caches.
-    if super::super::native_this_alias::alias_active()
-        && super::super::native_this_alias::alias_handle_for_object(f64::from_bits(obj as u64))
-            .is_some()
-    {
-        return js_object_get_field_by_name_f64(obj, key);
-    }
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj as usize);
     }
@@ -801,6 +789,17 @@ pub(super) fn get_field_ic_miss_impl(
     //
     let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) };
     let gc_kind = gc_header.map(|h| h.obj_type);
+    // #11725: an explicit-this native subclass reads missing properties
+    // from its aliased handle. The ordinary IC ladder bypasses the f64
+    // getter (and may cache an absent key), so preserve that getter's alias
+    // semantics before consulting or priming shape-based caches. The alias
+    // is a word on the object's own meta record; the header read above has
+    // already classified the receiver.
+    if gc_kind == Some(crate::gc::GC_TYPE_OBJECT)
+        && unsafe { super::super::native_this_alias::object_alias(obj) }.is_some()
+    {
+        return js_object_get_field_by_name_f64(obj, key);
+    }
     // An accessor can run JS and collect, so this lives in the collecting
     // miss handler. The leaf front only recognizes data and absent entries.
     if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
