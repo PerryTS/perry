@@ -54,3 +54,28 @@ console.log("exotic-accessor", date.lane12015, desc(date, "lane12015"));
 console.log("exotic-delete", delete date.lane12015,
   Object.prototype.hasOwnProperty.call(date, "lane12015"), typeof date.lane12015,
   date.constructor.name);
+
+// Non-writable data on arrays uses the caller's strictness for both key kinds.
+// Function code without a strict directive stays sloppy even in a module.
+const sloppyArrayWrite = new Function("target", "key", "target[key] = 99;");
+function strictArrayWrite(target: any, key: string): void {
+  "use strict";
+  target[key] = 99;
+}
+const readonlyArray: any = [11];
+Object.defineProperty(readonlyArray, "0", { writable: false, configurable: true });
+Object.defineProperty(readonlyArray, "named", { value: 12, writable: false, configurable: true });
+for (const key of ["named", "0"]) {
+  sloppyArrayWrite(readonlyArray, key);
+  console.log("array-readonly-sloppy", key, readonlyArray[key]);
+  try {
+    strictArrayWrite(readonlyArray, key);
+    console.log("array-readonly-strict", key, "no error");
+  } catch (error) {
+    console.log("array-readonly-strict", key, error instanceof TypeError, readonlyArray[key]);
+  }
+}
+const frozenNamedArray: any = [1, 2];
+frozenNamedArray.named = 13;
+Object.freeze(frozenNamedArray);
+console.log("array-frozen-named", desc(frozenNamedArray, "named"));
