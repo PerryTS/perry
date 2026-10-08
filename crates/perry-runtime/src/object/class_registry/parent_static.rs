@@ -144,7 +144,7 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     class_decl_prototype_value(class_id);
 }
 
-fn register_class_parent_dynamic(class_id: u32, mut parent_value: f64) {
+fn register_class_parent_dynamic(class_id: u32, parent_value: f64) {
     // Stash the parent VALUE keyed by child class id so `super()` can read it
     // back (`js_get_dynamic_parent_value`) instead of re-evaluating the extends
     // expression inside the constructor scope. The decl-time call here runs in
@@ -276,54 +276,9 @@ fn register_class_parent_dynamic(class_id: u32, mut parent_value: f64) {
         throw_object_type_error(b"Class extends value is not a constructor");
     }
 
-    // #5893 (ClassDefinitionEvaluation): once the superclass is confirmed a
-    // constructor (above), `Get(superclass, "prototype")` must be an Object or
-    // null, else a TypeError is thrown at class-definition time. A *bound*
-    // function (`fn.bind(...)`) has no intrinsic `.prototype`, so its
-    // `Get(_, "prototype")` yields either whatever a `defineProperty`
-    // accessor/data on the bound function provides or `undefined` — and
-    // `undefined`, a number, etc. are neither Object nor null. test262
-    // language/statements/class/definition/{constructable-but-no-prototype,
-    // prototype-getter,prototype-setter}.
-    //
-    // Scope to bound functions specifically: an ordinary function always
-    // carries a valid object prototype (even after unrelated `defineProperty`
-    // calls on it — see superclass-static-method-override), and a real class
-    // (ClassRef, INT32) or per-evaluation class object likewise. So this stays
-    // purely additive — it cannot reject anything Node accepts, since Node also
-    // throws for every `class C extends aBoundFunction` whose bound function
-    // lacks a valid `prototype`. The `prototype` read happens exactly once here
-    // — the getter-invocation count is observable (prototype-getter.js asserts
-    // the accessor runs exactly once per class definition).
-    if super::construct::is_bound_function_closure_value(parent_value) {
-        // `js_get_property` can run a user-defined `prototype` getter, which may
-        // allocate and move `parent_value`'s nan-boxed object under GC. Root it
-        // across the call and refresh from the handle so the later reuses below
-        // (`js_nanbox_get_pointer(parent_value)`) see the current address rather
-        // than a stale pre-evacuation pointer. (The `CLASS_DYNAMIC_PARENT_VALUE`
-        // stash above is a rewritten GC root — see `class_registry/gc_roots.rs`
-        // — so it needs no equivalent refresh.)
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let parent_handle = scope.root_nanbox_f64(parent_value);
-        let proto = unsafe {
-            crate::value::js_get_property(
-                parent_value,
-                b"prototype".as_ptr() as i64,
-                b"prototype".len() as i64,
-            )
-        };
-        parent_value = parent_handle.get_nanbox_f64();
-        const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        let pbits = proto.to_bits();
-        let proto_is_object_or_null =
-            pbits == TAG_NULL || (pbits & 0xFFFF_0000_0000_0000) == POINTER_TAG;
-        if !proto_is_object_or_null {
-            super::super::object_ops::throw_object_type_error(
-                b"Class extends value does not have valid prototype property",
-            );
-        }
-    }
+    // The shared prototype birth performs the ordinary superclass.prototype
+    // Get and validates object-or-null. Repeating it here for bound functions
+    // would invoke an observable getter twice during one class definition.
 
     let bits = parent_value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
