@@ -156,3 +156,20 @@ function nestedAdd(bytes: Uint8Array, i: number): string {
   return out;
 }
 console.log('nested-boxed-key', nestedAdd(new Uint8Array(0), 0));
+
+function detachThroughArrayLength(bytes: Uint8Array, side: number[]): string {
+  let out = '';
+  for (let i = 0; i < 4; i++) {
+    out += String(bytes[i]) + ',';
+    if (i === 1) String(side.length);
+  }
+  return out;
+}
+const proxyBacking = new ArrayBuffer(4);
+const proxyBytes = new Uint8Array(proxyBacking);
+proxyBytes.set([3,5,7,11]);
+const lengthProxy = new Proxy([], {get(target, key) {
+  if (key === 'length') { proxyBacking.transfer(); return 4; }
+  return Reflect.get(target, key);
+}});
+console.log('proxy-length-detach', detachThroughArrayLength(proxyBytes, lengthProxy));
