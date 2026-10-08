@@ -17,6 +17,7 @@
 //! operation supplies it, which is why [`NodeError`] carries it as a field
 //! rather than computing it.
 
+#[cfg(not(target_os = "wasi"))]
 use turnloop::{Error, ErrorKind};
 
 /// A Node-shaped socket error: the three fields `net` puts on the `Error`
@@ -54,7 +55,7 @@ impl NodeError {
 /// produce. An unlisted code falls through to the [`ErrorKind`] mapping and
 /// then to `UNKNOWN`, which is exactly what Node does for a code libuv has no
 /// name for.
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "wasi"))]
 fn os_table() -> &'static [(i32, &'static str)] {
     &[
         (libc::EACCES, "EACCES"),
@@ -141,12 +142,13 @@ fn os_table() -> &'static [(i32, &'static str)] {
     ]
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 fn os_table() -> &'static [(i32, &'static str)] {
     &[]
 }
 
 /// The portable fallback, used only when the backend reported no OS code.
+#[cfg(not(target_os = "wasi"))]
 fn kind_code(kind: ErrorKind) -> &'static str {
     match kind {
         ErrorKind::Cancelled => "ECANCELED",
@@ -177,6 +179,7 @@ fn kind_code(kind: ErrorKind) -> &'static str {
 /// `syscall` is the operation that failed; it is never inferred, because the
 /// same OS code means different things per operation (`ECONNRESET` on a read
 /// versus on a write) and Node's own message text starts with it.
+#[cfg(not(target_os = "wasi"))]
 pub fn map_error(err: Error, syscall: &'static str) -> NodeError {
     let code = err
         .os
@@ -189,6 +192,35 @@ pub fn map_error(err: Error, syscall: &'static str) -> NodeError {
     NodeError {
         code,
         errno: libuv_errno(code, err.os),
+        syscall,
+    }
+}
+
+/// Map an errno without depending on a particular I/O driver.
+pub fn from_os(os: i32, syscall: &'static str) -> NodeError {
+    let code = os_table()
+        .iter()
+        .find_map(|(value, name)| (*value == os).then_some(*name))
+        .unwrap_or("UNKNOWN");
+    NodeError {
+        code,
+        errno: libuv_errno(code, (os != 0).then_some(os)),
+        syscall,
+    }
+}
+
+pub(super) fn invalid_input(syscall: &'static str) -> NodeError {
+    NodeError {
+        code: "EINVAL",
+        errno: 0,
+        syscall,
+    }
+}
+
+pub(super) fn unsupported(syscall: &'static str) -> NodeError {
+    NodeError {
+        code: "ENOTSUP",
+        errno: 0,
         syscall,
     }
 }
@@ -300,7 +332,7 @@ pub fn os_code_for_name(name: &str) -> Option<i32> {
         .find_map(|(value, code)| (*code == name).then_some(*value))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "wasi")))]
 mod tests {
     use super::*;
 

@@ -626,9 +626,13 @@ pub extern "C" fn perry_has_work() -> i32 {
 /// so runtime-only binaries retain their existing link surface.
 #[inline]
 fn next_wake_sources_ms() -> [f64; 4] {
+    #[cfg(target_os = "wasi")]
+    let transport = crate::turnloop_net::next_wake_ms();
+    #[cfg(not(target_os = "wasi"))]
+    let transport = -1.0;
     [
         js_timer_next_deadline(),
-        -1.0,
+        transport,
         -1.0,
         crate::stdlib_pump::stdlib_next_wake_ms(),
     ]

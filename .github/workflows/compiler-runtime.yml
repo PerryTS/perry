@@ -1620,6 +1620,8 @@ jobs:
         run: ./scripts/wasi_check.sh
       - name: Runtime ABI check (self-test)
         run: python3 scripts/runtime_abi_check.py --self-test
+      - name: WASI runner rejects compile failures, stale outputs and timeouts
+        run: python3 scripts/test_wasi_run.py
       - name: Runtime ABI check (report)
         run: python3 scripts/runtime_abi_check.py
       - name: wasm32 runtime ABI table is current
@@ -1635,7 +1637,11 @@ jobs:
     name: wasi-check / wasi-check
   wasi-check__wasi-codegen:
     if: ${{ needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['wasi-check'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
@@ -1667,16 +1673,41 @@ jobs:
         with:
           shared-key: "${{ runner.os }}-wasi-codegen"
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install pinned Node oracle for WASI compatibility tests
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
       - name: Build perry with the WASI target
         run: cargo build --locked --profile perry-dev -p perry --features target-wasi
       - name: wasm32 IR matches the runtime ABI
+        if: runner.os != 'Windows'
         run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
       - name: Install the WASI toolchain
+        if: runner.os != 'Windows'
         run: ./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi" | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+      - name: Install Windows WASI tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          . ./scripts/wasi_toolchain.ps1 "$env:RUNNER_TEMP/wasi"
+          foreach ($key in @('WASI_SDK_PATH', 'WASMTIME', 'CC_wasm32_wasip2', 'AR_wasm32_wasip2', 'CFLAGS_wasm32_wasip2', 'CC_SHELL_ESCAPED_FLAGS')) {
+            "$key=$([Environment]::GetEnvironmentVariable($key))" >> $env:GITHUB_ENV
+          }
       - name: Build the runtime for wasm32-wasip2
-        run: ./scripts/wasi_build_runtime.sh
-      - name: Programs compiled with --target wasi run under wasmtime
-        run: ./scripts/wasi_smoke.sh target/perry-dev/perry
+        run: python scripts/wasi_build_runtime.py
+      - name: WASI smoke and complete issue 11375 acceptance
+        shell: bash
+        run: |
+          compiler=target/perry-dev/perry
+          if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
+          python scripts/wasi_run.py "$compiler" --suite smoke
+          python scripts/wasi_run.py "$compiler" --suite acceptance
+      - name: All WASI gap probes match the pinned Node oracle
+        shell: bash
+        run: |
+          compiler=target/perry-dev/perry
+          if [[ "$RUNNER_OS" == Windows ]]; then compiler="$compiler.exe"; fi
+          python scripts/wasi_run.py "$compiler" --suite gap
     needs:
       - route-compatibility
     env:

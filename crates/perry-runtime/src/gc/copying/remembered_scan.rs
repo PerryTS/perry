@@ -8,7 +8,7 @@ use super::*;
 pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
     snapshot: &RememberedDirtySnapshot,
     mut covered: Option<&mut crate::fast_hash::PtrHashSet<usize>>,
-    mut visit: impl FnMut(*mut u64, *mut GcHeader, bool, &mut RememberedSetTraceStats),
+    mut visit: impl FnMut(GcMutableSlot, *mut GcHeader, bool, &mut RememberedSetTraceStats),
 ) -> RememberedSetTraceStats {
     let mut stats = RememberedSetTraceStats {
         entries_scanned: snapshot.dirty_old_pages.len()
@@ -42,14 +42,14 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
         stats.valid_roots += 1;
         stats.dirty_objects_scanned += 1;
         let mut changed = false;
-        let mut visit_slot = |slot: *mut u64, stats: &mut RememberedSetTraceStats| {
+        let mut visit_slot = |slot: GcMutableSlot, stats: &mut RememberedSetTraceStats| {
             let external = !matches!(
-                crate::arena::classify_heap_generation(slot as usize),
+                crate::arena::classify_heap_generation(slot.slot as usize),
                 crate::arena::HeapGeneration::Old
             );
-            let before = *slot;
+            let before = slot.read();
             visit(slot, header, external, stats);
-            changed |= *slot != before;
+            changed |= slot.read() != before;
         };
         let complete =
             scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);

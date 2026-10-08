@@ -67,7 +67,7 @@ pub(super) fn scan_remembered_dirty_slot_ranges(
     snapshot: &RememberedDirtySnapshot,
     valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
 ) {
     if snapshot.dirty_old_pages.is_empty() && snapshot.external_dirty_entries.is_empty() {
         return;
@@ -113,7 +113,7 @@ pub(super) unsafe fn scan_dirty_header_once(
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     valid_ptrs: &ValidPointerSet,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
 ) {
     let total_size = (*header).size as usize;
     if total_size == 0 {
@@ -141,32 +141,32 @@ pub(super) fn dirty_pages_contains_addr(
 }
 
 pub(super) unsafe fn scan_dirty_slot(
-    slot: *mut u64,
+    slot: GcMutableSlot,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
 ) {
-    if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
+    if !dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
         return;
     }
     stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot as usize);
+    crate::arena::old_page_account_dirty_slot(slot.slot as usize);
     visit_slot(slot, stats);
 }
 
 pub(super) unsafe fn scan_dirty_slot_with_layout(
-    slot: *mut u64,
+    slot: GcMutableSlot,
     layout_kind: HeapChildSlotReadKind,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
 ) {
-    if !dirty_pages_contains_addr(dirty_pages, slot as usize) {
+    if !dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
         return;
     }
     record_layout_child_slot_read(layout_kind);
     stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot as usize);
+    crate::arena::old_page_account_dirty_slot(slot.slot as usize);
     visit_slot(slot, stats);
 }
 
@@ -187,7 +187,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
 ) -> bool {
     let body_start = header as usize;
     let body_end = body_start.saturating_add((*header).size as usize);
@@ -206,15 +206,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 complete &= in_body(slot.slot)
                     && dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
                 if let Some(layout_kind) = slot.layout_kind {
-                    scan_dirty_slot_with_layout(
-                        slot.slot,
-                        layout_kind,
-                        dirty_pages,
-                        stats,
-                        visit_slot,
-                    );
+                    scan_dirty_slot_with_layout(slot, layout_kind, dirty_pages, stats, visit_slot);
                 } else {
-                    scan_dirty_slot(slot.slot, dirty_pages, stats, visit_slot);
+                    scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
@@ -271,7 +265,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
                             acct_slots = 0;
                         }
                         acct_slots += 1;
-                        visit_slot(slot, stats);
+                        visit_slot(GcMutableSlot::new(slot, layout_kind), stats);
                     }
                     if acct_slots != 0 {
                         crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);

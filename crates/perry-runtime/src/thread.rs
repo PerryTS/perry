@@ -1218,16 +1218,20 @@ pub extern "C" fn js_thread_spawn_with_literals(closure_val: f64, literal_prepar
 
 #[cfg_attr(target_os = "wasi", allow(unreachable_code, unused_variables))]
 unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::promise::Promise {
-    // WASI preview 2 has no threads (#11377). Running the worker body inline
-    // is not faithful — it claims and retires its own agent — so until a
-    // main-thread `spawn` lands with the WASI event loop, reject clearly
-    // instead of aborting on the failed `std::thread::spawn`.
+    // WASI's sequential fallback schedules the original closure on this
+    // agent's promise queue. The queue/then machinery roots the closure and
+    // result, preserves async context, catches throws and adopts promises.
+    // No worker agent is claimed or retired, and captures stay in this heap.
     #[cfg(target_os = "wasi")]
     {
-        let msg = "perry/thread spawn() is not supported on WASI yet (#11377)";
-        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_error_new_with_message(s);
-        return crate::promise::js_promise_rejected(crate::value::js_nanbox_pointer(err as i64));
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let closure = scope.root_nanbox_f64(closure_val);
+        let source = crate::promise::js_promise_resolved(f64::from_bits(TAG_UNDEFINED));
+        return crate::promise::js_promise_then(
+            source,
+            (closure.get_nanbox_f64().to_bits() & POINTER_MASK) as *const ClosureHeader,
+            std::ptr::null(),
+        );
     }
     // ── 0. Extract closure pointer and body info ──────────────────────
     let closure_bits = closure_val.to_bits();

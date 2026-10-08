@@ -16,8 +16,6 @@
 
 use std::collections::HashMap;
 
-const PARAM: &str = "(i64 %this_closure";
-
 /// A retyped body: its IR return type and parameter types, after the change.
 pub(super) struct Retyped {
     pub(super) ret: String,
@@ -30,10 +28,9 @@ pub(super) fn retype_closure_bodies(ir: &str) -> (String, HashMap<String, Retype
     let mut retyped = HashMap::new();
     // Set after a retyped `define` line: the `ptrtoint` still has to be
     // placed, right after the entry block's label if it has one.
-    let mut pending = false;
+    let mut pending: Option<String> = None;
     for line in ir.split_inclusive('\n') {
-        if pending {
-            pending = false;
+        if let Some(recover) = pending.take() {
             let body = line.trim_end();
             let is_label = !body.starts_with(' ')
                 && body
@@ -44,17 +41,17 @@ pub(super) fn retype_closure_bodies(ir: &str) -> (String, HashMap<String, Retype
                     .ends_with(':');
             if is_label {
                 out.push_str(line);
-                out.push_str(RECOVER);
+                out.push_str(&recover);
                 continue;
             }
-            out.push_str(RECOVER);
+            out.push_str(&recover);
         }
-        if let Some((name, ret, params)) = closure_define(line) {
-            out.push_str(&line.replacen(PARAM, "(ptr %this_closure.ptr", 1));
+        if let Some((name, ret, params, param)) = closure_define(line) {
+            out.push_str(&line.replacen(&format!("(i64 {param}"), &format!("(ptr {param}.ptr"), 1));
             let mut params = params;
             params[0] = "ptr".to_string();
             retyped.insert(name, Retyped { ret, params });
-            pending = true;
+            pending = Some(format!("  {param} = ptrtoint ptr {param}.ptr to i64\n"));
             continue;
         }
         out.push_str(line);
@@ -62,18 +59,24 @@ pub(super) fn retype_closure_bodies(ir: &str) -> (String, HashMap<String, Retype
     (out, retyped)
 }
 
-const RECOVER: &str = "  %this_closure = ptrtoint ptr %this_closure.ptr to i64\n";
-
 /// `define [linkage …] <ret> @name(i64 %this_closure, <ty> %x, …) … {`
 /// → (name, ret, param types).
-fn closure_define(line: &str) -> Option<(String, String, Vec<String>)> {
+fn closure_define(line: &str) -> Option<(String, String, Vec<String>, String)> {
     let rest = line.strip_prefix("define ")?;
     let at = rest.find(" @")?;
     let after = &rest[at + 2..];
     let paren = after.find('(')?;
-    if !after[paren..].starts_with(PARAM) {
+    let param = if after[paren..].starts_with("(i64 %this_closure") {
+        "%this_closure"
+    } else if after[paren..].starts_with("(i64 %callee, i64 %this")
+        && (after[..paren].ends_with("__eclo") || after[..paren].ends_with("__clo"))
+    {
+        // Public class-method function objects use the same JS body ABI,
+        // but method_entries.rs spells the closure argument `callee`.
+        "%callee"
+    } else {
         return None;
-    }
+    };
     let ret = rest[..at].rsplit(' ').next()?.to_string();
     let name = after[..paren].to_string();
     let close = after[paren..].find(')')? + paren;
@@ -81,12 +84,21 @@ fn closure_define(line: &str) -> Option<(String, String, Vec<String>)> {
         .split(',')
         .map(|p| p.trim().split(' ').next().unwrap_or("").to_string())
         .collect();
-    Some((name, ret, params))
+    Some((name, ret, params, param.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::retype_closure_bodies;
+
+    #[test]
+    fn public_class_method_entries_use_the_same_pointer_abi() {
+        let ir = "define double @m__eclo(i64 %callee, i64 %this) optsize {\nentry:\n  ret double 0.0\n}\n";
+        let (out, retyped) = retype_closure_bodies(ir);
+        assert!(out.contains("@m__eclo(ptr %callee.ptr, i64 %this)"));
+        assert!(out.contains("entry:\n  %callee = ptrtoint ptr %callee.ptr to i64"));
+        assert_eq!(retyped["m__eclo"].params, ["ptr", "i64"]);
+    }
 
     #[test]
     fn closure_bodies_take_a_pointer_and_recover_the_i64() {

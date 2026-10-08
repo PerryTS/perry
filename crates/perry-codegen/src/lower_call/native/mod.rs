@@ -182,7 +182,12 @@ pub(crate) fn lower_native_method_call(
             // the body obviously writes to `counter`. Instead, walk the
             // body ourselves and flag any LocalSet/Update whose target
             // isn't a parameter or a `let` introduced inside the body.
-            if module == "perry/thread" {
+            // WASI spawn is a same-agent deferred task, so it neither
+            // copies captures nor crosses heaps. The worker-only hazards
+            // below do not apply to that sequential fallback.
+            if module == "perry/thread"
+                && !(ctx.target_triple.starts_with("wasm32") && method == "spawn")
+            {
                 let closure_arg = match method {
                     "parallelMap" | "parallelFilter" => args.get(1),
                     "spawn" => args.first(),

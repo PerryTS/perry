@@ -623,8 +623,13 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
     } else {
-        let keys_bytes =
-            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
+        // Legacy empty-shape callers pass a null pointer with length zero.
+        // Rust slices still require a non-null pointer for an empty slice.
+        let keys_bytes = if packed_keys_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
+        };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
@@ -835,8 +840,11 @@ pub extern "C" fn js_object_alloc_with_shape(
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
     } else {
-        let keys_bytes =
-            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
+        let keys_bytes = if packed_keys_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
+        };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena.
         // The builder roots the unfinished array across its key allocations;

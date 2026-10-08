@@ -261,6 +261,7 @@ unsafe fn signal_is_pre_aborted(options: f64) -> bool {
     !signal.is_null() && js_abort_signal_is_aborted(signal) != 0
 }
 
+#[cfg(not(target_os = "wasi"))]
 unsafe fn tls_preflight(port: u16, servername: &str, options: f64) -> i32 {
     extern "C" {
         fn js_tls_client_preflight(
@@ -271,6 +272,13 @@ unsafe fn tls_preflight(port: u16, servername: &str, options: f64) -> i32 {
         ) -> i32;
     }
     js_tls_client_preflight(port as f64, servername.as_ptr(), servername.len(), options)
+}
+
+#[cfg(target_os = "wasi")]
+unsafe fn tls_preflight(_port: u16, _servername: &str, _options: f64) -> i32 {
+    // This hook selects callbacks on an in-process stdlib TLS server. WASI
+    // does not link that server; rustls still negotiates SNI/ALPN on the wire.
+    0
 }
 
 fn preflight_error(code: i32) -> &'static str {
@@ -424,10 +432,15 @@ pub(crate) fn build_client_config(
     if let Some(ca) = data.and_then(|data| data.ca.as_ref()) {
         add_pem_roots(&mut root_store, ca);
     } else {
-        let native = rustls_native_certs::load_native_certs();
-        for cert in native.certs {
-            let _ = root_store.add(cert);
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let native = rustls_native_certs::load_native_certs();
+            for cert in native.certs {
+                let _ = root_store.add(cert);
+            }
         }
+        #[cfg(target_os = "wasi")]
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
     let configured = configured_ca_certificates(data);
     let custom_identity = data.is_some_and(|data| data.custom_identity);

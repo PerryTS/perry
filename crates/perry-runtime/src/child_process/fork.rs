@@ -25,6 +25,7 @@ use std::time::Duration;
 /// codegen boundary string-coerces a URL module path before calling this.
 #[no_mangle]
 pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr: i64) -> f64 {
+    cp_require_process_support();
     let module_raw = unsafe { cp_read_string_header(module_ptr) };
     if module_raw.contains('\0') {
         crate::fs::validate::throw_type_error_with_code(

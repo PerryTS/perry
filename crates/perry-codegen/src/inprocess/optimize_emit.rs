@@ -25,7 +25,9 @@ pub(super) fn optimize_and_emit(
     let triple = TargetTriple::create(effective_target);
     let target = Target::from_triple(&triple)
         .map_err(|e| anyhow!("no LLVM target for `{effective_target}`: {e}"))?;
-    let (cpu, features) = if mcpu_native {
+    let (cpu, features) = if effective_target.starts_with("wasm32") {
+        ("generic".to_string(), "+exception-handling".to_string())
+    } else if mcpu_native {
         (
             TargetMachine::get_host_cpu_name()
                 .to_string_lossy()
@@ -58,6 +60,15 @@ pub(super) fn optimize_and_emit(
             CodeModel::Default,
         )
         .ok_or_else(|| anyhow!("failed to create TargetMachine for `{effective_target}`"))?;
+    #[cfg(feature = "target-wasi")]
+    if effective_target.starts_with("wasm32") {
+        extern "C" {
+            fn perry_llvm_enable_wasm_eh(machine: *mut core::ffi::c_void);
+        }
+        unsafe {
+            perry_llvm_enable_wasm_eh(tm.as_mut_ptr().cast());
+        }
+    }
 
     // Same trust order as the subprocess path: `-target` wins over whatever
     // triple the module text states, and the module optimizes under the

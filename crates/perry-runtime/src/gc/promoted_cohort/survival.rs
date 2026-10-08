@@ -275,7 +275,7 @@ unsafe fn dead_parent_refers_into(
                 if !crate::weakref::is_weak_target_trace_slot(header, slot.slot)
                     && dirty_pages_contains_addr(dirty_pages, slot.slot as usize)
                 {
-                    hit = bits_refer_into(*slot.slot, ranges);
+                    hit = bits_refer_into(slot.read(), ranges);
                 }
             }
             GcMutableSlotDescriptor::Range { range, .. } => {

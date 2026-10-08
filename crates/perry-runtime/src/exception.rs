@@ -48,8 +48,8 @@ mod savepoints;
 use savepoints::CatchSavepoint;
 pub(crate) use savepoints::{catch_subsystem, note_catch_subsystem_used, CatchStack};
 
-#[cfg(not(target_os = "wasi"))]
 extern "C" {
+    #[cfg_attr(target_os = "wasi", link_name = "perry_wasi_longjmp")]
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
 
@@ -220,7 +220,6 @@ pub(crate) fn current_setjmp_stack_limit() -> Option<usize> {
 // setjmp trampoline (#9305): no Rust frame is ever a longjmp target.
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_os = "wasi"))]
 extern "C" {
     /// C-side setjmp trampoline (`src/ffi/perry_sjlj.c`, compiled by
     /// build.rs). Arms `env` via the platform `setjmp` inside its own C
@@ -243,18 +242,6 @@ extern "C" {
         body: unsafe extern "C" fn(*mut core::ffi::c_void),
         ctx: *mut core::ffi::c_void,
     ) -> core::ffi::c_int;
-}
-
-/// WASI (#11378): no longjmp ever lands (`js_throw` ends the program there),
-/// so the "trampoline" just runs the body, which always completes.
-#[cfg(target_os = "wasi")]
-unsafe fn perry_sjlj_try(
-    _env: *mut core::ffi::c_void,
-    body: unsafe extern "C" fn(*mut core::ffi::c_void),
-    ctx: *mut core::ffi::c_void,
-) -> core::ffi::c_int {
-    unsafe { body(ctx) };
-    0
 }
 
 /// Arm the jmp_buf `env` (from [`js_try_push`]) and run `f` under it.
@@ -499,19 +486,14 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             HandlerKind::NativeInactive => unreachable!(),
         }
     });
-    // WASI (#11378): there is no exception transport yet — setjmp/longjmp
-    // and unwinding on wasm need the exception-handling proposal (phase 3c).
-    // Every throw ends the program the way an uncaught one does: `exit`
-    // listeners, Node's report, exit status. A throw an open `try` would
-    // have caught says so first, rather than pretending it was uncaught.
+    // WASI handlers (generated and Rust callback boundaries) use libsetjmp
+    // over standardized wasm EH. Savepoints were restored above, exactly as
+    // for native longjmp; the only twice-returning frames are LLVM IR or C.
     #[cfg(target_os = "wasi")]
     {
-        let _ = jb_ptr;
         if !fatal {
-            eprintln!(
-                "perry: this exception would be caught by an enclosing `try`, \
-                 but catching exceptions is not supported on WASI yet (#11378)"
-            );
+            assert!(!jb_ptr.is_null(), "WASI handler must use SjLj");
+            unsafe { longjmp(jb_ptr, 1) }
         }
         let status = crate::process::run_process_exit_sequence(Some(1));
         print_uncaught(value);

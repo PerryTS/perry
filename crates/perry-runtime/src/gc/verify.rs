@@ -213,6 +213,13 @@ pub(super) unsafe fn rewrite_slot(slot: *mut u64, valid_ptrs: &ValidPointerSet) 
 }
 
 #[inline]
+pub(super) unsafe fn rewrite_mutable_slot(slot: GcMutableSlot, valid_ptrs: &ValidPointerSet) {
+    if let Some(bits) = try_rewrite_value(slot.read(), valid_ptrs) {
+        slot.write(bits);
+    }
+}
+
+#[inline]
 pub(super) unsafe fn verify_slot(
     slot: *const u64,
     verifier: EvacuationVerifier<'_>,
@@ -221,6 +228,18 @@ pub(super) unsafe fn verify_slot(
     let bits = *slot;
     if let Some(new_bits) = verifier.stale_value(bits) {
         panic_stale_forwarded_reference(verifier, surface, slot as usize, bits, new_bits);
+    }
+}
+
+#[inline]
+unsafe fn verify_mutable_slot(
+    slot: GcMutableSlot,
+    verifier: EvacuationVerifier<'_>,
+    surface: &str,
+) {
+    let bits = slot.read();
+    if let Some(new_bits) = verifier.stale_value(bits) {
+        panic_stale_forwarded_reference(verifier, surface, slot.slot as usize, bits, new_bits);
     }
 }
 
@@ -235,9 +254,9 @@ pub(super) unsafe fn rewrite_heap_object_fields(
     let mut changed = false;
     visit_gc_rewrite_slots(header, |slot| unsafe {
         slot.record_layout_read();
-        let before = *slot.slot;
-        rewrite_slot(slot.slot, valid_ptrs);
-        changed |= *slot.slot != before;
+        let before = slot.read();
+        rewrite_mutable_slot(slot, valid_ptrs);
+        changed |= slot.read() != before;
     });
     if changed {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -255,10 +274,21 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
     parent_header: *mut GcHeader,
     slot: *mut u64,
 ) -> bool {
+    remember_mutable_old_to_young_slot(sticky, parent_header, GcMutableSlot::new(slot, None))
+}
+
+#[inline]
+pub(super) unsafe fn remember_mutable_old_to_young_slot(
+    sticky: &mut StickyRememberedSet,
+    parent_header: *mut GcHeader,
+    mutable_slot: GcMutableSlot,
+) -> bool {
+    let slot = mutable_slot.slot;
     if slot.is_null() {
         return false;
     }
-    let child_addr = decode_heap_addr(*slot);
+    let bits = mutable_slot.read();
+    let child_addr = decode_heap_addr(bits);
     // Nursery AND malloc-GC children both need their pages kept dirty:
     // minors sweep the malloc registry too, and old parents are black
     // leaves — dropping an old→malloc page here would free the malloc
@@ -338,7 +368,7 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
             return;
         }
         slot.record_layout_read();
-        remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
+        remember_mutable_old_to_young_slot(sticky, header, slot);
     });
 }
 
@@ -435,7 +465,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
                 return;
             }
             slot.record_layout_read();
-            let tracking = remember_evacuated_old_to_young_slot(&mut sticky, header, slot.slot);
+            let tracking = remember_mutable_old_to_young_slot(&mut sticky, header, slot);
             if DIAGNOSTICS && tracking {
                 slots_tracking += 1;
             }
@@ -545,7 +575,7 @@ fn cross_check_covered_parent(header: *mut GcHeader, sticky: &mut StickyRemember
                 return;
             }
             slot.record_layout_read();
-            remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
+            remember_mutable_old_to_young_slot(sticky, header, slot);
         });
     }
 }
@@ -584,7 +614,7 @@ unsafe fn remember_retained_old_to_young_slots(
             return;
         }
         slot.record_layout_read();
-        remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
+        remember_mutable_old_to_young_slot(sticky, header, slot);
     });
 }
 
@@ -858,12 +888,13 @@ pub(super) unsafe fn verify_old_young_slot_covered(
     snapshot: &RememberedDirtySnapshot,
     stats: &mut OldYoungEdgeVerifyStats,
     parent_header: *mut GcHeader,
-    slot: *mut u64,
+    mutable_slot: GcMutableSlot,
 ) {
+    let slot = mutable_slot.slot;
     if slot.is_null() {
         return;
     }
-    let child_addr = decode_heap_addr(*slot);
+    let child_addr = decode_heap_addr(mutable_slot.read());
     if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
         return;
     }
@@ -918,7 +949,7 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
             return;
         }
         slot.record_layout_read();
-        verify_old_young_slot_covered(snapshot, stats, header, slot.slot);
+        verify_old_young_slot_covered(snapshot, stats, header, slot);
     });
 }
 
@@ -1070,7 +1101,7 @@ pub(super) unsafe fn verify_marked_object_child_marks(
             return;
         }
         slot.record_layout_read();
-        let Some((child, child_header)) = current_heap_header_for_heap_word(*slot.slot, None)
+        let Some((child, child_header)) = current_heap_header_for_heap_word(slot.read(), None)
         else {
             return;
         };
@@ -1415,7 +1446,7 @@ pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
                 return;
             }
             slot.record_layout_read();
-            let child_addr = decode_heap_addr(*slot.slot);
+            let child_addr = decode_heap_addr(slot.read());
             if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
                 return;
             }
@@ -1478,7 +1509,7 @@ pub(super) unsafe fn verify_heap_object_fields(
         });
         descriptor.visit_slots(&mut |slot| {
             slot.record_layout_read();
-            verify_slot(slot.slot as *const u64, verifier, surface);
+            verify_mutable_slot(slot, verifier, surface);
         });
     });
     slots
@@ -1530,8 +1561,8 @@ pub(super) fn rewrite_heap_objects(valid_ptrs: &ValidPointerSet) {
 pub(super) fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
     let snapshot = remembered_dirty_snapshot();
     let mut stats = RememberedSetTraceStats::default();
-    let mut rewrite_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| unsafe {
-        rewrite_slot(slot, valid_ptrs);
+    let mut rewrite_dirty_slot = |slot: GcMutableSlot, _stats: &mut RememberedSetTraceStats| unsafe {
+        rewrite_mutable_slot(slot, valid_ptrs);
     };
     scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut rewrite_dirty_slot);
 
@@ -1682,12 +1713,8 @@ pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
             return;
         }
         let parent_verifier = verifier.with_parent(header);
-        let mut verify_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| {
-            verify_slot(
-                slot as *const u64,
-                parent_verifier,
-                "remembered dirty ranges",
-            );
+        let mut verify_dirty_slot = |slot: GcMutableSlot, _stats: &mut RememberedSetTraceStats| {
+            verify_mutable_slot(slot, parent_verifier, "remembered dirty ranges");
         };
         scan_dirty_header_once(
             header,

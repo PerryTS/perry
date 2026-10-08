@@ -949,7 +949,13 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
         return Err(dns_not_found_error(hostname));
     }
     // Real getaddrinfo: the port is irrelevant, so use 0.
-    let Ok(iter) = (hostname, 0u16).to_socket_addrs() else {
+    #[cfg(not(target_os = "wasi"))]
+    let resolved = (hostname, 0u16)
+        .to_socket_addrs()
+        .map(|iter| iter.collect::<Vec<_>>());
+    #[cfg(target_os = "wasi")]
+    let resolved = wasi_lookup_addresses(hostname, family);
+    let Ok(iter) = resolved else {
         return Err(dns_not_found_error(hostname));
     };
     let mut addresses: Vec<ResolvedAddress> = Vec::new();
@@ -973,6 +979,43 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
     }
     apply_result_order(&mut addresses);
     Ok(addresses)
+}
+
+#[cfg(target_os = "wasi")]
+fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>, ()> {
+    use core::ffi::{c_char, c_void};
+    extern "C" {
+        fn perry_wasi_resolve(
+            hostname: *const c_char,
+            family: i32,
+            ctx: *mut c_void,
+            push: unsafe extern "C" fn(*mut c_void, i32, *const u8),
+        ) -> i32;
+    }
+    unsafe extern "C" fn push(ctx: *mut c_void, family: i32, bytes: *const u8) {
+        let addresses = &mut *(ctx as *mut Vec<SocketAddr>);
+        let ip = if family == 4 {
+            IpAddr::V4(Ipv4Addr::from(*(bytes as *const [u8; 4])))
+        } else {
+            IpAddr::V6(Ipv6Addr::from(*(bytes as *const [u8; 16])))
+        };
+        addresses.push(SocketAddr::new(ip, 0));
+    }
+    let hostname = std::ffi::CString::new(hostname).map_err(|_| ())?;
+    let mut addresses = Vec::<SocketAddr>::new();
+    let result = unsafe {
+        perry_wasi_resolve(
+            hostname.as_ptr(),
+            family,
+            &mut addresses as *mut _ as *mut c_void,
+            push,
+        )
+    };
+    if result == 0 {
+        Ok(addresses)
+    } else {
+        Err(())
+    }
 }
 
 fn lookup_result(address: &ResolvedAddress) -> f64 {

@@ -205,3 +205,14 @@ mod tests {
         assert_eq!(get(b"signal").to_bits(), TAG_NULL_BITS);
     }
 }
+
+/// WASI has no host process creation API. Reject before allocating child state
+/// or acquiring process registries, so the exception remains safely catchable.
+#[inline]
+fn cp_require_process_support() {
+    #[cfg(target_os = "wasi")]
+    crate::fs::validate::throw_error_with_code(
+        "child_process is not supported on WASI",
+        "ERR_NOT_SUPPORTED",
+    );
+}

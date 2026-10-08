@@ -16,12 +16,17 @@ use anyhow::{anyhow, bail, Context, Result};
 /// every heap address above the runtime's small-handle band.
 const STACK_SIZE: u32 = 8 * 1024 * 1024;
 
+fn sdk_clang(root: &Path) -> PathBuf {
+    root.join("bin")
+        .join(if cfg!(windows) { "clang.exe" } else { "clang" })
+}
+
 /// Where wasi-sdk lives: `$WASI_SDK_PATH`, else its conventional prefix.
 fn wasi_sdk() -> Result<PathBuf> {
     let root = std::env::var_os("WASI_SDK_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/opt/wasi-sdk"));
-    if root.join("bin/clang").exists() && root.join("share/wasi-sysroot").is_dir() {
+    if sdk_clang(&root).is_file() && root.join("share/wasi-sysroot").is_dir() {
         return Ok(root);
     }
     bail!(
@@ -45,6 +50,7 @@ pub(super) fn link_args(
     ];
     args.extend(objects.iter().map(|o| o.display().to_string()));
     args.push(runtime.display().to_string());
+    args.push("-lsetjmp".to_string());
     args.extend([
         // The component adapter allocates through the module's allocator.
         "-Wl,--export=cabi_realloc".to_string(),
@@ -69,7 +75,7 @@ pub(crate) fn link_wasi(
 ) -> Result<()> {
     let sdk = wasi_sdk()?;
     let args = link_args(&sdk, objects, runtime, output);
-    let clang = sdk.join("bin/clang");
+    let clang = sdk_clang(&sdk);
     if verbose > 0 {
         eprintln!("  wasi link: {} {}", clang.display(), args.join(" "));
     }
@@ -104,7 +110,13 @@ mod tests {
             Path::new("app.wasm"),
         );
         assert_eq!(args[0], "--target=wasm32-wasip2");
-        assert_eq!(args[1], "--sysroot=/sdk/share/wasi-sysroot");
+        assert_eq!(
+            args[1],
+            format!(
+                "--sysroot={}",
+                Path::new("/sdk").join("share/wasi-sysroot").display()
+            )
+        );
         assert_eq!(&args[2..5], ["a.o", "b.o", "/rt/libperry_runtime.a"]);
         for flag in [
             "-Wl,--export=cabi_realloc",

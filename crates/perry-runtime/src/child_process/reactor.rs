@@ -882,6 +882,7 @@ pub extern "C" fn js_child_process_spawn_streams(
     args_ptr: i64,
     opts_ptr: i64,
 ) -> f64 {
+    cp_require_process_support();
     let (cmd_str, arg_strs) = unsafe {
         (
             cp_read_string_header(cmd_ptr),

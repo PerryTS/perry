@@ -30,3 +30,9 @@ default = ["perry-runtime/default"]
 # strips perry-runtime down to the auto-optimize subset; without it the dep edge
 # would drag perry-runtime's defaults back on (cf. the root Cargo.toml note).
 perry-runtime = { path = "../perry-runtime", default-features = false }
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+# Bundle the existing net binding into the WASI archive. Independently built
+# Rust staticlibs both define allocator shims; one staticlib keeps a single
+# allocator and a single copy of std without permitting duplicate symbols.
+perry-ext-net = { path = "../perry-ext-net" }

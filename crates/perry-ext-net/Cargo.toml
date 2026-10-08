@@ -27,9 +27,16 @@ bytes.workspace = true
 # this crate already links, so the config types unify.
 turnloop-tls.workspace = true
 rustls.workspace = true
-rustls-native-certs = "0.8"
 serde_json.workspace = true
 rustls-pemfile.workspace = true
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+rustls-native-certs = "0.8"
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+# WASI exposes no host certificate store; retain a usable default trust
+# bundle while explicit `ca` options continue to take precedence.
+webpki-roots = "1"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

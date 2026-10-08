@@ -609,11 +609,19 @@ fn main() {
     // coloring across the call). See the header comment in the C file.
     println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
     println!("cargo:rerun-if-changed=src/ffi/perry_iterator_personality.c");
-    // WASI (#11377): setjmp/longjmp on wasm needs the exception-handling
-    // proposal and wasi-libc's `libsetjmp`, which the `--target wasi` link
-    // wires up (#11378/#11379). Until then the trampoline is not built there,
-    // so a WASI link fails loudly on `perry_sjlj_try` rather than silently.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("wasi") {
+    // WASI uses the standardized wasm EH proposal for SjLj, paired with
+    // wasi-libc's libsetjmp and the generated-code lowering (#11378).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
+        println!("cargo:rerun-if-changed=src/ffi/perry_wasi_net.c");
+        cc::Build::new()
+            .file("src/ffi/perry_sjlj.c")
+            .file("src/ffi/perry_wasi_net.c")
+            .flag("-mllvm")
+            .flag("-wasm-enable-sjlj")
+            .flag("-mllvm")
+            .flag("-wasm-use-legacy-eh=false")
+            .compile("perry_sjlj");
+    } else {
         cc::Build::new()
             .file("src/ffi/perry_sjlj.c")
             .file("src/ffi/perry_iterator_personality.c")

@@ -177,7 +177,9 @@ pub(super) fn is_live_map(addr: usize) -> bool {
         let header = header.as_ref();
         header.obj_type == crate::gc::GC_TYPE_MAP
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && header.size as usize == crate::gc::GC_HEADER_SIZE + std::mem::size_of::<MapHeader>()
+            && header.size as usize
+                == (crate::gc::GC_HEADER_SIZE + std::mem::size_of::<MapHeader>())
+                    .next_multiple_of(8)
             && !(*(addr as *const MapHeader)).store.is_null()
     }
 }
