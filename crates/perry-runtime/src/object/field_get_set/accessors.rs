@@ -82,6 +82,9 @@ pub(crate) unsafe fn object_field_at_with_live(
     val
 }
 
+/// An own DATA property of `obj` named `key`, private-name entries skipped.
+/// An own accessor reads as `Some(undefined)`: callers that need [[Get]]
+/// semantics use [`own_property_get_by_bytes`].
 pub(crate) unsafe fn own_data_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -89,27 +92,55 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key.is_null() {
         return None;
     }
-    own_data_field_with(obj, |keys, key_count| {
-        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key)
+    own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_key_ptr(keys, key_count, key)
     })
+    .map(OwnSlot::data_or_undefined)
 }
 
-/// [`own_data_field_by_name`] for a key the caller holds as bytes (a method
-/// name from rodata): the lookup reads the keys array directly, so no key
-/// string is built for it.
-pub(crate) unsafe fn own_data_field_by_bytes(
+/// [[Get]] of an own property of `obj` named by the bytes `key` (a method
+/// name from rodata, so no key string is built): a data value as stored,
+/// `undefined` included; an accessor through its getter, called on
+/// `receiver` (`undefined` without one). Private-name entries are a separate
+/// namespace and never match. `None` when `obj` has no such own property.
+///
+/// The getter runs user code, so the caller must not hold GC values across
+/// this call.
+pub(crate) unsafe fn own_property_get_by_bytes(
     obj: *const ObjectHeader,
     key: &[u8],
+    receiver: f64,
 ) -> Option<JSValue> {
-    own_data_field_with(obj, |keys, key_count| {
-        crate::object::keys_find_slot_by_bytes(keys, key_count, key)
-    })
+    match own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
+    })? {
+        OwnSlot::Data(value) => Some(value),
+        OwnSlot::Accessor { getter: 0 } => Some(JSValue::undefined()),
+        OwnSlot::Accessor { getter } => Some(invoke_accessor_getter(getter, receiver)),
+    }
 }
 
-unsafe fn own_data_field_with(
+/// What an own-property slot holds.
+enum OwnSlot {
+    Data(JSValue),
+    /// The slot holds an accessor pair, never a data value: its getter
+    /// (0 when it has none), read from the holder's slot.
+    Accessor { getter: u64 },
+}
+
+impl OwnSlot {
+    fn data_or_undefined(self) -> JSValue {
+        match self {
+            OwnSlot::Data(value) => value,
+            OwnSlot::Accessor { .. } => JSValue::undefined(),
+        }
+    }
+}
+
+unsafe fn own_property_slot(
     obj: *const ObjectHeader,
     find_slot: impl FnOnce(*const crate::array::ArrayHeader, u32) -> Option<u32>,
-) -> Option<JSValue> {
+) -> Option<OwnSlot> {
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         return None;
     }
@@ -144,19 +175,22 @@ unsafe fn own_data_field_with(
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
     if let Some(islot) = find_slot(keys, key_count as u32) {
         let i = islot as usize;
-        // An accessor key's slot holds its accessor pair, never a data value.
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
-            return Some(JSValue::undefined());
-        }
-        {
-            if i < alloc_limit {
-                return Some(js_object_get_field(obj, i as u32));
-            }
-            return Some(match overflow_get(obj as usize, i) {
-                Some(bits) => JSValue::from_bits(bits),
-                None => JSValue::undefined(),
+            // The holder's shape resolved the key to this slot, so its lane
+            // holds the accessor pair (#12015): read it there, no name search.
+            let live = crate::object::object_live_slot_count(obj);
+            let accessor = super::super::accessor_pair::slot_accessor_with_live(obj, islot, live);
+            return Some(OwnSlot::Accessor {
+                getter: accessor.get,
             });
         }
+        if i < alloc_limit {
+            return Some(OwnSlot::Data(js_object_get_field(obj, i as u32)));
+        }
+        return Some(OwnSlot::Data(match overflow_get(obj as usize, i) {
+            Some(bits) => JSValue::from_bits(bits),
+            None => JSValue::undefined(),
+        }));
     }
     None
 }
