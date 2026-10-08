@@ -10,6 +10,9 @@ pub(crate) const PROTOTYPE_KEY: &str = "#<perry:prototype>";
 
 const _: () = assert!(std::mem::size_of::<BufferHeader>() == crate::codegen_abi::BYTES_STORE);
 const _: () = assert!(std::mem::offset_of!(BufferHeader, link) == crate::codegen_abi::BYTES_LINK);
+const _: () =
+    assert!(std::mem::size_of::<ObjectHeader>() == crate::codegen_abi::BYTES_VIEW_BAG_OWNER);
+const _: () = assert!(crate::gc::GC_TYPE_OBJECT == crate::codegen_abi::GC_TYPE_OBJECT);
 
 #[inline(always)]
 pub(crate) unsafe fn header(addr: usize) -> *mut crate::gc::GcHeader {
@@ -39,6 +42,19 @@ pub(crate) unsafe fn own_slot(obj: *const ObjectHeader, key: &[u8]) -> Option<u3
     crate::object::keys_find_slot_by_bytes_resolved(keys.arr(), keys.count(), key)
 }
 
+/// Whether `bag` (non-null) holds a live own value under `key`.
+pub(crate) unsafe fn bag_holds(bag: *const ObjectHeader, key: &[u8]) -> bool {
+    own_slot(bag, key).is_some_and(|slot| {
+        crate::object::object_field_at_with_live(
+            bag,
+            slot,
+            crate::object::object_live_slot_count(bag),
+        )
+        .bits()
+            != crate::value::TAG_HOLE
+    })
+}
+
 pub(crate) unsafe fn bag_get(addr: usize, key: &str) -> Option<f64> {
     let obj = bag(addr);
     let slot = own_slot(obj, key.as_bytes())?;
@@ -63,15 +79,37 @@ pub(crate) unsafe fn bag_ensure(addr: usize) -> *mut ObjectHeader {
     }
     let cell = addr as *mut BufferHeader;
     let owner = (*cell).link;
-    let obj = crate::object::js_object_alloc_null_proto(0, 0);
-    if is_view(addr) {
-        object_define(
-            obj,
-            VIEW_OWNER_KEY,
-            crate::value::js_nanbox_pointer(owner as i64),
-            true,
-        );
-    }
+    let obj = if is_view(addr) {
+        // The owner is the bag's first key, born in inline slot 0 with its
+        // final attributes, so `BYTES_VIEW_BAG_OWNER` reaches it in one load.
+        #[cfg(test)]
+        if super::bytes::b4_sabotage("view_bag_owner_spilled") {
+            let obj = crate::object::js_object_alloc_null_proto(0, 0);
+            object_define(
+                obj,
+                VIEW_OWNER_KEY,
+                crate::value::js_nanbox_pointer(owner as i64),
+                true,
+            );
+            return attach_bag(cell, obj);
+        }
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs(
+            &[(
+                VIEW_OWNER_KEY,
+                crate::value::js_nanbox_pointer(owner as i64),
+            )],
+            &[crate::object::key_attrs::attr_bits_to_entry(
+                crate::object::PropertyAttrs::new(false, false, false).bits,
+            )],
+        )
+    } else {
+        crate::object::js_object_alloc_null_proto(0, 0)
+    };
+    attach_bag(cell, obj)
+}
+
+unsafe fn attach_bag(cell: *mut BufferHeader, obj: *mut ObjectHeader) -> *mut ObjectHeader {
+    let addr = cell as usize;
     // GC_STORE_AUDIT(BARRIERED): the sole raw-pointer child edge of a byte cell.
     (*cell).link = obj as usize;
     crate::gc::runtime_write_barrier_slot(
@@ -117,11 +155,17 @@ pub(crate) unsafe fn owner(addr: usize) -> usize {
     }
     let link = (*(addr as *const BufferHeader)).link;
     if (*header(link)).obj_type == crate::gc::GC_TYPE_OBJECT {
-        let value = bag_get(addr, VIEW_OWNER_KEY).expect("view bag must retain its owner");
-        JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize
+        view_bag_owner(link)
     } else {
         link
     }
+}
+
+/// The owner a view's bag holds at its fixed first inline slot.
+#[inline(always)]
+pub(crate) unsafe fn view_bag_owner(bag: usize) -> usize {
+    let value = *((bag + crate::codegen_abi::BYTES_VIEW_BAG_OWNER) as *const u64);
+    JSValue::from_bits(value).as_pointer::<u8>() as usize
 }
 
 #[inline(always)]
