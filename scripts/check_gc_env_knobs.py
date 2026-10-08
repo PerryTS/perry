@@ -74,6 +74,7 @@ HISTORICAL_DOCS = {
     "docs/statepoint-gc-experiment.md",
     "docs/engine-plan-history.md",
     "docs/audits/statepoints-only-12023.md",
+    "docs/src/internals/weakmap-owned-index-validation.md",
 }
 
 # Script-owned output plumbing shares the PERRY_GC_ prefix but is intentionally
