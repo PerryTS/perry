@@ -4134,10 +4134,6 @@
     },
     {
       "file": "crates/perry-runtime/src/tls_hot.rs",
-      "name": "HOT"
-    },
-    {
-      "file": "crates/perry-runtime/src/tls_hot.rs",
       "name": "PROBE_CONST"
     },
     {
