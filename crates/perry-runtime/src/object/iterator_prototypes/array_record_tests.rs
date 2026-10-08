@@ -416,7 +416,7 @@ fn array_record_entry_repairs_only_its_private_source() {
         let (alias, _, symbol) = fixture();
         let old = crate::value::js_nanbox_get_pointer(alias) as *mut crate::array::ArrayHeader;
         let live = crate::array::js_array_grow(old, 100);
-        let mut record = f64::from_bits(TAG_UNDEFINED);
+        let mut record = f64::from_bits(crate::value::TAG_UNDEFINED);
         assert_eq!(crate::array::js_array_record_enter(alias, &mut record), 0);
         assert_eq!(crate::value::js_nanbox_get_pointer(record), live as i64);
         assert_ne!(record.to_bits(), alias.to_bits());

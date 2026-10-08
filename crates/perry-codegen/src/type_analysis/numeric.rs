@@ -31,10 +31,9 @@ pub(crate) fn iterator_record_primitive_type(expr: &Expr) -> Option<HirType> {
         | "arrayRecordIndex"
         | "arrayRecordForBound"
         | "arrayRecordForUpdate" => Some(HirType::Number),
-        "iteratorStep"
-        | "arrayRecordEnter"
-        | "arrayRecordNeedsIterator"
-        | "arrayRecordCloseAbsent" => Some(HirType::Boolean),
+        "iteratorStep" | "arrayRecordNeedsIterator" | "arrayRecordCloseAbsent" => {
+            Some(HirType::Boolean)
+        }
         _ => None,
     }
 }

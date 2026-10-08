@@ -249,7 +249,7 @@ mod tests {
                 1,
                 Type::Boolean,
                 rt(
-                    "arrayRecordEnter",
+                    "arrayRecordNeedsIterator",
                     vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))],
                 ),
             ),
