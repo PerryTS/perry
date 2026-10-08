@@ -60,7 +60,7 @@ fn json_escaped_output_matches_complete_oracle_with_bounded_writes() {
                 expected.as_bytes()
             );
             assert_eq!((*result).utf16_len, plan.units);
-            assert_eq!(crate::buffer::store::capacity(result as usize), plan.bytes);
+            assert_eq!((*result).capacity, plan.bytes);
             assert_eq!((*result).flags, 0);
         }
     }

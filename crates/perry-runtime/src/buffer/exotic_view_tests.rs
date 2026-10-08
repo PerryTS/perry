@@ -55,7 +55,7 @@ fn array_buffer(bytes: &[u8]) -> usize {
 }
 
 /// A node `Buffer`: registered, marked nothing. (`Buffer.from` does not call
-/// `mark_as_uint8array` — that mark distinguishes the `Uint8Array` CONSTRUCTOR
+/// the Uint8Array birth brand — it distinguishes the `Uint8Array` CONSTRUCTOR
 /// path, which is why `Object.keys` was right for one and `[]` for the other.)
 fn node_buffer(bytes: &[u8]) -> usize {
     buffer_with(bytes) as usize

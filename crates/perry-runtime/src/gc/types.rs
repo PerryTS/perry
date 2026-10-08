@@ -117,9 +117,9 @@ pub const GC_TYPE_SCOPE: u8 = 25;
 // fixes its offsets), and a buffer is not a `GC_TYPE_OBJECT`, so it has no
 // class id to carry one.
 //
-// `GC_TYPE_BUFFER` itself is the Node `Buffer` flavor, which is what
-// `store_alloc` births with its final brand; the brand never changes
-// when a producer turns it into another flavor. Keep the block contiguous:
+// `GC_TYPE_BUFFER` itself is the Node `Buffer` flavor. `store_alloc` births
+// every byte cell with its final brand; the brand never changes.
+// Keep the block contiguous:
 // `is_buffer_family_type` is one equality and one range compare.
 /// A `Uint8Array` stored as a `BufferHeader` (formats as `Uint8Array(n) [...]`).
 pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
@@ -1703,8 +1703,7 @@ mod buffer_family_type_tests {
 
     /// #10694: every buffer-family flavor is the same GC kind under another
     /// brand. If one ever diverged (a different descriptor, finalize hook or
-    /// movability) the brand would stop being a pure label and a re-stamp in
-    /// A changed brand would change how the collector treats a live cell.
+    /// movability), the brand would change how the collector treats the cell.
     #[test]
     fn buffer_family_flavors_share_one_gc_kind() {
         let base = *gc_type_info(GC_TYPE_BUFFER).expect("buffer type info");

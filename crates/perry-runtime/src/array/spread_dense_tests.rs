@@ -50,7 +50,7 @@ fn plain_dense_array_takes_the_fast_path_and_copies_every_element() {
         "spread must produce a new array"
     );
     unsafe {
-        assert_eq!(crate::buffer::store::length(copy as usize) as u32, 3);
+        assert_eq!((*copy).length, 3);
         for i in 0..3 {
             assert_eq!(slot_bits(copy, i), slot_bits(src, i));
         }
@@ -68,7 +68,7 @@ fn the_copy_is_independent_of_its_source() {
             3,
             "appending to the copy must not grow the source"
         );
-        assert_eq!(crate::buffer::store::length(copy as usize) as u32, 4);
+        assert_eq!((*copy).length, 4);
     }
 }
 
@@ -77,7 +77,7 @@ fn an_empty_array_copies_to_an_empty_array() {
     let src = js_array_alloc(0);
     assert!(dense_spread_source(boxed(src)).is_some());
     let copy = dense_spread_copy(boxed(src));
-    unsafe { assert_eq!(crate::buffer::store::length(copy as usize) as u32, 0) };
+    unsafe { assert_eq!((*copy).length, 0) };
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn holes_become_undefined_not_hole_slots() {
     assert!(dense_spread_source(boxed(cur)).is_some());
     let copy = dense_spread_copy(boxed(cur));
     unsafe {
-        assert_eq!(crate::buffer::store::length(copy as usize) as u32, 3);
+        assert_eq!((*copy).length, 3);
         assert_eq!(slot_bits(copy, 0), 1.0f64.to_bits());
         assert_eq!(slot_bits(copy, 1), TAG_UNDEFINED);
         assert_eq!(slot_bits(copy, 2), 3.0f64.to_bits());
@@ -218,7 +218,7 @@ fn a_grown_arrays_forwarding_header_is_followed_not_copied() {
     );
     let copy = dense_spread_copy(stale);
     unsafe {
-        assert_eq!(crate::buffer::store::length(copy as usize) as u32, 40);
+        assert_eq!((*copy).length, 40);
         assert_eq!(slot_bits(copy, 0), 1.0f64.to_bits());
         assert_eq!(slot_bits(copy, 1), 2.0f64.to_bits());
         for i in 2..40 {

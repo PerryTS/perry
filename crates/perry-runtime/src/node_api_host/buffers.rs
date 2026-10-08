@@ -188,7 +188,7 @@ pub unsafe extern "C" fn napi_get_buffer_info(
         *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
     }
     if !length.is_null() {
-        *length = (*buffer).length as usize;
+        *length = crate::buffer::store::raw_length(buffer as usize) as usize;
     }
     ok(env)
 }
@@ -345,7 +345,7 @@ pub unsafe extern "C" fn napi_get_arraybuffer_info(
         *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
     }
     if !byte_length.is_null() {
-        *byte_length = (*buffer).length as usize;
+        *byte_length = crate::buffer::store::raw_length(buffer as usize) as usize;
     }
     ok(env)
 }
@@ -560,7 +560,7 @@ pub unsafe extern "C" fn napi_get_dataview_info(
     let view = owner as *const BufferHeader;
     let info = crate::buffer::view::lookup(owner);
     if !byte_length.is_null() {
-        *byte_length = (*view).length as usize;
+        *byte_length = crate::buffer::store::raw_length(view as usize) as usize;
     }
     if !data.is_null() {
         *data = crate::buffer::resolve_span_data_ptr(view) as *mut c_void;

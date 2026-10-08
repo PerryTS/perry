@@ -97,11 +97,11 @@ fn native_backed_alloc_buffer_consumer_preserves_the_pointer_word() {
     };
     let cell = JSValue::from_bits(value.to_bits()).as_pointer::<buffer::BufferHeader>();
     assert!(buffer::is_foreign_backed_buffer(cell as usize));
-    let ptr_word = unsafe { *((cell as *const u8).add(8) as *const usize) };
+    let ptr_word = unsafe { buffer::store::raw_link(cell as usize) };
     assert_ne!(
         ptr_word,
         u64::from_ne_bytes(input) as usize,
-        "payload must never overwrite the native pointer at cell+8"
+        "payload must never overwrite the traced link word"
     );
     bytes::no_gc(|scope| assert_eq!(bytes::bytes(value, scope).unwrap(), &input));
 }

@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn subarray_reads_live_backing_window() {
         let source = crate::bytes::from_slice(crate::bytes::Brand::Uint8Array, &[10, 20, 30, 40])
-            .as_pointer();
+            .as_pointer::<BufferHeader>();
         let view = perry_runtime::buffer::js_buffer_slice(source.cast(), 1, 3);
         crate::bytes::no_gc(|scope| {
             assert_eq!(read_buffer_bytes(view.cast(), scope).unwrap(), &[20, 30])
