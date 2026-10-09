@@ -256,13 +256,12 @@ pub(crate) fn read_sync_result(
     position_value: f64,
 ) -> Result<f64, std::io::Error> {
     let fd = fd_value as i32;
-    let offset = offset_value.max(0.0) as usize;
-    let length = length_value.max(0.0) as usize;
-    let position = if position_value.is_finite() && position_value >= 0.0 {
-        Some(position_value as u64)
-    } else {
-        None
-    };
+    // Node (`fs.read`/`fs.readSync`): an absent (`undefined`/`null`) offset
+    // is 0 and the length is `length | 0`, so a non-number reads 0 bytes.
+    // Both arrive as NaN-boxed values; read them as numbers first.
+    let offset = number_arg(offset_value).unwrap_or(0.0).max(0.0) as usize;
+    let length = number_arg(length_value).map_or(0, |length| length.max(0.0) as usize);
+    let position = position_arg(position_value);
     let buf = buffer_ptr_from_value(buffer_value);
     if buf.is_null() {
         return Ok(0.0);
@@ -359,11 +358,7 @@ pub(crate) fn write_string_sync_result(
     position_value: f64,
 ) -> Result<f64, std::io::Error> {
     let bytes = bytes_from_value(data_value);
-    let position = if position_value.is_finite() && position_value >= 0.0 {
-        Some(position_value as u64)
-    } else {
-        None
-    };
+    let position = position_arg(position_value);
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
@@ -423,13 +418,12 @@ pub(crate) fn write_buffer_sync_result(
     length_value: f64,
     position_value: f64,
 ) -> Result<f64, std::io::Error> {
-    let offset = offset_value.max(0.0) as usize;
-    let length = length_value.max(0.0) as usize;
-    let position = if position_value.is_finite() && position_value >= 0.0 {
-        Some(position_value as u64)
-    } else {
-        None
-    };
+    // Node: an absent (`undefined`/`null`) offset is 0 and a non-number
+    // length is "the rest of the buffer after offset". Both arrive as
+    // NaN-boxed values, which plain f64 arithmetic reads as 0 bytes.
+    let offset = number_arg(offset_value).unwrap_or(0.0).max(0.0) as usize;
+    let length = number_arg(length_value).map_or(usize::MAX, |length| length.max(0.0) as usize);
+    let position = position_arg(position_value);
     let buf = buffer_ptr_from_value(buffer_value);
     if buf.is_null() {
         return Ok(0.0);
@@ -480,6 +474,14 @@ fn is_byte_buffer_value(value: f64) -> bool {
     }
     let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr)
+}
+
+/// A file position argument: a non-negative number, or `None` (`null`,
+/// `undefined`, `-1`) for "use the current file position".
+fn position_arg(value: f64) -> Option<u64> {
+    number_arg(value)
+        .filter(|position| position.is_finite() && *position >= 0.0)
+        .map(|position| position as u64)
 }
 
 /// A number argument as an f64, whether it is a plain double or an int32.
