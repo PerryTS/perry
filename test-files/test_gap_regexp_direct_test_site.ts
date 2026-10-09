@@ -10,11 +10,6 @@
 function run(re: any, s: any): any {
   return re.test(s);
 }
-// The argument is a call, so the lookup runs before it and the call after
-// it (the split site): `exec` must be read when the call runs.
-function runSplit(re: any, f: () => any): any {
-  return re.test(f());
-}
 // Long enough to be a heap string (short strings are stored inline).
 const HEAP = "a heap-allocated subject string";
 function warm(re: any, s: any): void {
@@ -43,19 +38,38 @@ t("expando_then_exec", () => {
   r.exec = () => null;
   return [a, run(r, "a"), Object.keys(r)];
 });
+// Split rows: ONE textual site (`r.test(arg(i))` in one loop) is warmed
+// with a plain argument, so its lookup primes the direct entry; on the last
+// iteration the argument itself replaces `exec` AFTER that lookup and before
+// the call. A call that took the direct entry would skip the new `exec`.
+// (Calling a helper from several places gives each place its own site once
+// the helper is inlined, so the warm-up and the patch must share the loop.)
+function splitRow(r: any, patch: () => void): any {
+  const out: any[] = [];
+  for (let i = 0; i <= 64; i++) {
+    const v = r.test((() => { if (i === 64) patch(); return HEAP; })());
+    if (i === 0 || i === 64) out.push(v);
+  }
+  return out;
+}
 t("split_site_argument_adds_own_exec", () => {
   const r: any = /a/;
-  for (let i = 0; i < 64; i++) runSplit(r, () => HEAP);
-  return [runSplit(r, () => { r.exec = () => null; return HEAP; }), runSplit(r, () => HEAP)];
+  let calls = 0;
+  const v = splitRow(r, () => { r.exec = () => { calls++; return null; }; });
+  return [v, calls, splitRow(/a/, () => {})];
 });
-t("split_site_argument_patches_exec", () => {
+t("split_site_argument_patches_proto_exec", () => {
   const r = /a/;
-  for (let i = 0; i < 64; i++) runSplit(r, () => HEAP);
   const o = RegExp.prototype.exec;
   let calls = 0;
   try {
-    return [runSplit(r, () => { RegExp.prototype.exec = function () { calls++; return null; }; return HEAP; }), calls];
+    return [splitRow(r, () => { RegExp.prototype.exec = function () { calls++; return null; }; }), calls];
   } finally { RegExp.prototype.exec = o; }
+});
+t("split_site_argument_restores_builtin_exec", () => {
+  const r = /a/;
+  const v = splitRow(r, () => { RegExp.prototype.exec = RegExp.prototype.exec; });
+  return [v, splitRow(/b/, () => {})];
 });
 t("proto_exec_override_after_warm", () => {
   const r = /a/; warm(r, "a");
