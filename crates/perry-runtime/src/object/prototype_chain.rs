@@ -1531,11 +1531,15 @@ mod readpath_null_tests {
         let prototype = object::js_object_alloc(0, 0);
         object::class_registry::class_prototype_object_root_store(cid, prototype);
         let instance = object::js_object_alloc(cid, 0);
-        chain::object_link_class_default_prototype(instance as usize,
-            crate::value::js_nanbox_pointer(prototype as i64).to_bits());
+        chain::object_link_class_default_prototype(
+            instance as usize,
+            crate::value::js_nanbox_pointer(prototype as i64).to_bits(),
+        );
         chain::object_set_user_prototype(instance as usize, crate::value::TAG_NULL);
-        assert!(chain::object_has_individual_class_prototype(instance as usize),
-            "the live null edge must be authoritative even for a synthetic class");
+        assert!(
+            chain::object_has_individual_class_prototype(instance as usize),
+            "the live null edge must be authoritative even for a synthetic class"
+        );
         let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
         unsafe {
             object::js_object_set_field_by_name(prototype, key, 42.0);
