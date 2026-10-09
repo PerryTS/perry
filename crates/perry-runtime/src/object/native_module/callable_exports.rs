@@ -103,7 +103,23 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         callable_module_name.as_ptr(),
         callable_module_name.len(),
     ));
-    let closure = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 3);
+    // Export resolution already publishes the native class identity used by
+    // instanceof and super. Carry that fact on the canonical constructor;
+    // invocation must not resolve names again or consult a side table.
+    let constructor_class =
+        crate::native_payload::export_class_id(export_module_name, property_name).filter(|class| {
+            matches!(
+                *class,
+                crate::native_class_ids::NET_SOCKET | crate::native_class_ids::NET_SERVER
+            )
+        });
+    let info = if constructor_class.is_some() {
+        &crate::closure::BOUND_NATIVE_CONSTRUCTOR_INFO
+    } else {
+        &crate::closure::BOUND_METHOD_INFO
+    };
+    let closure =
+        crate::closure::js_closure_alloc(info, 3 + u32::from(constructor_class.is_some()));
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
@@ -114,6 +130,11 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_ptr(c, 2, method_bytes.len() as i64);
     });
+    if let Some(class) = constructor_class {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            crate::closure::js_closure_set_capture_f64(c, 3, class as f64);
+        });
+    }
     #[cfg(test)]
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| {
         if armed.replace(false) {
