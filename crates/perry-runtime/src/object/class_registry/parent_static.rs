@@ -1630,15 +1630,19 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 /// receiver/argument pointers while asking this question.
 pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let existing = class_holder_prototype(class_id);
-    let start = if existing.is_null() {
+    let word = crate::object::class_holder_word(class_id);
+    if word == 0 {
+        return None;
+    }
+    let existing = crate::JSValue::from_bits(word);
+    let start = if !existing.is_pointer() {
         let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
         if !v.is_pointer() {
             return None;
         }
         v.as_pointer::<ObjectHeader>() as *const ObjectHeader
     } else {
-        existing as *const ObjectHeader
+        existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
     let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
     match unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) } {
@@ -1672,15 +1676,19 @@ pub(crate) fn class_method_slot_target(
 /// The holder's owner identity, when a data property exists on the chain.
 pub(crate) fn class_method_slot_owner(class_id: u32, name: &str) -> Option<u32> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let existing = class_holder_prototype(class_id);
-    let start = if existing.is_null() {
+    let word = crate::object::class_holder_word(class_id);
+    if word == 0 {
+        return None;
+    }
+    let existing = crate::JSValue::from_bits(word);
+    let start = if !existing.is_pointer() {
         let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
         if !v.is_pointer() {
             return None;
         }
         v.as_pointer::<ObjectHeader>() as *const ObjectHeader
     } else {
-        existing as *const ObjectHeader
+        existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
     if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
         name.as_bytes(),

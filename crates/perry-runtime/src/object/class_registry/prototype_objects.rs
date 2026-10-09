@@ -454,15 +454,22 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
 /// about which object holds `C.prototype.m`.
 #[inline]
 pub(crate) fn class_holder_prototype(class_id: u32) -> *mut ObjectHeader {
-    let word = crate::object::shapes::identity_prototype_word(
-        crate::object::shapes::class_identity_proto_id(class_id),
-    );
+    let word = class_holder_word(class_id);
     let value = crate::JSValue::from_bits(word);
     if value.is_pointer() {
         value.as_pointer::<ObjectHeader>() as *mut ObjectHeader
     } else {
         std::ptr::null_mut()
     }
+}
+
+/// The CLASS surface fact: zero means absent, undefined means declared but
+/// unbuilt, and a pointer names the actual holder.
+#[inline]
+pub(crate) fn class_holder_word(class_id: u32) -> u64 {
+    crate::object::shapes::identity_prototype_word(crate::object::shapes::class_identity_proto_id(
+        class_id,
+    ))
 }
 
 /// Lookup helper for the dispatch chain walk: returns the prototype

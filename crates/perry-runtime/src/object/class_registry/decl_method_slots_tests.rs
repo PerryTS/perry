@@ -325,10 +325,36 @@ fn s7b_anon_shape_identity_has_no_class_surface() {
         crate::value::TAG_UNDEFINED,
         "a literal's id must not build a declaration holder"
     );
+    assert!(!crate::object::class_has_own_method(cid, "missing"));
+    assert!(!crate::object::class_instance_has_method(cid, "missing"));
+    assert_eq!(class_method_slot_owner(cid, "missing"), None);
+    assert_eq!(class_method_slot_value(cid, "missing"), None);
+    assert_eq!(crate::object::class_holder_word(cid), 0);
     // A declared class keeps its surface; the anon mark alone decides nothing
     // for a named collision.
     let declared = 0x6E3D;
     register(declared, b"Declared");
     unsafe { crate::object::js_register_anon_shape_class_id(declared) };
     assert!(super::state::class_identity_has_surface(declared));
+}
+
+#[test]
+fn s7b_empty_anonymous_declaration_publishes_surface_and_inherits_methods() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let parent = 0x6E3E;
+    let child = 0x6E3F;
+    register(parent, b"Parent");
+    unsafe { register_method(parent, b"m", None) };
+    register(child, b"");
+    crate::object::js_register_class_parent(child, parent);
+    assert_eq!(
+        crate::object::class_holder_word(child),
+        crate::value::TAG_UNDEFINED
+    );
+    assert!(crate::object::class_holder_prototype(child).is_null());
+    assert!(!crate::object::class_has_own_method(child, "m"));
+    assert!(crate::object::class_instance_has_method(child, "m"));
+    assert_eq!(class_method_slot_owner(child, "m"), Some(parent));
+    assert!(class_method_slot_value(child, "m").is_some());
+    assert!(!crate::object::class_holder_prototype(child).is_null());
 }
