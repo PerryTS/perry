@@ -129,7 +129,9 @@ pub(super) unsafe fn scan_dirty_header_once(
     stats.old_objects_considered += 1;
     stats.valid_roots += 1;
     stats.dirty_objects_scanned += 1;
-    let _ = scan_dirty_object_slots(header, dirty_pages, stats, visit_slot);
+    let _ = scan_dirty_object_slots(header, dirty_pages, stats, &mut |slot, _, stats| {
+        visit_slot(slot, stats);
+    });
 }
 
 #[inline]
@@ -140,42 +142,12 @@ pub(super) fn dirty_pages_contains_addr(
     dirty_pages.contains(&crate::arena::generation_page_for_addr(addr))
 }
 
-pub(super) unsafe fn scan_dirty_slot(
-    slot: GcMutableSlot,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
-) {
-    if !dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
-        return;
-    }
-    stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot.slot as usize);
-    visit_slot(slot, stats);
-}
-
-pub(super) unsafe fn scan_dirty_slot_with_layout(
-    slot: GcMutableSlot,
-    layout_kind: HeapChildSlotReadKind,
-    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
-) {
-    if !dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
-        return;
-    }
-    record_layout_child_slot_read(layout_kind);
-    stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot.slot as usize);
-    visit_slot(slot, stats);
-}
-
 /// Scan the slots of `header` that lie on `dirty_pages`.
 ///
 /// Returns whether the scan was COMPLETE for the object (#9754): every pointer
 /// slot it owns lies on a dirty page AND inside its own allocation. For such
 /// an object the per-slot re-remembering the copying minor does in
-/// `visit_slot_with_parent` is exactly what the post-cycle
+/// `visit_remembered_slot` is exactly what the post-cycle
 /// `restore_surviving_dirty_coverage` re-derives — the same child predicate on
 /// the same post-visit value, and the same `external` verdict (an in-body slot
 /// of an old parent is not external under either the page rule used here or
@@ -187,13 +159,33 @@ pub(super) unsafe fn scan_dirty_object_slots(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, bool, &mut RememberedSetTraceStats),
 ) -> bool {
     let body_start = header as usize;
     let body_end = body_start.saturating_add((*header).size as usize);
     let in_body = |slot: *mut u64| {
         let addr = slot as usize;
         addr >= body_start && addr < body_end
+    };
+    // Custody belongs to the parent and descriptor, not to each child store.
+    // An old in-body slot is described by its page. Every other slot needs
+    // the owner entry, including a separate buffer that happens to be old.
+    let parent_old = crate::arena::pointer_in_old_gen(body_start + GC_HEADER_SIZE);
+    let mut acct_page = usize::MAX;
+    let mut acct_slots = 0usize;
+    let mut account = |slot: *mut u64, old: bool| {
+        if !old {
+            return;
+        }
+        let page = crate::arena::generation_page_for_addr(slot as usize);
+        if page != acct_page {
+            if acct_slots != 0 {
+                crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
+            }
+            acct_page = page;
+            acct_slots = 0;
+        }
+        acct_slots += 1;
     };
     super::ephemeron::discover(header);
     let mut complete = true;
@@ -203,43 +195,44 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                     return;
                 }
-                complete &= in_body(slot.slot)
-                    && dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
-                if let Some(layout_kind) = slot.layout_kind {
-                    scan_dirty_slot_with_layout(slot, layout_kind, dirty_pages, stats, visit_slot);
-                } else {
-                    scan_dirty_slot(slot, dirty_pages, stats, visit_slot);
+                let contained = in_body(slot.slot);
+                let dirty = dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
+                complete &= contained && dirty;
+                if dirty {
+                    slot.record_layout_read();
+                    stats.dirty_slots_scanned += 1;
+                    let old = if contained {
+                        parent_old
+                    } else {
+                        !slot.external()
+                    };
+                    account(slot.slot, old);
+                    visit_slot(slot, !parent_old || !contained, stats);
                 }
             }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
-                // Three per-slot costs hoisted out of this loop, which is the
-                // copying minor's hottest (750 k iterations per cycle on
-                // `gc-handoff/bench/retain.ts`):
-                //
-                // * `is_weak_target_trace_slot` asks a question about the
-                //   PARENT — only a `WeakRef` / weak-entry / finalization-record
-                //   object has weak slots at all. Deciding that once per
-                //   descriptor instead of once per slot is exact, because a
-                //   parent that is not one of those three classes answers
-                //   `false` for every slot it owns.
-                // * `old_page_account_dirty_slot` is a page-keyed counter
-                //   reached through a hash map. Slots here are contiguous and
-                //   ascending, so 512 consecutive slots share one page: batch
-                //   the increment and pay one map probe per page.
-                // * the value in slot `i` is about to be classified, which
-                //   reads its target's (cold) GC header — prefetch ahead.
+                // A range belongs to one allocation. Read its custody and
+                // weak-holder fact once; batch old-page accounting across all
+                // descriptors of this parent, including individual slots.
                 let parent_has_weak_slots =
                     crate::weakref::header_may_hold_weak_target_slots(header);
                 let count = range.slot_count();
-                if count != 0 {
-                    complete &= in_body(range.slot(0)) && in_body(range.slot(count - 1));
-                }
+                let contained =
+                    count == 0 || (in_body(range.slot(0)) && in_body(range.slot(count - 1)));
+                complete &= contained;
+                let external = !parent_old || !contained;
+                let old = if contained {
+                    parent_old
+                } else {
+                    matches!(
+                        crate::arena::classify_heap_generation(range.slots() as usize),
+                        crate::arena::HeapGeneration::Old
+                    )
+                };
                 let mut visited_slots = 0usize;
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
                     visited_slots += end - start;
                     stats.dirty_slot_ranges_scanned += 1;
-                    let mut acct_page = usize::MAX;
-                    let mut acct_slots = 0usize;
                     for i in start..end {
                         let slot = range.slot(i);
                         if let Some(ahead) = (i + super::prefetch::PREFETCH_DISTANCE < end)
@@ -256,19 +249,8 @@ pub(super) unsafe fn scan_dirty_object_slots(
                             record_layout_child_slot_read(layout_kind);
                         }
                         stats.dirty_slots_scanned += 1;
-                        let page = crate::arena::generation_page_for_addr(slot as usize);
-                        if page != acct_page {
-                            if acct_slots != 0 {
-                                crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
-                            }
-                            acct_page = page;
-                            acct_slots = 0;
-                        }
-                        acct_slots += 1;
-                        visit_slot(GcMutableSlot::new(slot, layout_kind), stats);
-                    }
-                    if acct_slots != 0 {
-                        crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
+                        account(slot, old);
+                        visit_slot(GcMutableSlot::new(slot, layout_kind), external, stats);
                     }
                 }
                 complete &= visited_slots == count;
@@ -276,6 +258,9 @@ pub(super) unsafe fn scan_dirty_object_slots(
             GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         }
     });
+    if acct_slots != 0 {
+        crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
+    }
     complete
 }
 

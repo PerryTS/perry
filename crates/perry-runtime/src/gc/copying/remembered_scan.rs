@@ -42,15 +42,12 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
         stats.valid_roots += 1;
         stats.dirty_objects_scanned += 1;
         let mut changed = false;
-        let mut visit_slot = |slot: GcMutableSlot, stats: &mut RememberedSetTraceStats| {
-            let external = !matches!(
-                crate::arena::classify_heap_generation(slot.slot as usize),
-                crate::arena::HeapGeneration::Old
-            );
-            let before = slot.read();
-            visit(slot, header, external, stats);
-            changed |= slot.read() != before;
-        };
+        let mut visit_slot =
+            |slot: GcMutableSlot, external: bool, stats: &mut RememberedSetTraceStats| {
+                let before = slot.read();
+                visit(slot, header, external, stats);
+                changed |= slot.read() != before;
+            };
         let complete =
             scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
         if complete {

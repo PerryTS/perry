@@ -1351,7 +1351,7 @@ pub(super) fn run_copied_minor_attempt(
                     d.remembered_parent_type = (*header).obj_type;
                 }
                 let before = slot.read();
-                collector.visit_mutable_slot_with_parent(slot, header, external);
+                collector.visit_remembered_slot(slot, header, external);
                 if slot.read() != before {
                     stats.newly_marked += 1;
                 }
