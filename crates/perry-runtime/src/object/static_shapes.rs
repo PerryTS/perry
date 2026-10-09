@@ -691,17 +691,17 @@ pub extern "C" fn js_shape_run_static_seed() {
 }
 
 /// The canonical keys node for `names`, built exactly as a class keys array
-/// is (`js_build_class_keys_array`): interned strings in a long-lived array,
+/// is (`js_build_class_keys_array`): a temporary list of the names,
 /// then the canonical trie.
 ///
 /// A seed runs before any module's pool; the builder mints each name's atom
 /// first, so the canonical copy stores the atoms the pools find later
-/// (`build_longlived_keys_array`).
+/// (`build_keys_source_array`).
 ///
 /// # Safety
 /// May collect; holds no caller object.
 pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectKeys {
-    let arr = super::alloc::build_longlived_keys_array(std::ptr::null_mut(), 0, names);
+    let arr = super::alloc::build_keys_source_array(std::ptr::null_mut(), 0, names);
     crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     super::canonical_keys::canonicalize(
         &super::canonical_keys::SharedLayout::shape_cache_entry(),

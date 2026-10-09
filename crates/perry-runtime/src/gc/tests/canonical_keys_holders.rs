@@ -799,3 +799,126 @@ fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
         );
     }
 }
+
+// ------------------------------------------- Longlived holds no movable word
+
+/// Every pointer word a Longlived object holds that names an object a minor
+/// can move or free, as `(holder, index, target)`.
+///
+/// A Longlived object is neither barriered (`barrier_parent_needs_remembering`
+/// answers false for it), nor swept, nor rewritten by a minor unless the minor
+/// happens to trace through it, so a word naming a young (or malloc) object is
+/// left behind by the first minor that moves its target — the stale header the
+/// copier later reads. Longlived holds strings and arrays only (asserted below,
+/// so a new kind of Longlived holder makes this walk fail instead of skipping
+/// it), which makes the array elements every word there is to check.
+unsafe fn longlived_words_naming_minor_collectible() -> Vec<(usize, usize, usize)> {
+    let mut found = Vec::new();
+    crate::arena::arena_walk_objects(|hp| {
+        let header = hp as *mut GcHeader;
+        let user = hp as usize + GC_HEADER_SIZE;
+        if crate::arena::classify_heap_space(user) != crate::arena::HeapSpace::Longlived {
+            return;
+        }
+        let ty = (*header).obj_type;
+        assert!(
+            ty == GC_TYPE_STRING || ty == GC_TYPE_ARRAY,
+            "premise: a Longlived object of type {ty} at {user:#x}; this walk covers the \
+             element words of arrays (and pointer-free strings) only"
+        );
+        if ty != GC_TYPE_ARRAY {
+            return;
+        }
+        let arr = user as *const ArrayHeader;
+        let elements = crate::array::array_elements_ptr(arr) as *const u64;
+        for i in 0..(*arr).length as usize {
+            let bits = *elements.add(i);
+            let tag = bits & crate::value::TAG_MASK;
+            if tag != crate::value::POINTER_TAG
+                && tag != crate::value::STRING_TAG
+                && tag != crate::value::BIGINT_TAG
+            {
+                continue;
+            }
+            let target = (bits & POINTER_MASK) as usize;
+            if super::super::young_log::addr_is_minor_collectible(target) {
+                found.push((user, i, target));
+            }
+        }
+    });
+    found
+}
+
+/// Building a class keys list must leave no Longlived object naming a young
+/// key. A dynamically-parented class copies its parent's canonical list, whose
+/// keys are the parent's young atoms; the builder used to copy them into a
+/// Longlived temporary that canonicalization then dropped. Nothing traced or
+/// rewrote that immortal array, so after a moving minor it named the atoms'
+/// pre-move addresses — on OpenCode's TUI worker the evacuation verifier
+/// reported it at the first minor of every run (`stale forwarded pointer`,
+/// `parent_space=old_page`, `child_type=string`).
+///
+/// Sabotage: allocate the builder's array with
+/// `js_array_alloc_with_length_longlived` again (object/alloc.rs,
+/// `build_keys_source_array`) and the INVARIANT below fails.
+#[test]
+fn no_longlived_object_names_a_young_key_after_a_class_keys_build() {
+    const PARENT: u32 = 0x0C1_7761;
+    const CHILD: u32 = 0x0C1_7762;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_object_model_scanners();
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    canonical_keys::reset_for_test();
+    let scope = RuntimeHandleScope::new();
+    unsafe {
+        let parent_packed = b"llk_a\0llk_b\0";
+        let parent = scope.root_raw_mut_ptr(crate::object::js_build_class_keys_array(
+            PARENT,
+            2,
+            parent_packed.as_ptr(),
+            parent_packed.len() as u32,
+            0,
+        ));
+        let first_key = parent
+            .with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits());
+        let first_key_addr = (first_key & POINTER_MASK) as usize;
+        assert!(
+            crate::JSValue::from_bits(first_key).is_string()
+                && crate::arena::pointer_in_nursery(first_key_addr),
+            "premise: the parent's canonical list holds a young key a minor can move"
+        );
+        crate::object::register_class(CHILD, PARENT);
+        let own_packed = b"llk_c\0";
+        let inst = scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_dynamic_parent(
+            CHILD,
+            1,
+            own_packed.as_ptr(),
+            own_packed.len() as u32,
+        ));
+        assert_eq!(
+            crate::array::js_array_length(keys_of(inst)),
+            3,
+            "premise: the dynamic-parent birth merged the parent's keys"
+        );
+
+        let before = longlived_words_naming_minor_collectible();
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(
+            trace.copying_nursery.copied_objects > 0,
+            "premise: the minor copied"
+        );
+        let moved = parent
+            .with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits())
+            & POINTER_MASK;
+        let moved = moved as usize;
+        assert_ne!(moved, first_key_addr, "premise: the minor moved the parent's key");
+        let after = longlived_words_naming_minor_collectible();
+        assert!(
+            before.is_empty() && after.is_empty(),
+            "INVARIANT: a Longlived object names a young object (holder, index, target): \
+             before the minor {before:#x?}, after it {after:#x?} (the parent's first key moved \
+             {first_key_addr:#x} -> {moved:#x})"
+        );
+    }
+}

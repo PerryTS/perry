@@ -477,12 +477,10 @@ fn select_whole_blocks(
     selection
 }
 
-/// Module class keys arrays are built in the Longlived arena
-/// (`object/alloc.rs::build_longlived_keys_array`) and worker agents copy
-/// their addresses at spawn (`object/shapes_worker_seed.rs`). That is sound
-/// only while nothing relocates a Longlived object: a copying minor never
-/// does (`gc/pin.rs`), and old-gen defrag selects only `Old`-generation
-/// pages, which a Longlived block never is.
+/// Longlived objects (module namespace method lists, longlived key strings)
+/// must not be relocated: a copying minor never moves one (`gc/pin.rs`), and
+/// old-gen defrag selects only `Old`-generation pages, which a Longlived
+/// block never is.
 #[cfg(test)]
 mod longlived_never_selected_tests {
     #[test]

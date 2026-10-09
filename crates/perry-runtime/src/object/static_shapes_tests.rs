@@ -543,7 +543,7 @@ unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> b
 /// atoms confirms nothing, and every megamorphic read of a seeded literal
 /// falls to the by-name walk (lead_mega1 225.8 -> 435.8 instructions/read).
 ///
-/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the seeded
+/// Sabotage: drop the atom mint in `build_keys_source_array` -> the seeded
 /// record's confirms fail (the minted twin's still pass).
 #[test]
 fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
@@ -591,7 +591,7 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
 /// hold the atom B's pool then finds, or every megamorphic read of the class
 /// through B's key falls to the by-name walk.
 ///
-/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the
+/// Sabotage: drop the atom mint in `build_keys_source_array` -> the
 /// class's confirms fail.
 #[test]
 fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
@@ -1067,7 +1067,7 @@ fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
     assert_eq!(control_after, requested, "control must finalize");
     // Same names, a different (non-canonical) keys array.
     let keys = unsafe {
-        let arr = crate::object::alloc::build_longlived_keys_array(
+        let arr = crate::object::alloc::build_keys_source_array(
             std::ptr::null_mut(),
             0,
             &[b"ltcf_alias_m"],
