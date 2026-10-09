@@ -208,6 +208,8 @@ mod array_retargeted_proto;
 mod buffer_own_prop;
 mod class_object_props;
 mod class_object_template;
+#[cfg(test)]
+pub(crate) use class_object_template::js_class_evaluation_object;
 pub(crate) use class_object_template::{
     class_object_template_cell, record_instance_link, template_instance, TemplateCell,
     TemplateInstance, CLASS_TEMPLATE_KEY,
