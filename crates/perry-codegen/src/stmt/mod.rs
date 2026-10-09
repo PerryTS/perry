@@ -904,8 +904,7 @@ fn emit_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool) {
         // sentinel. A closure born on such a path mints the object itself
         // (`binding_cell::ensure_capture_cells`), so no capture slot ever holds
         // the sentinel.
-        ctx.func
-            .entry_allocas_push_store(I64, "0", &root);
+        ctx.func.entry_allocas_push_store(I64, "0", &root);
         root
     };
     let base = binding_cell::mint_scope_object(ctx, members, tdz);
