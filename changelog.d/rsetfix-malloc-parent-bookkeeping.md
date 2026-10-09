@@ -17,3 +17,8 @@ The copying dirty scan reuses that uniqueness instead of building a second set
 for old owners. Exact deduplication remains for external and fallback entries.
 A spanning-object witness includes omitted first pages and clean gaps, with a
 negative control that duplicates owners by visiting each page independently.
+
+Presize the copying scan's coverage set from its current owner snapshot and
+remove the global previous-cycle size estimate. Test/debug builds assert that
+the table never grows while scanning. Reservation is bounded by the owners in
+this cycle, with no retained peak or new collector state.

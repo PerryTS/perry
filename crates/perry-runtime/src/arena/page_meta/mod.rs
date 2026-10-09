@@ -1738,8 +1738,21 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     pages: &crate::fast_hash::PtrHashSet<usize>,
     mut callback: impl FnMut(*mut u8),
 ) -> usize {
+    let headers = old_arena_headers_on_pages(pages);
+    let count = headers.len();
+    for header_addr in headers {
+        callback(header_addr as *mut u8);
+    }
+    count
+}
+
+/// Snapshot the unique owners on these pages before any visitor mutates the
+/// heap. Collectors may use its length to bound their own coverage bookkeeping.
+pub(crate) fn old_arena_headers_on_pages(
+    pages: &crate::fast_hash::PtrHashSet<usize>,
+) -> Vec<usize> {
     if pages.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     // #7624 READER: promotions land in old-gen mid-cycle (a copying minor's
@@ -1774,11 +1787,7 @@ pub(crate) fn old_arena_walk_objects_on_pages(
         }
     });
 
-    let count = headers.len();
-    for header_addr in headers {
-        callback(header_addr as *mut u8);
-    }
-    count
+    headers
 }
 
 pub(crate) struct OldArenaPageObjectCursor {
