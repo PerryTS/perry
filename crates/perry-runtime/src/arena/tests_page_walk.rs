@@ -5,8 +5,7 @@ use super::*;
 fn ordered_dirty_pages_emit_spanning_objects_once_even_across_clean_gaps() {
     super::tests::run_with_fresh_arenas(|| {
         let user = arena_alloc_gc_old(5 * 4096, 8, crate::gc::GC_TYPE_STRING);
-        let header = unsafe { crate::gc::header_from_user_ptr(user) } as usize;
-        let size = unsafe { (*(header as *const crate::gc::GcHeader)).size as usize };
+        let (header, size) = super::tests::old_header_and_size(user as usize);
         let overlaps = old_object_page_overlaps(header, size);
         assert!(overlaps.len() >= 5);
         for indices in [vec![0, 1, 2, 4], vec![1, 3, 4], vec![4]] {
