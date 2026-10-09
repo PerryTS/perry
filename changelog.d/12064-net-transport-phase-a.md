@@ -30,3 +30,24 @@ upgrade parameter hint; delete them in the immediate follow-up. Linux ext-ws
 lib tests fail to compile on main (`js_shadow_frame_push` is absent with native
 stack maps). Main also fails issue_9619's manual/callback-only path and
 `nested_object_literal_ws_inbound`: ws handleUpgrade has no raw-socket path.
+
+Validation uses main a9834307e829 (the newest origin/main at the final rebase)
+and separate qb6 targets. Script lint: main 102/125 pass, lane 103/125 pass;
+the remaining failures and strict Clippy failures are inherited, with no new
+diagnostics. Lean dependencies and pruned feature builds pass. The full lane
+gap subset, with its echo fixture running, is 88 pass / 15 mismatch / 0 timeout
+against the supplied main's 85 / 16 / 1: zero regressions. The worker completes
+25 rounds, ws_client passes, and the new upgrade fixture passes.
+
+This is a review bundle, with performance acceptance still blocked. All eight
+programs match Node for five interleaved instructions/RSS runs on CPUs 0-55
+with ASLR disabled. HTTP 10k adds 24.606% instructions and net echo 10k adds
+36.939%; repeated payload validation/root access and event argument allocation
+outweigh the deleted table lookups. Net's extra minor collection promotes an
+old arena; its RSS increase survives THP-off. Fix-forward: reuse validation
+within a callback-free operation, use existing rooted emitter arguments, and
+avoid empty write-ack callback/provider work while preserving async_hooks.
+The small tsc increase (+0.029%) is not fully attributed. P0's global
+bound-method constructor guard also compares module/export names; replace
+that special case with captured canonical constructor metadata to meet the
+architecture policy. No performance acceptance is claimed for this bundle.
