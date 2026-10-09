@@ -57,3 +57,35 @@ fn inline_runtime_bursts_preserve_exact_allocation_accounting() {
         assert_eq!(large.1 - after.1, 16 * 1024);
     });
 }
+
+#[test]
+fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
+    tests::run_with_fresh_arenas(|| unsafe {
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        js_inline_arena_state();
+        sync_inline_arena_state();
+        let before = crate::map::test_thread_map_side_deallocation_snapshot();
+        let map = crate::map::js_map_alloc(8);
+        assert!(!map.is_null());
+        // Exercise Arena::drop directly, before test TLS destructors remove
+        // the per-thread deallocation counter. The thread makes no further
+        // JS allocations after taking out its Eden arena.
+        let arena = ARENA.with(|cell| {
+            std::mem::replace(
+                &mut *cell.get(),
+                Arena {
+                    blocks: Vec::new(),
+                    current: 0,
+                    generation: HeapGeneration::Nursery,
+                    space: HeapSpace::NurseryEden,
+                    allocated_bytes: 0,
+                    large_allocated_bytes: 0,
+                },
+            )
+        });
+        drop(arena);
+        let after = crate::map::test_thread_map_side_deallocation_snapshot();
+        assert_eq!(after.0, before.0 + 1, "pending Map store must be finalized");
+        assert!(after.1 > before.1);
+    });
+}
