@@ -612,32 +612,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             {
                 if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                    let obj_class_id =
-                        unsafe { (*(value_addr(value) as *const ObjectHeader)).class_id };
-                    if let Some(answer) =
-                        relinked_instance_chain_answer(value, obj_class_id, CLASS_ID_OBJECT)
-                    {
-                        return if answer { true_val } else { false_val };
-                    }
+                    let obj = value_addr(value) as *const ObjectHeader;
+                    let answer = unsafe {
+                        super::shape_ancestry::class_shape_reaches(obj, CLASS_ID_OBJECT, true)
+                    };
+                    return if answer { true_val } else { false_val };
                 }
             }
             // An ordinary object whose chain ends in null before it reaches
             // `Object.prototype` (`Object.create(null)`) is not an instance.
-            // Only a cell born null, a receiver with a recorded prototype, or
-            // a program that ever replaced one can have such a chain.
+            // The chain is read from the live links (any of them may have
+            // been relinked to null), not from a process history bit.
             let addr = jsval.as_pointer::<u8>() as usize;
-            if let Some(obj) = unsafe { crate::object::prototype_chain::meta_capable_object(addr) }
+            if unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
+                && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(addr)
             {
-                let born_null =
-                    unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
-                        .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0);
-                if (born_null
-                    || crate::object::prototype_chain::any_class_chain_relinked()
-                    || crate::object::prototype_chain::object_static_prototype(addr).is_some())
-                    && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(addr)
-                {
-                    return false_val;
-                }
+                return false_val;
             }
             // Covers every heap object, including a Date (now a NaN-boxed
             // `DateCell` pointer — #2089) and an Invalid Date.
@@ -863,16 +853,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         {
             return true_val;
         }
-        // Walk up the inheritance chain using the class registry. #7575: the
-        // walk also follows the generic-origin edge, so a dynamic RHS holding a
-        // generic class (`const C = Gen; x instanceof C`) matches an instance of
-        // one of its specializations.
-        if let Some(answer) =
-            super::relinked_object_chain_answer(obj_ptr, value, obj_class_id, class_id)
-        {
-            return if answer { true_val } else { false_val };
+        // Walk the receiver's prototype shapes. #7575: the walk also follows
+        // the generic-origin edge, so a dynamic RHS holding a generic class
+        // (`const C = Gen; x instanceof C`) matches an instance of one of its
+        // specializations.
+        if super::shape_ancestry::class_shape_reaches(obj_ptr, class_id, true) {
+            true_val
+        } else {
+            false_val
         }
-
-        false_val
     }
 }

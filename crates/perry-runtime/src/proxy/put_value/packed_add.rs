@@ -88,7 +88,7 @@ pub struct PackedSetSite {
     /// `pre | post << 32`. `pre` is flipped by the read path's spill flip for
     /// an overflow slot, so no emitted compare can match it.
     pub add_shapes: AtomicU64,
-    /// `(proto_validity + VTABLE_GEN) << ADD_SLOT_BITS | slot`.
+    /// `proto_validity << ADD_SLOT_BITS | slot`.
     pub add_guard: AtomicU64,
     /// A `*mut AddWays` (0 = none): the memos of further pre-shapes, served
     /// by [`packed_add_try`]. A base-class constructor's key-add sees one
@@ -249,7 +249,7 @@ const ADD_BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
     | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
 
 /// The verdict generation the guard word records and the emitted hit
-/// recomputes: `PERRY_PROTO_VALIDITY + PERRY_VTABLE_GEN`.
+/// recomputes: `PERRY_PROTO_VALIDITY`.
 #[inline]
 pub(crate) fn add_generation() -> u64 {
     crate::object::chain_store::verdict_generation()

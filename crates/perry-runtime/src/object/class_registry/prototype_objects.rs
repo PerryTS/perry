@@ -615,10 +615,10 @@ unsafe fn evaluated_parent_instance_field(
 /// `cid`'s declared prototype? Then `get_parent_class_id(cid)` no longer
 /// names the next hop of an instance chain, and walks over the class
 /// registry must stop at `cid` (the recorded link continues the chain).
+///
+/// An unmaterialized prototype has never been observed, so nothing can have
+/// relinked it: the empty table entry answers `false`.
 pub(crate) fn class_decl_prototype_relinked(cid: u32) -> bool {
-    if !super::super::prototype_chain::any_class_chain_relinked() {
-        return false;
-    }
     let decl_proto = class_decl_prototype_object(cid);
     !decl_proto.is_null() && unsafe { decl_prototype_relinked(cid, decl_proto) }
 }
@@ -675,9 +675,7 @@ unsafe fn relinked_decl_prototype_field(
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> RelinkedRead {
-    if key.is_null()
-        || !super::super::prototype_chain::any_class_chain_relinked()
-        || !decl_prototype_relinked(cid, decl_proto)
+    if key.is_null() || !decl_prototype_relinked(cid, decl_proto)
     {
         return RelinkedRead::NotRelinked;
     }

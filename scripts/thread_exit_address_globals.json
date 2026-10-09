@@ -3627,14 +3627,6 @@
    "why": "UIWindowScene ObjC object pointer stored by the UIKit scene-delegate callback fallback_scene_will_connect (main-thread UIKit); a UIKit-owned object, not a GC arena address."
   },
   {
-   "file": "crates/perry-runtime/src/object/class_registry/dispatch.rs",
-   "names": [
-    "VTABLE_GEN"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Generation counter bumped on class method/getter registration; caches compare it to invalidate."
-  },
-  {
    "file": "crates/perry-runtime/src/ohos_napi.rs",
    "names": [
     "NAPI_MODULE_DESC"

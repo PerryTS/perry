@@ -274,12 +274,6 @@ pub extern "C" fn js_object_delete_field(
                             return 0;
                         }
                     }
-                    // Deleting an accessor from a class/Object prototype changes
-                    // method resolution for this key just like installing it.
-                    super::descriptor_state::invalidate_prototype_descriptor_guards(
-                        obj as usize,
-                        name,
-                    );
                     super::clear_accessor_descriptor(obj as usize, name);
                     super::clear_property_attrs(obj as usize, name);
                     // defineProperty may ALSO have planted a keys_array
@@ -339,9 +333,6 @@ pub extern "C" fn js_object_delete_field(
                                 );
                             }
                         }
-                        super::class_registry::invalidate_class_prototype_fast_guards_for_method(
-                            name,
-                        );
                         crate::typed_feedback::invalidate_method_change(cid);
                         // Methods and (S2) accessors are physical keys: fall
                         // through so the scan below removes the key.
@@ -387,9 +378,6 @@ pub extern "C" fn js_object_delete_field(
                     // must not govern a later assignment that recreates it.
                     super::clear_property_attrs(obj as usize, name);
                 }
-                // A configurable data method on a class/Object prototype is about
-                // to disappear. Retire only this name's direct-method guards.
-                super::descriptor_state::invalidate_prototype_descriptor_guards(obj as usize, name);
             }
         }
 

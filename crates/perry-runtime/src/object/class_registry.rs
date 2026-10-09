@@ -59,6 +59,8 @@ mod decl_method_slots_tests;
 #[cfg(test)]
 #[path = "class_registry/decl_prototype_birth_tests.rs"]
 mod decl_prototype_birth_tests;
+#[cfg(test)]
+mod retired_symbols_tests;
 mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;
@@ -141,17 +143,8 @@ pub(crate) use class_meta::{
     CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
     CLASS_ID_TEXT_ENCODER_STREAM,
 };
-#[cfg(test)]
-pub(crate) use prototype_methods::{
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
-};
-
 // ── prototype_methods.rs ────────────────────────────────────────────────────
-pub(crate) use prototype_methods::{
-    class_prototype_relinked, class_prototype_set, invalidate_class_prototype_fast_guards,
-    invalidate_class_prototype_fast_guards_for_method, prototype_relink_may_retarget_direct_arms,
-    retire_prototype_caches_without_direct_arms, synthetic_class_id_for_function,
-};
+pub(crate) use prototype_methods::{class_prototype_set, synthetic_class_id_for_function};
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,
     js_register_function_prototype_method, js_register_prototype_method,
@@ -207,12 +200,9 @@ pub use registration::{
 };
 
 // ── dispatch.rs ─────────────────────────────────────────────────────────────
-#[cfg(test)]
-pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
     call_vtable_method, call_vtable_method_value, call_vtable_method_with_private_brand,
     class_lookup_surface_gen_bump, class_lookup_surface_generation, fetch_parent_kind_in_chain,
-    vtable_generation, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
@@ -322,8 +312,5 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
     }
     rows
 }
-
-#[cfg(test)]
-pub(crate) use prototype_methods::class_prototype_method_guard_slot;
 
 pub(crate) use state::reserved_native_parent_prototype_bits;

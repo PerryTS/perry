@@ -466,12 +466,12 @@ fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
 /// The dangerous staleness direction is a cached `false` — "nothing on this
 /// chain can produce a `toJSON`" — that should have become `true`; a stale
 /// `true` only costs the slow path, which is the correct answer path. Every
-/// route that can flip the answer that way is covered by one of the three
+/// route that can flip the answer that way is covered by one of the two
 /// generations keyed on here:
 ///
 /// | route to a newly reachable `toJSON` | caught by |
 /// |---|---|
-/// | `class C { toJSON() {} }`, a getter or a setter registered for this class or any ancestor (`CLASS_VTABLE_REGISTRY`) | `VTABLE_GEN` — `js_register_class_method` / `_getter` / `_setter`, `js_register_class_computed_method` / `_accessor`, and the bound-method vtable copy in `object_ops/define_property.rs` all bump it |
+/// | `class C { toJSON() {} }`, a getter or a setter registered for this class or any ancestor (`CLASS_VTABLE_REGISTRY`) | nothing needed: registration adds a class's members before any instance of it exists (a later evaluation of a class expression stands on its own prototype object, which the surface generation covers) |
 /// | a NEW parent edge splicing in an ancestor that carries any of the above | the SEMANTIC property epoch — `class_registry::parent_static::register_class` is the only writer of the parent map and calls `prop_plan_epoch_bump` before publishing |
 /// | `Object.setPrototypeOf`, a descriptor install, or a `delete` anywhere | the SEMANTIC property epoch |
 /// | a prototype OBJECT materializing for this class or an ancestor — the very thing the walk looks for, since such an object can carry arbitrary later-added properties | `CLASS_LOOKUP_SURFACE_GEN`, bumped inside `class_prototype_object_root_store` and `class_decl_prototype_object_root_store` |
@@ -491,7 +491,6 @@ fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
 #[derive(Clone, Copy)]
 struct ClassChainToJsonEntry {
     class_id: u32,
-    vtable_gen: u64,
     semantic_epoch: u64,
     surface_gen: u64,
     may_have: bool,
@@ -512,7 +511,6 @@ const EMPTY_CLASS_CHAIN_TOJSON: ClassChainToJsonEntry = ClassChainToJsonEntry {
     // Class id 0 is answered by the caller without consulting the memo, so it
     // is a safe "empty" tag.
     class_id: 0,
-    vtable_gen: 0,
     semantic_epoch: 0,
     surface_gen: 0,
     may_have: false,
@@ -549,19 +547,17 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
 #[inline]
 fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
     debug_assert_ne!(class_id, 0, "class id 0 is answered by the caller");
-    let vtable_gen = crate::object::vtable_generation();
     let semantic_epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
     let surface_gen = crate::object::class_lookup_surface_generation();
     let slot = class_chain_tojson_slot(class_id);
     let entry = CLASS_CHAIN_TOJSON_MEMO.with(|table| table[slot].get());
     if entry.class_id == class_id
-        && entry.vtable_gen == vtable_gen
         && entry.semantic_epoch == semantic_epoch
         && entry.surface_gen == surface_gen
     {
         return entry;
     }
-    class_chain_to_json_memo_fill(class_id, vtable_gen, semantic_epoch, surface_gen, slot)
+    class_chain_to_json_memo_fill(class_id, semantic_epoch, surface_gen, slot)
 }
 
 /// Is an instance of `class_id` serialized by `JSON.stringify` exactly like a
@@ -623,7 +619,6 @@ fn class_is_plain_record_uncached(class_id: u32, may_have: bool) -> bool {
 #[inline(never)]
 fn class_chain_to_json_memo_fill(
     class_id: u32,
-    vtable_gen: u64,
     semantic_epoch: u64,
     surface_gen: u64,
     slot: usize,
@@ -633,7 +628,6 @@ fn class_chain_to_json_memo_fill(
     let may_have = class_chain_may_have_to_json_uncached(class_id);
     let entry = ClassChainToJsonEntry {
         class_id,
-        vtable_gen,
         semantic_epoch,
         surface_gen,
         may_have,

@@ -211,31 +211,6 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
 /// an object — the overwhelmingly common case.
 static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
-/// Latched true by the first user relink of a CLASS CHAIN link: a class
-/// declaration prototype (`Object.setPrototypeOf(C.prototype, X)`,
-/// `util.inherits`), a class constructor, or a function object. Those are the
-/// events that make a class's registered parent edges stop describing the
-/// live chain, which the class-id shortcuts (vtable, decl-proto and static
-/// walks) assume. Ordinary receivers re-pointed by `setPrototypeOf`,
-/// `__proto__` or `Object.create` do not set it: their prototype is a fact of
-/// their own shape. While it is clear, `class_decl_prototype_relinked` and the
-/// super/static relink probes answer `false` in one load; once set, they read
-/// the recorded `[[Prototype]]` of the link in question.
-static CLASS_CHAIN_RELINKED_EVER: AtomicBool = AtomicBool::new(false);
-
-/// Has any class chain link (see [`CLASS_CHAIN_RELINKED_EVER`]) ever been
-/// re-pointed by a user operation? `false` proves every class's registered
-/// parent edges still describe its live chain.
-#[inline]
-pub(crate) fn any_class_chain_relinked() -> bool {
-    CLASS_CHAIN_RELINKED_EVER.load(Ordering::Acquire)
-}
-
-/// Arm [`any_class_chain_relinked`] (`class_prototype_relinked`).
-pub(crate) fn note_class_chain_relinked() {
-    CLASS_CHAIN_RELINKED_EVER.store(true, Ordering::Release);
-}
-
 /// #10362: mark `obj_ptr`'s own header as an owner in the residual registry.
 ///
 /// Called under the registry lock and BEFORE the insert, the same discipline
@@ -591,15 +566,6 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                     word,
                 );
             }
-            if user_override {
-                // A user relink of a class declaration prototype retires the
-                // class's prototype-method fast guards and arms
-                // `any_class_chain_relinked`; so does one of a class object.
-                if crate::object::class_registry::is_class_object_ptr(obj.cast()) {
-                    note_class_chain_relinked();
-                }
-                crate::object::class_registry::class_prototype_relinked(obj);
-            }
             let proto_bits = proto_handle.get_heap_word_u64();
             #[cfg(feature = "shape-mint-diag")]
             if link_kind != PrototypeLinkKind::ClassDefault {
@@ -614,11 +580,6 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             crate::gc::runtime_shade_external_edge(proto_bits);
             return;
         }
-    }
-    if user_override {
-        // A function object (a class constructor or a plain function whose
-        // `.prototype` other chains name) re-pointed by a user operation.
-        note_class_chain_relinked();
     }
     let mut slot_addr = 0usize;
     if let Ok(mut map) = get_object_prototypes().lock() {
@@ -885,8 +846,8 @@ pub(crate) fn object_prototype_is_foreign(obj_ptr: usize) -> bool {
             return false;
         }
         // A class object's [[Prototype]] is its heritage (the parent
-        // constructor): its declared static chain. A user relink of one arms
-        // `any_class_chain_relinked`, which the static walks consult.
+        // constructor): its static chain, which the static walks read from
+        // its recorded link.
         if crate::object::class_registry::is_class_object_ptr(obj.cast()) {
             return false;
         }

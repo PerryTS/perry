@@ -215,22 +215,14 @@ fn class_chain_tojson_memo_reuses_a_verdict_until_a_generation_moves() {
     assert_eq!(
         super::test_class_chain_tojson_recomputes(),
         1,
-        "an unchanged generation triple must reuse the recorded verdict"
-    );
-
-    crate::object::test_bump_vtable_generation();
-    assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
-    assert_eq!(
-        super::test_class_chain_tojson_recomputes(),
-        2,
-        "a vtable registration must retire the entry"
+        "an unchanged generation pair must reuse the recorded verdict"
     );
 
     crate::object::prop_plan::prop_plan_epoch_bump();
     assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
     assert_eq!(
         super::test_class_chain_tojson_recomputes(),
-        3,
+        2,
         "a semantic property mutation must retire the entry"
     );
 
@@ -238,7 +230,7 @@ fn class_chain_tojson_memo_reuses_a_verdict_until_a_generation_moves() {
     assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
     assert_eq!(
         super::test_class_chain_tojson_recomputes(),
-        4,
+        3,
         "a class lookup-surface mutation must retire the entry"
     );
 }

@@ -11,7 +11,6 @@ use super::*;
 struct PrototypeSignature {
     prototype_addr: usize,
     shape_id: u32,
-    vtable_generation: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -57,7 +56,6 @@ unsafe fn prototype_signature(prototype_addr: usize) -> Option<PrototypeSignatur
     Some(PrototypeSignature {
         prototype_addr,
         shape_id,
-        vtable_generation: super::super::class_registry::vtable_generation(),
     })
 }
 

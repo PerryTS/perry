@@ -66,7 +66,7 @@
 //! cannot leave the thread that resolved it (see [`current`]).
 //!
 //! The `RegistryLatch`es that gate the slow paths (`HAS_INSTANCE_LATCH`,
-//! `GENERIC_ORIGIN_LATCH`, …) and `VTABLE_GEN` stay process-global on
+//! `GENERIC_ORIGIN_LATCH`, …) stay process-global on
 //! purpose: a latch armed by ANY image only ever costs another image the slow
 //! path, never a wrong answer.
 

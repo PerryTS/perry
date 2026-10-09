@@ -601,7 +601,7 @@ mod setter_arm;
 ///
 /// ```text
 ///   ONE pre-shape compare       sid == low half of a memo's shapes (caller)
-///   the chain verdict           PROTO_VALIDITY + VTABLE_GEN == guard >> 16
+///   the chain verdict           PROTO_VALIDITY == guard >> 16
 ///   per-object facts            ONE test of the GcHeader word: not TENURED,
 ///                               no tombstones or descriptor flag, and no
 ///                               layout record to retire (receiver kind and

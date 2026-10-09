@@ -712,7 +712,6 @@ pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut O
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
-    super::super::prototype_chain::note_class_chain_relinked();
     let bits = crate::value::js_nanbox_pointer(proto_ptr as i64).to_bits();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
@@ -725,7 +724,6 @@ pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
     if class_id == 0 {
         return;
     }
-    super::super::prototype_chain::note_class_chain_relinked();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
         crate::value::TAG_NULL,
@@ -786,10 +784,7 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
 fn link_decl_prototype_object(class_id: u32, proto_ptr: *mut ObjectHeader) {
     let displaced =
         crate::object::class_value::class_decl_prototype_link_store(class_id, proto_ptr);
-    // Its sole caller, `class_decl_prototype_value`, argues at length against
-    // bumping VTABLE_GEN here (it would disarm dispatch speculation for a
-    // whole class hierarchy). The lookup-surface generation is the separate
-    // counter that exists for exactly this store (#10696).
+    // The lookup-surface generation exists for exactly this store (#10696).
     super::class_lookup_surface_gen_bump();
     if !displaced.is_null() && displaced != proto_ptr {
         retire_displaced_decl_prototype(displaced);
@@ -894,9 +889,7 @@ pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
 
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
-/// vtable accessors as own properties of the prototype object, and by
-/// `descriptor_state::invalidate_prototype_descriptor_guards` on every
-/// `Object.defineProperty`.
+/// vtable accessors as own properties of the prototype object.
 ///
 /// Callers ask about arbitrary objects (#9180: on a bundled application most
 /// asks are misses, run thousands of times during module init), so the answer
@@ -1409,23 +1402,11 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // #7769 follow-up: materializing a declared class's prototype object is
-    // not prototype surgery. A real keyed prototype write invalidates only
-    // the matching method-name guard slot, retires element-shape records, and
-    // bumps `VTABLE_GEN` so generic dispatch observes the replacement.
-    //
-    // Reaching this line changes none of that. The object being created is
-    // fresh and unobserved; the writes immediately below install
-    // `constructor` plus exactly the methods the class already declares, i.e.
-    // the same answers the vtable already gives. But because ANY demand for
-    // `Class.prototype` lands here — `instanceof`, `Object.getPrototypeOf`,
-    // a `super` chain — a plain class-hierarchy program disarmed its own
-    // dispatch speculation during startup and then ran every `recv.m()`
-    // through the `js_native_call_method` tower.
-    //
-    // Measured on `gc-handoff/apps/shapes.ts`: 384,000 of 384,000 shape-guard
-    // probes failed here and nowhere else, and every element read fell back to
-    // the generic index path for the same reason.
+    // Materializing a declared class's prototype object is not prototype
+    // surgery: the object is fresh and unobserved, and the writes below
+    // install `constructor` plus exactly the members the class declares. It
+    // retires nothing (#7769: when it did, 384,000 of 384,000 shape-guard
+    // probes on `gc-handoff/apps/shapes.ts` failed here).
     proto.with_mut_ptr::<ObjectHeader, _>(|p| link_decl_prototype_object(class_id, p));
 
     let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(

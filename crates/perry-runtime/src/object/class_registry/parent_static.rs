@@ -1,7 +1,6 @@
 use super::*;
 use crate::{object::object_ops::throw_object_type_error, JSValue};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
@@ -826,7 +825,6 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if is_static == 0 && !proto.is_null() {
             super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
         }
-        VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
     let name = match property_key_string(property_key) {
@@ -903,7 +901,6 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         let proto = class_decl_prototype_object(class_id);
         super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
     }
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
 }
 
 #[no_mangle]
@@ -953,7 +950,6 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         if is_static == 0 && !proto.is_null() {
             super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
         }
-        VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
     if let Some(name) = property_key_string(property_key) {
@@ -1004,7 +1000,6 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             crate::object::class_value::note_intrinsic_registration(class_id, &name);
         }
     }
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
 }
 
 /// Look up a static method by name in `CLASS_STATIC_METHODS`, walking the

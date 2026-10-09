@@ -4,38 +4,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 // ============================================================================
 // Class-method calls through the vtable's function pointers (constructors,
-// private and symbol-keyed members, the method-value trampoline), and the
-// registration generation the store-plan cache keys on.
+// private and symbol-keyed members, the method-value trampoline).
 //
 // A by-name call of a class instance's string-keyed method is answered by its
 // prototype chain's shapes (`native_call_method::class_holder`), not here: the
 // per-(class, name) caches this module used to keep for it are gone.
 // ============================================================================
 
-pub(crate) static VTABLE_GEN: AtomicU64 = AtomicU64::new(1);
-
-/// Current vtable generation — consumed by caches (the store-plan cache in
-/// `object::prop_plan`) that must invalidate on any class
-/// registration/mutation.
-#[inline]
-pub(crate) fn vtable_generation() -> u64 {
-    VTABLE_GEN.load(Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(crate) fn test_bump_vtable_generation() {
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
-}
-
-/// Generation counter for the class-registry lookup surfaces that
-/// [`VTABLE_GEN`] deliberately does NOT cover.
-///
-/// `VTABLE_GEN` tracks method/getter/setter REGISTRATION. Four other writes
-/// change what a class-chain walk would ANSWER without touching a vtable, and
-/// none of them may bump `VTABLE_GEN`: materializing a declared class's
-/// prototype OBJECT is explicitly documented as a dispatch deoptimization to
-/// avoid (`class_registry/state.rs`, #7769 — "384,000 of 384,000 shape-guard
-/// probes failed here"). They are:
+/// Generation counter for the class-registry lookup surfaces: the writes
+/// that change what a class-chain walk would ANSWER without touching a
+/// vtable. They are:
 ///
 /// * `class_prototype_object_root_store` — NULL to a real
 ///   `CLASS_PROTOTYPE_OBJECTS` entry (a reflective `F.prototype` read,
@@ -48,9 +26,7 @@ pub(crate) fn test_bump_vtable_generation() {
 ///
 /// Bumped INSIDE those three writers, after the store, so a new call site
 /// cannot forget it — the same enforced-funnel rule `prop_plan_epoch_bump`
-/// follows. Kept separate from `VTABLE_GEN` precisely so that a consumer of
-/// this counter does not impose the dispatch-speculation cost that bumping
-/// `VTABLE_GEN` in those writers would.
+/// follows.
 ///
 /// Garbage collection is NOT an input: the class side-table scanners
 /// (`object/class_gc_roots.rs`, `class_registry/gc_roots.rs`) only rewrite

@@ -126,7 +126,7 @@ console.log("4 sibling unaffected:", fresh.kind());
 //
 // Both are upstream of the dispatch cache: the fast path's guard REJECTS a
 // receiver with a non-null `meta` record (which `setPrototypeOf` installs) and
-// prototype surgery now bumps `VTABLE_GEN`, so neither is reached from cache —
+// prototype surgery restamps the holder's shape, so neither is reached from cache —
 // the tower produces these answers on its own. Asserting them here would make
 // this file a permanent gap failure and hide the regressions it exists to
 // catch, so they are left to whoever fixes the tower.
