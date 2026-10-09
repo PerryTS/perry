@@ -10,7 +10,6 @@ pub(crate) struct IteratorRecordPlan {
     array: LocalId,
     index: LocalId,
     scalars: Option<Vec<LocalId>>,
-    numeric_candidate: bool,
 }
 
 fn runtime(method: &str, args: Vec<Expr>) -> Expr {
@@ -97,7 +96,6 @@ impl IteratorRecordPlan {
             array,
             index,
             scalars: None,
-            numeric_candidate,
         }
     }
 
@@ -170,7 +168,6 @@ impl IteratorRecordPlan {
             array: source,
             index,
             scalars: Some(scalars),
-            numeric_candidate: false,
         }
     }
 
@@ -223,8 +220,12 @@ impl IteratorRecordPlan {
     }
 
     pub(crate) fn release(&self, extra: &[LocalId]) -> Vec<Stmt> {
-        let mut ids = vec![self.source];
-        ids.extend(extra.iter().copied());
+        let mut ids = vec![self.array];
+        for id in extra {
+            if !ids.contains(id) {
+                ids.push(*id);
+            }
+        }
         if let Some(scalars) = &self.scalars {
             ids.extend(scalars.iter().copied());
         }
@@ -743,6 +744,18 @@ mod tests {
             panic!("capture the payload");
         };
         assert_eq!(*id, 99);
+        let release = plan.release(&[99, 100, 101]);
+        assert_eq!(
+            release.len(),
+            3,
+            "each payload and step owner is released once"
+        );
+        assert!(
+            !release.iter().any(|stmt| matches!(stmt,
+            Stmt::Expr(Expr::LocalSet(id, _)) if *id == source)),
+            "the original input was already released at capture"
+        );
+
         assert!(matches!(value.as_ref(), Expr::Conditional {
             condition, then_expr, else_expr,
         } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
@@ -866,15 +879,21 @@ mod tests {
     fn array_record_typed_candidate_survives_private_root_release() {
         let mut ctx = LoweringContext::new("hint");
         let mut setup = Vec::new();
-        let typed = IteratorRecordPlan::new_typed(
+        let _typed = IteratorRecordPlan::new_typed(
             &mut ctx,
             Expr::Undefined,
             Type::Array(Box::new(Type::Number)),
             &mut setup,
         );
-        assert!(typed.numeric_candidate);
-        let general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup);
-        assert!(!general.numeric_candidate);
+        assert!(matches!(&setup[1], Stmt::Let {
+            init: Some(Expr::NativeMethodCall { args, .. }), .. }
+            if matches!(args.last(), Some(Expr::Bool(true)))));
+
+        let _general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup);
+        assert!(matches!(&setup[4], Stmt::Let {
+            init: Some(Expr::NativeMethodCall { args, .. }), .. }
+            if !matches!(args.last(), Some(Expr::Bool(true)))));
+
         let ir = hir("function f(a: number[]) { for (const x of a) { console.log(x); } }");
         let entry = &ir[ir.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(

@@ -318,3 +318,29 @@ fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
     #[cfg(feature = "llvm-inprocess")]
     crate::testing::verify_ir(&ll, "ordinary_index_forwarding_custody").unwrap();
 }
+
+#[test]
+fn completion_flags_preserve_truthiness_without_boolean_constructor_evidence() {
+    for (done, constructed) in [(Expr::Bool(true), true), (Expr::LocalGet(1), false)] {
+        let ll = ir(runtime(
+            "arrayRecordFinish",
+            vec![
+                Expr::Bool(false),
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                Expr::Undefined,
+                done,
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        ));
+        assert!(ll.contains("call double @js_array_record_finish("));
+        assert_eq!(
+            ll.contains("call i32 @js_is_truthy("),
+            !constructed,
+            "a declaration must not replace IteratorClose's ToBoolean contract: {ll}"
+        );
+        #[cfg(feature = "llvm-inprocess")]
+        crate::testing::verify_ir(&ll, "record_completion_flags").unwrap();
+    }
+}

@@ -123,8 +123,15 @@
                     ctx.block().unreachable();
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
-                let done_bits = ctx.block().bitcast_double_to_i64(values[4].1);
-                let done = ctx.block().icmp_eq(I64, &done_bits, crate::nanbox::TAG_TRUE_I64);
+                let done = if crate::type_analysis::is_bool_expr(ctx, &args[4]) {
+                    let done_bits = ctx.block().bitcast_double_to_i64(values[4].1);
+                    ctx.block().icmp_eq(I64, &done_bits, crate::nanbox::TAG_TRUE_I64)
+                } else {
+                    // IteratorClose consumes ToBoolean(done). Only an actual
+                    // constructed Boolean permits the strict tag shortcut.
+                    let truth = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, values[4].1)]);
+                    ctx.block().icmp_ne(I32, &truth, "0")
+                };
                 let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
                 let done_flag = ctx.block().shl(I32, &done_flag, "1");
                 let flags = ctx.block().or(I32, &mode_flag, &done_flag);
