@@ -1,44 +1,16 @@
 //! `Object.defineProperties` and `Object.setPrototypeOf`.
 use super::*;
 
-struct CollectedDescriptor<'scope> {
-    key: crate::gc::RuntimeHandle<'scope>,
-    descriptor: DescView<'scope>,
-}
-
-/// Caller-owned buffers survive the protected frame on abrupt completion.
-struct CollectionStorage<'scope> {
-    keys: Vec<crate::gc::RuntimeHandle<'scope>>,
-    collected: Vec<CollectedDescriptor<'scope>>,
-    #[cfg(test)]
-    accounted_bytes: usize,
-}
-impl CollectionStorage<'_> {
-    #[cfg(test)]
-    fn account_growth(&mut self) {
-        #[cfg(test)]
-        {
-            let bytes = self.keys.capacity() * std::mem::size_of::<crate::gc::RuntimeHandle<'_>>()
-                + self.collected.capacity() * std::mem::size_of::<CollectedDescriptor<'_>>();
-            LIVE_COLLECTION_BYTES.with(|live| live.set(live.get() + bytes - self.accounted_bytes));
-            self.accounted_bytes = bytes;
-        }
-    }
-}
-#[cfg(test)]
-thread_local! { static LIVE_COLLECTION_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-#[cfg(test)]
-impl Drop for CollectionStorage<'_> {
-    fn drop(&mut self) {
-        LIVE_COLLECTION_BYTES.with(|live| live.set(live.get() - self.accounted_bytes));
-    }
-}
-#[cfg(test)]
-pub(crate) fn live_collection_bytes_for_tests() -> usize {
-    LIVE_COLLECTION_BYTES.with(|live| live.get())
-}
-
 /// Snapshot all keys, collect current enumerable descriptors, then apply.
+///
+/// Both key snapshots are fresh arrays (`getOwnPropertyNames` /
+/// `getOwnPropertySymbols`, or the Proxy's validated `ownKeys` list) rooted
+/// before any per-key callback. Each collected definition is a contiguous
+/// record of rooted handles in this operation's own scope
+/// (`DescView::collected_words`), so the operation owns no Rust-heap buffer:
+/// an abrupt completion leaves nothing to release, and the thrower's
+/// savepoint truncates the records with the rest of the handle stack. No
+/// protected frame is needed.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f64 {
     unsafe {
@@ -50,110 +22,91 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         // normalize them before any enumeration or descriptor callback.
         let target = scope.root_nanbox_f64(normalize_descriptor_operand(target));
         let properties = scope.root_nanbox_f64(normalize_descriptor_operand(properties));
-        // longjmp skips Drop. Own both buffers outside the catch and borrow them
-        // into its body. On Err, their handles have been truncated: never read
-        // an entry; free the owned buffers before rethrowing the rooted error.
-        let mut storage = CollectionStorage {
-            keys: Vec::new(),
-            collected: Vec::new(),
-            #[cfg(test)]
-            accounted_bytes: 0,
+        let value = f64::from_bits(properties.get_nanbox_u64());
+        if matches!(
+            value.to_bits(),
+            crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+        ) {
+            throw_object_type_error(b"Cannot convert undefined or null to object");
+        }
+        let properties = scope.root_nanbox_u64(if definition_target_is_object(value) {
+            value.to_bits()
+        } else {
+            super::super::js_object_coerce(value).to_bits()
+        });
+        let current_properties = || f64::from_bits(properties.get_nanbox_u64());
+        let proxy = crate::proxy::js_proxy_is_proxy(current_properties()) != 0;
+        let names = if proxy {
+            crate::proxy::js_proxy_own_keys(current_properties())
+        } else {
+            js_object_get_own_property_names(current_properties())
         };
-        let outcome = crate::exception::catch_js_throw(|| {
-            let value = f64::from_bits(properties.get_nanbox_u64());
-            if matches!(
-                value.to_bits(),
-                crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
-            ) {
-                throw_object_type_error(b"Cannot convert undefined or null to object");
-            }
-            let properties = scope.root_nanbox_u64(if definition_target_is_object(value) {
-                value.to_bits()
-            } else {
-                super::super::js_object_coerce(value).to_bits()
-            });
-            let current_properties = || f64::from_bits(properties.get_nanbox_u64());
-            let proxy = crate::proxy::js_proxy_is_proxy(current_properties()) != 0;
-            let names = if proxy {
-                crate::proxy::js_proxy_own_keys(current_properties())
-            } else {
-                js_object_get_own_property_names(current_properties())
-            };
-            let names =
-                scope
-                    .root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(names)
-                        as *mut crate::array::ArrayHeader);
-            // Root the name array while enumerating symbols; both snapshots are
-            // complete before any per-key own-descriptor/Get callback.
-            let symbols = if proxy {
-                None
-            } else {
-                let raw = crate::symbol::js_object_get_own_property_symbols(current_properties());
-                (raw != 0).then(|| scope.root_raw_mut_ptr(raw as *mut crate::array::ArrayHeader))
-            };
-            let length = names.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+        let names = scope.root_raw_mut_ptr(
+            crate::value::js_nanbox_get_pointer(names) as *mut crate::array::ArrayHeader
+        );
+        // Root the name array while enumerating symbols; both snapshots are
+        // complete before any per-key own-descriptor/Get callback.
+        let symbols = if proxy {
+            None
+        } else {
+            let raw = crate::symbol::js_object_get_own_property_symbols(current_properties());
+            (raw != 0).then(|| scope.root_raw_mut_ptr(raw as *mut crate::array::ArrayHeader))
+        };
+        let length_of = |array: &crate::gc::RuntimeHandle<'_>| {
+            array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
                 crate::array::js_array_length(array)
-            });
-            for index in 0..length {
-                let key = names.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
-                    crate::array::js_array_get_f64(array, index)
-                });
-                storage.keys.push(scope.root_nanbox_f64(key));
-                #[cfg(test)]
-                storage.account_growth();
-            }
-            if let Some(symbols) = symbols {
-                let length = symbols.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
-                    crate::array::js_array_length(array)
-                });
-                for index in 0..length {
-                    let key = symbols.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+            })
+        };
+        let name_count = length_of(&names);
+        let key_count = name_count + symbols.as_ref().map(length_of).unwrap_or(0);
+        // Per-key work runs in its own scope; only the finished record is
+        // pushed into `scope`, so records sit back to back from `base`.
+        let base = crate::gc::runtime_handle_stack_savepoint();
+        let mut entries = 0usize;
+        for index in 0..key_count {
+            let words = {
+                let key_scope = crate::gc::RuntimeHandleScope::new();
+                let key = key_scope.root_nanbox_f64(match (&symbols, index < name_count) {
+                    (_, true) => names.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
                         crate::array::js_array_get_f64(array, index)
-                    });
-                    storage.keys.push(scope.root_nanbox_f64(key));
-                    #[cfg(test)]
-                    storage.account_growth();
+                    }),
+                    (Some(symbols), false) => symbols
+                        .with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+                            crate::array::js_array_get_f64(array, index - name_count)
+                        }),
+                    (None, false) => unreachable!("key_count counts only snapshot entries"),
+                });
+                // `props.[[GetOwnProperty]](key)` read for its [[Enumerable]]
+                // only: the source family answers from its own facts (a
+                // Proxy runs its getOwnPropertyDescriptor trap exactly once),
+                // so no reflection record is built per source key.
+                if js_object_property_is_enumerable(current_properties(), key.get_nanbox_f64())
+                    .to_bits()
+                    != crate::value::TAG_TRUE
+                {
+                    continue;
                 }
-            }
-            for index in 0..storage.keys.len() {
-                let key = scope.root_nanbox_f64(storage.keys[index].get_nanbox_f64());
-                let current = scope.root_nanbox_f64(js_object_get_own_property_descriptor(
+                // The Get result is a JSValue at rest: decode it as-is, never
+                // through the raw-operand admission used for public operands.
+                let bag = key_scope.root_nanbox_f64(super::super::js_object_get_property_key(
                     current_properties(),
                     key.get_nanbox_f64(),
                 ));
-                if current.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
-                    continue;
-                }
-                let current = decode_own_descriptor_result(&scope, &current);
-                if current.flag(b"enumerable") != Some(true) {
-                    continue;
-                }
-                let bag = scope.root_nanbox_f64(normalize_descriptor_operand(
-                    super::super::js_object_get_property_key(
-                        current_properties(),
-                        key.get_nanbox_f64(),
-                    ),
-                ));
-                let descriptor = decode_property_descriptor(&scope, &bag);
-                // A second handle references the same rooted key word; no raw
-                // key or editable descriptor bag enters the application list.
-                storage.collected.push(CollectedDescriptor {
-                    key: scope.root_nanbox_f64(key.get_nanbox_f64()),
-                    descriptor,
-                });
-                #[cfg(test)]
-                storage.account_growth();
+                let descriptor = decode_property_descriptor(&key_scope, &bag);
+                let words = descriptor.collected_words(key.get_nanbox_u64());
+                words
+            };
+            // No allocation between reading the words and rooting them.
+            for word in words {
+                scope.root_nanbox_u64(word);
             }
-            for entry in &storage.collected {
-                if !define_own_property_decoded(&scope, &target, &entry.key, &entry.descriptor) {
-                    throw_definition_rejected(&scope, &target, &entry.key);
-                }
+            entries += 1;
+        }
+        for entry in 0..entries {
+            let (key, descriptor) = DescView::collected_at(&scope, base, entry);
+            if !define_own_property_decoded(&scope, &target, &key, &descriptor) {
+                throw_definition_rejected(&scope, &target, &key);
             }
-        });
-        if let Err(error) = outcome {
-            let error = scope.root_nanbox_f64(error);
-            drop(storage);
-            crate::exception::js_throw(error.get_nanbox_f64());
         }
         f64::from_bits(target.get_nanbox_u64())
     }

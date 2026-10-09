@@ -8,7 +8,7 @@ pub(super) unsafe fn define_symbol_property(
     receiver_value: f64,
     key_value: f64,
     descriptor: &DescView<'_>,
-) -> f64 {
+) -> bool {
     let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let receiver_handle = scope.root_nanbox_u64(receiver_value.to_bits());
     let key_handle = scope.root_nanbox_f64(key_value);
@@ -34,7 +34,7 @@ pub(super) unsafe fn define_symbol_property(
         scope.root_nanbox_u64(existing_data_bits.unwrap_or(crate::value::TAG_UNDEFINED));
     let existed = existing_accessor_bits.is_some() || existing_data_bits.is_some();
     if !existed && crate::value::js_is_truthy(js_object_is_extensible(current_obj())) == 0 {
-        throw_object_type_error(b"Cannot define property on non-extensible object");
+        return false;
     }
     // A symbol installed by ordinary assignment has no explicit
     // attrs side-table entry and therefore has the ordinary
@@ -44,9 +44,8 @@ pub(super) unsafe fn define_symbol_property(
             .unwrap_or(PropertyAttrs::new(true, true, true))
     });
     if let Some(attrs) = existing_attrs {
-        if !attrs.configurable() {
-            validate_nonconfigurable_redefine(
-                "symbol",
+        if !attrs.configurable()
+            && !nonconfigurable_redefine_allowed(
                 attrs,
                 existing_accessor_bits.map(|_| super::super::AccessorDescriptor {
                     get: existing_get.get_nanbox_u64(),
@@ -54,7 +53,9 @@ pub(super) unsafe fn define_symbol_property(
                 }),
                 existing_data.get_nanbox_f64(),
                 descriptor,
-            );
+            )
+        {
+            return false;
         }
     }
 
@@ -135,5 +136,5 @@ pub(super) unsafe fn define_symbol_property(
             }),
         ),
     );
-    current_obj()
+    true
 }
