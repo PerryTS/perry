@@ -169,8 +169,11 @@ mod keepalive {
     static JS_STATE: unsafe extern "C" fn(f64, *const PerryPayloadFamily, i32) -> f64 =
         js_perry_payload_js_state;
     #[used(compiler)]
-    static LINK_PTR: unsafe extern "C" fn(usize, *const PerryPayloadFamily, *mut i32) -> *mut c_void =
-        js_perry_payload_link_ptr;
+    static LINK_PTR: unsafe extern "C" fn(
+        usize,
+        *const PerryPayloadFamily,
+        *mut i32,
+    ) -> *mut c_void = js_perry_payload_link_ptr;
     #[used(compiler)]
     static LINK_LIFECYCLE: unsafe extern "C" fn(usize, *const PerryPayloadFamily) -> i32 =
         js_perry_payload_link_lifecycle;
@@ -178,8 +181,12 @@ mod keepalive {
     static LINK_CLOSE: unsafe extern "C" fn(usize, *const PerryPayloadFamily) -> i32 =
         js_perry_payload_link_close;
     #[used(compiler)]
-    static LINK_REOPEN: unsafe extern "C" fn(usize, *const PerryPayloadFamily, *mut c_void, usize) -> i32 =
-        js_perry_payload_link_reopen;
+    static LINK_REOPEN: unsafe extern "C" fn(
+        usize,
+        *const PerryPayloadFamily,
+        *mut c_void,
+        usize,
+    ) -> i32 = js_perry_payload_link_reopen;
     #[used(compiler)]
     static LINK_JS_STATE: unsafe extern "C" fn(usize, *const PerryPayloadFamily, i32) -> f64 =
         js_perry_payload_link_js_state;
@@ -190,8 +197,12 @@ mod keepalive {
     static RECEIVER_LINK: unsafe extern "C" fn(f64, *const PerryPayloadFamily, *mut i32) -> usize =
         js_perry_payload_receiver_link;
     #[used(compiler)]
-    static PROTO_GETTER: unsafe extern "C" fn(*mut c_void, *const u8, usize, *const crate::closure::JsFunctionInfo) =
-        js_perry_payload_proto_getter;
+    static PROTO_GETTER: unsafe extern "C" fn(
+        *mut c_void,
+        *const u8,
+        usize,
+        *const crate::closure::JsFunctionInfo,
+    ) = js_perry_payload_proto_getter;
     #[used(compiler)]
     static PROTO_DATA: unsafe extern "C" fn(*mut c_void, *const u8, usize, f64, u32) =
         js_perry_payload_proto_data;
@@ -443,8 +454,10 @@ pub unsafe extern "C" fn js_perry_payload_link_reopen(
     resource: *mut c_void,
     bytes: usize,
 ) -> i32 {
-    let (Ok(cell), Some(family)) = (link_family_cell(link, family_ptr), checked_family(family_ptr))
-    else {
+    let (Ok(cell), Some(family)) = (
+        link_family_cell(link, family_ptr),
+        checked_family(family_ptr),
+    ) else {
         return -1;
     };
     let Some(owner) = np::link_event_owner(np::OwnerLink(link)) else {

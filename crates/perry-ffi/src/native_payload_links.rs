@@ -153,8 +153,11 @@ fn miss_code(code: i32) -> PayloadMiss {
 }
 
 extern "C" {
-    fn js_perry_payload_link_ptr(link: usize, family: *const PayloadFamily, miss: *mut i32)
-        -> *mut c_void;
+    fn js_perry_payload_link_ptr(
+        link: usize,
+        family: *const PayloadFamily,
+        miss: *mut i32,
+    ) -> *mut c_void;
     fn js_perry_payload_link_lifecycle(link: usize, family: *const PayloadFamily) -> i32;
     fn js_perry_payload_link_close(link: usize, family: *const PayloadFamily) -> i32;
     fn js_perry_payload_link_reopen(
@@ -163,9 +166,16 @@ extern "C" {
         resource: *mut c_void,
         bytes: usize,
     ) -> i32;
-    fn js_perry_payload_link_js_state(link: usize, family: *const PayloadFamily, create: i32)
-        -> f64;
-    fn js_perry_payload_link_external_bytes(link: usize, family: *const PayloadFamily, bytes: usize);
+    fn js_perry_payload_link_js_state(
+        link: usize,
+        family: *const PayloadFamily,
+        create: i32,
+    ) -> f64;
+    fn js_perry_payload_link_external_bytes(
+        link: usize,
+        family: *const PayloadFamily,
+        bytes: usize,
+    );
     fn js_perry_payload_receiver_link(
         value: f64,
         family: *const PayloadFamily,
@@ -290,7 +300,12 @@ pub unsafe fn attach_link<T>(
     bytes: usize,
 ) -> Result<(), AttachMiss> {
     let ptr = Box::into_raw(Box::new(payload));
-    let result = attach_code(js_perry_payload_link_reopen(link.0, family, ptr.cast(), bytes));
+    let result = attach_code(js_perry_payload_link_reopen(
+        link.0,
+        family,
+        ptr.cast(),
+        bytes,
+    ));
     if result.is_err() {
         drop(Box::from_raw(ptr));
     }
@@ -319,7 +334,11 @@ pub unsafe fn link_js_state(link: OwnerLink, family: &'static PayloadFamily, cre
 /// Restate the native bytes the payload behind a link retains.
 /// # Safety
 /// As [`link_payload_ptr`].
-pub unsafe fn link_set_external_bytes(link: OwnerLink, family: &'static PayloadFamily, bytes: usize) {
+pub unsafe fn link_set_external_bytes(
+    link: OwnerLink,
+    family: &'static PayloadFamily,
+    bytes: usize,
+) {
     js_perry_payload_link_external_bytes(link.0, family, bytes);
 }
 
@@ -340,7 +359,14 @@ impl PayloadPrototype {
         unsafe { js_perry_payload_proto_getter(self.0, name.as_ptr(), name.len(), info) }
     }
     /// A data property.
-    pub fn data(&mut self, name: &str, value: f64, writable: bool, enumerable: bool, configurable: bool) {
+    pub fn data(
+        &mut self,
+        name: &str,
+        value: f64,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) {
         let flags = u32::from(writable) | u32::from(enumerable) << 1 | u32::from(configurable) << 2;
         unsafe { js_perry_payload_proto_data(self.0, name.as_ptr(), name.len(), value, flags) }
     }

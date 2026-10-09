@@ -5208,6 +5208,7 @@ dependencies = [
 name = "perry-ext-ws"
 version = "0.5.1659"
 dependencies = [
+ "perry-ext-net",
  "perry-ffi",
  "perry-http-server",
  "perry-runtime",

@@ -29,7 +29,6 @@ unsafe extern "C" fn event(closure: *const RawClosureHeader, _: JsThis, arg: f64
     let state = scope.root_nanbox(bun_state(owner.get()));
     let handlers = scope.root_nanbox(p::own_get(state.get(), "bunHandlers"));
     let promise = scope.root_nanbox(p::own_get(state.get(), "bunPromise"));
-    let opened = boolean(p::own_get(state.get(), "bunOpened"));
     if index == 0 || index == 4 {
         p::own_set(state.get(), "bunPromise", p::undefined());
         if JsValue::from_bits(promise.get().to_bits()).is_pointer() {
@@ -41,16 +40,9 @@ unsafe extern "C" fn event(closure: *const RawClosureHeader, _: JsThis, arg: f64
             }
         }
     }
-    if index == 0 {
-        p::own_set(
-            state.get(),
-            "bunOpened",
-            f64::from_bits(JsValue::TRUE.bits()),
-        );
-    }
     let handler = scope.root_nanbox(p::own_get(
         handlers.get(),
-        if index == 4 && !opened {
+        if index == 4 && JsValue::from_bits(promise.get().to_bits()).is_pointer() {
             "connectError"
         } else {
             HANDLERS[index]
@@ -96,11 +88,6 @@ fn install(owner: f64, options: f64) {
     p::own_set(state.get(), "bunHandlers", handlers.get());
     let data = scope.root_nanbox(p::own_get(options.get(), "data"));
     p::own_set(owner.get(), "data", data.get());
-    p::own_set(
-        state.get(),
-        "bunOpened",
-        f64::from_bits(JsValue::FALSE.bits()),
-    );
     if p::socket_link(owner.get()).is_ok() {
         unsafe {
             if let Ok(payload) = p::socket_ptr(socket::link(owner.get())) {
@@ -314,12 +301,6 @@ unsafe extern "C" fn connection(closure: *const RawClosureHeader, _: JsThis, chi
     install(child.get(), options.get());
     p::own_set(child.get(), "listener", owner.get());
     let callback = scope.root_nanbox(p::own_get(handlers.get(), "open"));
-    let state = scope.root_nanbox(bun_state(child.get()));
-    p::own_set(
-        state.get(),
-        "bunOpened",
-        f64::from_bits(JsValue::TRUE.bits()),
-    );
     if socket::is_callback(callback.get()) {
         events::call(callback.get(), JsThis::UNDEFINED, &[child.get()]);
     }

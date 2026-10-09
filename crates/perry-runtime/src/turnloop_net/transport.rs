@@ -1344,7 +1344,12 @@ pub unsafe fn pending_resolve_for_test(cell: usize) -> Option<OpId> {
 /// As [`pending_resolve_for_test`].
 #[cfg(any(test, feature = "native-payload-test-census"))]
 pub unsafe fn replay_resolve_for_test(cell: usize, op: OpId, addresses: Vec<SocketAddr>) {
-    dispatch_resolve(OwnerLink(cell), Some(op), false, OpResult::Resolved(addresses));
+    dispatch_resolve(
+        OwnerLink(cell),
+        Some(op),
+        false,
+        OpResult::Resolved(addresses),
+    );
 }
 
 /// Start the plan's next address, or report its final failure.

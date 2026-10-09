@@ -6,11 +6,9 @@
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
     "crates/perry-ext-http/src/server/handle_dispatch.rs": 2,
     "crates/perry-ext-http/src/server/request.rs": 7,
-    "crates/perry-ext-http/src/server/response.rs": 1,
     "crates/perry-ext-http/src/server/types.rs": 1,
     "crates/perry-ext-net/src/classes.rs": 2,
     "crates/perry-ext-net/src/jsvalue.rs": 1,
-    "crates/perry-ext-net/src/lifecycle.rs": 1,
     "crates/perry-ext-streams/src/lib.rs": 4,
     "crates/perry-ext-ws/src/server.rs": 3,
     "crates/perry-stdlib/src/cheerio.rs": 6,
@@ -48,5 +46,5 @@
     "crates/perry-stdlib/src/worker_threads/worker_surface.rs": 6
   },
   "schema_version": 3,
-  "total": 315
+  "total": 313
 }

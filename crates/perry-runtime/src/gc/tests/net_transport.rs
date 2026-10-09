@@ -14,7 +14,11 @@ use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-static DROPS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+}
 
 /// The family's own fields; its drop is counted.
 struct Ext;

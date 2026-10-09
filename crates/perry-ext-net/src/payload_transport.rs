@@ -13,14 +13,18 @@ use std::net::SocketAddr;
 pub(crate) const SOCKET_CLASS_ID: u32 = perry_ffi::native_class_ids::NET_SOCKET;
 pub(crate) const SERVER_CLASS_ID: u32 = perry_ffi::native_class_ids::NET_SERVER;
 
-static SOCKET_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<SocketPayload>(None);
-pub(crate) static SOCKET: PayloadFamily = PayloadFamily::new::<SocketPayload>(SOCKET_CLASS_ID, "Socket", true, &SOCKET_VTABLE)
-    .with_constructor_length(1)
-    .with_installer(super::payload_prototype::install_socket);
-static SERVER_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<ServerPayload>(None);
-pub(crate) static SERVER: PayloadFamily = PayloadFamily::new::<ServerPayload>(SERVER_CLASS_ID, "Server", true, &SERVER_VTABLE)
-    .with_constructor_length(2)
-    .with_installer(super::payload_prototype::install_server);
+static SOCKET_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<SocketPayload>(None);
+pub(crate) static SOCKET: PayloadFamily =
+    PayloadFamily::new::<SocketPayload>(SOCKET_CLASS_ID, "Socket", true, &SOCKET_VTABLE)
+        .with_constructor_length(1)
+        .with_installer(super::payload_prototype::install_socket);
+static SERVER_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<ServerPayload>(None);
+pub(crate) static SERVER: PayloadFamily =
+    PayloadFamily::new::<ServerPayload>(SERVER_CLASS_ID, "Server", true, &SERVER_VTABLE)
+        .with_constructor_length(2)
+        .with_installer(super::payload_prototype::install_server);
 
 pub(crate) type SocketPayload = TransportPayload<SocketFields>;
 pub(crate) type ServerPayload = TransportPayload<ServerFields>;
@@ -209,11 +213,15 @@ pub(crate) fn alloc_socket(route: u8, fields: SocketFields) -> f64 {
     super::payload_io::register();
     let scope = TransientRootScope::enter();
     let bytes = std::mem::size_of::<SocketPayload>() + fields.retained_bytes();
-    let owner = scope.root_nanbox(unsafe { np::alloc_in(&SOCKET, "net",
-        SocketPayload::new(route, fields),
-        bytes,
-        &[],
-    ) });
+    let owner = scope.root_nanbox(unsafe {
+        np::alloc_in(
+            &SOCKET,
+            "net",
+            SocketPayload::new(route, fields),
+            bytes,
+            &[],
+        )
+    });
     unsafe {
         js_event_emitter_subclass_init(owner.get(), undefined());
     }
@@ -224,11 +232,15 @@ pub(crate) fn alloc_server(route: u8, fields: ServerFields) -> f64 {
     let scope = TransientRootScope::enter();
     let bytes =
         std::mem::size_of::<ServerPayload>() + fields.path.as_ref().map_or(0, String::capacity);
-    let owner = scope.root_nanbox(unsafe { np::alloc_in(&SERVER, "net",
-        ServerPayload::new(route, fields),
-        bytes,
-        &[],
-    ) });
+    let owner = scope.root_nanbox(unsafe {
+        np::alloc_in(
+            &SERVER,
+            "net",
+            ServerPayload::new(route, fields),
+            bytes,
+            &[],
+        )
+    });
     unsafe {
         js_event_emitter_subclass_init(owner.get(), undefined());
     }
@@ -242,12 +254,14 @@ pub(crate) fn attach_socket(owner: f64, route: u8, fields: SocketFields) -> bool
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let bytes = std::mem::size_of::<SocketPayload>() + fields.retained_bytes();
-    if !unsafe { np::attach_to_object(
-        owner.get(),
-        &SOCKET,
-        SocketPayload::new(route, fields),
-        bytes,
-    ) } {
+    if !unsafe {
+        np::attach_to_object(
+            owner.get(),
+            &SOCKET,
+            SocketPayload::new(route, fields),
+            bytes,
+        )
+    } {
         return false;
     }
     unsafe {
@@ -261,12 +275,14 @@ pub(crate) fn attach_server(owner: f64, route: u8, fields: ServerFields) -> bool
     let owner = scope.root_nanbox(owner);
     let bytes =
         std::mem::size_of::<ServerPayload>() + fields.path.as_ref().map_or(0, String::capacity);
-    if !unsafe { np::attach_to_object(
-        owner.get(),
-        &SERVER,
-        ServerPayload::new(route, fields),
-        bytes,
-    ) } {
+    if !unsafe {
+        np::attach_to_object(
+            owner.get(),
+            &SERVER,
+            ServerPayload::new(route, fields),
+            bytes,
+        )
+    } {
         return false;
     }
     unsafe {
@@ -299,11 +315,11 @@ pub(crate) fn own_set(owner: f64, key: &str, value: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let value = scope.root_nanbox(value);
-    let key = perry_ffi::alloc_string(key);
+    let key = scope.root_addr(perry_ffi::alloc_string(key).as_raw() as i64);
     unsafe {
         js_object_set_field_by_name(
             JsValue::from_bits(owner.get().to_bits()).as_pointer(),
-            key.as_raw(),
+            key.get() as *const perry_ffi::StringHeader,
             value.get(),
         );
     }

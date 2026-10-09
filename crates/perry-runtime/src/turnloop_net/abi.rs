@@ -1200,6 +1200,8 @@ pub unsafe extern "C" fn js_perry_net_link_snapshot_handle(
 ) -> i32 {
     match unsafe { transport::snapshot_handle(core.cast(), link_arg(link)) } {
         Some(snapshot) if !out.is_null() => {
+            // GC_STORE_AUDIT(POINTER_FREE): caller-owned opaque capability snapshot;
+            // numeric driver handle/generation/resolve ids, no GC pointers or JS values.
             unsafe { std::ptr::write(out.cast::<transport::HandleSnapshot>(), snapshot) };
             1
         }

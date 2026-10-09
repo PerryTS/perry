@@ -16,10 +16,15 @@ struct SocketCodec {
     write_shut: bool,
     read_eof: bool,
 }
-static FAMILY_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<SocketCodec>(None);
-static FAMILY: PayloadFamily =
-    PayloadFamily::new::<SocketCodec>(perry_ffi::native_class_ids::WS_CODEC, "WebSocketCodec", false, &FAMILY_VTABLE)
-    .with_constructor_length(0);
+static FAMILY_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<SocketCodec>(None);
+static FAMILY: PayloadFamily = PayloadFamily::new::<SocketCodec>(
+    perry_ffi::native_class_ids::WS_CODEC,
+    "WebSocketCodec",
+    false,
+    &FAMILY_VTABLE,
+)
+.with_constructor_length(0);
 
 fn with_codec<R>(socket: &RootedSocket, f: impl FnOnce(&mut SocketCodec) -> R) -> Option<R> {
     if !socket.is_current() {
@@ -57,17 +62,21 @@ pub fn adopt(owner: f64, leftover: &[u8]) -> i64 {
     let socket = RootedSocket::new(owner);
     let ws_id = crate::allocate_client_id();
     let scope = TransientRootScope::enter();
-    let codec = scope.root_nanbox(unsafe { np::alloc_in(&FAMILY, "",
-        SocketCodec {
-            ws_id,
-            codec: Codec::new(Role::Server),
-            closing: false,
-            write_shut: false,
-            read_eof: false,
-        },
-        std::mem::size_of::<SocketCodec>(),
-        &[],
-    ) });
+    let codec = scope.root_nanbox(unsafe {
+        np::alloc_in(
+            &FAMILY,
+            "",
+            SocketCodec {
+                ws_id,
+                codec: Codec::new(Role::Server),
+                closing: false,
+                write_shut: false,
+                read_eof: false,
+            },
+            std::mem::size_of::<SocketCodec>(),
+            &[],
+        )
+    });
     unsafe { net::set_codec(socket.value(), "ws", codec.get(), release) };
     crate::attach_socket_client(ws_id, socket.value());
     if net::set_route(socket.value(), LINK_SUBSYSTEM).is_err() {

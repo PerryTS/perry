@@ -7,12 +7,6 @@
   ],
   "registries": [
     {
-      "file": "crates/perry-ext-http/src/client_request_surface.rs",
-      "name": "CLIENT_REQUEST_SURFACE",
-      "verdict": "open_leak",
-      "why": "Keyed by ClientRequest handle, one entry per outgoing request via with_state_mut's entry().or_default(); destroy() only flips `destroyed`, nothing removes the key"
-    },
-    {
       "file": "crates/perry-ext-http/src/client_turnloop/tls.rs",
       "name": "CONFIGS",
       "fn": "configs",
@@ -32,20 +26,6 @@
       "fn": "pending",
       "verdict": "open_leak",
       "why": "Keyed by runtime server handle; take_pending pops the deque but never removes the key, leaving one entry per created server after close"
-    },
-    {
-      "file": "crates/perry-ext-net/src/classes.rs",
-      "name": "MAP",
-      "fn": "block_lists",
-      "verdict": "open_leak",
-      "why": "Keyed by per-instance id from js_net_block_list_new: one entry per new BlockList(), and no production path removes it"
-    },
-    {
-      "file": "crates/perry-ext-net/src/classes.rs",
-      "name": "MAP",
-      "fn": "socket_addresses",
-      "verdict": "open_leak",
-      "why": "Keyed by per-instance handle: one SocketAddressState per new SocketAddress, production only inserts/reads"
     },
     {
       "file": "crates/perry-ext-streams/src/lib.rs",

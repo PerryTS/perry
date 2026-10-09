@@ -121,7 +121,10 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
 /// dispatch (`handle` is the server object's address).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader {
-    alloc_string(&payload_server::address_json(payload_transport::boxed_addr(handle))).as_raw()
+    alloc_string(&payload_server::address_json(
+        payload_transport::boxed_addr(handle),
+    ))
+    .as_raw()
 }
 
 #[no_mangle]

@@ -1642,105 +1642,11 @@ pub fn set_pending_exception(owner: f64, exception: f64) -> Result<(), ()> {
     }
 }
 
-/// Default-off acceptance instrumentation for net.Socket payload cells.
-/// Scalar counts only; no addresses or identities are stored.
+#[path = "native_payload_links.rs"]
+mod links;
 #[cfg(feature = "native-payload-test-census")]
-pub mod test_census {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static CREATED: AtomicU64 = AtomicU64::new(0);
-    static FINALIZED: AtomicU64 = AtomicU64::new(0);
-    static DROPS: AtomicU64 = AtomicU64::new(0);
-    static REFS: AtomicU64 = AtomicU64::new(0);
-    fn counted(tag: u64) -> bool {
-        tag as u32 == crate::native_class_ids::NET_SOCKET
-    }
-    /// `[created, finalized, payload drops, outstanding cell refs]`.
-    pub fn snapshot() -> [u64; 4] {
-        [
-            CREATED.load(Ordering::SeqCst),
-            FINALIZED.load(Ordering::SeqCst),
-            DROPS.load(Ordering::SeqCst),
-            REFS.load(Ordering::SeqCst),
-        ]
-    }
-    pub(crate) fn created(tag: u64) {
-        if counted(tag) {
-            CREATED.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    pub(crate) fn finalized(tag: u64, refs: u32) {
-        if counted(tag) {
-            FINALIZED.fetch_add(1, Ordering::SeqCst);
-            // Completions discarded at worker teardown never unref; the heap
-            // retires their remaining refs with the cell.
-            REFS.fetch_sub(refs as u64, Ordering::SeqCst);
-        }
-    }
-    pub(crate) fn dropped(tag: u64) {
-        if counted(tag) {
-            DROPS.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    pub(crate) fn reference(tag: u64) {
-        if counted(tag) {
-            REFS.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    pub(crate) fn unreference(tag: u64) {
-        if counted(tag) {
-            REFS.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-}
-
-/// # Safety
-/// Call on the creator thread with a live cell, once per outstanding item.
-pub unsafe fn link_ref(link: OwnerLink) {
-    let cell = link.0 as *mut NativeHandleHeader;
-    assert_eq!(
-        (*cell).creator_thread_id,
-        crate::native_handle::current_thread_id()
-    );
-    (*cell).refs = (*cell).refs.checked_add(1).expect("native refs overflow");
-    #[cfg(feature = "native-payload-test-census")]
-    test_census::reference((*cell).type_id);
-    #[cfg(test)]
-    if callback_sabotage("pin") {
-        return;
-    }
-    if (*cell).refs == 1 {
-        #[cfg(test)]
-        if callback_sabotage("latch") {
-            crate::gc::pin_object(
-                (((*cell).owner & crate::value::POINTER_MASK) as *mut u8)
-                    .sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader,
-            );
-            return;
-        }
-        crate::gc::pin_object_non_young(
-            (cell as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
-        );
-    }
-}
-
-/// # Safety
-/// Match a link_ref on the creator thread, even when explicitly closed.
-pub unsafe fn link_unref(link: OwnerLink) {
-    let cell = link.0 as *mut NativeHandleHeader;
-    assert_eq!(
-        (*cell).creator_thread_id,
-        crate::native_handle::current_thread_id()
-    );
-    assert_ne!((*cell).refs, 0, "unbalanced native unref");
-    (*cell).refs -= 1;
-    #[cfg(feature = "native-payload-test-census")]
-    test_census::unreference((*cell).type_id);
-    if (*cell).refs == 0 {
-        crate::gc::unpin_object(
-            (cell as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
-        );
-    }
-}
+pub use links::test_census;
+pub use links::{link_ref, link_unref};
 
 /// Explicitly close a payload attached to an ordinary subclass instance.
 ///
