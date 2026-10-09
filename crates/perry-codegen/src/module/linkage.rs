@@ -87,19 +87,21 @@ pub(crate) fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
     }
 }
 
-/// `line` with its default-model (general-dynamic) `thread_local` specifier
-/// replaced by `thread_local(localexec)`, or `None` when it has none (not a
-/// thread-local, or one that already names its model).
+/// `line` with its `thread_local` specifier (the default general-dynamic
+/// model, or `initialexec`) replaced by `thread_local(localexec)`, or `None`
+/// when it has none (not a thread-local, or already local-exec).
 pub(crate) fn with_local_exec_tls(line: &str) -> Option<String> {
     let (lhs, rhs) = line.split_once(" = ")?;
-    let at = rhs.find("thread_local ")?;
+    let (at, spec) = ["thread_local ", "thread_local(initialexec) "]
+        .into_iter()
+        .find_map(|spec| rhs.find(spec).map(|at| (at, spec)))?;
     if at != 0 && !rhs[..at].ends_with(' ') {
         return None;
     }
     Some(format!(
         "{lhs} = {}thread_local(localexec) {}",
         &rhs[..at],
-        &rhs[at + "thread_local ".len()..]
+        &rhs[at + spec.len()..]
     ))
 }
 
@@ -360,7 +362,11 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
         // a declined GC-leaf hit. Still throwing, still GC-capable.
         | "js_object_get_field_ic_fast_miss"
         | "js_class_field_get_ic_fast_miss"
-        | "js_class_field_set_ic_fast_miss" => HelperDeclContract::Cold,
+        | "js_class_field_set_ic_fast_miss"
+        // The prologue stack check's overflow arm (`expr/stack_guard.rs`).
+        // `-> !` in the runtime, but declared without `noreturn` here: the
+        // clone-call check rejoins its call after it.
+        | "js_stack_overflow" => HelperDeclContract::Cold,
         // PURE — each verified: pure bit tests/masking on the f64/i64 args,
         // total over arbitrary bits, no memory access anywhere in the body.
         //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL

@@ -645,8 +645,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("perry_transition_cache_base", PTR, &[]);
     module.declare_function("js_transition_ic_note_hit", VOID, &[]);
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
-    // executables through the initial-exec TLS model; its slot-1 accessor,
-    // and the method-call site's miss entry (`expr/method_site.rs`).
+    // executables (where `use_local_exec_tls` turns this model into
+    // local-exec); its slot-1 accessor, and the method-call site's miss entry
+    // (`expr/method_site.rs`).
     module.add_external_tls_global(
         crate::expr::agent_ptr::AGENT_PTRS_SYMBOL,
         &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
@@ -657,7 +658,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // TLS block. Declarations only; no other target references them.
     module.add_external_global(crate::expr::agent_ptr::TLS_INDEX_SYMBOL, I32);
     module.add_external_global(crate::expr::agent_ptr::AGENT_PTRS_SECREL_SYMBOL, I32);
-    // #10812: the prologue stack check (`expr/stack_guard.rs`).
+    // #10812: the prologue stack check (`expr/stack_guard.rs`): the stack
+    // pointer it compares, and the overflow arm's (`cold`) throw.
+    module.declare_function("llvm.read_register.i64", I64, &["metadata"]);
     module.declare_function("js_stack_overflow", VOID, &[]);
     module.declare_function(
         "js_method_site_miss",
