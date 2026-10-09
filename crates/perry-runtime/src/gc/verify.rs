@@ -307,6 +307,35 @@ pub(super) unsafe fn remember_mutable_old_to_young_slot(
     true
 }
 
+/// Full mark's observer-free visit already decoded this immutable slot word.
+/// Do not use this entry across foreign handle observers; those visits retain
+/// the slot-reading wrapper above. Tracking is independent of marking success.
+#[inline(always)]
+pub(super) unsafe fn remember_decoded_full_mark_slot(
+    sticky: &mut StickyRememberedSet,
+    parent_header: *mut GcHeader,
+    mutable_slot: GcMutableSlot,
+    word: trace::FieldWord,
+) -> bool {
+    let slot = mutable_slot.slot;
+    if slot.is_null() || !word.needs_tracking() {
+        return false;
+    }
+    #[cfg(test)]
+    if trace::remembered_mark_sabotage::drop_next_entry() {
+        return false;
+    }
+    let external = slot_is_external_to(parent_header, slot);
+    #[cfg(test)]
+    let external = if trace::full_mark_decode_sabotage::generation_only_custody() {
+        mutable_slot.external()
+    } else {
+        external
+    };
+    sticky.remember_slot(parent_header, slot, external);
+    true
+}
+
 /// Is `slot` outside `parent_header`'s own allocation, or on a page the
 /// old-page modbuf cannot describe?
 ///

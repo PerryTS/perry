@@ -18,6 +18,20 @@ pub(in crate::gc) fn decode_raw_pointer_candidate(addr: usize) -> usize {
     }
 }
 
+/// The raw-word remembering consumer: decode_heap_addr accepts a raw word
+/// only in a registered arena generation, then remembered_child_needs_tracking
+/// asks the same generation again. Their conjunction is Nursery. Unknown
+/// remains rejected even for an exact malloc hit; tagged words use the wider
+/// arena-first nursery-or-malloc predicate instead.
+#[cold]
+#[inline(never)]
+pub(in crate::gc) fn raw_child_needs_tracking(addr: usize) -> bool {
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
+}
+
 /// The barrier's cheapest exit, as an inlinable test the entry points run
 /// BEFORE calling into [`write_barrier_decoded_parent`]: an inline slot whose
 /// page is the one the dirty-page cache names owes the remembered set nothing

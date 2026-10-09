@@ -1660,7 +1660,9 @@ mod maintenance;
 // Remembered-set root marking (dirty-slot work + `RememberedSetRootMarkState`)
 // lives in a sibling module for the 2000-line file-size gate (#10750).
 mod remembered_mark;
-pub(super) use leaf::{decode_raw_pointer_candidate, inline_slot_store_on_cached_dirty_page};
+pub(super) use leaf::{
+    decode_raw_pointer_candidate, inline_slot_store_on_cached_dirty_page, raw_child_needs_tracking,
+};
 pub(super) use remembered_mark::{dirty_slot_ranges_for, RememberedSetRootMarkState};
 
 pub(super) use super::barrier_store::{barrier_child_prologue, barrier_remembering_active};
