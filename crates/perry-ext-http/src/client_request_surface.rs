@@ -176,7 +176,12 @@ fn handle_value(handle: Handle) -> f64 {
 }
 
 pub(crate) fn scan_roots(visitor: &mut GcRootVisitor<'_>) {
-    for state in CLIENT_REQUEST_SURFACE.lock().unwrap().values_mut() {
+    for (handle, state) in CLIENT_REQUEST_SURFACE.lock().unwrap().iter_mut() {
+        if get_handle_mut::<ClientRequestHandle>(*handle)
+            .is_none_or(|request| request.owner_agent != perry_ffi::agent_post::current_agent())
+        {
+            continue;
+        }
         if state.socket != 0.0 {
             visitor.visit_nanbox_f64_slot(&mut state.socket);
         }

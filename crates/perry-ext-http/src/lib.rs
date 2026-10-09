@@ -107,9 +107,9 @@ use root_scanner::scan_http_roots;
 use bytes::Bytes;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
-    json_stringify, notify_main_thread, register_aux_event_pump, register_handle, with_handle_mut,
-    ArrayHeader, GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader,
-    RawClosureHeader, StringHeader,
+    json_stringify, notify_main_thread, register_agent_event_pump, register_handle,
+    with_handle_mut, ArrayHeader, GcRootVisitor, Handle, JsClosure, JsString, JsValue,
+    ObjectHeader, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
@@ -233,22 +233,27 @@ pub(crate) enum PendingHttpEvent {
 /// counter as a keepalive contributor lets the runtime gate and fast
 /// wait-driver honor the request's true lifetime.
 static CLIENT_REQUESTS_INFLIGHT: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<Handle>>,
+    std::sync::Mutex<std::collections::HashSet<(u64, Handle)>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
-/// RAII in-flight marker, held by an exchange from dispatch until it settles,
-/// so the count tracks the exchange's full lifetime. Drop wakes the main loop
-/// so its active-handle gate re-evaluates promptly.
+/// RAII in-flight marker, held by an exchange from dispatch until it settles.
+/// Its owning agent is captured on the transport loop, independently of the
+/// request registry: removing a request cannot shorten the exchange lifetime.
 pub(crate) struct ClientInflightGuard {
+    owner_agent: u64,
     request_handle: Handle,
 }
 impl ClientInflightGuard {
     pub(crate) fn new(request_handle: Handle) -> Self {
+        let owner_agent = perry_ffi::agent_post::current_agent();
         CLIENT_REQUESTS_INFLIGHT
             .lock()
             .unwrap()
-            .insert(request_handle);
-        ClientInflightGuard { request_handle }
+            .insert((owner_agent, request_handle));
+        ClientInflightGuard {
+            owner_agent,
+            request_handle,
+        }
     }
 }
 impl Drop for ClientInflightGuard {
@@ -256,20 +261,21 @@ impl Drop for ClientInflightGuard {
         CLIENT_REQUESTS_INFLIGHT
             .lock()
             .unwrap()
-            .remove(&self.request_handle);
+            .remove(&(self.owner_agent, self.request_handle));
         notify_main_thread();
     }
 }
 
 /// Registered with the runtime's extension keepalive gate (#5779 follow-up):
-/// returns nonzero while any HTTP client fetch is outstanding.
+/// returns nonzero while this agent has an HTTP client fetch outstanding.
 #[no_mangle]
 pub extern "C" fn js_ext_http_client_inflight() -> i32 {
+    let owner = perry_ffi::agent_post::current_agent();
     let requests: Vec<Handle> = CLIENT_REQUESTS_INFLIGHT
         .lock()
         .unwrap()
         .iter()
-        .copied()
+        .filter_map(|(agent, request)| (*agent == owner).then_some(*request))
         .collect();
     requests
         .into_iter()
@@ -316,7 +322,7 @@ mod proxy_policy_tests {
     }
 }
 
-static HTTP_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingHttpEvent>>> =
+static HTTP_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<(u64, PendingHttpEvent)>>> =
     std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 static HTTP_GC_REGISTERED: Once = Once::new();
@@ -326,11 +332,7 @@ extern "C" fn client_pump() -> i32 {
 }
 
 extern "C" fn client_has_active() -> i32 {
-    let pending = HTTP_PENDING_EVENTS
-        .lock()
-        .map(|queue| !queue.is_empty())
-        .unwrap_or(false);
-    i32::from(pending || js_ext_http_client_inflight() != 0)
+    i32::from(client_has_pending() || js_ext_http_client_inflight() != 0)
 }
 
 pub(crate) fn ensure_gc_scanner_registered() {
@@ -339,7 +341,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
         // Register both halves directly with perry-runtime. The stdlib bridge
         // intentionally does not name extension symbols: a client contributes
         // only after this crate is linked and one of its entry points runs.
-        register_aux_event_pump(client_pump, client_has_active);
+        register_agent_event_pump(client_pump, client_has_active);
         extern "C" {
             fn js_register_http_agent_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
         }
@@ -353,9 +355,28 @@ pub(crate) fn ensure_gc_scanner_registered() {
     });
 }
 
+fn client_has_pending() -> bool {
+    let owner = perry_ffi::agent_post::current_agent();
+    HTTP_PENDING_EVENTS
+        .lock()
+        .map(|queue| queue.iter().any(|(agent, _)| *agent == owner))
+        .unwrap_or(false)
+}
+
 pub(crate) fn push_event(ev: PendingHttpEvent) {
+    // A completion can be produced by a transport thread acting for another
+    // agent. Its request (or idle Agent), not the producer, owns the callback.
+    let owner = match &ev {
+        PendingHttpEvent::AgentIdleExpire { agent_handle, .. } => {
+            with_handle_mut::<agent::AgentHandle, _, _>(*agent_handle, |agent| agent.owner_agent)
+        }
+        _ => with_handle_mut::<ClientRequestHandle, _, _>(pending_request_handle(&ev), |request| {
+            request.owner_agent
+        }),
+    };
+    let Some(owner) = owner else { return };
     if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
-        q.push(ev);
+        q.push((owner, ev));
     }
     notify_main_thread();
 }
@@ -389,6 +410,8 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
 // ------------------------------------------------------------------
 
 pub struct ClientRequestHandle {
+    /// The JS heap that owns this request and every callback it registers.
+    owner_agent: u64,
     async_id: u64,
     method: String,
     url: String,
@@ -491,6 +514,7 @@ unsafe impl Send for ClientRequestHandle {}
 unsafe impl Sync for ClientRequestHandle {}
 
 pub struct IncomingMessageHandle {
+    owner_agent: u64,
     pub status_code: u16,
     pub status_message: String,
     /// Raw `(name, value)` header pairs in arrival order, multiplicity
@@ -649,6 +673,7 @@ fn make_request_handle(
         js_async_hooks_provider_init(b"HTTPCLIENTREQUEST".as_ptr(), b"HTTPCLIENTREQUEST".len())
     };
     let handle = register_handle(ClientRequestHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         async_id,
         method,
         url,
@@ -697,17 +722,26 @@ fn make_request_handle(
         })
         .unwrap_or_else(|| "localhost::".to_string());
         let admission = agent::admit_request(agent_handle, &key, handle);
-        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| match admission {
-            agent::PoolAdmission::Active { reused, socket } => {
-                request.agent_active = true;
-                request.reused_socket = reused;
-                request.socket_handle = socket;
-                push_event(PendingHttpEvent::Socket {
-                    request_handle: handle,
-                });
-            }
-            agent::PoolAdmission::Queued => request.agent_queued = true,
-        });
+        let active =
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| match admission {
+                agent::PoolAdmission::Active { reused, socket } => {
+                    request.agent_active = true;
+                    request.reused_socket = reused;
+                    request.socket_handle = socket;
+                    true
+                }
+                agent::PoolAdmission::Queued => {
+                    request.agent_queued = true;
+                    false
+                }
+            });
+        // Queued once the borrow has ended: `push_event` reads the request's
+        // owner from this same registry entry.
+        if active == Some(true) {
+            push_event(PendingHttpEvent::Socket {
+                request_handle: handle,
+            });
+        }
     } else {
         let socket = agent::allocate_agent_socket();
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
@@ -1782,19 +1816,12 @@ pub(crate) unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) ->
 /// Number of pending events the main loop should drain.
 #[no_mangle]
 pub extern "C" fn js_http_has_pending() -> i32 {
-    let has_events = HTTP_PENDING_EVENTS
-        .lock()
-        .map(|q| !q.is_empty())
-        .unwrap_or(false);
-    if has_events {
+    if client_has_pending() {
         unsafe {
             js_http_process_pending();
         }
     }
-    HTTP_PENDING_EVENTS
-        .lock()
-        .map(|q| if q.is_empty() { 0 } else { 1 })
-        .unwrap_or(0)
+    i32::from(client_has_pending())
 }
 
 // ------------------------------------------------------------------

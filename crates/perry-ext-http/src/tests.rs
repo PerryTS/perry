@@ -80,6 +80,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         }],
     );
     let request_handle = register_handle(ClientRequestHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         async_id: 0,
         method: "GET".to_string(),
         url: "http://localhost/".to_string(),
@@ -116,6 +117,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let mut incoming_listeners = HashMap::new();
     incoming_listeners.insert("data".to_string(), vec![incoming_listener]);
     let incoming_handle = register_handle(IncomingMessageHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         status_code: 200,
         status_message: "OK".to_string(),
         headers: Vec::new(),
@@ -172,6 +174,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
 /// no live codegen — only the handle registry the other tests already use.
 fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
     let request_handle = register_handle(ClientRequestHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         async_id: 0,
         method: "GET".to_string(),
         url: "http://localhost/".to_string(),

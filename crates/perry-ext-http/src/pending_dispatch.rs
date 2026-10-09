@@ -5,16 +5,11 @@ use super::*;
 /// progress on later response chunks (#5783).
 #[no_mangle]
 pub unsafe extern "C" fn js_http_process_pending() -> i32 {
+    let owner = perry_ffi::agent_post::current_agent();
     let mut count = 0i32;
     loop {
         let ev = match HTTP_PENDING_EVENTS.lock() {
-            Ok(mut q) => {
-                if q.is_empty() {
-                    None
-                } else {
-                    Some(q.remove(0))
-                }
-            }
+            Ok(mut q) => take_event(&mut q, owner),
             Err(_) => return count,
         };
         let Some(ev) = ev else { break };
@@ -141,4 +136,38 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
         }
     }
     count
+}
+
+/// Select the next event of this heap, preserving each agent's FIFO order.
+fn take_event(queue: &mut Vec<(u64, PendingHttpEvent)>, owner: u64) -> Option<PendingHttpEvent> {
+    let index = queue.iter().position(|(agent, _)| *agent == owner)?;
+    Some(queue.remove(index).1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn foreign_events_stay_queued_and_own_events_keep_fifo_order() {
+        let mut queue = vec![
+            (2, PendingHttpEvent::Abort { request_handle: 20 }),
+            (1, PendingHttpEvent::Abort { request_handle: 10 }),
+            (2, PendingHttpEvent::Abort { request_handle: 21 }),
+        ];
+        assert_eq!(
+            pending_request_handle(&take_event(&mut queue, 1).unwrap()),
+            10
+        );
+        assert!(take_event(&mut queue, 1).is_none());
+        assert_eq!(
+            pending_request_handle(&take_event(&mut queue, 2).unwrap()),
+            20
+        );
+        assert_eq!(
+            pending_request_handle(&take_event(&mut queue, 2).unwrap()),
+            21
+        );
+        assert!(queue.is_empty());
+    }
 }

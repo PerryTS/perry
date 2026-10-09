@@ -94,6 +94,7 @@ fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
 /// Tracker: #2129 (initial constructor + getName); #2154 (validation +
 /// per-agent keep-alive + socket-counter accessors + setters).
 pub struct AgentHandle {
+    pub(crate) owner_agent: u64,
     pub protocol: Option<String>,
     pub keep_alive: bool,
     pub keep_alive_msecs: f64,
@@ -158,6 +159,7 @@ pub struct AgentHandle {
 impl Default for AgentHandle {
     fn default() -> Self {
         AgentHandle {
+            owner_agent: perry_ffi::agent_post::current_agent(),
             protocol: Some("http:".to_string()),
             keep_alive: false,
             keep_alive_msecs: 1000.0,
@@ -824,6 +826,9 @@ pub(crate) fn expire_free_socket(handle: Handle, key: &str, socket: Handle, gene
 
 pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<AgentHandle, _>(|agent| {
+        if agent.owner_agent != perry_ffi::agent_post::current_agent() {
+            return;
+        }
         visitor.visit_nanbox_f64_slot(&mut agent.agent_keep_alive_timeout_buffer);
         if agent.create_connection != 0 {
             visitor.visit_i64_slot(&mut agent.create_connection);

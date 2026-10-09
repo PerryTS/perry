@@ -281,6 +281,7 @@ pub(crate) unsafe fn handle_response_event(
         .map(|request| request.socket_handle)
         .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         status_code: status,
         status_message,
         headers,
@@ -436,6 +437,7 @@ pub(crate) unsafe fn handle_upgrade_event(
     }
 
     let incoming = register_handle(IncomingMessageHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         status_code: status,
         status_message,
         headers,
@@ -518,6 +520,7 @@ pub(crate) unsafe fn handle_response_head_event(
         .map(|request| request.socket_handle)
         .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
         status_code: status,
         status_message,
         headers,
