@@ -42,5 +42,5 @@ x509-cert = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 # GC and async test shims call runtime internals; production code uses only perry-ffi.
-perry-runtime = { workspace = true, features = ["default", "stdlib"] }
+perry-runtime = { workspace = true, features = ["default", "stdlib", "native-payload-test-census"] }
 perry-ffi = { workspace = true, features = ["runtime-link"] }

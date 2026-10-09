@@ -85,7 +85,7 @@ pub(super) fn try_listen_on_turnloop(server_handle: i64, host: &str, port: u16) 
             server.base.bound_port = bound_port;
             server.base.bound_host = host.to_string();
             server.base.listening = true;
-            server.turnloop_listener = id;
+            let _ = id;
             H2Listen::Bound
         }
         Err(err) if err.no_loop => H2Listen::NoLoop,
@@ -109,8 +109,11 @@ pub(super) fn try_listen_on_turnloop(server_handle: i64, host: &str, port: u16) 
 /// sessions finish, which is Node's contract.
 pub(super) fn close_turnloop_listener(server_handle: i64) -> bool {
     let id = match get_handle_mut::<Http2SecureServer>(server_handle) {
-        Some(server) if server.turnloop_listener != 0 => {
-            std::mem::replace(&mut server.turnloop_listener, 0)
+        Some(server)
+            if perry_ext_net::native_transport::server_link(server.base.transport_listener)
+                .is_ok() =>
+        {
+            server.base.transport_listener
         }
         _ => return false,
     };

@@ -6,7 +6,7 @@
 
 use perry_ffi::{get_handle, get_handle_mut};
 
-use super::{HttpPendingUpgrade, HttpServer, PENDING_CONNECTION_EVENTS, TURNLOOP_UPGRADES};
+use super::{HttpPendingUpgrade, HttpServer, TURNLOOP_UPGRADES};
 
 /// Fire Node's `'aborted'` on every request whose connection died before its
 /// response completed (P5), and report how many listeners ran.
@@ -43,9 +43,21 @@ pub(crate) fn note_turnloop_request_aborted(request_handle: i64) {
 /// Drained by the pump, whose listeners fire with `socket_handle` — the
 /// connection's socket object — as the sole
 /// argument.
-pub(crate) fn queue_turnloop_connection_event(server_handle: i64, socket_handle: i64) {
-    if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
-        q.push((server_handle, socket_handle));
+pub(crate) fn emit_connection(server_handle: i64, socket: f64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(socket);
+    let listeners = super::with_base_server_mut(server_handle, |server| {
+        super::take_server_event_listeners(server, "connection")
+    })
+    .unwrap_or_default();
+    let listeners = scope.root_addrs(&listeners);
+    let this = crate::server::request::handle_to_pointer_f64(server_handle);
+    for callback in listeners {
+        perry_ext_net::native_transport::call(
+            crate::server::request::handle_to_pointer_f64(callback.get()),
+            perry_ffi::JsThis::from_f64(this),
+            &[socket.get()],
+        );
     }
 }
 
@@ -84,7 +96,7 @@ pub(super) fn try_listen_on_turnloop(
     host: &str,
     port: u16,
     resolved: Option<u16>,
-) -> Option<i64> {
+) -> Option<bool> {
     if !crate::server::turnloop_serve::enabled() {
         return None;
     }
@@ -113,7 +125,8 @@ pub(super) fn try_listen_on_turnloop(
             server.bound_port = bound_port;
             server.bound_host = host.to_string();
             server.listening = true;
-            Some(id)
+            let _ = id;
+            Some(true)
         }
         Err(err) if err.no_loop => None,
         Err(err) => {
@@ -131,7 +144,7 @@ pub(super) fn try_listen_on_turnloop(
                 &err.syscall,
             );
             // The failure is reported once and the listen ends here.
-            Some(0)
+            Some(false)
         }
     }
 }
@@ -212,7 +225,7 @@ mod tests {
         use std::sync::mpsc;
         use std::time::{Duration, Instant};
 
-        type Observed = (bool, u16, bool, Option<String>, Option<i64>);
+        type Observed = (bool, u16, bool, Option<String>, Option<f64>);
         /// `listen()` on 127.0.0.1:0, and what the server reports right after.
         fn listen_and_observe(handle: i64) -> Observed {
             let args = crate::server::types::ListenArgs {
@@ -230,7 +243,7 @@ mod tests {
                 crate::server::turnloop_serve::listener_for_server(handle),
             )
         }
-        fn close(handle: i64, listener: Option<i64>) {
+        fn close(handle: i64, listener: Option<f64>) {
             if let Some(id) = listener {
                 crate::server::turnloop_serve::close_listener(id);
             }

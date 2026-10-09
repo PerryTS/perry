@@ -131,6 +131,23 @@ pub(crate) struct TlsOptions {
 }
 
 impl TlsOptions {
+    /// Owned identity facts for the Socket which will retain the TLS session
+    /// when an HTTPS request upgrades to another protocol.
+    pub(crate) fn client_certificate_pem(&self) -> Result<Vec<u8>, String> {
+        let Some((der, passphrase)) = self.client_pfx.first() else {
+            return Ok(Vec::new());
+        };
+        let (certificates, _) = pfx_certificate_and_key(der, passphrase)?;
+        use perry_base64::Engine;
+        let encoded = perry_base64::engine::general_purpose::STANDARD.encode(&certificates[0]);
+        let mut pem = b"-----BEGIN CERTIFICATE-----\n".to_vec();
+        for line in encoded.as_bytes().chunks(64) {
+            pem.extend_from_slice(line);
+            pem.push(b'\n');
+        }
+        pem.extend_from_slice(b"-----END CERTIFICATE-----\n");
+        Ok(pem)
+    }
     /// Whether these options require a dedicated TLS config instead of the
     /// shared default. `NODE_TLS_REJECT_UNAUTHORIZED=0` alone counts (it
     /// disables verification process-wide).

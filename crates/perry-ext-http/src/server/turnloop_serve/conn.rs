@@ -15,14 +15,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
+use perry_ext_net::native_transport::{self as net, RootedSocket};
+use perry_ffi::native_payload::{self as np, PayloadFamily};
 use perry_ffi::turnloop_net as tl;
+use perry_ffi::{JsValue, TransientRootScope};
 use turnloop_http::http1;
 
 use super::wire::{self, Framing};
-use crate::server::request::{
-    alloc_connection_socket, alloc_incoming_message, handle_to_pointer_f64, incoming_socket_assign,
-    IncomingMessage,
-};
+use crate::server::request::{alloc_incoming_message, incoming_socket_assign, IncomingMessage};
 use crate::server::response::{alloc_http1_server_response_for_turnloop, ResponseShape};
 use crate::server::server::{with_base_server, HttpPendingRequest};
 
@@ -76,15 +76,9 @@ struct Active {
 }
 
 pub(crate) struct Conn {
-    id: i64,
     server_handle: i64,
     peer_address: String,
     peer_port: u16,
-    /// The `IncomingMessage`-shaped object
-    /// handed to `server.on('connection', ...)` and shared as `req.socket`
-    /// by every request this connection carries. One per connection, built
-    /// once in `start_connection`/`adopt_alpn_http1`.
-    socket_handle: i64,
     decoder: http1::Decoder,
     input: Vec<u8>,
     building: Option<Building>,
@@ -118,9 +112,20 @@ pub(crate) struct Conn {
     websocket: bool,
 }
 
-fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
-    static CONNS: OnceLock<Mutex<HashMap<i64, Conn>>> = OnceLock::new();
-    CONNS.get_or_init(|| Mutex::new(HashMap::new()))
+static PARSER_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<Conn>(None);
+static PARSER: PayloadFamily =
+    PayloadFamily::new::<Conn>(perry_ffi::native_class_ids::HTTP_PARSER, "HTTPParser", false, &PARSER_VTABLE)
+    .with_constructor_length(0);
+
+/// Explicit cleanup runs outside SocketFields::Drop. The ordinary `parser`
+/// edge remains valid and CLOSED, including for a late socket close listener.
+unsafe fn close_parser(owner: f64) {
+    let socket = RootedSocket::new(owner);
+    note_aborted(&socket);
+    let scope = TransientRootScope::enter();
+    let state = scope.root_nanbox(net::state(socket.value()));
+    let parser = scope.root_nanbox(net::own_get(state.get(), "parser"));
+    np::close(parser.get(), &PARSER);
 }
 
 /// Requests decoded and waiting for the main-thread pump, per JS server handle.
@@ -173,31 +178,9 @@ fn take_owned(queue: &mut Vec<(u64, i64)>) -> Vec<i64> {
     mine.into_iter().map(|(_, handle)| handle).collect()
 }
 
-/// Connection-socket handles (`alloc_connection_socket`) whose TCP connection
-/// has fully closed. Same pattern as `aborted()`: the completion sink cannot
-/// run JS, so the pump drains this and fires the socket's `'close'`
-/// listeners on its own tick.
-fn closed_sockets() -> &'static Mutex<Vec<(u64, i64)>> {
-    static CLOSED: OnceLock<Mutex<Vec<(u64, i64)>>> = OnceLock::new();
-    CLOSED.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub(crate) fn note_closed_socket(socket_handle: i64) {
-    closed_sockets()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push((perry_ffi::agent_post::current_agent(), socket_handle));
-}
-
-/// Take the connection-socket handles due a `'close'` emit.
-pub(crate) fn take_closed_sockets() -> Vec<i64> {
-    let mut queue = closed_sockets().lock().unwrap_or_else(|e| e.into_inner());
-    take_owned(&mut queue)
-}
-
 /// Note that this connection's in-flight request (if any) will never be
 /// answered, exactly once per request.
-fn note_aborted(id: i64) {
+fn note_aborted(id: &RootedSocket) {
     let handle = with_conn(id, |c| {
         c.active
             .as_mut()
@@ -228,35 +211,31 @@ fn queue_pending(server_handle: i64, request: HttpPendingRequest) {
         .push_back(request);
 }
 
-fn with_conn<R>(id: i64, f: impl FnOnce(&mut Conn) -> R) -> Option<R> {
-    let mut map = conns().lock().unwrap_or_else(|e| e.into_inner());
-    map.get_mut(&id).map(f)
-}
-
-/// Every live turnloop connection of one server.
-pub(crate) fn connections_of(server_handle: i64) -> Vec<i64> {
-    conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .filter(|(_, c)| c.server_handle == server_handle)
-        .map(|(id, _)| *id)
-        .collect()
-}
-
-/// Route a JS accepted-socket handle to its live transport, if this is ours.
-pub(crate) fn destroy_socket(socket_handle: i64) -> bool {
-    let conn_id = conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find_map(|(id, conn)| (conn.socket_handle == socket_handle).then_some(*id));
-    if let Some(conn_id) = conn_id {
-        destroy_connection(conn_id);
-        true
-    } else {
-        false
+/// The parser's owner is an ordinary child of the rooted Socket. `f` may
+/// allocate, but must not call JS, close/reopen the Socket, or enter the driver.
+fn with_conn<R>(socket: &RootedSocket, f: impl FnOnce(&mut Conn) -> R) -> Option<R> {
+    if !socket.is_current() {
+        return None;
     }
+    let scope = TransientRootScope::enter();
+    let state = scope.root_nanbox(net::state(socket.value()));
+    let parser = scope.root_nanbox(net::own_get(state.get(), "parser"));
+    unsafe { np::payload_mut::<Conn>(parser.get(), &PARSER).ok().map(f) }
+}
+
+/// Visit children through the delegate's existing ordinary ownership graph.
+/// Root the complete snapshot before any callback can allocate or close one.
+pub(crate) fn with_connections(server_handle: i64, mut visit: impl FnMut(&RootedSocket)) {
+    let Some(listener) = super::listener_for_server(server_handle) else {
+        return;
+    };
+    net::for_each_server_child(listener, |socket| {
+        // Upgraded sockets have released the HTTP parser and belong to the
+        // upgraded protocol; Node excludes them from closeAllConnections.
+        if with_conn(socket, |_| ()).is_some() {
+            visit(socket);
+        }
+    });
 }
 
 /// Whether a connection has a request in flight (`closeIdleConnections`,
@@ -270,7 +249,7 @@ pub(crate) fn destroy_socket(socket_handle: i64) -> bool {
 /// through sending its request (#11586, `test_issue_4971_tls_connect_options`
 /// — the tokio implementation tracked this as `read_active`, and the turnloop
 /// port in b77aba634 dropped it).
-pub(crate) fn is_busy(id: i64) -> bool {
+pub(crate) fn is_busy(id: &RootedSocket) -> bool {
     with_conn(id, |c| {
         c.active.is_some() || c.building.is_some() || !c.input.is_empty()
     })
@@ -283,81 +262,81 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
     if completion.is_null() {
         return;
     }
-    // SAFETY: the runtime passes a live completion for the duration of the
-    // call, which is this function's body.
-    let c = unsafe { &*completion };
-    // HTTP/2 shares this subsystem slot (see `turnloop_h2`'s module docs), and
-    // answers first by id. A completion it claims never reaches the HTTP/1.1
-    // state machine below.
-    if crate::server::turnloop_h2::intercept(c) {
-        return;
-    }
-    match c.kind {
-        tl::NET_ACCEPT => on_accept(c.id, c.conn),
-        // SAFETY: same call; the pooled lease outlives it.
-        tl::NET_DATA => on_data(c.id, unsafe { c.bytes() }),
-        tl::NET_EOF => on_eof(c.id),
-        tl::NET_WROTE => on_wrote(c.id, c.len),
-        tl::NET_SHUTDOWN => on_shutdown(c.id),
-        tl::NET_CLOSED => on_closed(c.id),
-        tl::NET_TIMER => on_timer(c.id),
-        tl::NET_ERROR => {
-            // SAFETY: same call; both point at `'static` string data.
-            let (code, syscall) = unsafe { (c.code(), c.syscall()) };
-            if crate::server::turnloop_h2::intercept_listener_error(c.id, c.terminal != 0) {
-                return;
-            }
-            on_error(c.id, code, syscall, c.terminal != 0);
-        }
-        _ => {}
-    }
-}
-
-fn on_accept(listener_id: i64, conn_id: i64) {
-    if conn_id == 0 {
-        return;
-    }
-    let Some((server_handle, tls, idle_close_ms)) = super::with_listener(listener_id, |l| {
-        (l.server_handle, l.tls.clone(), l.idle_close_ms)
-    }) else {
-        let _ = tl::close(conn_id);
+    let event = unsafe { &*completion };
+    let Some(link) = event.link() else { return };
+    let Some(owner) = (unsafe { np::link_event_owner(link) }) else {
         return;
     };
-    start_connection(conn_id, server_handle, tls, idle_close_ms);
+    let socket = RootedSocket::new(owner);
+    if net::socket_link(socket.value()).is_err() {
+        return;
+    }
+    match event.kind {
+        tl::NET_DATA => {
+            let bytes = unsafe { event.bytes() };
+            if event.flags & tl::NET_FLAG_PLAINTEXT == 0 && net::tls_installed(socket.value()) {
+                net::receive_tls(socket.value(), bytes);
+            } else {
+                net::received(socket.value(), bytes.len());
+                on_data(&socket, bytes);
+            }
+        }
+        tl::NET_EOF => on_eof(&socket),
+        tl::NET_SHUTDOWN => {
+            on_shutdown(&socket);
+            unsafe {
+                net::dispatch_common(event);
+            }
+        }
+        tl::NET_CLOSED => {
+            if event.flags & tl::NET_FLAG_STALE == 0 {
+                on_closed(&socket)
+            }
+            unsafe {
+                net::dispatch_common(event);
+            }
+        }
+        tl::NET_TIMER => on_timer(&socket),
+        tl::NET_ERROR => on_error(
+            &socket,
+            unsafe { event.code() },
+            unsafe { event.syscall() },
+            event.terminal != 0,
+        ),
+        _ => unsafe {
+            net::dispatch_common(event);
+        },
+    }
 }
 
-/// Serve a connection that is already on this thread's loop under `conn_id`
-/// — one turnloop accepted from a listener, or one adopted from a descriptor
-/// another process accepted (a SCHED_RR cluster worker's, `adopt_connection`).
-pub(crate) fn start_connection(
-    conn_id: i64,
-    server_handle: i64,
-    tls: Option<std::sync::Arc<rustls::ServerConfig>>,
-    idle_close_ms: u64,
-) {
-    let secure = tls.is_some();
-    if let Some(config) = tls {
-        if let Err(_message) =
-            perry_ext_net::turnloop_tls_io::install_server_session(conn_id, config)
-        {
-            let _ = tl::close(conn_id);
-            return;
-        }
-    }
-    let peer = tl::peer_address(conn_id);
-    let peer_address = peer.as_ref().map(|e| e.address.clone()).unwrap_or_default();
-    let peer_port = peer.as_ref().map(|e| e.port).unwrap_or(0);
-    let keep_alive_timeout_ms =
-        with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
-    let socket_handle = alloc_connection_socket(peer_address.clone(), peer_port);
-    conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
-        conn_id,
+/// An accepted/adopted connection is already an ordinary Socket with its
+/// handle installed. No id or fake IncomingMessage socket is allocated.
+pub(crate) fn start_connection(owner: f64, server_handle: i64) {
+    initialize_connection(owner, server_handle, true);
+}
+
+fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
+    let socket = RootedSocket::new(owner);
+    let peer_address = net::endpoint(socket.value(), true)
+        .map(|endpoint| endpoint.address)
+        .unwrap_or_default();
+    let peer_port = net::endpoint(socket.value(), true)
+        .map(|endpoint| endpoint.port)
+        .unwrap_or(0);
+    let (idle_close_ms, keep_alive_timeout_ms) = with_base_server(server_handle, |server| {
+        (
+            crate::server::server::idle_close_ms(server),
+            server.keep_alive_timeout,
+        )
+    })
+    .unwrap_or((0, 5_000.0));
+    let secure = net::tls_installed(socket.value());
+    let scope = TransientRootScope::enter();
+    let parser = scope.root_nanbox(unsafe { np::alloc_in(&PARSER, "",
         Conn {
-            id: conn_id,
             server_handle,
             peer_address,
             peer_port,
-            socket_handle,
             decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
             input: Vec::with_capacity(8 * 1024),
             building: None,
@@ -375,129 +354,52 @@ pub(crate) fn start_connection(
             handshaking: secure,
             websocket: false,
         },
-    );
-    crate::server::server::queue_turnloop_connection_event(server_handle, socket_handle);
-    arm_idle(conn_id);
-    if let Err(_err) = tl::read_start(conn_id) {
-        destroy_connection(conn_id);
+        std::mem::size_of::<Conn>() + 8 * 1024,
+        &[],
+    ) });
+    unsafe {
+        net::set_codec(socket.value(), "parser", parser.get(), close_parser);
+    }
+    if net::set_route(socket.value(), super::SUBSYSTEM).is_err() {
+        net::destroy(socket.value());
+        return;
+    }
+    if announce {
+        crate::server::server::emit_connection(server_handle, socket.value());
+    }
+    if socket.is_current() {
+        arm_idle(&socket);
     }
 }
 
-/// Adopt a TLS connection whose ALPN chose `http/1.1` from the HTTP/2 listener
-/// (`http2.createSecureServer({ allowHTTP1: true })`).
-///
-/// The socket keeps its id, its installed TLS layer and its outstanding
-/// multishot read: only the owning table changes, because both halves live in
-/// the same subsystem slot. `leftover` is whatever plaintext the HTTP/2 side
-/// had buffered but not decoded — with ALPN there is normally none, but a
-/// client that pipelined its first request into the handshake's last flight
-/// would lose it otherwise.
-///
-/// Returns false when no `Conn` could be made, in which case the caller closes
-/// the socket rather than leaving an orphan.
-pub(crate) fn adopt_alpn_http1(
-    id: i64,
-    server_handle: i64,
-    peer_address: String,
-    peer_port: u16,
-    socket_handle: i64,
-    leftover: Vec<u8>,
-) -> bool {
-    // `id` is a connection, not a listener, so the idle deadline comes from the
-    // server the same way P5's own `listen` derived it.
-    let idle_close_ms =
-        with_base_server(server_handle, crate::server::server::idle_close_ms).unwrap_or(0);
-    let keep_alive_timeout_ms =
-        with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
-    let mut input = Vec::with_capacity(8 * 1024);
-    input.extend_from_slice(&leftover);
-    // Keep the connection socket already announced by HTTP/2 admission.
-    conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
-        id,
-        Conn {
-            id,
-            server_handle,
-            peer_address,
-            peer_port,
-            socket_handle,
-            decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
-            input,
-            building: None,
-            active: None,
-            seq: 0,
-            requests: 0,
-            idle_close_ms,
-            keep_alive_timeout_ms,
-            paused: false,
-            read_eof: false,
-            closing: false,
-            write_shut: false,
-            destroyed: false,
-            secure: true,
-            // The handshake is already complete: that is what decided ALPN.
-            handshaking: false,
-            websocket: false,
-        },
-    );
+/// The ALPN handoff replaces a separate codec on the same rooted Socket.
+pub(crate) fn adopt_alpn_http1(socket: f64, server_handle: i64, leftover: Vec<u8>) -> bool {
+    let socket = RootedSocket::new(socket);
+    initialize_connection(socket.value(), server_handle, false);
+    with_conn(&socket, |connection| connection.handshaking = false);
     if !leftover.is_empty() {
-        decode(id);
+        feed(&socket, &leftover);
     }
-    true
+    with_conn(&socket, |_| ()).is_some()
 }
 
-fn on_data(id: i64, bytes: &[u8]) {
-    // Every read refreshes the idle deadline; the connection is only "idle"
-    // between a completed response and the next request byte. Park it rather
-    // than cancel it: cancelling destroys the timer handle, and turnloop
-    // answers that with a `Cancelled` and a `Closed` — two completions per
-    // request, both routed nowhere — after which `arm_idle` has to build a
-    // fresh handle. Parking keeps the handle, so this disarm and the re-arm in
-    // `complete_response` are both a deadline move, which costs nothing.
+fn on_data(id: &RootedSocket, bytes: &[u8]) {
     park_idle(id);
-    let plaintext: Option<Vec<u8>> = if with_conn(id, |c| c.secure).unwrap_or(false) {
-        match perry_ext_net::turnloop_tls_io::receive(id, bytes) {
-            Some(received) => {
-                if received.peer_closed {
-                    // A TLS close_notify is the readable EOF.
-                    let text = received.plaintext;
-                    if !text.is_empty() {
-                        feed(id, &text);
-                    }
-                    on_eof(id);
-                    return;
-                }
-                Some(received.plaintext)
-            }
-            // The layer is gone (the handshake failed and destroyed the
-            // connection); there is nothing to decode.
-            None => return,
-        }
-    } else {
-        None
-    };
-    if with_conn(id, |c| c.handshaking).unwrap_or(false)
-        && perry_ext_net::turnloop_tls_io::handshake_done(id)
-    {
-        with_conn(id, |c| c.handshaking = false);
-    }
-    match plaintext {
-        Some(text) if !text.is_empty() => feed(id, &text),
-        Some(_) => {}
-        None => feed(id, bytes),
-    }
+    with_conn(id, |connection| connection.handshaking = false);
+    feed(id, bytes);
 }
 
 /// Is this connection carrying a WebSocket rather than HTTP?
-fn is_websocket(id: i64) -> bool {
+fn is_websocket(id: &RootedSocket) -> bool {
     with_conn(id, |c| c.websocket).unwrap_or(false)
 }
 
-fn feed(id: i64, bytes: &[u8]) {
+fn feed(id: &RootedSocket, bytes: &[u8]) {
     if is_websocket(id) {
         // Past the 101 these are frames, not HTTP. The connection, its id, its
         // outstanding multishot read and its TLS layer are all unchanged — only
         // who decodes the bytes.
-        perry_ext_ws::turnloop_link::on_data(id, bytes);
+        perry_ext_ws::native_socket::on_data(id.value(), bytes);
         return;
     }
     let known = with_conn(id, |c| c.input.extend_from_slice(bytes)).is_some();
@@ -512,7 +414,7 @@ fn feed(id: i64, bytes: &[u8]) {
 /// is only `reset()` once the current response has been written, so a pipelined
 /// request stays in `input` and is dispatched afterwards. That is Node's
 /// per-connection serialization, and it is also what makes `res` unambiguous.
-fn decode(id: i64) {
+fn decode(id: &RootedSocket) {
     loop {
         enum Step {
             Idle,
@@ -611,7 +513,7 @@ fn decode(id: i64) {
                             c.requests += 1;
                             c.seq += 1;
                             c.paused = true;
-                            let (request, send_continue) = finish_request(c, building);
+                            let (request, send_continue) = finish_request(id, c, building);
                             Step::Dispatch(request, send_continue)
                         }
                         None => Step::Again,
@@ -716,7 +618,11 @@ fn building_from(head: &http1::Head) -> Building {
 
 /// Turn a fully decoded request into the `(req, res)` handle pair the pump
 /// dispatches.
-fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool) {
+fn finish_request(
+    socket: &RootedSocket,
+    c: &mut Conn,
+    building: Building,
+) -> (HttpPendingRequest, bool) {
     let mut im = IncomingMessage::new(
         building.method.clone(),
         building.url.clone(),
@@ -735,9 +641,8 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
     // `req.socket === conn` for the
     // `'connection'` listener's argument — same handle, every request on
     // this connection.
-    incoming_socket_assign(im_handle, handle_to_pointer_f64(c.socket_handle));
-    let sr_handle =
-        alloc_http1_server_response_for_turnloop(c.id, c.seq, im_handle, c.socket_handle);
+    incoming_socket_assign(im_handle, socket.value());
+    let sr_handle = alloc_http1_server_response_for_turnloop(socket.value(), c.seq, im_handle);
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {
@@ -821,7 +726,7 @@ fn prepare_headers(c: &mut Conn, shape: &mut ResponseShape) -> bool {
 }
 
 /// `res.end()` on a fully buffered response.
-pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
+pub(crate) fn send_response(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) {
     let bytes = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -915,7 +820,7 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
 /// 102 was never sent at all. On turnloop nothing is automatic once a
 /// `'checkContinue'` listener has taken the request over, so the call has to
 /// reach the wire.
-pub(crate) fn send_interim(conn_id: i64, seq: u64, bytes: &[u8]) {
+pub(crate) fn send_interim(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) {
     let ours = with_conn(conn_id, |c| {
         owns(c, seq)
             && !(bytes.starts_with(b"HTTP/1.1 100 ")
@@ -929,7 +834,7 @@ pub(crate) fn send_interim(conn_id: i64, seq: u64, bytes: &[u8]) {
 
 /// `res.flushHeaders()` / the first `res.write(...)`: send the head now and
 /// stream the body afterwards.
-pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: ResponseShape) -> bool {
+pub(crate) fn begin_stream(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) -> bool {
     let prepared = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -966,7 +871,7 @@ pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: ResponseShape) -> 
 }
 
 /// A streaming `res.write(chunk)`.
-pub(crate) fn send_body(conn_id: i64, seq: u64, bytes: &[u8]) -> bool {
+pub(crate) fn send_body(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) -> bool {
     let framed = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -996,7 +901,7 @@ pub(crate) fn send_body(conn_id: i64, seq: u64, bytes: &[u8]) -> bool {
 }
 
 /// A streaming `res.end()`: close the body framing and finish the exchange.
-pub(crate) fn finish_body(conn_id: i64, seq: u64, trailers: &[(String, String)]) {
+pub(crate) fn finish_body(conn_id: &RootedSocket, seq: u64, trailers: &[(String, String)]) {
     let framed = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -1025,7 +930,7 @@ pub(crate) fn finish_body(conn_id: i64, seq: u64, trailers: &[(String, String)])
 }
 
 /// Retire the answered request and decide the connection's fate.
-fn complete_response(conn_id: i64, seq: u64, framing: Framing) {
+fn complete_response(conn_id: &RootedSocket, seq: u64, framing: Framing) {
     let decision = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -1058,60 +963,30 @@ fn complete_response(conn_id: i64, seq: u64, framing: Framing) {
 }
 
 /// `res.destroy()` / `socket.destroy()` on the turnloop connection.
-pub(crate) fn destroy_connection(conn_id: i64) {
+pub(crate) fn destroy_connection(conn_id: &RootedSocket) {
     note_aborted(conn_id);
-    let known = with_conn(conn_id, |c| {
-        c.destroyed = true;
-        c.closing = true;
-    })
-    .is_some();
-    if known {
-        cancel_idle(conn_id);
-        let _ = tl::close(conn_id);
-    }
+    net::destroy(conn_id.value());
 }
 
-/// End the write side and close once it has drained. turnloop orders a
-/// handle's writes ahead of its shutdown, so a completed shutdown means every
-/// queued byte left — closing outright would cancel them.
-fn finish_and_close(conn_id: i64) {
+fn finish_and_close(conn_id: &RootedSocket) {
     cancel_idle(conn_id);
-    let secure = with_conn(conn_id, |c| {
-        c.closing = true;
-        c.secure
-    })
-    .unwrap_or(false);
-    if secure {
-        // `close_notify` first, then the FIN, then the close (`on_shutdown`).
-        if perry_ext_net::turnloop_tls_io::shutdown(conn_id, 0).is_err() {
-            let _ = tl::close(conn_id);
-        }
-        return;
-    }
-    if tl::shutdown(conn_id, 0).is_err() {
-        let _ = tl::close(conn_id);
+    with_conn(conn_id, |c| c.closing = true);
+    if net::shutdown(conn_id.value(), 0).is_err() {
+        net::destroy(conn_id.value());
     }
 }
 
-fn write_raw(conn_id: i64, bytes: &[u8]) {
-    if bytes.is_empty() {
+fn write_raw(conn_id: &RootedSocket, bytes: &[u8]) {
+    if bytes.is_empty() || !conn_id.is_current() {
         return;
     }
-    let secure = with_conn(conn_id, |c| c.secure).unwrap_or(false);
-    let result = if secure {
-        perry_ext_net::turnloop_tls_io::write(conn_id, bytes, 0).map(|_| ())
-    } else {
-        tl::write(conn_id, bytes, 0)
-            .map(|_| ())
-            .map_err(|e| e.message())
-    };
-    if result.is_err() {
-        destroy_connection(conn_id);
+    if net::write(conn_id.value(), bytes, 0).is_err() {
+        destroy_connection(conn_id)
     }
 }
 
 /// Answer a malformed request the way Node does: one 400, then close.
-fn bad_request(conn_id: i64, _code: &str) {
+fn bad_request(conn_id: &RootedSocket, _code: &str) {
     write_raw(
         conn_id,
         b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -1126,7 +1001,7 @@ fn bad_request(conn_id: i64, _code: &str) {
 
 // ── Terminal completions ────────────────────────────────────────────────────
 
-fn on_eof(id: i64) {
+fn on_eof(id: &RootedSocket) {
     if is_websocket(id) {
         // An upgraded connection has no request in flight and no response to
         // finish; `ws` reports a missing close frame as 1006. Our own side is
@@ -1140,12 +1015,12 @@ fn on_eof(id: i64) {
             c.write_shut
         })
         .unwrap_or(false);
-        if perry_ext_ws::turnloop_link::on_eof(id) {
+        if perry_ext_ws::native_socket::on_eof(id.value()) {
             finish_and_close(id);
         } else if shut {
             // The close handshake finished and our FIN went out first; this
             // FIN is the last thing either side sends (see `on_shutdown`).
-            let _ = tl::close(id);
+            net::destroy(id.value());
         }
         return;
     }
@@ -1200,7 +1075,7 @@ fn on_eof(id: i64) {
 /// lets it go when the peer's FIN arrives too, so the close is whichever of
 /// this and that EOF comes second. Only a shutdown this layer asked for
 /// (`closing`) counts.
-fn on_shutdown(id: i64) {
+fn on_shutdown(id: &RootedSocket) {
     let close = with_conn(id, |c| {
         if !c.closing {
             return false;
@@ -1210,69 +1085,16 @@ fn on_shutdown(id: i64) {
     })
     .unwrap_or(false);
     if close {
-        let _ = tl::close(id);
+        net::destroy(id.value());
     }
 }
 
-fn on_wrote(_id: i64, _len: usize) {
-    // Backpressure for `res.write()`'s boolean return is read directly from
-    // `tl::queued_bytes` at the call site, so a write completion needs no
-    // bookkeeping here.
-}
-
-fn on_closed(id: i64) {
-    if is_websocket(id) {
-        // The ws side has to learn the connection is gone before the id is
-        // recycled, or a later connection drawing the same id would find a
-        // stale link — the same class of bug the `turnloop_tls_io::forget`
-        // comment below records.
-        perry_ext_ws::turnloop_link::on_closed(id);
-    }
-    // A peer that vanished mid-request reaches the terminal `Closed` without
-    // ever passing through `destroy_connection`.
+fn on_closed(id: &RootedSocket) {
     note_aborted(id);
-    cancel_idle(id);
-    let removed = conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&id);
-    let owned = removed.is_some();
-    // The connection is fully gone — queue its
-    // socket's `'close'` for the pump's next tick. This sink runs inside
-    // `dispatch_staged` and must not run JS (same rule as `note_aborted`
-    // above), so `js_node_http_server_process_pending` (via
-    // `take_closed_sockets`) fires the listeners instead.
-    if let Some(conn) = removed {
-        if conn.socket_handle != 0 {
-            note_closed_socket(conn.socket_handle);
-        }
-    }
-    crate::server::server::turnloop_connection_closed(id);
-    if owned {
-        // The rustls session has to go BEFORE the id does. `turnloop_tls_io`
-        // keys its layer table by connection id, and nothing on this
-        // subsystem's terminal path was dropping it — perry-ext-net's
-        // `emit_close_once` is the only caller of `forget`, and that is
-        // subsystem 0's socket path, not this one. So every HTTPS connection
-        // left a `Layer` (a rustls session plus its buffers) behind for the
-        // life of the process, and — worse — once `free_handle_id` handed the
-        // id back and the next accepted connection drew it, `install_server_
-        // session` answered "socket is already TLS" and the connection was
-        // closed before a byte was read.
-        //
-        // Found through the HTTP/2 `allowHTTP1` handoff, which routes an ALPN
-        // `http/1.1` connection here and then closes it: the next TLS
-        // connection to that server got EOF, every time.
-        perry_ext_net::turnloop_tls_io::forget(id);
-        // The terminal completion: no completion can name this id again, and
-        // unlike a `net.Socket` id there is no JS object still holding it, so
-        // it goes back to the shared band instead of leaking one id per
-        // connection for the life of a server (the #6441 exhaustion class).
-        perry_ffi::free_handle_id(id);
-    }
+    unsafe { close_parser(id.value()) };
 }
 
-fn on_timer(id: i64) {
+fn on_timer(id: &RootedSocket) {
     // The idle keep-alive deadline. Node closes the connection; an exchange
     // that started in the meantime cancelled the deadline already.
     let idle = with_conn(id, |c| c.active.is_none() && c.building.is_none()).unwrap_or(false);
@@ -1281,15 +1103,7 @@ fn on_timer(id: i64) {
     }
 }
 
-fn on_error(id: i64, code: Option<&str>, syscall: Option<&str>, terminal: bool) {
-    if super::with_listener(id, |_| ()).is_some() {
-        // A transient accept failure does not end the listener, exactly as the
-        // hyper accept loop kept going on one.
-        if terminal {
-            super::close_listener(id);
-        }
-        return;
-    }
+fn on_error(id: &RootedSocket, code: Option<&str>, syscall: Option<&str>, terminal: bool) {
     if is_websocket(id) {
         let message = code.unwrap_or("WS_ERR_SOCKET");
         // Same rule, and the same reason P5 stopped reporting a rustls failure
@@ -1297,12 +1111,12 @@ fn on_error(id: i64, code: Option<&str>, syscall: Option<&str>, terminal: bool) 
         // connection this layer has already finished with is teardown noise,
         // and destroying the handle for it cancels writes that are still going
         // out.
-        if perry_ext_ws::turnloop_link::on_error(id, message) {
+        if perry_ext_ws::native_socket::on_error(id.value(), message) {
             destroy_connection(id);
         }
         return;
     }
-    let _ = (code, syscall);
+    let _ = (code, syscall, terminal);
     destroy_connection(id);
 }
 
@@ -1314,22 +1128,22 @@ fn on_error(id: i64, code: Option<&str>, syscall: Option<&str>, terminal: bool) 
 /// `keepAliveTimeout + keepAliveTimeoutBuffer` (defaults 5000 + 1000 ms), and
 /// `keepAliveTimeout = 0` disables the close entirely while *keeping*
 /// keep-alive on. Zero here therefore arms nothing.
-fn arm_idle(id: i64) {
+fn arm_idle(id: &RootedSocket) {
     let ms = with_conn(id, |c| c.idle_close_ms).unwrap_or(0);
     if ms == 0 {
         return;
     }
-    let _ = tl::timer_arm(id, super::SUBSYSTEM, ms);
+    net::deadline_arm(id.value(), ms);
 }
 
 /// Disarm the idle close for the duration of an exchange, keeping the handle.
 /// Teardown still uses `cancel_idle`: there the handle really is going away.
-fn park_idle(id: i64) {
-    let _ = tl::timer_park(id);
+fn park_idle(id: &RootedSocket) {
+    net::deadline_park(id.value());
 }
 
-fn cancel_idle(id: i64) {
-    let _ = tl::timer_cancel(id);
+fn cancel_idle(id: &RootedSocket) {
+    net::deadline_cancel(id.value());
 }
 
 // ── WebSocket ───────────────────────────────────────────────────────────────
@@ -1349,7 +1163,7 @@ fn cancel_idle(id: i64) {
 /// TLS layer all stay exactly as they are, and only the decoder changes. That
 /// is the shape P5 used for TLS (a session *above* the handle), applied one
 /// layer up.
-fn on_websocket(id: i64, building: Building) {
+fn on_websocket(id: &RootedSocket, building: Building) {
     let Some((server_handle, leftover, secure)) = with_conn(id, |c| {
         (c.server_handle, std::mem::take(&mut c.input), c.secure)
     }) else {
@@ -1386,7 +1200,8 @@ fn on_websocket(id: i64, building: Building) {
         c.websocket = true;
         c.paused = false;
     });
-    let ws_id = perry_ext_ws::turnloop_link::adopt(id, &leftover);
+    unsafe { close_parser(id.value()) };
+    let ws_id = perry_ext_ws::native_socket::adopt(id.value(), &leftover);
 
     let mut im = IncomingMessage::new(
         building.method,
@@ -1407,22 +1222,9 @@ fn on_websocket(id: i64, building: Building) {
         server_handle,
         request_handle,
         ws_id,
-        raw_socket_id: 0,
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        raw_socket_value: f64::from_bits(JsValue::UNDEFINED.bits()),
         head: Vec::new(),
-    });
-}
-
-/// Install this crate as `perry-ext-ws`'s turnloop transport.
-///
-/// `perry-ext-http` already depends on `perry-ext-ws`, so the reverse would be
-/// a cycle; function pointers are the same one-way seam
-/// `register_http_address_reader` uses. Both are TLS-transparent because
-/// `write_raw` and `destroy_connection` are.
-pub(crate) fn register_ws_transport() {
-    perry_ext_ws::turnloop_link::register_transport(perry_ext_ws::turnloop_link::Transport {
-        write: |id, bytes| write_raw(id, bytes),
-        finish: finish_and_close,
-        destroy: destroy_connection,
     });
 }
 
@@ -1436,7 +1238,7 @@ pub(crate) fn register_ws_transport() {
 /// itself is `turnloop_net::transfer`: the id and the outstanding multishot
 /// read stay exactly as they are and only the completion route changes, so no
 /// byte can be lost between the two owners and no descriptor moves.
-fn on_upgrade(id: i64, building: Building) {
+fn on_upgrade(id: &RootedSocket, building: Building) {
     let (server_handle, head) = match with_conn(id, |c| {
         c.closing = true;
         (c.server_handle, std::mem::take(&mut c.input))
@@ -1457,18 +1259,15 @@ fn on_upgrade(id: i64, building: Building) {
         return;
     }
     cancel_idle(id);
-    if tl::transfer(id, perry_ext_net::TURNLOOP_SUBSYSTEM).is_err()
-        || !perry_ext_net::adopt_turnloop_upgrade(id)
-    {
+    #[cfg(test)]
+    let sabotage_route = std::env::var("PERRY_NET_A_HTTP_SABOTAGE").as_deref() == Ok("route");
+    #[cfg(not(test))]
+    let sabotage_route = false;
+    if !sabotage_route && net::set_route(id.value(), net::ROUTE).is_err() {
         destroy_connection(id);
         return;
     }
-    // The connection is no longer ours: drop our record without closing the
-    // handle, which now belongs to `net`.
-    conns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&id);
+    unsafe { close_parser(id.value()) };
 
     let mut im = IncomingMessage::new(
         building.method,
@@ -1481,11 +1280,23 @@ fn on_upgrade(id: i64, building: Building) {
     );
     im.http_version = if building.version == 0 { "1.0" } else { "1.1" }.to_string();
     let request_handle = alloc_incoming_message(im);
+    incoming_socket_assign(request_handle, id.value());
+    #[cfg(test)]
+    let head = if std::env::var("PERRY_NET_A_HTTP_SABOTAGE").as_deref() == Ok("head") {
+        Vec::new()
+    } else {
+        head
+    };
     crate::server::server::queue_turnloop_upgrade(crate::server::server::HttpPendingUpgrade {
         server_handle,
         request_handle,
         ws_id: 0,
-        raw_socket_id: id,
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        raw_socket_value: id.value(),
         head,
     });
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod native_tests;

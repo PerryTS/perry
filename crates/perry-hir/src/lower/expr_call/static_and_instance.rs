@@ -113,7 +113,7 @@ pub(super) fn try_static_method_and_instance(
             // Scope this guard to the STATIC-class / native-module-static arms
             // below — NOT to the native-INSTANCE arm (line ~191), which is
             // itself keyed on a local/param binding via `lookup_native_instance`
-            // (e.g. an upgrade handler's `wsId.send(...)` parameter) and must
+            // (e.g. a request handler's `res.end(...)` parameter) and must
             // still dispatch.
             // #11157: a per-evaluation class's self-binding is a value too —
             // `C.m()` inside C's own body must call THIS evaluation's `m`

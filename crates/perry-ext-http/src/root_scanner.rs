@@ -5,10 +5,20 @@ use perry_ffi::GcRootVisitor;
 /// Raw closure pointers are exposed as mutable slots so copying GC can
 /// rewrite them after relocation.
 pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
+    let agent = perry_ffi::agent_post::current_agent();
+    if let Ok(mut queue) = HTTP_PENDING_EVENTS.lock() {
+        for (_, event) in queue.iter_mut().filter(|(owner, _)| *owner == agent) {
+            if let PendingHttpEvent::Upgrade { socket_handle, .. } = event {
+                visitor.visit_i64_slot(socket_handle);
+            }
+        }
+    }
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
-        if req.owner_agent != perry_ffi::agent_post::current_agent() {
+        if req.owner_agent != agent {
             return;
         }
+        visitor.visit_i64_slot(&mut req.socket_handle);
+        visitor.visit_i64_slot(&mut req.request_create_connection);
         visitor.visit_i64_slot(&mut req.response_callback);
         visitor.visit_i64_slot(&mut req.response_raw_wrapper);
         visitor.visit_i64_slot(&mut req.end_callback);
@@ -38,9 +48,10 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     });
 
     iter_handles_of_mut::<IncomingMessageHandle, _>(|msg| {
-        if msg.owner_agent != perry_ffi::agent_post::current_agent() {
+        if msg.owner_agent != agent {
             return;
         }
+        visitor.visit_i64_slot(&mut msg.socket_handle);
         for cbs in msg.listeners.values_mut() {
             for cb in cbs {
                 visitor.visit_i64_slot(cb);
@@ -53,5 +64,41 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     });
 
     agent::scan_agent_roots(visitor);
-    client_request_surface::scan_roots(visitor);
+}
+
+/// Agent teardown drops only that heap's app ownership edges. The runtime
+/// retires driver capabilities separately; this hook never runs JS/driver.
+pub(super) extern "C" fn retire_client_roots(agent: u64) {
+    iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
+        if req.owner_agent != agent {
+            return;
+        }
+        req.socket_handle = 0;
+        req.socket_snapshot = None;
+        req.response_callback = 0;
+        req.response_raw_wrapper = 0;
+        req.end_callback = 0;
+        req.request_create_connection = 0;
+        req.abort_signal_bits = 0;
+        req.abort_listener_bits = 0;
+        req.pending_write_callbacks.clear();
+        req.listeners.clear();
+        req.tls.check_server_identity_callback = 0;
+        req.completed = true;
+    });
+    iter_handles_of_mut::<IncomingMessageHandle, _>(|msg| {
+        if msg.owner_agent != agent {
+            return;
+        }
+        msg.socket_handle = 0;
+        msg.listeners.clear();
+        msg.pipes.clear();
+    });
+    if let Ok(mut queue) = HTTP_PENDING_EVENTS.lock() {
+        queue.retain(|(owner, _)| *owner != agent);
+    }
+    if let Ok(mut inflight) = CLIENT_REQUESTS_INFLIGHT.lock() {
+        inflight.retain(|(owner, _)| *owner != agent);
+    }
+    agent::retire_agent_roots(agent);
 }

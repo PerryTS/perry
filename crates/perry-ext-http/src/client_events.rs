@@ -130,12 +130,13 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
     if socket == 0 {
         return;
     }
-    let value = f64::from_bits(POINTER_TAG | (socket as u64 & PTR_MASK));
     let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket);
     let listeners = scope.root_addrs(&listeners);
     for callback in listeners {
         if callback.get() != 0 {
             let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
+            let value = f64::from_bits(POINTER_TAG | (socket.get() as u64 & PTR_MASK));
             let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value);
         }
     }
@@ -145,13 +146,16 @@ unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
     let listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
         .and_then(|response| response.listeners.get(event).cloned())
         .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
+    let arg = arg.map(|value| scope.root_nanbox(value));
     for callback in listeners {
-        if callback == 0 {
+        if callback.get() == 0 {
             continue;
         }
-        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
-        if let Some(value) = arg {
-            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value);
+        let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
+        if let Some(value) = &arg {
+            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, value.get());
         } else {
             let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
@@ -162,13 +166,8 @@ unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Hand
     fire_incoming_event(incoming, "aborted", None);
     fire_incoming_event(incoming, "error", Some(error));
     fire_incoming_event(incoming, "close", None);
-    if let Some(socket) = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|response| response.socket_handle)
-        .filter(|socket| *socket != 0)
-    {
-        let event = alloc_string("close");
-        perry_ext_net::js_ext_net_socket_emit(socket, event.as_raw() as i64, std::ptr::null(), 0);
-        perry_ext_net::js_ext_net_destroy_socket(socket);
+    if let Some(socket) = crate::current_request_socket(request_handle) {
+        perry_ext_net::native_transport::destroy(socket.value());
     }
     finish_agent_request(request_handle, false);
     fire_request_close_once(request_handle);
@@ -397,16 +396,8 @@ pub(crate) unsafe fn handle_response_event(
     fire_request_close_once(request_handle);
 }
 
-/// Drain handler for `PendingHttpEvent::Upgrade` (#10468): build a
-/// lightweight client `IncomingMessage` (statusCode/headers only — the body
-/// is the upgraded protocol now, delivered over the adopted socket instead)
-/// and fire `req.on('upgrade', (res, socket, head) => ...)` with
-/// `(res, socket, head)`, Node's exact argument shape. `socket` is the
-/// `net.Socket` id the client transport already
-/// adopted via `perry_ext_net::adopt_turnloop_upgrade`; `head` is any
-/// bytes the peer sent past the header block, as a `Buffer` (never a lossy
-/// string — the write side of #10471 stays server-only, this is a fresh
-/// client-side implementation).
+/// Deliver the response head, actual Socket and binary upgrade head. The
+/// client already stored net's route on this same cell; no adoption is needed.
 ///
 /// # Safety
 ///
@@ -419,6 +410,8 @@ pub(crate) unsafe fn handle_upgrade_event(
     socket_handle: Handle,
     head: Vec<u8>,
 ) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket_handle);
     let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
         let was = req.completed;
         req.completed = true;
@@ -430,11 +423,13 @@ pub(crate) unsafe fn handle_upgrade_event(
     }
     client_abort::cleanup_request_signal(request_handle);
 
-    // Main-thread companion of the net adoption (#4973) — must run before
-    // user code touches the socket.
-    if socket_handle != 0 {
-        perry_ext_net::ensure_adopted_socket_dispatch();
-    }
+    debug_assert!(
+        perry_ext_net::native_transport::socket_link(f64::from_bits(
+            POINTER_TAG | (socket.get() as u64 & PTR_MASK),
+        ))
+        .is_ok(),
+        "HTTP upgrade must retain its actual Socket"
+    );
 
     let incoming = register_handle(IncomingMessageHandle {
         owner_agent: perry_ffi::agent_post::current_agent(),
@@ -447,7 +442,7 @@ pub(crate) unsafe fn handle_upgrade_event(
         encoding: None,
         decoder_pending: Vec::new(),
         pipes: Vec::new(),
-        socket_handle,
+        socket_handle: socket.get(),
         request_handle,
         http_version: (1, 1),
         complete: true,
@@ -458,12 +453,13 @@ pub(crate) unsafe fn handle_upgrade_event(
     })
     .unwrap_or_default();
 
-    let res_arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-    let socket_arg = if socket_handle == 0 {
+    let res_arg = scope.root_nanbox(f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK)));
+    let socket_arg = scope.root_nanbox(if socket.get() == 0 {
         f64::from_bits(TAG_UNDEFINED)
     } else {
-        f64::from_bits(POINTER_TAG | (socket_handle as u64 & PTR_MASK))
-    };
+        f64::from_bits(POINTER_TAG | (socket.get() as u64 & PTR_MASK))
+    });
+    let listeners = scope.root_addrs(&upgrade_listeners);
     // Node always hands the listener a Buffer here, even when the peer sent
     // no bytes past the header block (`Buffer.isBuffer(head) === true` for a
     // zero-length upgrade head) — never `undefined`.
@@ -472,11 +468,7 @@ pub(crate) unsafe fn handle_upgrade_event(
         f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
     };
 
-    let scope = perry_ffi::TransientRootScope::enter();
-    let res_arg = scope.root_nanbox(res_arg);
-    let socket_arg = scope.root_nanbox(socket_arg);
     let head_arg = scope.root_nanbox(head_arg);
-    let listeners = scope.root_addrs(&upgrade_listeners);
     for cb in listeners {
         if cb.get() != 0 {
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
@@ -489,7 +481,7 @@ pub(crate) unsafe fn handle_upgrade_event(
         }
     }
 
-    finish_agent_request(request_handle, false);
+    finish_upgraded_agent_request(request_handle);
     fire_request_close_once(request_handle);
 }
 

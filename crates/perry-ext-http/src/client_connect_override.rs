@@ -1,10 +1,7 @@
-//! Client requests routed over a caller-supplied raw socket instead of
-//! the default transport: both `agent.createConnection`/`agent.createSocket` (#2154) and
-//! the request option's own `createConnection` (#10469, honored only when
-//! `agent_handle == 0`) end up here. Split out of `lib.rs` to stay under
-//! the file-size cap; the closure storage/invocation and the `{ host, port,
-//! path, keepAlive, keepAliveInitialDelay }` options object still live in
-//! `agent.rs` alongside the pre-existing Agent-level override.
+//! HTTP requests on a caller-supplied net.Socket. Override callbacks retain
+//! the same actual object; the request/Agent ownership edges are updated
+//! before releasing the unconnected placeholder. The Socket's link route
+//! becomes HTTP while preserving its driver read and TLS session.
 
 use std::collections::HashMap;
 
@@ -28,13 +25,7 @@ pub(crate) fn dispatch_for_handle(request_handle: Handle, url: &str) -> Option<i
     request_create_connection_socket(cc, url)
 }
 
-/// The whole "no explicit Agent, but the request's own `createConnection`
-/// is set" path: resolve `(host, port, path)` from `url`, invoke the
-/// override on the main thread, and attach raw mode on the socket it
-/// returns (so no inbound byte gets dispatched as a JS `'data'` event
-/// before `dispatch_request_over_socket`'s task takes over — mirrors the
-/// Agent-override path in `dispatch_request_snapshot`). `None` means "not
-/// handled", so the caller falls back to the default transport.
+/// Invoke a request's createConnection override on its JS heap.
 pub(crate) fn request_create_connection_socket(
     request_create_connection: i64,
     url: &str,
@@ -43,9 +34,6 @@ pub(crate) fn request_create_connection_socket(
     let socket_id = unsafe {
         agent::try_request_create_connection_socket(request_create_connection, &host, port, &path)
     }?;
-    if let Some(vt) = perry_ffi::raw_net() {
-        (vt.attach)(socket_id);
-    }
     Some(socket_id)
 }
 
@@ -90,20 +78,8 @@ fn serialize_http_request(
     out
 }
 
-/// #2154 — run an HTTP exchange over a socket that a `createConnection`
-/// override (Agent-level or, since #10469, request-level) produced
-/// (`socket_id`), instead of the default transport. Ordinary responses force
-/// `Connection: close` and read to EOF. A `101` response to an upgrade request
-/// detaches the still-live socket from the raw reader and pushes `Upgrade` with
-/// any bytes following the header block. Other responses are parsed with
-/// `plain_client::parse_http_response` and produce the same `Response` / `Error` events as
-/// the default transport.
-///
-/// The socket I/O goes through perry-ffi's raw-net vtable (published by
-/// perry-ext-net) and runs on the agent's event loop, woken by
-/// `perry_ffi::raw_net_notify` (`client_turnloop::raw_socket`). If no net
-/// backend is linked the request errors out (the override couldn't have
-/// produced a socket without `net`, so this is a defensive guard).
+/// Run the existing wire request on the actual supplied Socket. Driver and
+/// TLS ownership remain with Socket; framing is a separate pure payload.
 pub(crate) fn dispatch_request_over_socket(
     request_handle: Handle,
     method: String,
@@ -137,13 +113,65 @@ pub(crate) fn dispatch_request_over_socket(
         path.push_str(q);
     }
     let req_bytes = serialize_http_request(&method, &path, &host_header, &headers, &body);
-    let wants_upgrade = crate::client_upgrade::wants_upgrade(&headers);
-    crate::client_turnloop::raw_socket::start_raw_exchange(
-        request_handle,
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(socket_id);
+    let value = f64::from_bits(perry_ffi::JsValue::from_object_ptr(owner.get() as *mut u8).bits());
+    if perry_ext_net::native_transport::socket_link(value).is_err() {
+        push_event(PendingHttpEvent::CodedError {
+            request_handle,
+            code: "ERR_INVALID_RETURN_VALUE".into(),
+            message: "createConnection must return a net.Socket".into(),
+        });
+        return;
+    }
+    let Some((previous, agent, key, tls)) =
+        perry_ffi::get_handle_mut::<crate::ClientRequestHandle>(request_handle).map(|request| {
+            let previous = request.socket_handle;
+            request.socket_handle = owner.get();
+            request.socket_snapshot = None;
+            request.reused_socket = false;
+            (
+                previous,
+                request.agent_handle,
+                request.agent_key.clone(),
+                request.tls.clone(),
+            )
+        })
+    else {
+        return;
+    };
+    let previous = scope.root_addr(previous);
+    if let Some(agent) = perry_ffi::get_handle_mut::<crate::agent::AgentHandle>(agent) {
+        if let Some(sockets) = agent.active_socket_handles.get_mut(&key) {
+            for socket in sockets {
+                if *socket == previous.get() {
+                    *socket = owner.get();
+                }
+            }
+        }
+    }
+    if agent != 0 {
+        crate::agent::track_agent_socket(agent, owner.get());
+    }
+    if previous.get() != 0 && previous.get() != owner.get() {
+        perry_ext_net::native_transport::destroy(f64::from_bits(
+            perry_ffi::JsValue::from_object_ptr(previous.get() as *mut u8).bits(),
+        ));
+    }
+    crate::client_turnloop::dispatch_supplied(
+        crate::client_turnloop::Request {
+            request_handle,
+            method: &method,
+            url: &url,
+            headers,
+            body,
+            timeout_ms,
+            agent_handle: agent,
+            tls: &tls,
+            continue_mode: false,
+        },
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(owner.get() as *mut u8).bits()),
         req_bytes,
-        wants_upgrade,
-        timeout_ms,
-        socket_id,
     );
 }
 

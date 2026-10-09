@@ -57,6 +57,7 @@ pub mod mask;
 mod server;
 pub use server::*;
 mod host_upgrade;
+pub mod native_socket;
 mod turnloop_io;
 pub mod turnloop_link;
 pub use host_upgrade::{accept_http_upgrade, drive_http_upgraded, Refusal, HTTP_SERVER_TRANSPORT};
@@ -114,6 +115,12 @@ enum WsTransport {
     /// [`attach_turnloop_client`] the moment the connection is adopted.
     Connecting(Vec<WsCommand>),
     Turnloop(i64),
+    /// The application's traced ownership edge for an attached connection.
+    Socket {
+        owner: f64,
+        agent: u64,
+    },
+    Closed,
 }
 
 struct WsConnection {
@@ -236,14 +243,29 @@ extern "C" {
 /// contributors, the mutable-root scanner, and the handle-property dispatch
 /// extension that answers dynamic reads on ws handles (#9324).
 fn ensure_runtime_hooks_registered() {
+    gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
     WS_RUNTIME_HOOKS_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
+        perry_ffi::agent_post::register_retire_hook(retire_socket_edges);
         register_aux_event_pump(js_ws_process_pending, js_ws_has_pending);
         unsafe {
             js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch);
             dispatch::register_method_dispatch();
         };
     });
+}
+
+extern "C" fn retire_socket_edges(agent: u64) {
+    let mut connections = WS_CONNECTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for connection in connections.values_mut() {
+        if matches!(connection.transport, WsTransport::Socket { agent: owner, .. } if owner == agent)
+        {
+            connection.transport = WsTransport::Closed;
+            connection.is_open = false;
+            connection.is_closed = true;
+        }
+    }
 }
 
 /// Resolve `WebSocketServer.clients` for an UNTYPED receiver (#9324).
@@ -276,6 +298,16 @@ pub unsafe extern "C" fn js_ext_ws_handle_property_dispatch(
 }
 
 fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
+    if let Ok(mut connections) = WS_CONNECTIONS.lock() {
+        let current = perry_ffi::agent_post::current_agent();
+        for connection in connections.values_mut() {
+            if let WsTransport::Socket { owner, agent } = &mut connection.transport {
+                if *agent == current {
+                    visitor.visit_nanbox_f64_slot(owner);
+                }
+            }
+        }
+    }
     if let Ok(mut per_client) = WS_CLIENT_LISTENERS.lock() {
         for client in per_client.values_mut() {
             for cb_vec in client.listeners.values_mut() {
@@ -420,6 +452,9 @@ pub(crate) fn connection_closed(ws_id: usize, code: u16, reason: String) {
         }
         c.is_open = false;
         c.is_closed = true;
+        if matches!(c.transport, WsTransport::Socket { .. }) {
+            c.transport = WsTransport::Closed;
+        }
     } else {
         return;
     }
@@ -463,6 +498,18 @@ pub(crate) fn allocate_client_id() -> usize {
     ws_id
 }
 
+/// An existing logical WS client retains its actual ordinary Socket edge.
+/// This is application ownership, with no new connection lookup or alias.
+fn attach_socket_client(ws_id: usize, socket: f64) {
+    if let Some(connection) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        connection.transport = WsTransport::Socket {
+            owner: socket,
+            agent: perry_ffi::agent_post::current_agent(),
+        };
+        connection.is_open = true;
+    }
+}
+
 /// Bind an allocated id to the connection that now carries it.
 ///
 /// Returns whatever `ws.send`/`ws.close` queued while it was connecting, for
@@ -475,7 +522,7 @@ pub(crate) fn attach_turnloop_client(ws_id: usize, conn_id: i64) -> Vec<WsComman
     let queued = match std::mem::replace(&mut connection.transport, WsTransport::Turnloop(conn_id))
     {
         WsTransport::Connecting(queued) => queued,
-        WsTransport::Turnloop(_) => Vec::new(),
+        WsTransport::Turnloop(_) | WsTransport::Socket { .. } | WsTransport::Closed => Vec::new(),
     };
     connection.is_open = true;
     queued
@@ -517,7 +564,11 @@ pub(crate) fn connection_failed(ws_id: usize, message: &str) {
 /// re-enter this crate through `connection_error` / `connection_closed`, and
 /// `std::sync::Mutex` is not reentrant.
 fn command_on(ws_id: usize, command: WsCommand) {
-    let conn_id = {
+    enum Target {
+        Id(i64),
+        Socket(f64),
+    }
+    let target = {
         let mut map = WS_CONNECTIONS.lock().unwrap();
         match map.get_mut(&ws_id) {
             Some(connection) => match &mut connection.transport {
@@ -525,12 +576,22 @@ fn command_on(ws_id: usize, command: WsCommand) {
                     queued.push(command);
                     return;
                 }
-                WsTransport::Turnloop(conn_id) => *conn_id,
+                WsTransport::Turnloop(id) => Target::Id(*id),
+                WsTransport::Socket { owner, agent }
+                    if *agent == perry_ffi::agent_post::current_agent() =>
+                {
+                    Target::Socket(*owner)
+                }
+                WsTransport::Socket { .. } => return,
+                WsTransport::Closed => return,
             },
             None => return,
         }
     };
-    replay_command(conn_id, command);
+    match target {
+        Target::Id(id) => replay_command(id, command),
+        Target::Socket(owner) => native_socket::command(owner, command),
+    }
 }
 
 /// `ws.send(...)`.

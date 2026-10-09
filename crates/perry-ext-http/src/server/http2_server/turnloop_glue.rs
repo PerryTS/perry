@@ -18,13 +18,16 @@ use crate::server::http2_session_settings::Http2SettingsState;
 /// A session handle for a connection turnloop just accepted.
 pub(crate) fn register_turnloop_server_session(
     server_handle: i64,
-    conn_id: i64,
+    socket: f64,
     peer_port: u16,
     encrypted: bool,
     alpn: &str,
     local_settings: Http2SettingsState,
 ) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
+        socket_value: socket,
+        socket_incarnation: perry_ext_net::native_transport::snapshot(socket),
+        owner_agent: perry_ffi::agent_post::current_agent(),
         server_handle,
         connection_port: peer_port,
         session_event_emitted: false,
@@ -45,7 +48,7 @@ pub(crate) fn register_turnloop_server_session(
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),
         timeout_callback: 0,
-        turnloop_conn: conn_id,
+        turnloop_conn: 0,
     });
     let has_session_listener = get_handle::<Http2SecureServer>(server_handle)
         .map(|server| crate::server::server::server_has_event_listener(&server.base, "session"))
@@ -79,19 +82,41 @@ pub(crate) fn bind_turnloop_client_port(session_handle: i64, port: u16) {
 
 /// The turnloop connection a session handle rides on, or `None` on the legacy
 /// transport. Every control surface routes on this.
-pub(crate) fn turnloop_conn_of_session(session_handle: i64) -> Option<i64> {
-    get_handle::<Http2SessionHandle>(session_handle)
-        .map(|s| s.turnloop_conn)
-        .filter(|id| *id != 0)
+pub(crate) fn socket_of_session(session: i64) -> f64 {
+    perry_ffi::get_handle::<Http2SessionHandle>(session)
+        .filter(|session| session.owner_agent == perry_ffi::agent_post::current_agent())
+        .map(|session| session.socket_value)
+        .unwrap_or(f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()))
 }
 
-/// The turnloop connection and real stream id behind an `Http2Stream` handle.
-pub(crate) fn turnloop_target_of_stream(stream_handle: i64) -> Option<(i64, u32)> {
-    let stream = get_handle::<Http2StreamHandle>(stream_handle)?;
-    if stream.turnloop_conn == 0 || stream.id <= 0 {
+pub(crate) fn turnloop_conn_of_session(
+    session_handle: i64,
+) -> Option<crate::server::turnloop_h2::target::Target> {
+    use crate::server::turnloop_h2::target::Target;
+    let session = get_handle::<Http2SessionHandle>(session_handle)?;
+    if session.owner_agent != perry_ffi::agent_post::current_agent() {
         return None;
     }
-    Some((stream.turnloop_conn, stream.id as u32))
+    if perry_ext_net::native_transport::socket_link(session.socket_value).is_ok() {
+        Some(Target::Session(session_handle))
+    } else if session.turnloop_conn != 0 {
+        Some(Target::Client(session.turnloop_conn))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn turnloop_target_of_stream(
+    stream_handle: i64,
+) -> Option<(crate::server::turnloop_h2::target::Target, u32)> {
+    let stream = get_handle::<Http2StreamHandle>(stream_handle)?;
+    if stream.id <= 0 {
+        return None;
+    }
+    Some((
+        turnloop_conn_of_session(stream.session_handle)?,
+        stream.id as u32,
+    ))
 }
 
 pub(crate) fn mark_turnloop_client_connected(session_handle: i64, protocol: &str) {

@@ -52,6 +52,7 @@
 
 use std::collections::HashMap;
 
+use super::target::Target;
 use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1::Header;
 use turnloop_http::http2::{HeadersKind, Role};
@@ -323,7 +324,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     let server_handle = conn.server_handle;
     let peer_address = conn.peer_address.clone();
     let peer_port = conn.peer_port;
-    let conn_id = conn.id;
+    let conn_id = conn.session_handle;
     let session_handle = conn.session_handle;
     let stream = &mut conn.streams[i];
     let h2_id = stream.h2_id;
@@ -351,6 +352,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
         peer_port,
     );
     im.http_version = "2.0".to_string();
+    im.socket_value = crate::server::http2_server::socket_of_session(session_handle);
     let request_handle = crate::server::request::alloc_incoming_message(im);
     let response_handle = crate::server::response::alloc_server_response_for_turnloop(
         conn_id,
@@ -368,7 +370,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     let stream_handle = if has_stream_listener {
         crate::server::http2_server::register_turnloop_stream_handle(
             session_handle,
-            conn_id,
+            0,
             h2_id as i64,
             headers_vec.clone(),
         )
@@ -559,7 +561,8 @@ pub(crate) fn body_forbidden(status: u16, head_request: bool) -> bool {
 }
 
 /// `res.end(body)` on a fully buffered response.
-pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: ResponseShape) {
+pub(crate) fn h2_send_response(conn_id: impl Into<Target>, h2_id: u32, shape: ResponseShape) {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return;
@@ -600,7 +603,12 @@ pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: ResponseShape) {
 }
 
 /// `res.flushHeaders()` / the first `res.write(...)`: send the head now.
-pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: ResponseShape) -> bool {
+pub(crate) fn h2_begin_stream(
+    conn_id: impl Into<Target>,
+    h2_id: u32,
+    shape: ResponseShape,
+) -> bool {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return false;
@@ -625,7 +633,8 @@ pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: ResponseShape) ->
 
 /// A streaming `res.write(chunk)`. `None` means the stream is gone;
 /// `Some(false)` means the bytes were accepted with backpressure.
-pub(crate) fn h2_send_body(conn_id: i64, h2_id: u32, bytes: &[u8]) -> Option<bool> {
+pub(crate) fn h2_send_body(conn_id: impl Into<Target>, h2_id: u32, bytes: &[u8]) -> Option<bool> {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return None;
@@ -642,7 +651,12 @@ pub(crate) fn h2_send_body(conn_id: i64, h2_id: u32, bytes: &[u8]) -> Option<boo
 }
 
 /// A streaming `res.end()`: close the body framing and finish the stream.
-pub(crate) fn h2_finish_body(conn_id: i64, h2_id: u32, trailers: &[(String, String)]) {
+pub(crate) fn h2_finish_body(
+    conn_id: impl Into<Target>,
+    h2_id: u32,
+    trailers: &[(String, String)],
+) {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return;
@@ -655,7 +669,8 @@ pub(crate) fn h2_finish_body(conn_id: i64, h2_id: u32, trailers: &[(String, Stri
 }
 
 /// `res.destroy()` / `stream.close(code)` — one stream, not the connection.
-pub(crate) fn destroy_stream(conn_id: i64, h2_id: u32, code: u32) {
+pub(crate) fn destroy_stream(conn_id: impl Into<Target>, h2_id: u32, code: u32) {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         if index_of(conn, h2_id).is_none() {
             return;
@@ -791,11 +806,18 @@ pub(crate) fn writable_below_watermark(conn: &H2Conn, h2_id: u32) -> bool {
     let stalled = index_of(conn, h2_id)
         .map(|i| conn.streams[i].outbox.len())
         .unwrap_or(0);
-    stalled + tl::queued_bytes(conn.id) <= HIGH_WATER_MARK
+    let staged: usize = conn.wire.iter().map(Vec::len).sum();
+    let queued = if conn.role == Role::Server {
+        staged
+    } else {
+        tl::queued_bytes(conn.id)
+    };
+    stalled + queued <= HIGH_WATER_MARK
 }
 
 /// After a stream ends, a connection that was asked to close may now be drained.
-fn maybe_drain(conn_id: i64) {
+fn maybe_drain(conn_id: impl Into<Target>) {
+    let conn_id = conn_id.into();
     let drained = super::conn::peek(conn_id, |conn| {
         conn.core.as_ref().is_some_and(|core| core.is_drained())
     });
@@ -862,11 +884,12 @@ pub(crate) fn open_client_stream(conn: &mut H2Conn, open: QueuedOpen) {
 /// `session.request(headers)` from JS. Opens immediately when the transport is
 /// ready — which is what Node does — and queues otherwise.
 pub(crate) fn request(
-    conn_id: i64,
+    conn_id: impl Into<Target>,
     stream_handle: i64,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 ) {
+    let conn_id = conn_id.into();
     super::conn::with_owned(conn_id, |conn| {
         let open = QueuedOpen {
             stream_handle,
@@ -886,7 +909,8 @@ pub(crate) fn request(
 }
 
 /// `session.close()` — Node's graceful GOAWAY.
-pub(crate) fn session_close(conn_id: i64) {
+pub(crate) fn session_close(conn_id: impl Into<Target>) {
+    let conn_id = conn_id.into();
     let drained = super::conn::with_owned(conn_id, |conn| {
         if !super::conn::transport_ready(conn) {
             // A `close()` on a session that is still connecting: the GOAWAY

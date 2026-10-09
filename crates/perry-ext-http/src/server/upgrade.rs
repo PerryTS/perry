@@ -12,8 +12,6 @@
 //!
 //! Attached WebSocket servers are native observers registered by perry-ext-ws.
 
-use perry_ffi::{JsClosure, RawClosureHeader};
-
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::server::HttpServer;
 use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK};
@@ -29,7 +27,7 @@ fn upgrade_head_arg(head_data: &[u8]) -> f64 {
 pub(crate) fn fire_upgrade_listeners(
     server_handle: i64,
     im_handle: i64,
-    ws_id: i64,
+    socket: f64,
     head_data: Vec<u8>,
 ) -> bool {
     let listeners = crate::server::server::with_base_server_mut(server_handle, |server| {
@@ -43,13 +41,7 @@ pub(crate) fn fire_upgrade_listeners(
     let listeners = scope.root_addrs(&listeners);
 
     let req_f64 = handle_to_pointer_f64(im_handle);
-    // Encode ws_id as NaN-boxed POINTER_TAG so `unbox_to_i64` (the
-    // codegen helper used at every NATIVE_MODULE_TABLE receiver
-    // call site — `wsId.send(...)` / `wsId.on(...)`) extracts the
-    // low-48 bits as the original ws_id. A plain `ws_id as f64`
-    // (1.0_f64) would have bits 0x3FF0_…, which `unbox_to_i64`
-    // AND-masks to 0, missing the WS_CONNECTIONS lookup entirely.
-    let ws_id_f64 = f64::from_bits(POINTER_TAG | (ws_id as u64 & PTR_MASK));
+    let socket = scope.root_nanbox(socket);
     // Node always supplies a Buffer, including for a zero-length head. Public
     // `ws` reads `head.length` before deciding whether to call `unshift`, and
     // upgrade bytes are arbitrary protocol data rather than UTF-8 text.
@@ -60,18 +52,13 @@ pub(crate) fn fire_upgrade_listeners(
         if cb.get() == 0 {
             continue;
         }
+        delivered = true;
+        perry_ext_net::native_transport::call(
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(cb.get() as *mut u8).bits()),
+            perry_ffi::JsThis::from_f64(handle_to_pointer_f64(server_handle)),
+            &[req_f64, socket.get(), head_arg.get()],
+        );
         unsafe {
-            let raw = cb.get() as *const RawClosureHeader;
-            let closure = JsClosure::from_raw(raw);
-            if !closure.is_null() {
-                delivered = true;
-                let _ = closure.call3(
-                    perry_ffi::JsThis::UNDEFINED,
-                    req_f64,
-                    ws_id_f64,
-                    head_arg.get(),
-                );
-            }
             js_promise_run_microtasks();
         }
     }

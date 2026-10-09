@@ -1414,8 +1414,8 @@ impl LoweringContext {
     /// `Array.prototype.map.call(e)` worked → `(number).join is not a function`).
     pub(crate) fn shadow_native_instance_if_present(&mut self, name: &str) {
         // A pre-scan registered this exact param name as a native instance for
-        // the callback now being lowered (e.g. `wsId` for `server.on('upgrade',
-        // (req, wsId, head) => …)`). That tag is the FRESH, intended one — the
+        // the callback now being lowered (e.g. `res` for a request handler).
+        // That tag is the FRESH, intended one — the
         // param IS the native instance — so its own param binding must NOT
         // tombstone it. One-shot: consume the protection so a later, unrelated
         // param of the same name still shadows a genuinely stale tag.

@@ -1,96 +1,24 @@
-//! The `node:http` / `node:https` client, on turnloop — the only transport.
-//!
-//! Lane 1 (#11091) put the simplest shape here — a cleartext, bodyless request
-//! on the implicit agent — and declined everything else to reqwest. This module
-//! now carries **every** exchange `dispatch_request_snapshot` used to hand
-//! reqwest, plus the three shapes that bypassed reqwest on raw tokio sockets,
-//! and `reqwest` is no longer a dependency of this crate:
-//!
-//! | shape | how |
-//! |---|---|
-//! | request bodies | buffered at `end()`, so always a known length: `Content-Length`, or chunked when the caller set `Transfer-Encoding: chunked` ([`wire`]) |
-//! | `options.timeout` / `req.setTimeout` | a deadline on the loop (`tl::timer_arm`) covering the whole exchange, as reqwest's `RequestBuilder::timeout` did; it fires `'timeout'` and tears the exchange down |
-//! | `https:` | [`perry_tls_session::TlsSession`] above the same socket handle, with the verifier `tls_client` builds from Node's options ([`tls`]) |
-//! | an explicit or HTTPS `Agent` | keep-alive with physical reuse ([`pool`]); the observable agent pools in `agent.rs` are untouched |
-//! | an explicit `Host` | sent verbatim, as Node and reqwest both did ([`wire`]) |
-//! | `NODE_USE_ENV_PROXY=1` | absolute-form through an HTTP proxy, or a `CONNECT` tunnel for `https:` ([`proxy`]) |
-//! | `TE: trailers` | the codec's `Event::Trailers`, delivered with the buffered response — was `plain_client.rs` over a tokio `TcpStream` |
-//! | `Expect: 100-continue` | head first, body withheld until the interim `100`, which fires `'continue'` — was `continue_client.rs` over tokio |
-//! | `Connection: Upgrade` | the codec's `Event::Upgrade`; a `101` hands the live handle to `net` with `tl::transfer` — was `client_upgrade.rs` over tokio |
-//!
-//! # What is still not here
-//!
-//! * `agent.createConnection` / `createSocket` and a request-level
-//!   `createConnection` run their exchange over a socket JS produced
-//!   (`client_connect_override.rs`, perry-ext-net's raw vtable). They are
-//!   decided before this module is offered the request and are unchanged.
-//! * A thread that does not own its agent's loop **posts** the submission to
-//!   the owner (`perry_ffi::agent_post`), which serves the same JS heap; only a
-//!   host where no loop exists at all reports `ENOTSUP` — the rule `perry-ext-net`
-//!   adopted when it dropped tokio.
-//! * `Connection: Upgrade` over `https:` cannot hand a TLS session to `net`, so
-//!   a `101` there is delivered as an ordinary response, exactly as reqwest did.
-//!
-//! # Redirects
-//!
-//! None are followed. Node's `http.request` never follows a 3xx; reqwest had to
-//! be told `redirect::Policy::none()`, and driving the codec directly gives it
-//! by construction.
-//!
-//! # Threading, locking and the GC
-//!
-//! Every connection lives on the agent's loop and is touched only from this
-//! module's completion sink or from work running on that loop. State is one
-//! mutex ([`State`]), and **no `tl::` call is ever made while it is held**: a
-//! loopback completion can be delivered to the sink before the submitting call
-//! returns, and the sink takes the same lock. Handlers therefore compute a list
-//! of [`Effect`]s under the lock and perform them after releasing it.
-//!
-//! The sink runs no JS. Every outcome is a `PendingHttpEvent` for
-//! `js_http_process_pending`, exactly as the reqwest task's were. Nothing here
-//! holds a JS value — requests are owned `String`/`Vec` copies — so there is no
-//! GC root to register and `scan_http_roots` is unchanged.
+//! HTTP client exchanges run on ordinary net.Socket payloads. Request and
+//! Agent app records own the actual objects; their separately owned framing
+//! payload contains pure Rust bytes. Socket owns TLS, driver capabilities and
+//! deadlines. Upgrade stores the current route without a transfer or retoken.
 
-mod conn;
+mod native_client;
 mod pool;
+mod protocol;
 mod proxy;
-pub(crate) mod raw_socket;
 pub(crate) mod tls;
 mod wire;
 
+use crate::tls_client::TlsOptions;
+use crate::{push_event, ClientRequestHandle, PendingHttpEvent};
+use perry_ffi::turnloop_net as tl;
+use perry_ffi::{Handle, JsValue, TransientRootScope};
+pub(crate) use pool::{PoolKey, Reuse};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-
-use perry_ffi::turnloop_net as tl;
-use perry_ffi::Handle;
-
-use crate::tls_client::TlsOptions;
-use crate::{push_event, PendingHttpEvent};
-
-pub(crate) use pool::{PoolKey, Reuse};
-
-/// This lane's slot in the runtime's completion-sink registry.
-///
-/// Distinct from `server/turnloop_serve`'s `1`, which is this crate's *server*.
-/// The authority for the map is `perry-db-turnloop`'s `subsystem` module
-/// header; `6` is the free slot between `perry-stdlib`'s framework server (5)
-/// and `perry-ext-ws`'s client (7).
 pub(crate) const SUBSYSTEM: u8 = 6;
-
-/// Node sets `TCP_NODELAY` on client sockets; a request that sat in Nagle's
-/// queue would add a round trip to every exchange.
-const NODELAY: bool = true;
-
-/// The code a request fails with when no loop exists for its agent at all.
-/// Same as `perry-ext-net`'s: there is no second event loop to fall back to.
 const NO_LOOP_CODE: &str = "ENOTSUP";
-
-// ── Liveness counters ───────────────────────────────────────────────────────
-//
-// A transport that silently did nothing would leave every JS-level test green
-// having exercised nothing — the "gate runs but its subject never did" shape.
-// These let a test assert the subject was live, per shape.
 
 static ACCEPTED: AtomicU64 = AtomicU64::new(0);
 static COMPLETED: AtomicU64 = AtomicU64::new(0);
@@ -125,13 +53,13 @@ pub fn timed_out_total() -> u64 {
     TIMED_OUT.load(Ordering::Relaxed)
 }
 
-/// `createConnection` / `createSocket` exchanges ([`raw_socket`]) that
+/// Exchanges on caller-supplied Sockets that
 /// delivered a response or an upgrade.
 pub fn raw_completed_total() -> u64 {
     RAW_COMPLETED.load(Ordering::Relaxed)
 }
 
-/// Deferred events ([`push_after`]) whose loop deadline fired.
+/// Deferred request timeout callbacks that fired.
 pub fn deferred_fired_total() -> u64 {
     DEFERRED_FIRED.load(Ordering::Relaxed)
 }
@@ -173,207 +101,6 @@ pub(crate) struct Outbound {
     pub(crate) extra: Vec<(String, String)>,
 }
 
-// ── Shared state ────────────────────────────────────────────────────────────
-
-/// A deadline this module armed, and what it is for.
-enum Timer {
-    /// `options.timeout` for an in-flight exchange.
-    Deadline { conn: i64, request: Handle },
-    /// An idle pooled connection's expiry.
-    Idle { conn: i64 },
-    /// An event queued for later: `req.setTimeout(ms, cb)` armed before (or
-    /// independently of) dispatch, or an Agent socket facade's idle expiry.
-    Deferred(PendingHttpEvent),
-    /// Read a `createConnection` socket that `perry-ext-net` said is ready.
-    RawDrain { socket: i64 },
-    /// A `createConnection` exchange's deadline.
-    RawDeadline { socket: i64 },
-}
-
-#[derive(Default)]
-struct State {
-    conns: HashMap<i64, conn::Conn>,
-    /// Which connection is carrying a request, for `destroy()` and the
-    /// deferred `Expect: 100-continue` body.
-    by_request: HashMap<Handle, i64>,
-    timers: HashMap<i64, Timer>,
-    idle: HashMap<PoolKey, Vec<i64>>,
-    /// `createConnection` exchanges, keyed by the user's socket id.
-    raw: HashMap<i64, raw_socket::RawExchange>,
-}
-
-fn state() -> &'static Mutex<State> {
-    static STATE: OnceLock<Mutex<State>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(State::default()))
-}
-
-fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    let mut guard = state().lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut guard)
-}
-
-/// I/O decided under the lock and performed after it is released.
-enum Effect {
-    Connect {
-        id: i64,
-        host: String,
-        port: u16,
-    },
-    ReadStart(i64),
-    Write(i64, Vec<u8>),
-    Close(i64),
-    SetRef(i64, bool),
-    ArmTimer(i64, u64),
-    CancelTimer(i64),
-    FreeId(i64),
-    Push(PendingHttpEvent),
-    /// Hand a connection to `net` after a `101`, then publish the event.
-    Handoff(i64, PendingHttpEvent),
-    /// Read a `createConnection` socket ([`raw_socket::drain_raw_socket`]).
-    RawDrain(i64),
-    /// Close a `createConnection` socket through the raw-net vtable.
-    RawClose(i64),
-    /// Run a request again on a fresh connection (a reused one died before
-    /// the response began), keeping its in-flight guard.
-    Redispatch(Box<Outbound>, crate::ClientInflightGuard),
-}
-
-/// Perform effects in order. A failed submission feeds its handler, whose own
-/// effects join the queue — that is how a write error on a connection becomes
-/// the same teardown a read error would.
-fn run(effects: Vec<Effect>) {
-    let mut queue = std::collections::VecDeque::from(effects);
-    while let Some(effect) = queue.pop_front() {
-        let more = match effect {
-            Effect::Connect { id, host, port } => {
-                match tl::tcp_connect(id, SUBSYSTEM, &host, port, NODELAY) {
-                    Ok(()) => Vec::new(),
-                    Err(error) => with_state(|st| {
-                        conn::on_error(st, id, &error.code, &error.syscall, error.errno as i64)
-                    }),
-                }
-            }
-            Effect::ReadStart(id) => match tl::read_start(id) {
-                Ok(()) => Vec::new(),
-                Err(error) => with_state(|st| {
-                    conn::on_error(st, id, &error.code, &error.syscall, error.errno as i64)
-                }),
-            },
-            Effect::Write(id, bytes) => {
-                if bytes.is_empty() {
-                    Vec::new()
-                } else {
-                    match tl::write(id, &bytes, 0) {
-                        Ok(_) => Vec::new(),
-                        Err(error) => with_state(|st| {
-                            conn::on_error(st, id, &error.code, &error.syscall, error.errno as i64)
-                        }),
-                    }
-                }
-            }
-            Effect::Close(id) => {
-                let _ = tl::close(id);
-                Vec::new()
-            }
-            Effect::SetRef(id, referenced) => {
-                tl::set_ref(id, referenced);
-                Vec::new()
-            }
-            Effect::ArmTimer(id, ms) => match tl::timer_arm(id, SUBSYSTEM, ms) {
-                Ok(()) => Vec::new(),
-                // No deadline could be armed: fire it now rather than never.
-                Err(_) => with_state(|st| conn::on_timer(st, id)),
-            },
-            Effect::CancelTimer(id) => {
-                let _ = tl::timer_cancel(id);
-                perry_ffi::free_handle_id(id);
-                Vec::new()
-            }
-            Effect::FreeId(id) => {
-                perry_ffi::free_handle_id(id);
-                Vec::new()
-            }
-            Effect::Push(event) => {
-                push_event(event);
-                Vec::new()
-            }
-            Effect::RawDrain(socket) => {
-                raw_socket::drain_raw_socket(socket);
-                Vec::new()
-            }
-            Effect::RawClose(socket) => {
-                raw_socket::close_raw_socket(socket);
-                Vec::new()
-            }
-            Effect::Handoff(id, event) => {
-                handoff(id, event);
-                Vec::new()
-            }
-            Effect::Redispatch(outbound, inflight) => with_state(|st| {
-                let mut fx = Vec::new();
-                conn::start(st, *outbound, Some(inflight), &mut fx);
-                fx
-            }),
-        };
-        queue.extend(more);
-    }
-}
-
-/// A `101` on a cleartext upgrade request: the live handle becomes a
-/// `net.Socket`, keeping its id and outstanding read — the server's own
-/// `'upgrade'` handoff in `turnloop_serve`, from the client side.
-fn handoff(id: i64, event: PendingHttpEvent) {
-    let adopted = tl::transfer(id, perry_ext_net::TURNLOOP_SUBSYSTEM).is_ok()
-        && perry_ext_net::adopt_turnloop_upgrade(id);
-    if adopted {
-        push_event(event);
-        return;
-    }
-    let _ = tl::close(id);
-    if let PendingHttpEvent::Upgrade { request_handle, .. } = event {
-        push_event(PendingHttpEvent::CodedError {
-            request_handle,
-            message: "socket hang up".to_string(),
-            code: "ECONNRESET".to_string(),
-        });
-    }
-}
-
-// ── Ids ─────────────────────────────────────────────────────────────────────
-
-/// One authoritative id domain for the connections and deadlines this module
-/// creates. The runtime keys its handle table by id across every subsystem,
-/// so it must be globally unique.
-fn registry_domain() -> perry_ffi::NativeRegistryDomain {
-    static DOMAIN: OnceLock<perry_ffi::NativeRegistryDomain> = OnceLock::new();
-    *DOMAIN.get_or_init(|| {
-        perry_ffi::NativeRegistryDomain::new().expect("http client registry domains exhausted")
-    })
-}
-
-fn next_id() -> i64 {
-    perry_ffi::reserve_handle_id_in_domain(registry_domain())
-}
-
-/// This subsystem accepts nothing — it only dials.
-extern "C" fn alloc_id() -> i64 {
-    0
-}
-
-// ── Availability and routing ────────────────────────────────────────────────
-
-/// Whether a request issued *now, on this thread* can be submitted directly.
-///
-/// Deliberately not cached: availability is a property of the calling thread,
-/// and the first thread to ask claims its agent's route.
-pub fn available() -> bool {
-    static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| {
-        tl::register_sink(SUBSYSTEM, sink, alloc_id);
-    });
-    tl::available(SUBSYSTEM)
-}
-
 struct LoopJob(Box<dyn FnOnce() + Send>);
 
 impl perry_ffi::agent_post::AgentJob for LoopJob {
@@ -382,23 +109,8 @@ impl perry_ffi::agent_post::AgentJob for LoopJob {
     }
 }
 
-/// How often a transiently refused post is retried before the request fails.
-const POST_ATTEMPTS: usize = 64;
-
-thread_local! {
-    /// This thread has already been found to own the agent's loop by
-    /// [`on_loop`]. Asking [`available`] *claims* the route for the first
-    /// thread that asks, so [`push_after`] consults this instead of asking:
-    /// scheduling a deferred event must never be what decides which thread
-    /// owns the loop.
-    static OWNS_LOOP_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Run `op` on the loop: here when this thread owns it, else on the owner.
-/// `false` means no loop exists for this agent at all; `op` was not run.
 fn on_loop(op: impl FnOnce() + Send + 'static) -> bool {
     if available() {
-        OWNS_LOOP_HERE.with(|owns| owns.set(true));
         op();
         return true;
     }
@@ -482,7 +194,7 @@ fn prepare(request: Request<'_>) -> Result<Outbound, String> {
         "https" => true,
         other => return Err(format!("unsupported protocol {other}:")),
     };
-    let host = conn::dial_host(&url).ok_or_else(|| "missing host".to_string())?;
+    let host = protocol::dial_host(&url).ok_or_else(|| "missing host".to_string())?;
     let port = url
         .port_or_known_default()
         .unwrap_or(if https { 443 } else { 80 });
@@ -586,271 +298,135 @@ pub(crate) fn dispatch(request: Request<'_>) -> Route {
 }
 
 /// Start an exchange on the loop thread.
+pub fn available() -> bool {
+    native_client::available()
+}
+const POST_ATTEMPTS: usize = 64;
+
+fn socket_owner(request: Handle) -> Option<f64> {
+    perry_ffi::get_handle::<ClientRequestHandle>(request)
+        .filter(|req| req.socket_handle != 0)
+        .map(|req| f64::from_bits(JsValue::from_object_ptr(req.socket_handle as *mut u8).bits()))
+}
+
 fn start(outbound: Outbound) {
-    let effects = with_state(|st| start_locked(st, outbound));
-    run(effects);
-}
-
-fn start_locked(st: &mut State, outbound: Outbound) -> Vec<Effect> {
-    let mut fx = Vec::new();
-    conn::start(st, outbound, None, &mut fx);
-    fx
-}
-
-/// The body `end()` supplies to an `Expect: 100-continue` exchange.
-pub(crate) fn continue_body(request_handle: Handle, body: Vec<u8>) {
-    let carried = on_loop(move || {
-        let effects = with_state(|st| {
-            let mut fx = Vec::new();
-            conn::continue_body(st, request_handle, body, &mut fx);
-            fx
+    let request = outbound.request_handle;
+    let Some(owner) = socket_owner(request) else {
+        push_event(PendingHttpEvent::Error {
+            request_handle: request,
+            error_message: "HTTP request has no assigned Socket".into(),
         });
-        run(effects);
-    });
-    let _ = carried;
+        return;
+    };
+    if let Err(message) = native_client::start_on_socket(owner, outbound, None, false) {
+        push_event(PendingHttpEvent::Error {
+            request_handle: request,
+            error_message: message,
+        });
+    }
 }
 
-/// `req.destroy()` / `req.abort()`: stop carrying the request. The JS-visible
-/// teardown (`'error'`/`'close'`) is the caller's; this only closes the socket
-/// so the peer sees it, as Node's destroy does, and drops the exchange so no
-/// late event reaches a completed request.
-pub(crate) fn cancel(request_handle: Handle) {
-    // Only a request this module is carrying has anything to cancel. Checking
-    // first also keeps `destroy()` of a never-dispatched request from asking
-    // for the loop route, which the first asker claims for its thread.
-    if !with_state(|st| st.by_request.contains_key(&request_handle)) {
-        return;
-    }
+pub(crate) fn continue_body(request: Handle, body: Vec<u8>) {
     let _ = on_loop(move || {
-        let effects = with_state(|st| {
-            let mut fx = Vec::new();
-            conn::cancel(st, request_handle, &mut fx);
-            fx
-        });
-        run(effects);
-    });
-}
-
-/// `agent.destroy()`: close the agent's idle pooled connections. Also
-/// reachable from `tests/turnloop_client_exchange.rs`, which parks one.
-pub fn purge_agent(agent_handle: Handle) {
-    // Idle connections exist only once an agent has used the transport; an
-    // agent that never did must not claim the loop route just by being
-    // configured or destroyed.
-    if !with_state(|st| st.idle.keys().any(|key| key.agent == agent_handle)) {
-        return;
-    }
-    let _ = on_loop(move || {
-        let effects = with_state(|st| {
-            let mut fx = Vec::new();
-            conn::purge_agent(st, agent_handle, &mut fx);
-            fx
-        });
-        run(effects);
-    });
-}
-
-/// `req.setTimeout(ms[, cb])` / `options.timeout` armed at request creation:
-/// a one-shot `'timeout'` for the request, independent of any exchange.
-pub(crate) fn arm_request_timeout(request_handle: Handle, ms: u64) {
-    push_after(ms, PendingHttpEvent::Timeout { request_handle });
-}
-
-/// Queue `event` for the drain `ms` milliseconds from now, on a loop deadline.
-///
-/// The deadline is unreferenced (`tl::timer_arm`): like the tokio sleeps it
-/// replaces for `'timeout'` and the Agent facade's idle expiry, it never keeps
-/// the process alive on its own.
-pub(crate) fn push_after(ms: u64, event: PendingHttpEvent) {
-    if !OWNS_LOOP_HERE.with(std::cell::Cell::get) {
-        // Not (yet) known to be the loop owner — a `'timeout'` armed before
-        // this thread's first request, or bookkeeping on a thread that never
-        // carried one. A plain thread keeps the promise that the event fires
-        // without claiming the loop route as a side effect.
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-            push_event(event);
-        });
-        return;
-    }
-    // `on_loop` drops its closure unrun when it refuses, so the event is held
-    // in a shared slot the "no loop at all" fallback below can take back.
-    let slot = std::sync::Arc::new(Mutex::new(Some(event)));
-    let posted = slot.clone();
-    let carried = on_loop(move || {
-        let Some(event) = posted.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-            return;
-        };
-        let id = next_id();
-        if id == perry_ffi::INVALID_HANDLE {
-            push_event(event);
-            return;
+        if let Some(owner) = socket_owner(request) {
+            native_client::continue_body(owner, request, body);
         }
-        with_state(|st| st.timers.insert(id, Timer::Deferred(event)));
-        run(vec![Effect::ArmTimer(id, ms)]);
     });
-    if !carried {
-        // No loop anywhere for this agent: a plain thread keeps the promise
-        // that the event fires, without a second event loop.
-        if let Some(event) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                push_event(event);
+}
+pub(crate) fn cancel(request: Handle) {
+    let _ = on_loop(move || {
+        if let Some(owner) = socket_owner(request) {
+            native_client::cancel(owner, request);
+        }
+    });
+}
+
+pub fn purge_agent(handle: Handle) {
+    let sockets = perry_ffi::get_handle_mut::<crate::agent::AgentHandle>(handle)
+        .map(|agent| {
+            agent.free_sockets.clear();
+            agent
+                .free_socket_handles
+                .drain()
+                .flat_map(|(_, sockets)| sockets)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let scope = TransientRootScope::enter();
+    for socket in scope.root_addrs(&sockets) {
+        perry_ext_net::native_transport::destroy(f64::from_bits(
+            JsValue::from_object_ptr(socket.get() as *mut u8).bits(),
+        ));
+    }
+}
+
+/// A deferred request timeout is an ordinary runtime Timeout callback. It
+/// owns its callback on the current JS heap; no HTTP timer identity map.
+pub(crate) fn arm_request_timeout(request: Handle, ms: u64) {
+    extern "C" {
+        fn js_set_timeout_callback(callback: i64, delay: f64) -> i64;
+        fn js_timer_unref(timer: i64);
+    }
+    let scope = TransientRootScope::enter();
+    let callback = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(deferred_timeout, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    unsafe {
+        perry_ffi::set_closure_capture_f64(
+            callback.get() as *mut perry_ffi::RawClosureHeader,
+            0,
+            request as f64,
+        );
+        let timer = js_set_timeout_callback(callback.get(), ms as f64);
+        js_timer_unref(timer);
+    }
+}
+unsafe extern "C" fn deferred_timeout(
+    closure: *const perry_ffi::RawClosureHeader,
+    _: perry_ffi::JsThis,
+) -> f64 {
+    let request = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+    if perry_ffi::get_handle::<ClientRequestHandle>(request).is_some_and(|req| !req.completed) {
+        DEFERRED_FIRED.fetch_add(1, Ordering::Relaxed);
+        push_event(PendingHttpEvent::Timeout {
+            request_handle: request,
+        });
+    }
+    f64::from_bits(JsValue::UNDEFINED.bits())
+}
+
+pub(crate) fn dispatch_supplied(request: Request<'_>, owner: f64, head: Vec<u8>) {
+    let request_handle = request.request_handle;
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let outbound = match prepare(request) {
+        Ok(mut out) => {
+            out.reuse = None;
+            out
+        }
+        Err(error_message) => {
+            push_event(PendingHttpEvent::Error {
+                request_handle,
+                error_message,
             });
+            return;
         }
+    };
+    if let Err(error_message) =
+        native_client::start_on_socket(owner.get(), outbound, Some(head), false)
+    {
+        push_event(PendingHttpEvent::Error {
+            request_handle,
+            error_message,
+        });
     }
 }
 
-// ── The public liveness hooks ───────────────────────────────────────────────
-
-/// Offer a request to this module the way `dispatch_request_snapshot` does,
-/// with no TLS options. `true` means it was carried (directly or posted).
-///
-/// Kept `pub` for `tests/turnloop_client_exchange.rs`, which asserts the lane
-/// was live rather than trusting a JS-level green.
-#[allow(clippy::too_many_arguments)]
-pub fn try_dispatch(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    timeout_ms: Option<u64>,
-    agent_handle: Handle,
-) -> bool {
-    try_dispatch_tls(
-        request_handle,
-        method,
-        url,
-        headers,
-        body,
-        timeout_ms,
-        agent_handle,
-        Vec::new(),
-    )
-}
-
-/// [`try_dispatch`] with an explicit `ca` (PEM) for an `https:` URL.
-#[allow(clippy::too_many_arguments)]
-pub fn try_dispatch_tls(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    timeout_ms: Option<u64>,
-    agent_handle: Handle,
-    ca_pems: Vec<Vec<u8>>,
-) -> bool {
-    let tls = TlsOptions {
-        ca_pems,
-        ..TlsOptions::default()
-    };
-    let route = dispatch(Request {
-        request_handle,
-        method,
-        url,
-        headers: headers.clone(),
-        body: body.to_vec(),
-        timeout_ms,
-        agent_handle,
-        tls: &tls,
-        continue_mode: false,
-    });
-    matches!(route, Route::Direct | Route::Posted)
-}
-
-/// Keep-alive for the liveness test, which has no `AgentHandle` to read the
-/// policy from: carry `request` with this reuse policy on pool key `agent`.
-#[allow(clippy::too_many_arguments)]
-pub fn try_dispatch_pooled(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    agent: Handle,
-    max_free: usize,
-    idle_ms: u64,
-) -> bool {
-    let tls = TlsOptions::default();
-    let mut outbound = match prepare(Request {
-        request_handle,
-        method,
-        url,
-        headers: headers.clone(),
-        body: body.to_vec(),
-        timeout_ms: None,
-        agent_handle: agent,
-        tls: &tls,
-        continue_mode: false,
-    }) {
-        Ok(outbound) => outbound,
-        Err(_) => return false,
-    };
-    outbound.reuse = Some(Reuse { max_free, idle_ms });
-    ACCEPTED.fetch_add(1, Ordering::Relaxed);
-    on_loop(move || start(outbound))
-}
-
-/// Run an HTTP exchange over an already-open `perry-ext-net` socket, as
-/// `agent.createConnection` does. For `tests/turnloop_client_exchange.rs`.
-#[allow(clippy::too_many_arguments)]
-pub fn try_dispatch_over_socket(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    timeout_ms: Option<u64>,
-    socket_id: i64,
-) {
-    crate::client_connect_override::dispatch_request_over_socket(
-        request_handle,
-        method.to_string(),
-        url.to_string(),
-        headers.clone(),
-        body.to_vec(),
-        timeout_ms,
-        socket_id,
-    );
-}
-
-/// Queue a `'timeout'` for `request_handle` in `ms` ([`push_after`]). For
+/// Queue a `'timeout'` for `request_handle` in `ms`. For
 /// `tests/turnloop_client_exchange.rs`.
 pub fn schedule_timeout_for_test(request_handle: Handle, ms: u64) {
     arm_request_timeout(request_handle, ms);
-}
-
-// ── The completion sink ─────────────────────────────────────────────────────
-
-extern "C" fn sink(completion: *const tl::NetCompletion) {
-    if completion.is_null() {
-        return;
-    }
-    // SAFETY: the runtime passes a live completion for the duration of the
-    // call, which is this function's body.
-    let c = unsafe { &*completion };
-    let effects = match c.kind {
-        tl::NET_CONNECT => with_state(|st| conn::on_connect(st, c.id)),
-        // SAFETY: same call; the pooled lease outlives it.
-        tl::NET_DATA => {
-            let bytes = unsafe { c.bytes() };
-            with_state(|st| conn::on_data(st, c.id, bytes))
-        }
-        tl::NET_EOF => with_state(|st| conn::on_eof(st, c.id)),
-        tl::NET_ERROR => {
-            // SAFETY: the runtime builds these from `&'static str`s.
-            let code = unsafe { c.code() }.unwrap_or("EPIPE").to_string();
-            let syscall = unsafe { c.syscall() }.unwrap_or("").to_string();
-            with_state(|st| conn::on_error(st, c.id, &code, &syscall, c.errno as i64))
-        }
-        tl::NET_CLOSED => with_state(|st| conn::on_closed(st, c.id)),
-        tl::NET_TIMER => with_state(|st| conn::on_timer(st, c.id)),
-        // `NET_WROTE` is an acknowledgement only: `tl::write` copies.
-        _ => Vec::new(),
-    };
-    run(effects);
 }
 
 #[cfg(test)]

@@ -1467,6 +1467,21 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         property: property_name,
                     });
                 } else if module_name == "net"
+                    && matches!(
+                        class_name.as_str(),
+                        "Socket" | "Server" | "BlockList" | "SocketAddress"
+                    )
+                {
+                    // These families are ordinary payload objects. A bare
+                    // member read resolves their prototype, including getters;
+                    // method values must not invoke a zero-argument FFI call.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "net"
                     && ((class_name == "Socket" && is_net_socket_method_name(&property_name))
                         || (class_name == "Server" && is_net_server_method_name(&property_name)))
                 {

@@ -12,7 +12,6 @@ use crate::ir::Expr;
 use crate::lower_patterns::{
     pre_scan_fastify_handler_params, pre_scan_node_http_client_callback_params,
     pre_scan_node_http_client_request_socket_params, pre_scan_node_http_create_server_params,
-    pre_scan_node_http_upgrade_params,
 };
 
 use super::super::{try_desugar_reactive_animate, try_desugar_reactive_text, LoweringContext};
@@ -47,7 +46,7 @@ pub(super) fn run_call_prescans(
         // through the fastify Request/Reply table rows. Protect only when
         // registration actually happened (it no-ops under a `perry.compilePackages`
         // override), else a later same-named param would skip tombstoning a
-        // genuinely stale tag — same gating as the `wsId`/`sock` sites below.
+        // genuinely stale tag — same gating as the `sock` site below.
         //
         // Without this, an untyped `(req, reply) =>` handler lost the Reply tag,
         // so every `reply.*` lowered to the generic fallback and silently no-op'd:
@@ -111,24 +110,6 @@ pub(super) fn run_call_prescans(
         }
     }
 
-    // Issue #577 Phase 4 — `httpServer.on('upgrade', (req, wsId, head) => …)`
-    // — register `wsId` as a `("ws", "Client")` native instance BEFORE
-    // the arrow body is lowered, so `wsId.send(...)` / `wsId.on(...)` /
-    // `wsId.close()` inside the handler dispatch via the Client-class
-    // entries in NATIVE_MODULE_TABLE.
-    if let Some(ws_id_name) = pre_scan_node_http_upgrade_params(ctx, call) {
-        // The arrow's own `wsId` param binding would otherwise tombstone this
-        // fresh tag via shadow_native_instance_if_present — protect it so
-        // `wsId.send`/`.on` inside the handler keep the Client-class dispatch.
-        // Protect only when registration actually happened (it no-ops under a
-        // compile-package override), else a later same-named param would skip
-        // tombstoning a genuinely stale tag.
-        if ctx.register_native_instance(ws_id_name.clone(), "ws".to_string(), "Client".to_string())
-        {
-            ctx.protect_native_param(ws_id_name);
-        }
-    }
-
     // Issue #2211 — `request.on('socket', sock => …)` on a `ClientRequest`
     // hands the consumer the underlying TCP socket; pre-tag the arrow param
     // as a `("net", "Socket")` native instance so EventEmitter introspection
@@ -137,7 +118,8 @@ pub(super) fn run_call_prescans(
     // NATIVE_MODULE_TABLE.
     if let Some(sock_name) = pre_scan_node_http_client_request_socket_params(ctx, call) {
         // Protect only on successful registration (no-ops under a
-        // compile-package override) — see the `wsId` site above.
+        // compile-package override), else a later same-named param would
+        // skip tombstoning a genuinely stale tag.
         if ctx.register_native_instance(sock_name.clone(), "net".to_string(), "Socket".to_string())
         {
             ctx.protect_native_param(sock_name);

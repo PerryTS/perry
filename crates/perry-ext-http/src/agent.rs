@@ -25,8 +25,8 @@
 //!   `http.request` services a request whose agent defines a
 //!   `createConnection` or `createSocket` override, the override is invoked
 //!   (on the main thread) to produce a `net.Socket`, and the HTTP/1.1 exchange
-//!   is driven over that socket via the raw-net bridge (`perry_ffi::raw_net`,
-//!   published by perry-ext-net) instead of the default transport. `createConnection`
+//!   runs on that same Socket core and TLS session, with a separate pure
+//!   framing payload. `createConnection`
 //!   returns the socket synchronously (see `try_create_connection_socket`
 //!   here); `createSocket(req, options, cb)` follows Node's
 //!   `Agent.prototype.addRequest` contract and delivers the socket via its
@@ -46,7 +46,6 @@ use perry_ffi::{
     StringHeader,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::Once;
 
 mod tls_compat;
 pub(crate) use tls_compat::{
@@ -95,6 +94,8 @@ fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
 /// per-agent keep-alive + socket-counter accessors + setters).
 pub struct AgentHandle {
     pub(crate) owner_agent: u64,
+    /// The built-in HTTPS Agent is an app record belonging to this JS heap.
+    pub(crate) default_https: bool,
     pub protocol: Option<String>,
     pub keep_alive: bool,
     pub keep_alive_msecs: f64,
@@ -121,8 +122,8 @@ pub struct AgentHandle {
     /// Incremented at dispatch, decremented when the response or error
     /// pump fires on the main thread.
     pub sockets: HashMap<String, u32>,
-    /// Idle keep-alive connection count per host. The transport owns the
-    /// physical sockets; this mirrors their Agent-visible lifecycle.
+    /// Idle keep-alive connection count per host, mirrored from the actual
+    /// Socket ownership edges below.
     pub free_sockets: HashMap<String, u32>,
     /// Queued request count per host, mirrored by `queued_requests` below.
     pub requests: HashMap<String, u32>,
@@ -130,17 +131,9 @@ pub struct AgentHandle {
     /// separately from the public counts so the next request can be resumed
     /// when the active response reaches a terminal edge.
     pub queued_requests: HashMap<String, Vec<Handle>>,
-    /// Stable public socket handles backing the count mirrors above. The HTTP
-    /// transport owns the physical sockets; these alloc-only net.Socket handles
-    /// provide Node's observable Agent/ClientRequest socket identity and
-    /// EventEmitter lifecycle.
+    /// Actual ordinary Socket ownership edges backing the count mirrors.
     pub active_socket_handles: HashMap<String, Vec<Handle>>,
     pub free_socket_handles: HashMap<String, Vec<Handle>>,
-    /// Generation of each current free-pool admission. Idle invalidation is
-    /// asynchronous, so a generation prevents an old guard from destroying a
-    /// socket that has since been reused and returned to the pool again.
-    pub free_socket_generations: HashMap<Handle, u64>,
-    pub next_free_socket_generation: u64,
     /// Synthetic public session identity layered over rustls' real cached
     /// sessions. Node exposes opaque session bytes through `TLSSocket`, while
     /// the transport keeps them inside rustls; this mirror preserves the cache and
@@ -160,6 +153,7 @@ impl Default for AgentHandle {
     fn default() -> Self {
         AgentHandle {
             owner_agent: perry_ffi::agent_post::current_agent(),
+            default_https: false,
             protocol: Some("http:".to_string()),
             keep_alive: false,
             keep_alive_msecs: 1000.0,
@@ -178,8 +172,6 @@ impl Default for AgentHandle {
             queued_requests: HashMap::new(),
             active_socket_handles: HashMap::new(),
             free_socket_handles: HashMap::new(),
-            free_socket_generations: HashMap::new(),
-            next_free_socket_generation: 0,
             max_cached_sessions: 100,
             tls_sessions: HashMap::new(),
             tls_session_order: VecDeque::new(),
@@ -202,10 +194,7 @@ pub(crate) fn agent_pool_config(handle: Handle) -> Option<(bool, f64, f64)> {
         .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
 }
 
-/// Close `handle`'s idle physical connections. The reqwest transport did this
-/// by dropping the agent's cached client — on `destroy()`, when an idle
-/// socket facade expired, and when a pool setter changed the config — and
-/// the same edges keep doing it, so connection reuse is unchanged.
+/// Close the actual idle Socket owners when an Agent pool option changes.
 fn invalidate_agent_client(handle: Handle) {
     crate::client_turnloop::purge_agent(handle);
 }
@@ -319,7 +308,8 @@ extern "C" fn agent_connection_abort_listener(
     closure: *const RawClosureHeader,
     _this: perry_ffi::JsThis,
 ) -> f64 {
-    let socket = unsafe { perry_ffi::closure_capture_f64(closure, 0) } as i64;
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
     let signal_value = unsafe { perry_ffi::closure_capture_f64(closure, 1) };
     unsafe {
         extern "C" {
@@ -342,7 +332,11 @@ extern "C" fn agent_connection_abort_listener(
             js_abort_signal_remove_listener(signal, event.get(), listener_value.get());
         }
     }
-    perry_ext_net::js_ext_net_socket_emit_abort_error(socket);
+    perry_ext_net::native_transport::destroy_error(
+        socket.get(),
+        "ABORT_ERR",
+        "The operation was aborted",
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -357,13 +351,18 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
         fn js_abort_signal_add_listener(signal: *mut ObjectHeader, event_type: f64, listener: f64);
     }
     let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket);
     let signal_value = scope.root_nanbox(signal_value);
     let signal = js_abort_signal_resolve_ptr(signal_value.get());
     if signal.is_null() {
         return;
     }
     if js_abort_signal_is_aborted(signal) != 0 {
-        perry_ext_net::js_ext_net_socket_emit_abort_error(socket);
+        perry_ext_net::native_transport::destroy_error(
+            handle_value(socket.get()),
+            "ABORT_ERR",
+            "The operation was aborted",
+        );
         return;
     }
     let listener = perry_ffi::alloc_closure(
@@ -375,7 +374,7 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
     }
     let listener_value =
         scope.root_nanbox(f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)));
-    perry_ffi::set_closure_capture_f64(listener, 0, socket as f64);
+    perry_ffi::set_closure_capture_f64(listener, 0, handle_value(socket.get()));
     perry_ffi::set_closure_capture_f64(listener, 1, signal_value.get());
     let event = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string("abort").as_raw()).bits(),
@@ -454,6 +453,13 @@ fn empty_object_f64() -> f64 {
 }
 
 fn handle_map_object_f64(values: &HashMap<String, Vec<Handle>>) -> f64 {
+    // Clone snapshots carry actual Socket addresses. Root them before the
+    // object/array allocations below can move their owners.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let rooted: HashMap<&str, Vec<_>> = values
+        .iter()
+        .map(|(key, handles)| (key.as_str(), scope.root_addrs(handles)))
+        .collect();
     let mut entries: Vec<(&str, &Vec<Handle>)> = values
         .iter()
         .filter(|(_, handles)| !handles.is_empty())
@@ -477,7 +483,6 @@ fn handle_map_object_f64(values: &HashMap<String, Vec<Handle>>) -> f64 {
     if object.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let scope = perry_ffi::TransientRootScope::enter();
     let object = scope.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(object as *mut u8).bits(),
     ));
@@ -488,13 +493,13 @@ fn handle_map_object_f64(values: &HashMap<String, Vec<Handle>>) -> f64 {
             )
             .bits(),
         ));
-        for handle in handles.iter().copied() {
+        for handle in &rooted[entries[index].0] {
             let current =
                 JsValue::from_bits(array.get().to_bits()).as_pointer::<perry_ffi::ArrayHeader>();
             let pushed = unsafe {
                 perry_ffi::js_array_push(
                     current,
-                    JsValue::from_bits(handle_value(handle).to_bits()),
+                    JsValue::from_bits(handle_value(handle.get()).to_bits()),
                 )
             };
             array = scope.root_nanbox(f64::from_bits(
@@ -514,55 +519,78 @@ fn handle_map_object_f64(values: &HashMap<String, Vec<Handle>>) -> f64 {
 }
 
 pub(crate) fn allocate_agent_socket() -> Handle {
-    ensure_agent_socket_hook_registered();
-    let socket = unsafe { perry_ext_net::js_net_socket_alloc() };
-    perry_ext_net::js_ext_net_set_http_agent_phase(socket, 1);
-    socket
+    let _ = crate::client_turnloop::available();
+    let owner = perry_ext_net::native_transport::new_socket(
+        crate::client_turnloop::SUBSYSTEM,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    JsValue::from_bits(owner.to_bits()).as_pointer::<u8>() as Handle
 }
 
-extern "C" fn agent_socket_event(handle: Handle, event_ptr: *const u8, event_len: usize) {
-    if event_ptr.is_null() || event_len == 0 {
-        return;
+/// A Socket's ordinary close listener removes its existing Agent ownership
+/// edge. The closure and Socket are traced together, without a global hook.
+unsafe extern "C" fn agent_socket_closed(
+    closure: *const RawClosureHeader,
+    _: perry_ffi::JsThis,
+    _: f64,
+) -> f64 {
+    let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
+    // A listener may have reopened the same cell before this close listener.
+    // Its current driver capability then belongs to the new use.
+    if !JsValue::from_bits(
+        perry_ext_net::native_transport::get(socket.get(), "destroyed").to_bits(),
+    )
+    .to_bool()
+    {
+        return f64::from_bits(TAG_UNDEFINED);
     }
-    let event = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(event_ptr, event_len)).unwrap_or("")
-    };
-    if !matches!(event, "error" | "close") {
-        return;
+    let raw = JsValue::from_bits(socket.get().to_bits()).as_pointer::<u8>() as Handle;
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        for (counts, sockets) in [
+            (&mut agent.sockets, &mut agent.active_socket_handles),
+            (&mut agent.free_sockets, &mut agent.free_socket_handles),
+        ] {
+            for (key, owners) in sockets.iter_mut() {
+                owners.retain(|owner| *owner != raw);
+                if owners.is_empty() {
+                    counts.remove(key);
+                } else {
+                    counts.insert(key.clone(), owners.len() as u32);
+                }
+            }
+            sockets.retain(|_, owners| !owners.is_empty());
+        }
     }
-    iter_handles_of_mut::<AgentHandle, _>(|agent| {
-        for (key, handles) in &mut agent.active_socket_handles {
-            let before = handles.len();
-            handles.retain(|socket| *socket != handle);
-            if handles.len() != before {
-                agent.sockets.insert(key.clone(), handles.len() as u32);
-            }
-        }
-        for (key, handles) in &mut agent.free_socket_handles {
-            let before = handles.len();
-            handles.retain(|socket| *socket != handle);
-            if handles.len() != before {
-                agent.free_sockets.insert(key.clone(), handles.len() as u32);
-            }
-        }
-        agent.sockets.retain(|_, count| *count > 0);
-        agent.free_sockets.retain(|_, count| *count > 0);
-        agent
-            .active_socket_handles
-            .retain(|_, sockets| !sockets.is_empty());
-        agent
-            .free_socket_handles
-            .retain(|_, sockets| !sockets.is_empty());
-        agent.free_socket_generations.remove(&handle);
-    });
-    tls_compat::sync_default_https_agent_if_initialized();
+    sync_default_https_agent(handle);
+    f64::from_bits(TAG_UNDEFINED)
 }
 
-fn ensure_agent_socket_hook_registered() {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        perry_ext_net::js_ext_net_register_http_agent_socket_event_hook(agent_socket_event);
-    });
+pub(crate) fn track_agent_socket(handle: Handle, socket: Handle) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket);
+    let callback = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(agent_socket_closed, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        2,
+    ) as i64);
+    unsafe {
+        perry_ffi::set_closure_capture_f64(
+            callback.get() as *mut RawClosureHeader,
+            0,
+            handle as f64,
+        );
+        perry_ffi::set_closure_capture_f64(
+            callback.get() as *mut RawClosureHeader,
+            1,
+            handle_value(socket.get()),
+        );
+    }
+    perry_ext_net::native_transport::once(
+        handle_value(socket.get()),
+        "close",
+        handle_value(callback.get()),
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -587,105 +615,97 @@ pub(crate) fn request_key(url: &str) -> String {
 /// Acquire an Agent slot or append the request to the per-origin queue.
 pub(crate) fn admit_request(handle: Handle, key: &str, request_handle: Handle) -> PoolAdmission {
     let result = admit_request_inner(handle, key, request_handle);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = match result {
+        PoolAdmission::Active { socket, .. } => Some(scope.root_addr(socket)),
+        PoolAdmission::Queued => None,
+    };
     sync_default_https_agent(handle);
-    result
+    match result {
+        PoolAdmission::Active { reused, .. } => PoolAdmission::Active {
+            reused,
+            socket: socket.unwrap().get(),
+        },
+        PoolAdmission::Queued => PoolAdmission::Queued,
+    }
 }
 
 fn admit_request_inner(handle: Handle, key: &str, request_handle: Handle) -> PoolAdmission {
-    let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
-        return PoolAdmission::Active {
-            reused: false,
-            socket: 0,
-        };
-    };
-
-    if let Some(free) = agent.free_sockets.get_mut(key) {
-        *free = free.saturating_sub(1);
-        if *free == 0 {
-            agent.free_sockets.remove(key);
-        }
-        let socket = agent
-            .free_socket_handles
-            .get_mut(key)
-            .and_then(Vec::pop)
-            .unwrap_or_else(allocate_agent_socket);
-        agent.free_socket_generations.remove(&socket);
-        if agent
-            .free_socket_handles
-            .get(key)
-            .is_some_and(Vec::is_empty)
-        {
-            agent.free_socket_handles.remove(key);
-        }
-        perry_ext_net::js_ext_net_set_http_agent_phase(socket, 1);
-        agent
-            .active_socket_handles
-            .entry(key.to_string())
-            .or_default()
-            .push(socket);
-        *agent.sockets.entry(key.to_string()).or_default() += 1;
-        return PoolAdmission::Active {
-            reused: true,
-            socket,
-        };
-    }
-
-    let active_for_key = agent.sockets.get(key).copied().unwrap_or(0);
-    let active_total: u32 = agent.sockets.values().copied().sum();
-    if (active_for_key as f64) < agent.max_sockets
-        && (active_total as f64) < agent.max_total_sockets
+    let mut reused = false;
+    let mut socket = 0;
     {
-        let socket = allocate_agent_socket();
+        let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
+            return PoolAdmission::Active {
+                reused: false,
+                socket: 0,
+            };
+        };
+        if let Some(owners) = agent.free_socket_handles.get_mut(key) {
+            socket = if agent.scheduling == "fifo" && !owners.is_empty() {
+                owners.remove(0)
+            } else {
+                owners.pop().unwrap_or(0)
+            };
+            let remaining = owners.len();
+            if remaining == 0 {
+                agent.free_socket_handles.remove(key);
+                agent.free_sockets.remove(key);
+            } else {
+                agent.free_sockets.insert(key.to_string(), remaining as u32);
+            }
+            reused = socket != 0;
+        }
+        if !reused {
+            let active = agent.sockets.get(key).copied().unwrap_or(0);
+            let total: u32 = agent.sockets.values().copied().sum();
+            if active as f64 >= agent.max_sockets || total as f64 >= agent.max_total_sockets {
+                let queue = agent.queued_requests.entry(key.to_string()).or_default();
+                queue.push(request_handle);
+                agent.requests.insert(key.to_string(), queue.len() as u32);
+                return PoolAdmission::Queued;
+            }
+        }
+        *agent.sockets.entry(key.to_string()).or_default() += 1;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(if socket == 0 {
+        allocate_agent_socket()
+    } else {
+        socket
+    });
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
         agent
             .active_socket_handles
             .entry(key.to_string())
             .or_default()
-            .push(socket);
-        *agent.sockets.entry(key.to_string()).or_default() += 1;
-        return PoolAdmission::Active {
-            reused: false,
-            socket,
-        };
+            .push(socket.get());
     }
-
-    let queue = agent.queued_requests.entry(key.to_string()).or_default();
-    queue.push(request_handle);
-    agent.requests.insert(key.to_string(), queue.len() as u32);
-    PoolAdmission::Queued
+    if !reused {
+        track_agent_socket(handle, socket.get());
+    }
+    PoolAdmission::Active {
+        reused,
+        socket: socket.get(),
+    }
 }
 
-/// Release one active slot. A queued request, when present, inherits the slot
-/// and is returned for dispatch; otherwise successful keep-alive exchanges
-/// become one observable idle pooled socket.
+/// Reserve the next logical slot under the app borrow, then allocate, close
+/// and emit outside it. Active/free lists own the actual Socket objects.
 pub(crate) fn release_request(
     handle: Handle,
     key: &str,
     socket: Handle,
     keep_alive: bool,
 ) -> Option<(Handle, bool, Handle)> {
-    let result = release_request_inner(handle, key, socket, keep_alive);
-    let became_free = get_handle_mut::<AgentHandle>(handle)
-        .and_then(|agent| agent.free_socket_handles.get(key))
-        .is_some_and(|sockets| sockets.contains(&socket));
-    sync_default_https_agent(handle);
-    if became_free {
-        emit_default_https_agent(
-            handle,
-            "free",
-            handle_value(socket),
-            f64::from_bits(TAG_UNDEFINED),
-        );
-    }
-    result
-}
-
-fn release_request_inner(
-    handle: Handle,
-    key: &str,
-    socket: Handle,
-    keep_alive: bool,
-) -> Option<(Handle, bool, Handle)> {
-    let free_generation = {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket);
+    let keep_alive = keep_alive
+        && socket.get() != 0
+        && !JsValue::from_bits(
+            perry_ext_net::native_transport::get(handle_value(socket.get()), "destroyed").to_bits(),
+        )
+        .to_bool();
+    let (next, parked) = {
         let agent = get_handle_mut::<AgentHandle>(handle)?;
         if let Some(active) = agent.sockets.get_mut(key) {
             *active = active.saturating_sub(1);
@@ -693,131 +713,85 @@ fn release_request_inner(
                 agent.sockets.remove(key);
             }
         }
-        if let Some(active) = agent.active_socket_handles.get_mut(key) {
-            active.retain(|candidate| *candidate != socket);
-            if active.is_empty() {
+        if let Some(owners) = agent.active_socket_handles.get_mut(key) {
+            owners.retain(|owner| *owner != socket.get());
+            if owners.is_empty() {
                 agent.active_socket_handles.remove(key);
             }
         }
-
         let next = agent
             .queued_requests
             .get_mut(key)
             .and_then(|queue| (!queue.is_empty()).then(|| queue.remove(0)));
-        if let Some(next_handle) = next {
-            let remaining = agent.queued_requests.get(key).map(Vec::len).unwrap_or(0);
-            if remaining == 0 {
-                agent.queued_requests.remove(key);
-                agent.requests.remove(key);
-            } else {
-                agent.requests.insert(key.to_string(), remaining as u32);
-            }
-            let (next_socket, reused) = if keep_alive && socket != 0 {
-                (socket, true)
-            } else {
-                if socket != 0 {
-                    perry_ext_net::js_ext_net_destroy_socket(socket);
-                }
-                (allocate_agent_socket(), false)
-            };
-            perry_ext_net::js_ext_net_set_http_agent_phase(next_socket, 1);
+        let remaining = agent.queued_requests.get(key).map(Vec::len).unwrap_or(0);
+        if remaining == 0 {
+            agent.queued_requests.remove(key);
+            agent.requests.remove(key);
+        } else {
+            agent.requests.insert(key.to_string(), remaining as u32);
+        }
+        if next.is_some() {
+            *agent.sockets.entry(key.to_string()).or_default() += 1;
+            (next, false)
+        } else if keep_alive
+            && agent.keep_alive
+            && !agent.destroyed
+            && (agent
+                .free_socket_handles
+                .get(key)
+                .map(Vec::len)
+                .unwrap_or(0) as f64)
+                < agent.max_free_sockets.max(0.0)
+        {
+            let owners = agent
+                .free_socket_handles
+                .entry(key.to_string())
+                .or_default();
+            owners.push(socket.get());
+            agent
+                .free_sockets
+                .insert(key.to_string(), owners.len() as u32);
+            (None, true)
+        } else {
+            (None, false)
+        }
+    };
+    if let Some(request) = next {
+        let reused = keep_alive;
+        let next_socket = scope.root_addr(if reused {
+            socket.get()
+        } else {
+            allocate_agent_socket()
+        });
+        if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
             agent
                 .active_socket_handles
                 .entry(key.to_string())
                 .or_default()
-                .push(next_socket);
-            *agent.sockets.entry(key.to_string()).or_default() += 1;
-            return Some((next_handle, reused, next_socket));
+                .push(next_socket.get());
         }
-
-        if keep_alive && agent.keep_alive && !agent.destroyed && socket != 0 {
-            let free = agent.free_sockets.entry(key.to_string()).or_default();
-            if (*free as f64) < agent.max_free_sockets.max(0.0) {
-                *free += 1;
-                perry_ext_net::js_ext_net_set_http_agent_phase(socket, 0);
-                agent
-                    .free_socket_handles
-                    .entry(key.to_string())
-                    .or_default()
-                    .push(socket);
-                agent.next_free_socket_generation =
-                    agent.next_free_socket_generation.wrapping_add(1);
-                let generation = agent.next_free_socket_generation;
-                agent.free_socket_generations.insert(socket, generation);
-                Some(generation)
-            } else {
-                perry_ext_net::js_ext_net_destroy_socket(socket);
-                None
-            }
-        } else {
-            if socket != 0 {
-                perry_ext_net::js_ext_net_destroy_socket(socket);
-            }
-            None
+        if !reused {
+            track_agent_socket(handle, next_socket.get());
         }
-    };
-
-    if let Some(generation) = free_generation {
-        unsafe {
-            let event = alloc_string("free");
-            perry_ext_net::js_ext_net_socket_emit(
-                socket,
-                event.as_raw() as i64,
-                std::ptr::null(),
-                0,
-            );
+        if !reused && socket.get() != 0 {
+            perry_ext_net::native_transport::destroy(handle_value(socket.get()));
         }
-        let key = key.to_string();
-        // The transport owns the physical pooled connection, so the public
-        // net.Socket facade cannot receive its idle read/EOF edge.
-        // Conservatively retire an unclaimed facade after the I/O guard
-        // window; immediate/next-tick reuse cancels this via the generation
-        // check below. A deadline on the loop, not a tokio sleep.
-        crate::client_turnloop::push_after(
-            40,
-            crate::PendingHttpEvent::AgentIdleExpire {
-                agent_handle: handle,
-                key,
-                socket,
-                generation,
-            },
+        sync_default_https_agent(handle);
+        return Some((request, reused, next_socket.get()));
+    }
+    sync_default_https_agent(handle);
+    if parked {
+        perry_ext_net::native_transport::emit(handle_value(socket.get()), "free", &[]);
+        emit_default_https_agent(
+            handle,
+            "free",
+            handle_value(socket.get()),
+            f64::from_bits(TAG_UNDEFINED),
         );
+    } else if socket.get() != 0 {
+        perry_ext_net::native_transport::destroy(handle_value(socket.get()));
     }
     None
-}
-
-/// Retire a socket facade only if it is still the exact free-pool admission
-/// scheduled by `release_request`. Reuse removes the generation, making stale
-/// timers harmless.
-pub(crate) fn expire_free_socket(handle: Handle, key: &str, socket: Handle, generation: u64) {
-    let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
-        return;
-    };
-    if agent.free_socket_generations.get(&socket).copied() != Some(generation) {
-        return;
-    }
-    let Some(free) = agent.free_socket_handles.get_mut(key) else {
-        agent.free_socket_generations.remove(&socket);
-        return;
-    };
-    let before = free.len();
-    free.retain(|candidate| *candidate != socket);
-    if free.len() == before {
-        agent.free_socket_generations.remove(&socket);
-        return;
-    }
-    agent.free_socket_generations.remove(&socket);
-    if free.is_empty() {
-        agent.free_socket_handles.remove(key);
-        agent.free_sockets.remove(key);
-    } else {
-        agent
-            .free_sockets
-            .insert(key.to_string(), free.len() as u32);
-    }
-    perry_ext_net::js_ext_net_destroy_socket(socket);
-    invalidate_agent_client(handle);
-    sync_default_https_agent(handle);
 }
 
 // ------------------------------------------------------------------
@@ -829,6 +803,15 @@ pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
         if agent.owner_agent != perry_ffi::agent_post::current_agent() {
             return;
         }
+        for sockets in agent
+            .active_socket_handles
+            .values_mut()
+            .chain(agent.free_socket_handles.values_mut())
+        {
+            for socket in sockets {
+                visitor.visit_i64_slot(socket);
+            }
+        }
         visitor.visit_nanbox_f64_slot(&mut agent.agent_keep_alive_timeout_buffer);
         if agent.create_connection != 0 {
             visitor.visit_i64_slot(&mut agent.create_connection);
@@ -839,6 +822,24 @@ pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
         if agent.tls_defaults.check_server_identity_callback != 0 {
             visitor.visit_i64_slot(&mut agent.tls_defaults.check_server_identity_callback);
         }
+    });
+}
+
+pub(crate) fn retire_agent_roots(owner: u64) {
+    iter_handles_of_mut::<AgentHandle, _>(|agent| {
+        if agent.owner_agent != owner {
+            return;
+        }
+        agent.active_socket_handles.clear();
+        agent.free_socket_handles.clear();
+        agent.sockets.clear();
+        agent.free_sockets.clear();
+        agent.queued_requests.clear();
+        agent.requests.clear();
+        agent.create_connection = 0;
+        agent.create_socket = 0;
+        agent.tls_defaults.check_server_identity_callback = 0;
+        agent.destroyed = true;
     });
 }
 
@@ -1332,36 +1333,32 @@ pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
 /// the handle for chainability.
 #[no_mangle]
 pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
-    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
-        agent.destroyed = true;
-        let sockets = agent
-            .active_socket_handles
-            .values()
-            .chain(agent.free_socket_handles.values())
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
-        for socket in sockets {
-            perry_ext_net::js_ext_net_destroy_socket(socket);
-        }
-        agent.sockets.clear();
-        agent.free_sockets.clear();
-        agent.active_socket_handles.clear();
-        agent.free_socket_handles.clear();
-        agent.free_socket_generations.clear();
-        // Node leaves maxSockets waiters queued when `destroy()` tears down
-        // the current sockets. The next released slot reconnects and serves
-        // the oldest waiter, so retain both the private queue and its public
-        // `requests` mirror instead of orphaning those ClientRequests.
+    let sockets = get_handle_mut::<AgentHandle>(handle)
+        .map(|agent| {
+            agent.destroyed = true;
+            let sockets: Vec<_> = agent
+                .active_socket_handles
+                .values()
+                .chain(agent.free_socket_handles.values())
+                .flatten()
+                .copied()
+                .collect();
+            agent.sockets.clear();
+            agent.free_sockets.clear();
+            agent.active_socket_handles.clear();
+            agent.free_socket_handles.clear();
+            // Keep queued requests: the next released admission reconnects.
+            sockets
+        })
+        .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let sockets = scope.root_addrs(&sockets);
+    for socket in sockets {
+        perry_ext_net::native_transport::destroy(handle_value(socket.get()));
     }
-    invalidate_agent_client(handle);
     sync_default_https_agent(handle);
     handle
 }
-
-// ------------------------------------------------------------------
-// Property getters
-// ------------------------------------------------------------------
 
 fn agent_field<T, F>(handle: Handle, default: T, f: F) -> T
 where
@@ -1657,19 +1654,9 @@ unsafe fn invoke_create_connection_closure(
     let closure = JsClosure::from_raw(cc.get() as *const RawClosureHeader);
     let ret = closure.call1(perry_ffi::JsThis::UNDEFINED, options.get());
 
-    // `net.connect` / `net.createConnection` return the socket id NaN-boxed
-    // with POINTER_TAG; some codegen paths hand back a bare raw pointer.
-    // Extract the 48-bit handle id either way; reject anything else.
-    let bits = ret.to_bits();
-    let upper = bits >> 48;
-    let id = if upper == 0x7FFD {
-        (bits & PTR_MASK) as i64
-    } else if upper == 0 && bits >= 0x10000 {
-        bits as i64
-    } else {
-        return None;
-    };
-    (id > 0).then_some(id)
+    let owner = scope.root_nanbox(ret);
+    perry_ext_net::native_transport::socket_link(owner.get()).ok()?;
+    Some(JsValue::from_bits(owner.get().to_bits()).as_pointer::<u8>() as Handle)
 }
 
 /// #2154 — the agent's `createSocket` override closure pointer (0 when no

@@ -232,8 +232,7 @@ pub(super) fn static_call_prop_name(prop: &ast::MemberProp) -> Option<&str> {
 
 /// Issue #1132 — scope the native-instance param tags that
 /// `lower_call_inner`'s pre-scans register (createServer's
-/// `(req, res)`, http.get's `(res)`, fastify's `(req, reply)`, the
-/// `'upgrade'` `wsId`, …) to the call expression that owns the
+/// `(req, res)`, http.get's `(res)`, fastify's `(req, reply)`, …) to the call expression that owns the
 /// handler arrow.
 ///
 /// Those pre-scans `register_native_instance(...)` BEFORE the handler

@@ -6,7 +6,7 @@ use super::*;
 use std::collections::HashMap;
 
 use perry_ffi::{
-    get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of, iter_handles_of_mut,
+    get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of,
     register_handle, JsValue,
 };
 
@@ -15,21 +15,25 @@ use crate::server::http2_session_settings::Http2SettingsState;
 use crate::server::types::jsvalue_to_owned_string;
 
 pub(crate) fn mark_server_sessions_closed(server_handle: i64) {
-    let mut turnloop_conns = Vec::new();
-    iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
-        if session.server_handle == server_handle {
-            session.closed = true;
-            session.destroyed = true;
-            if session.turnloop_conn != 0 {
-                turnloop_conns.push(std::mem::replace(&mut session.turnloop_conn, 0));
-            }
+    let mut sessions = Vec::new();
+    iter_handle_ids_of::<Http2SessionHandle, _>(|id| {
+        if get_handle::<Http2SessionHandle>(id).is_some_and(|session| {
+            session.owner_agent == perry_ffi::agent_post::current_agent()
+                && session.server_handle == server_handle
+        }) {
+            sessions.push(id);
         }
     });
-    // A turnloop connection is a live handle that keeps the loop referenced;
-    // marking the JS session destroyed without closing it would keep the
-    // process alive after `server.close()`.
-    for conn in turnloop_conns {
-        crate::server::turnloop_h2::control::session_destroy(conn);
+    for session in sessions {
+        // Resolve the logical session's Socket edge before marking it
+        // destroyed; codec cleanup owns the terminal protocol updates.
+        crate::server::turnloop_h2::control::session_destroy(
+            crate::server::turnloop_h2::target::Target::Session(session),
+        );
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(session) {
+            session.closed = true;
+            session.destroyed = true;
+        }
     }
 }
 
@@ -157,6 +161,9 @@ pub unsafe extern "C" fn js_node_http2_connect(
             .push(callback);
     }
     let session_handle = register_handle(Http2SessionHandle {
+        socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+        socket_incarnation: None,
+        owner_agent: perry_ffi::agent_post::current_agent(),
         server_handle: local_server_handle,
         connection_port: 0,
         session_event_emitted: false,
@@ -463,6 +470,9 @@ mod tests {
 
     fn client_session(turnloop_conn: i64) -> Http2SessionHandle {
         Http2SessionHandle {
+            socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+            socket_incarnation: None,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             server_handle: 0,
             connection_port: 0,
             session_event_emitted: false,
@@ -485,28 +495,6 @@ mod tests {
             timeout_callback: 0,
             turnloop_conn,
         }
-    }
-
-    /// The capability the tokio inventory recorded as MISSING —
-    /// "`turnloop_tls_io` exposes `install_server_session` publicly but only
-    /// `begin_client_upgrade` (`pub(crate)`…), so `http2.connect('https://…')`
-    /// has no way to install a client session on a turnloop socket".
-    ///
-    /// It exists, it is `pub`, and it takes neither perry-ext-net's own
-    /// `TlsClientConfigData` nor a `JsNativeAsyncCompletion` — which were the
-    /// two shape objections in that entry. Coercing it to a plain fn pointer is
-    /// the assertion: narrowing it back to `pub(crate)`, or putting either of
-    /// those types in the signature, stops this compiling.
-    #[test]
-    fn a_public_tls_client_installer_exists_for_a_turnloop_socket() {
-        let install: fn(i64, String, bool, Vec<Vec<u8>>, Vec<Vec<u8>>) -> Result<(), String> =
-            perry_ext_net::turnloop_tls_io::install_client_session;
-        // Used, so the coercion cannot be optimized away as a dead binding.
-        assert!(!std::ptr::fn_addr_eq(
-            install,
-            (|_, _, _, _, _| Ok(()))
-                as fn(i64, String, bool, Vec<Vec<u8>>, Vec<Vec<u8>>) -> Result<(), String>
-        ));
     }
 
     /// `http2.connect('https://…')` may speak HTTP/2 only if the server selects
