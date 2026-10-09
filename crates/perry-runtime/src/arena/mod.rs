@@ -42,6 +42,8 @@ pub(crate) use map_allocations::walk_map_allocations;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_alloc_fast;
+#[cfg(test)]
 mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_page_meta_audit;
