@@ -1910,3 +1910,6 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
     assert!(!ir.contains("call double @js_value_length_property_ic_f64"));
     assert!(ir.contains("call double @js_value_length_property_key_ic_f64"));
 }
+
+#[path = "global_read_tests.rs"]
+mod global_read;

@@ -201,6 +201,7 @@ unsafe fn allocate(capacity: u32) -> *mut WeakStorage {
 
 /// Internal brands use the reserved builtin class-id namespace, disjoint
 /// from generated class ids and the high-bit private-evaluation namespace.
+#[inline]
 pub(crate) unsafe fn collection_brand(obj: *const ObjectHeader) -> Option<u32> {
     crate::object::shapes::object_shape_record(obj)?.weak_collection_brand()
 }

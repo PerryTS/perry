@@ -1327,9 +1327,6 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
 // stores an undefined value, so only its weak key represents the member.
 // =============================================================================
 
-const WEAKMAP_SHAPE_ID: u32 = 0x7FFF_FE12;
-const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
-
 // Reserved `ObjectHeader.class_id` markers for WeakMap/WeakSet instances.
 // These follow the same `0xFFFF00xx` reserved-builtin convention as
 // CLASS_ID_MAP/CLASS_ID_SET (see object/instanceof.rs). Unlike Map/Set —
@@ -1344,24 +1341,13 @@ const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
-fn weak_collection_new(shape: u32, class: u32) -> *mut ObjectHeader {
-    let obj = js_object_alloc_with_shape(shape, 0, std::ptr::null(), 0);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
-    unsafe {
-        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = class;
-        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
-    }
-    storage::initialize(
-        f64::from_bits(JSValue::pointer(obj.get_raw_mut_ptr::<ObjectHeader>().cast()).bits()),
-        class,
-    );
-    obj.get_raw_mut_ptr()
+fn weak_collection_new(class: u32) -> *mut ObjectHeader {
+    crate::object::object_alloc_branded(class, u64::from(class))
 }
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
-    weak_collection_new(WEAKMAP_SHAPE_ID, CLASS_ID_WEAKMAP)
+    weak_collection_new(CLASS_ID_WEAKMAP)
 }
 
 include!("weakref/subclass.rs");
@@ -1479,7 +1465,7 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
-    weak_collection_new(WEAKSET_SHAPE_ID, CLASS_ID_WEAKSET)
+    weak_collection_new(CLASS_ID_WEAKSET)
 }
 
 /// `WeakSet ( [ iterable ] )`'s iterable-consumption loop. `set` is the

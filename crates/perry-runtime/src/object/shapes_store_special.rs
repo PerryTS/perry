@@ -23,14 +23,19 @@ impl ShapeRecord {
         );
         self.rep = rep;
         self.special_constfn_mask = mask;
+        // Derive the exact brand once, while publishing immutable facts.
+        // Seven bits suffice for learned width (capped at 64), leaving the
+        // high bit for WeakSet without growing the 64-byte record.
         if brands
             .binary_search(&u64::from(crate::weakref::CLASS_ID_WEAKMAP))
             .is_ok()
-            || brands
-                .binary_search(&u64::from(crate::weakref::CLASS_ID_WEAKSET))
-                .is_ok()
         {
             self.flags_and_kind |= RECORD_WEAK_COLLECTION;
+        } else if brands
+            .binary_search(&u64::from(crate::weakref::CLASS_ID_WEAKSET))
+            .is_ok()
+        {
+            self.flags_and_kind |= RECORD_WEAK_COLLECTION | RECORD_WEAK_SET;
         }
         if !infos.is_empty() || !brands.is_empty() {
             self.extras = new_extras(infos, brands);
@@ -38,21 +43,17 @@ impl ShapeRecord {
         self
     }
 
-    /// A summary derived from the immutable brand list, using an existing
-    /// spare bit. Ordinary method dispatch needs neither extras nor a search.
+    /// The exact brand derived from the immutable brand list at mint time.
+    /// Dispatch reads only the record header, never extras or a brand search.
     #[inline]
     pub(crate) fn weak_collection_brand(&self) -> Option<u32> {
         if self.flags_and_kind & RECORD_WEAK_COLLECTION == 0 {
             return None;
         }
-        let brands = self.brands();
-        if brands
-            .binary_search(&u64::from(crate::weakref::CLASS_ID_WEAKMAP))
-            .is_ok()
-        {
-            Some(crate::weakref::CLASS_ID_WEAKMAP)
+        Some(if self.flags_and_kind & RECORD_WEAK_SET == 0 {
+            crate::weakref::CLASS_ID_WEAKMAP
         } else {
-            Some(crate::weakref::CLASS_ID_WEAKSET)
-        }
+            crate::weakref::CLASS_ID_WEAKSET
+        })
     }
 }

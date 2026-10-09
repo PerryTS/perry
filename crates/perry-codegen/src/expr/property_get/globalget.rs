@@ -4,28 +4,15 @@
 //! `if matches!(object.as_ref(), Expr::GlobalGet(_)) { ... }` block from the
 //! general catch-all arm, lifted into its own function.
 //!
-//! # Rooting (Layer 1, slice 4)
-//!
-//! Listed in `crate::rooting`'s `MIGRATED_MODULES`, and the listing is
-//! **vacuous on the committed source**: this module has never named an
-//! `expr::temp_root` symbol, so only the sabotage arm makes the line an
-//! assertion.
-//!
-//! The audit that earned it, and it is the one worth reading twice: the
-//! campaign map credits this file with **6 hazard sites** and all six are the
-//! same false positive. Each is `js_get_global_this_builtin_value` →
-//! `ctx.strings.intern(property)` → `unbox_to_i64` → `load` → the by-name
-//! getter. `intern` and `format!` are compile-time bookkeeping that emit NO IR,
-//! and the rest are loads, bitcasts and masks, none of which can collect. The
-//! `haz` heuristic counts source distance between a binding and its use; a
-//! window is measured in *emissions*, and there are none here. This module
-//! lowers no user expression at all.
+//! Global values use the ordinary property-read lowering, including its
+//! rooting and shape guards. Legacy HIR that collapsed a constructor's
+//! static-value receiver is reconstructed before entering that lowering.
 
 use super::*;
 
 use anyhow::Result;
 
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I64, PTR};
 
 /// Lower a `PropertyGet` whose receiver is the `GlobalGet(0)` builtin-global
@@ -97,13 +84,13 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
         property,
         "resolve" | "reject" | "all" | "race" | "allSettled" | "any" | "withResolvers" | "try"
     ) {
-        return Ok(lower_global_builtin_static_value(ctx, "Promise", property));
+        return lower_global_builtin_static_value(ctx, "Promise", property);
     }
     // `Proxy.revocable` read as a VALUE (not in a call) — the receiver is
     // collapsed to GlobalGet(0) so we route by property name. Resolves the
     // closure installed by `install_builtin_constructor_statics("Proxy", …)`.
     if property == "revocable" {
-        return Ok(lower_global_builtin_static_value(ctx, "Proxy", property));
+        return lower_global_builtin_static_value(ctx, "Proxy", property);
     }
     // #2904: V8/Node static Error members read as values
     // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
@@ -115,26 +102,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
         property,
         "captureStackTrace" | "isError" | "stackTraceLimit" | "prepareStackTrace"
     ) {
-        let error_idx = ctx.strings.intern("Error");
-        let error_bytes_global = format!("@{}", ctx.strings.entry(error_idx).bytes_global);
-        let error_len = "Error".len().to_string();
-        let error_ctor = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &error_bytes_global), (I64, &error_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let ctor_handle = unbox_to_i64(blk, &error_ctor);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &ctor_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "Error", property);
     }
     // Object statics read as VALUES (`var f = Object.seal`,
     // `typeof Object.defineProperties`, `Object.is.length`).
@@ -164,7 +132,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
             | "getOwnPropertyDescriptors"
             | "defineProperties"
     ) {
-        return Ok(lower_global_builtin_static_value(ctx, "Object", property));
+        return lower_global_builtin_static_value(ctx, "Object", property);
     }
     // #3527: `Object.hasOwn` read as a VALUE (not a direct call) —
     // e.g. iconv-lite's merge-exports does
@@ -176,52 +144,14 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
     // `hasOwn` static (installed by `install_builtin_constructor_statics`)
     // off it, instead of falling through to the `0.0` sentinel.
     if property == "hasOwn" {
-        let object_idx = ctx.strings.intern("Object");
-        let object_bytes_global = format!("@{}", ctx.strings.entry(object_idx).bytes_global);
-        let object_len = "Object".len().to_string();
-        let object_ctor = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &object_bytes_global), (I64, &object_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let ctor_handle = unbox_to_i64(blk, &object_ctor);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &ctor_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "Object", property);
     }
     // #4033: `ArrayBuffer.isView` must also work as a value
     // (`const isView = ArrayBuffer.isView; isView(view)`). Bare
     // builtin receivers are collapsed to `GlobalGet(0)`, so recover
     // the populated constructor closure and read the reified static.
     if property == "isView" {
-        let ctor_idx = ctx.strings.intern("ArrayBuffer");
-        let ctor_bytes_global = format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
-        let ctor_len = "ArrayBuffer".len().to_string();
-        let ctor = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let ctor_handle = unbox_to_i64(blk, &ctor);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &ctor_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "ArrayBuffer", property);
     }
     // `Buffer.isBuffer` used as a callback (for example
     // `values.every(Buffer.isBuffer)`) needs the callable value, not only the
@@ -229,7 +159,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
     // shared `GlobalGet(0)` sentinel, and `isBuffer` is distinctive among the
     // builtin statics, so recover it from the populated Buffer constructor.
     if property == "isBuffer" {
-        return Ok(lower_global_builtin_static_value(ctx, "Buffer", property));
+        return lower_global_builtin_static_value(ctx, "Buffer", property);
     }
     // #6674: `Uint8Array.fromBase64` / `fromHex` read as a VALUE (not a direct
     // call) — jose/Auth.js feature-detect with `Uint8Array.fromBase64 ? native
@@ -243,48 +173,10 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
     // read the static installed by `install_builtin_constructor_statics`. The
     // direct call form is intercepted earlier in HIR (`module_static.rs`).
     if matches!(property, "fromBase64" | "fromHex") {
-        let ctor_idx = ctx.strings.intern("Uint8Array");
-        let ctor_bytes_global = format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
-        let ctor_len = "Uint8Array".len().to_string();
-        let ctor = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let ctor_handle = unbox_to_i64(blk, &ctor);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &ctor_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "Uint8Array", property);
     }
     if property == "supports" {
-        let ctor_idx = ctx.strings.intern("SubtleCrypto");
-        let ctor_bytes_global = format!("@{}", ctx.strings.entry(ctor_idx).bytes_global);
-        let ctor_len = "SubtleCrypto".len().to_string();
-        let ctor = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &ctor_bytes_global), (I64, &ctor_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let ctor_handle = unbox_to_i64(blk, &ctor);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &ctor_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "SubtleCrypto", property);
     }
     if matches!(
         property,
@@ -325,26 +217,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
             | "tanh"
             | "trunc"
     ) {
-        let math_idx = ctx.strings.intern("Math");
-        let math_bytes_global = format!("@{}", ctx.strings.entry(math_idx).bytes_global);
-        let math_len = "Math".len().to_string();
-        let math_obj = ctx.block().call(
-            DOUBLE,
-            "js_get_global_this_builtin_value",
-            &[(PTR, &math_bytes_global), (I64, &math_len)],
-        );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let math_handle = unbox_to_i64(blk, &math_obj);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        return Ok(blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &math_handle), (I64, &key_raw)],
-        ));
+        return lower_global_builtin_static_value(ctx, "Math", property);
     }
     if matches!(
         property,
