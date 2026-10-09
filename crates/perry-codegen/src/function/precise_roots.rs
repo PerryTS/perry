@@ -102,7 +102,7 @@ fn rewrite_root_access(
         *cast_counter += 1;
         let n = *cast_counter;
         return Some(format!(
-            "  %rs4gc.s{n} = inttoptr i64 {value} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{n}, ptr {ptr}\n"
+            "  %rs4gc.b{n} = or i64 {value}, 9222527611924643840\n  %rs4gc.s{n} = inttoptr i64 %rs4gc.b{n} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{n}, ptr {ptr}\n"
         ));
     }
     if let Some(rest) = trimmed.strip_prefix("store double ") {
@@ -111,6 +111,9 @@ fn rewrite_root_access(
             return None;
         }
         let value = value.trim();
+        if value == "0.0" {
+            return Some(format!("  store ptr addrspace(1) null, ptr {ptr}\n"));
+        }
         *cast_counter += 1;
         let n = *cast_counter;
         return Some(format!(
@@ -122,7 +125,7 @@ fn rewrite_root_access(
             return None;
         }
         return Some(format!(
-            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n"
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = and i64 {result}.rs4o, 281474976710655\n"
         ));
     }
     if let Some((result, ptr)) = trimmed.split_once(" = load double, ptr ") {

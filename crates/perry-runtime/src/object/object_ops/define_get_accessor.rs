@@ -115,7 +115,7 @@ unsafe fn try_fast_install(
         return None;
     }
     let key_str_handle = scope.root_string_ptr(key_str);
-    let mut obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+    let mut obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
     let mut obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
         return None;
@@ -147,7 +147,7 @@ unsafe fn try_fast_install(
     };
     // (`obj_value_has_own_key` string-coerces its key internally and can
     // allocate — refresh before the next deref.)
-    obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+    obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
     obj = extract_obj_ptr(obj_value);
     if present || obj.is_null() {
         return None;
@@ -171,7 +171,7 @@ unsafe fn try_fast_install(
             ensure_key_in_keys_array_with_entry(obj, key_str, entry)
         });
     }
-    obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+    obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
     obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
         return Some(obj_value);
@@ -190,7 +190,7 @@ unsafe fn try_fast_install(
         let recv_box = crate::value::js_nanbox_pointer(obj as i64);
         crate::closure::clone_closure_rebind_this(getter.to_bits(), recv_box)
     };
-    obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+    obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
     obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
         return Some(obj_value);
@@ -212,7 +212,7 @@ unsafe fn try_fast_install(
         },
         FAST_ARM_ATTRS,
     );
-    Some(f64::from_bits(obj_handle.get_heap_word_u64()))
+    Some(f64::from_bits(obj_handle.get_nanbox_u64()))
 }
 
 /// The attributes of the fast arm's brand-new `{ get, enumerable: true }`
@@ -236,7 +236,7 @@ pub extern "C" fn js_object_define_get_accessor(
         // coerce, keys append, the generic define) nest and drop entirely
         // inside their calls.
         let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
         let key_handle = scope.root_nanbox_f64(key_value);
         let getter_handle = scope.root_nanbox_f64(getter_value);
 
@@ -253,7 +253,7 @@ pub extern "C" fn js_object_define_get_accessor(
         // Annex B `define_accessor_annexb` builder one file over.
         let desc = js_object_alloc(0, 2);
         if desc.is_null() {
-            return f64::from_bits(obj_handle.get_heap_word_u64());
+            return f64::from_bits(obj_handle.get_nanbox_u64());
         }
         let desc_handle = scope.root_raw_mut_ptr(desc);
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
@@ -269,7 +269,7 @@ pub extern "C" fn js_object_define_get_accessor(
             f64::from_bits(crate::JSValue::pointer(desc as *const u8).bits())
         });
         js_object_define_property(
-            f64::from_bits(obj_handle.get_heap_word_u64()),
+            f64::from_bits(obj_handle.get_nanbox_u64()),
             key_handle.get_nanbox_f64(),
             desc_val,
         )

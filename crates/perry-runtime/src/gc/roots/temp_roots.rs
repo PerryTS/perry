@@ -26,16 +26,12 @@
 //! word back out of the root and truncates. Reading back is not optional
 //! bookkeeping: this is a *mutable* root, so an evacuating cycle rewrites the
 //! slot, and the pre-collection SSA register is stale afterwards. Slots are
-//! visited with [`RuntimeRootVisitor::visit_heap_word_u64_slot`], the same
-//! decoder the shadow stack uses, so a slot may hold either form the
-//! `gc::root_words` contract admits:
+//! visited as JSValue words, matching generated statepoint slots. Raw pointer
+//! temporaries are tagged by codegen when stored and unwrapped when read.
+//! Immediates need no header and are skipped with one tag decode.
 //!
-//! - a NaN-boxed value (`POINTER_TAG` / `STRING_TAG` / `BIGINT_TAG`), or
-//! - a bare heap address, which is what the raw `i64` array pointers threaded
-//!   through `js_array_alloc` / `js_array_push_f64` are.
-//!
-//! Immediates (numbers, `undefined`, small ints) decode to nothing and cost a
-//! push slot and no more, so callers do not have to prove pointer-ness.
+//! Legacy shadow frames may still carry untyped words; this temporary stack
+//! has an explicit JSValue ABI even on those platforms.
 //!
 //! # Balance
 //!
@@ -117,7 +113,7 @@ pub extern "C" fn js_gc_temp_root_push(value: u64) -> u32 {
         }
         s.push(value);
         if value != 0 {
-            crate::gc::runtime_write_barrier_root_heap_word(value);
+            crate::gc::runtime_write_barrier_root_nanbox(value);
         }
         idx as u32
     }
@@ -142,7 +138,7 @@ pub extern "C" fn js_gc_temp_root_set(idx: u32, value: u64) {
         if let Some(slot) = s.get_mut(idx as usize) {
             *slot = value;
             if value != 0 {
-                crate::gc::runtime_write_barrier_root_heap_word(value);
+                crate::gc::runtime_write_barrier_root_nanbox(value);
             }
         }
     }
@@ -170,9 +166,9 @@ pub extern "C" fn js_gc_temp_root_truncate(base: u32) {
 /// `RuntimeHandleScope`), so only the accumulator needs the slot.
 #[no_mangle]
 pub extern "C" fn js_array_push_f64_temp_rooted(idx: u32, value: f64) {
-    let arr = js_gc_temp_root_get(idx) as *mut crate::array::ArrayHeader;
+    let arr = (js_gc_temp_root_get(idx) & POINTER_MASK) as *mut crate::array::ArrayHeader;
     let arr = crate::array::js_array_push_f64(arr, value);
-    js_gc_temp_root_set(idx, arr as u64);
+    js_gc_temp_root_set(idx, POINTER_TAG | arr as u64);
 }
 
 /// Current depth — the value a savepoint records.
@@ -205,7 +201,7 @@ pub(crate) fn reset_temp_roots() {
 pub(crate) fn scan_temp_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
     TEMP_ROOTS.with(|cell| unsafe {
         for slot in (*cell.get()).iter_mut() {
-            visitor.visit_heap_word_u64_slot(slot);
+            visitor.visit_nanbox_u64_slot(slot);
         }
     });
 }
@@ -230,7 +226,7 @@ pub(crate) fn scan_temp_roots_mut_step(
     TEMP_ROOTS.with(|cell| unsafe {
         let s = &mut *cell.get();
         while *remaining > 0 && state.cursor < s.len() {
-            visitor.visit_heap_word_u64_slot(&mut s[state.cursor]);
+            visitor.visit_nanbox_u64_slot(&mut s[state.cursor]);
             state.cursor += 1;
             *remaining -= 1;
         }

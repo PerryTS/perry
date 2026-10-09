@@ -1428,7 +1428,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // parent that cannot be one throws before anything is linked).
     let scope = crate::gc::RuntimeHandleScope::new();
     let parent_proto_bits = decl_prototype_parent_bits(class_id);
-    let parent_proto = scope.root_heap_word_u64(parent_proto_bits.unwrap_or(0));
+    let parent_proto = scope.root_nanbox_u64(parent_proto_bits.unwrap_or(0));
     let existing = class_decl_prototype_object(class_id);
     if !existing.is_null() {
         return crate::value::js_nanbox_pointer(existing as i64);
@@ -1436,7 +1436,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if parent_proto_bits.is_some() {
         if let Some(proto) = super::decl_prototype_birth::decl_prototype_born_final(
             class_id,
-            parent_proto.get_heap_word_u64(),
+            parent_proto.get_nanbox_u64(),
         ) {
             return proto;
         }
@@ -1481,7 +1481,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         proto.with_mut_ptr::<ObjectHeader, _>(|p| {
             super::super::prototype_chain::object_set_static_prototype(
                 p as usize,
-                parent_proto.get_heap_word_u64(),
+                parent_proto.get_nanbox_u64(),
             );
         });
     }

@@ -4,7 +4,7 @@
 
 /// `values` is an immediately consumed compiler stack buffer. Root every
 /// operand before the first assignment, since a setter may enter user code
-/// and collect. The keys address names an existing registered module root.
+/// and collect. The keys address names an existing registered JSValue module root.
 #[no_mangle]
 pub extern "C" fn js_literal_shape_initialize(
     receiver: f64,
@@ -17,7 +17,10 @@ pub extern "C" fn js_literal_shape_initialize(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
-    let keys = scope.root_raw_mut_ptr(unsafe { *keys_slot } as *mut crate::array::ArrayHeader);
+    let keys = scope.root_raw_const_ptr(
+        crate::value::JSValue::from_bits(unsafe { *keys_slot })
+            .as_pointer::<crate::array::ArrayHeader>(),
+    );
     let values: Vec<_> = unsafe { std::slice::from_raw_parts(values, count as usize) }
         .iter()
         .map(|value| scope.root_nanbox_f64(*value))
@@ -85,13 +88,15 @@ mod tests {
             crate::value::js_nanbox_string(head_key as i64),
             crate::value::js_nanbox_pointer(descriptor as i64),
         );
-        let keys = crate::object::js_build_class_keys_array(
+        let mut keys = crate::value::JSValue::pointer(crate::object::js_build_class_keys_array(
             1017302,
             3,
             b"head\0text\0n\0".as_ptr(),
             12,
             0,
-        ) as u64;
+        ) as *const u8)
+        .bits();
+        crate::gc::js_gc_register_global_root(&mut keys as *mut u64 as i64);
         let text = b"later value must survive the first setter";
         let string = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         // The caller's plain buffer is deliberately NOT rooted. The helper
@@ -105,6 +110,7 @@ mod tests {
             js_literal_shape_initialize(boxed, &keys, values.as_ptr(), 3);
         });
         assert!(crate::gc::copying_minor_cycles() > cycles);
+        assert_eq!(keys & crate::value::TAG_MASK, crate::value::POINTER_TAG);
         assert_ne!(after as usize, before);
         let key = crate::js_string_from_bytes(b"text".as_ptr(), 4);
         let actual =

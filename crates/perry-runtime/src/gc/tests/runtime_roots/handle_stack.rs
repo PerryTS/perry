@@ -16,14 +16,14 @@ fn handle_stack_growth_preserves_every_moving_root_including_last() {
         roots.push(match i % 3 {
             0 => scope.root_string_ptr(ptr),
             1 => scope.root_nanbox_u64(string_bits(ptr as usize)),
-            _ => scope.root_heap_word_u64(ptr as u64),
+            _ => scope.root_raw_const_ptr(ptr),
         });
     }
     assert!(RuntimeHandleScope::capacity_for_tests() > capacity_before);
     let address = |i: usize, root: &RuntimeHandle<'_>| match i % 3 {
         0 => root.with_const_ptr(|ptr: *const crate::StringHeader| ptr as usize),
         1 => (root.get_nanbox_u64() & POINTER_MASK) as usize,
-        _ => root.get_heap_word_u64() as usize,
+        _ => root.with_const_ptr(|ptr: *const crate::StringHeader| ptr as usize),
     };
     let before: Vec<_> = roots
         .iter()
@@ -119,7 +119,7 @@ fn handle_stack_pushes_and_updates_shade_all_kinds_during_marking() {
     let active = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
     let roots = [
         scope.root_nanbox_u64(ptr_bits(pointers[0] as usize)),
-        scope.root_heap_word_u64(pointers[1] as u64),
+        scope.root_raw_mut_ptr(pointers[1]),
         scope.root_raw_mut_ptr(pointers[2]),
         scope.root_string_ptr(pointers[3].cast()),
         scope.root_bigint_ptr(pointers[4]),
@@ -128,7 +128,7 @@ fn handle_stack_pushes_and_updates_shade_all_kinds_during_marking() {
         assert_marked_user_ptr(*ptr as usize, "new handle during marking");
     }
     roots[0].set_nanbox_u64(ptr_bits(pointers[5] as usize));
-    roots[1].set_heap_word_u64(pointers[6] as u64);
+    roots[1].set_raw_mut_ptr(pointers[6]);
     roots[2].set_raw_mut_ptr(pointers[7]);
     roots[3].set_raw_const_ptr(pointers[8]);
     roots[4].set_raw_const_ptr(pointers[9]);

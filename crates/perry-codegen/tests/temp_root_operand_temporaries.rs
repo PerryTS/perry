@@ -992,7 +992,7 @@ fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
         return Err("the concat must consume the operand after the sibling ran".into());
     }
 
-    let marker_store = format!("store i64 {REMAT_MARK_I64}, ptr %");
+    let marker_store = format!("store double 0x{:016X}, ptr %", REMAT_MARK_I64 as u64);
     if !lines[..alloc].iter().any(|l| l.starts_with(&marker_store)) {
         return Err(format!(
             "the WTF-8 operand must reach its slot as the remat marker \
@@ -1343,18 +1343,39 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
          (#7202). Bound slots: {bound:?}\n{f}"
     );
 
-    // The bind contract also requires an `undefined` seed: the bind is hoisted
-    // to entry setup, so the collector dereferences the alloca before the
-    // instance store executes.
+    // A bound home must contain a valid non-pointer JSValue before its first
+    // bind. The pooled temporary uses +0.0; semantic locals use undefined.
+    // Check ordering as well as existence, and prove a missing seed fails.
+    let seeded_before_bind = |ir: &str| {
+        let first_bind = ir.lines().position(|l| {
+            l.contains("@js_shadow_slot_bind(")
+                && l.trim_end().ends_with(&format!("ptr {this_slot})"))
+        });
+        let seed = ir.lines().position(|l| {
+            let l = l.trim();
+            (l.starts_with("store double 0.0, ")
+                || l.starts_with("store double 0x7FFC000000000001, "))
+                && l.ends_with(&format!("ptr {this_slot}"))
+        });
+        matches!((seed, first_bind), (Some(seed), Some(bind)) if seed < bind)
+    };
     assert!(
-        f.lines().any(|l| {
-            l.trim_start()
-                .starts_with("store double 0x7FFC000000000001")
-                && l.trim_end().ends_with(&format!("ptr {this_slot}"))
-        }),
-        "the `this` slot must be seeded with `undefined` in entry_allocas \
-         before the hoisted bind makes it live to the collector (#7202/#6968) \
-         — no such store for {this_slot}:\n{f}"
+        seeded_before_bind(f),
+        "the `this` slot {this_slot} must contain a non-pointer JSValue before \
+         its first bind (#7202/#6968):\n{f}"
+    );
+    let missing_seed = f
+        .lines()
+        .filter(|l| {
+            !(l.trim().starts_with("store double 0.0, ")
+                && l.trim_end().ends_with(&format!("ptr {this_slot}")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(missing_seed, f, "the seed sabotage must alter the fixture");
+    assert!(
+        !seeded_before_bind(&missing_seed),
+        "the seed check accepted an uninitialized bound home"
     );
 }
 

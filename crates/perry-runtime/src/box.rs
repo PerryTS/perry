@@ -133,7 +133,12 @@ fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
 
 /// Thread serialization unwraps an explicitly captured mutable cell.
 pub fn box_slot_contents_bits(bits: u64) -> Option<u64> {
-    let ptr = bits as usize as *mut Box;
+    let addr = if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        bits & crate::value::POINTER_MASK
+    } else {
+        bits
+    };
+    let ptr = addr as usize as *mut Box;
     is_registered_box_ptr(ptr).then(|| unsafe { (*ptr).value })
 }
 
@@ -214,11 +219,11 @@ fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
 /// True when `bits` is a live capture cell: a JSValue, i32 or bool box, or a
 /// scope object. A closure's cell capture slot holds one from birth on.
 pub fn is_live_capture_cell(bits: u64) -> bool {
-    let addr = bits as usize;
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
     has_box_type(addr, crate::gc::GC_TYPE_BOX)
         || has_box_type(addr, crate::gc::GC_TYPE_I32_BOX)
         || has_box_type(addr, crate::gc::GC_TYPE_BOOL_BOX)
-        || crate::r#box::scope::is_scope_ptr(bits)
+        || crate::r#box::scope::is_scope_ptr(addr as u64)
 }
 
 /// The birth check codegen emits under `PERRY_ASSERT_CAPTURE_CELLS=1` for each

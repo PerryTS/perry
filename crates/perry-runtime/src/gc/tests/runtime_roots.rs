@@ -347,7 +347,7 @@ fn test_rewrite_mutable_root_slots_updates_shadow_and_global_roots() {
     let shadow = js_shadow_frame_push(1);
     js_shadow_slot_set(0, shadow_bits);
 
-    let mut global_bits = nursery_user as u64;
+    let mut global_bits = POINTER_TAG | (nursery_user as u64 & POINTER_MASK);
     js_gc_register_global_root((&mut global_bits as *mut u64) as i64);
 
     rewrite_mutable_root_slots(&valid_ptrs, None);
@@ -358,7 +358,8 @@ fn test_rewrite_mutable_root_slots_updates_shadow_and_global_roots() {
         "shadow stack slot should be rewritten to the forwarding target"
     );
     assert_eq!(
-        global_bits, old_user as u64,
+        global_bits,
+        POINTER_TAG | (old_user as u64 & POINTER_MASK),
         "registered global root slot should be rewritten in place"
     );
 

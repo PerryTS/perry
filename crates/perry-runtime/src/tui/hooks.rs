@@ -80,7 +80,11 @@ enum HookSlot {
     Focus { focus_id: u32, is_active: bool },
 }
 
-static SLOTS: Mutex<Vec<HookSlot>> = Mutex::new(Vec::new());
+// Unit tests own separate heaps and skip process-wide retirement dispatch.
+// Keep the hook pool with its allocating test, as the state pool already is.
+per_test_global! {
+    static SLOTS: Mutex<Vec<HookSlot>> = Mutex::new(Vec::new());
+}
 
 /// Lock `SLOTS` to append a slot. Registers the thread-exit hook first
 /// (#11541): named in `arena::thread_exit`'s dispatcher it was linked into
@@ -96,8 +100,10 @@ fn lock_slots_for_insert() -> crate::gc::GcRootRegistryGuard<'static, Vec<HookSl
     crate::gc::lock_gc_root_registry(&SLOTS)
 }
 
-/// Per-frame hook index, reset by the run loop before each component call.
-static NEXT_HOOK_IDX: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    /// Per-frame hook index, reset by the run loop before each component call.
+    static NEXT_HOOK_IDX: AtomicUsize = AtomicUsize::new(0);
+}
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -280,7 +286,9 @@ pub fn tui_hook_slots_hold_bits_for_test(bits: u64) -> bool {
 
 #[cfg(test)]
 pub(crate) fn test_seed_hook_slot_roots(value_bits: u64) {
-    let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);
+    // Seed through the owner so its existing retirement hook clears these
+    // process-wide slots before the allocating test thread frees its heap.
+    let mut slots = lock_slots_for_insert();
     slots.clear();
     slots.push(HookSlot::State { value_bits });
     slots.push(HookSlot::Memo {

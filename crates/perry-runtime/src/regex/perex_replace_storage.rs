@@ -130,7 +130,7 @@ pub(super) fn call(
     let scope = crate::gc::RuntimeHandleScope::new();
     for cell in &slots {
         unsafe {
-            scope.root_heap_word_cell(cell);
+            scope.root_nanbox_cell(cell);
         }
     }
     let reservation = Reservation::new(
@@ -203,14 +203,14 @@ pub(super) fn call_native(
     let scope = crate::gc::RuntimeHandleScope::new();
     for cell in slots {
         unsafe {
-            scope.root_heap_word_cell(cell);
+            scope.root_nanbox_cell(cell);
         }
     }
     let mut set = |i: usize, value: f64| {
         unsafe {
             *slots[i].get() = value;
         }
-        crate::gc::runtime_write_barrier_root_heap_word(value.to_bits());
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     };
     fill(&mut set)?;
     let reservation = Reservation::new(

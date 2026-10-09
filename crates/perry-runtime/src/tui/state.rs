@@ -35,9 +35,8 @@ use std::sync::Mutex;
 // the GC guards' clear list `reset_copying_nursery_runtime_test_state()`
 // walks, so #7674's gate never saw this table either. Per-thread storage
 // removes the need for all three locks — `gc/tests/roots.rs` and friends
-// still take `lock_safe_runtime_scanner_test_guard()` for `tui::hooks`'s
-// still-unconverted slot pool and for scanner-registration serialization,
-// which is unrelated to this table's isolation.
+// still take `lock_safe_runtime_scanner_test_guard()` for
+// scanner-registration serialization, which is unrelated to slot isolation.
 per_test_global! {
     /// Set when ANY state.set() call writes a different value. Cleared by
     /// the render loop at the start of each frame; checked at the bottom

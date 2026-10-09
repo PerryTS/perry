@@ -189,7 +189,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // Enclosing function owns the box: slot holds
                         // the raw box pointer as i64.
                         let box_ptr = ctx.block().load(I64, &slot);
-                        birth.push(box_ptr);
+                        let bits = ctx.block().or(I64, &box_ptr, &crate::nanbox::POINTER_TAG.to_string());
+                        birth.push(bits);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).
                         let v = crate::codegen::global_transfer::load_module_global(

@@ -108,12 +108,8 @@ fn assert_each_continuation_allocates(initialized: bool) {
         "continuations must share the lexical slot"
     );
     assert!(
-        ir.contains(&format!(
-            "store i64 {}, ptr {}",
-            crate::nanbox::TAG_UNDEFINED_I64,
-            slots[0]
-        )),
-        "bypassed declarations still need the entry sentinel"
+        ir.contains(&format!("store i64 0, ptr {}", slots[0])),
+        "bypassed declarations need a null raw-pointer home"
     );
 }
 

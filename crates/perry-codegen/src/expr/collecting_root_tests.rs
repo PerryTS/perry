@@ -284,7 +284,9 @@ fn store_parts(line: &str) -> Option<(&str, &str)> {
 }
 
 fn is_clear(line: &str) -> bool {
-    line.starts_with("store i64 0,") || line.starts_with("store ptr addrspace(1) null,")
+    line.starts_with("store i64 0,")
+        || line.starts_with("store double 0.0,")
+        || line.starts_with("store ptr addrspace(1) null,")
 }
 
 fn derives_from(ir: &str, value: &str, ancestor: &str, depth: usize) -> bool {

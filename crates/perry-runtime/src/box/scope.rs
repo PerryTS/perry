@@ -35,7 +35,7 @@ pub const SCOPE_I1_SLOT_SEED: u64 = 0x7FFC_0000_0000_0000;
 /// behaviour. Every real base is a raw user pointer (high 16 bits clear).
 #[inline(always)]
 fn is_unallocated_base(base: i64) -> bool {
-    (base as u64) >> 48 != 0
+    base == 0 || (base as u64) >> 48 != 0
 }
 
 /// The number of slots `header` holds. Arena objects are padded to 8 bytes,
@@ -93,6 +93,11 @@ pub(crate) fn is_scope_ptr(bits: u64) -> bool {
 
 /// A scope object's slot words, for thread transfer.
 pub fn scope_slot_contents(bits: u64) -> Option<Vec<u64>> {
+    let bits = if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        bits & crate::value::POINTER_MASK
+    } else {
+        bits
+    };
     if !is_scope_ptr(bits) {
         return None;
     }

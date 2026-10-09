@@ -192,11 +192,11 @@ pub extern "C" fn js_object_define_accessor(
         // all of that, so a stale getter/setter would be stored in the
         // object's (possibly also stale) holder slot.
         let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
         let getter_handle = scope.root_nanbox_f64(getter);
         let setter_handle = scope.root_nanbox_f64(setter);
         let key_value = js_to_property_key(key_value);
-        let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
         if crate::symbol::js_is_symbol(key_value) != 0 {
             return crate::symbol::js_object_define_symbol_accessor(
                 obj_value,
@@ -207,10 +207,10 @@ pub extern "C" fn js_object_define_accessor(
         }
         let key_str = object_literal_key_to_string(key_value);
         if key_str.is_null() {
-            return f64::from_bits(obj_value_handle.get_heap_word_u64());
+            return f64::from_bits(obj_value_handle.get_nanbox_u64());
         }
         let key_handle = scope.root_string_ptr(key_str);
-        let obj = extract_obj_ptr(f64::from_bits(obj_value_handle.get_heap_word_u64()));
+        let obj = extract_obj_ptr(f64::from_bits(obj_value_handle.get_nanbox_u64()));
         let key_rust: Option<String> = {
             let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
             let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -222,7 +222,7 @@ pub extern "C" fn js_object_define_accessor(
             obj,
             key_handle.get_raw_const_ptr::<crate::StringHeader>() as *mut crate::StringHeader,
         );
-        let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
         let Some(k) = key_rust else {
             return obj_value;
         };
@@ -242,14 +242,14 @@ pub extern "C" fn js_object_define_accessor(
         };
         let get_bits_handle = scope.root_nanbox_u64(get_bits);
         let recv_box = crate::value::js_nanbox_pointer(extract_obj_ptr(f64::from_bits(
-            obj_value_handle.get_heap_word_u64(),
+            obj_value_handle.get_nanbox_u64(),
         )) as i64);
         let set_bits = if setter_handle.get_nanbox_u64() == undef {
             existing_set.get_nanbox_u64()
         } else {
             crate::closure::clone_closure_rebind_this(setter_handle.get_nanbox_u64(), recv_box)
         };
-        let obj = extract_obj_ptr(f64::from_bits(obj_value_handle.get_heap_word_u64()));
+        let obj = extract_obj_ptr(f64::from_bits(obj_value_handle.get_nanbox_u64()));
         set_accessor_descriptor(
             obj as usize,
             k.clone(),
@@ -259,6 +259,6 @@ pub extern "C" fn js_object_define_accessor(
             },
         );
         set_property_attrs(obj as usize, k, PropertyAttrs::new(true, true, true));
-        f64::from_bits(obj_value_handle.get_heap_word_u64())
+        f64::from_bits(obj_value_handle.get_nanbox_u64())
     }
 }

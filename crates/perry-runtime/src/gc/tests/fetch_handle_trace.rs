@@ -243,3 +243,37 @@ fn a_pool_id_stored_during_incremental_marking_reaches_the_provider() {
     abort_full_trace();
     perry_ffi_gc_register_pool_handle_trace(pool_phase_unregistered, pool_observe);
 }
+
+#[test]
+fn provider_edges_obey_the_precise_jsvalue_contract() {
+    let _guard = GcTestIsolationGuard::new();
+    clear_marks();
+    clear_mark_seeds();
+    let target = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid = build_valid_pointer_set();
+    perry_ffi_gc_register_fetch_trace(phase, observe);
+    let handle = ptr_bits(crate::value::addr_class::FETCH_HANDLE_BAND_START);
+    for (edge, should_mark) in [(target as u64, false), (ptr_bits(target as usize), true)] {
+        EDGE.with(|slot| slot.set(edge));
+        OBSERVED.with(|seen| seen.set(false));
+        begin_full_trace();
+        mark_precise_root(
+            PreciseRoot::JSValue(crate::value::addr_class::FETCH_HANDLE_BAND_START as u64),
+            &valid,
+        );
+        assert!(
+            !OBSERVED.with(Cell::get),
+            "numeric bits must not observe a handle"
+        );
+        mark_precise_root(PreciseRoot::JSValue(handle), &valid);
+        assert!(OBSERVED.with(Cell::get), "the provider control must run");
+        assert_eq!(
+            unsafe { (*header_from_user_ptr(target)).gc_flags & GC_FLAG_MARKED != 0 },
+            should_mark,
+            "provider JSValue edges must decode their tag, not classify numeric bits"
+        );
+        abort_full_trace();
+    }
+    clear_marks();
+    clear_mark_seeds();
+}

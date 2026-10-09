@@ -588,6 +588,31 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
             && ir.contains("call void @js_box_set_bits("),
         "the captured owner must be dereferenced and written through its box:\n{ir}"
     );
+
+    let mut decoded_cells = 0;
+    for line in ir.lines() {
+        let Some((capture, _)) = line
+            .trim()
+            .split_once(" = call i64 @js_closure_get_capture_bits(")
+        else {
+            continue;
+        };
+        let unwrap = format!(" = and i64 {capture}, {}", crate::nanbox::POINTER_MASK_I64);
+        let cell = ir
+            .lines()
+            .find_map(|line| line.trim().split_once(&unwrap).map(|(cell, _)| cell))
+            .expect("a boxed capture must decode its tagged cell before raw access");
+        assert!(
+            ir.contains(&format!("@js_box_get_bits(i64 {cell})"))
+                || ir.contains(&format!("@js_box_set_bits(i64 {cell},")),
+            "the decoded capture cell must feed the raw box accessor:\n{ir}"
+        );
+        decoded_cells += 1;
+    }
+    assert!(
+        decoded_cells >= 3,
+        "append load, store, and return must each reload the captured owner:\n{ir}"
+    );
 }
 
 #[test]

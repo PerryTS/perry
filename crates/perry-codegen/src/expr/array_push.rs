@@ -360,10 +360,9 @@ fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: 
 /// Extracted verbatim from `Expr::ArrayPush`'s generic tail in #7634 so that
 /// the spread arm and the spec-order arm share one copy: three sites emitting
 /// the same five-way storage chain is three places for the #5459 fall-through
-/// to be got wrong. The two early `return`s are the boxed cases — they must NOT
-/// also take the capture-slot store below, which would clobber the box pointer
-/// in the capture slot with the array pointer, so the next push would treat the
-/// array as the box and silently lose the realloc write-back.
+/// to be got wrong. The shared boxed writer returns before the capture-slot
+/// store below. Replacing the box pointer in a capture with the array pointer
+/// would make the next push treat the array as the box and lose write-back.
 ///
 /// `what` names the caller for the "local not in scope" diagnostic.
 pub(super) fn emit_push_writeback(
@@ -374,46 +373,8 @@ pub(super) fn emit_push_writeback(
 ) -> Result<()> {
     // Boxed var takes priority: write through the box so every closure sharing
     // the box sees the new pointer.
-    if ctx.boxed_vars.contains(&array_id) {
-        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
-        if crate::scope_env::access::write_scoped(ctx, array_id, &new_bits)? {
-            return Ok(());
-        }
-        // Captured-through-closure boxed var.
-        if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
-            let closure_ptr =
-                super::current_closure_ptr_value(ctx, &format!("{what} boxed captured"))?;
-            let idx_str = capture_idx.to_string();
-            let blk = ctx.block();
-            let box_ptr = blk.call(
-                I64,
-                "js_closure_get_capture_bits",
-                &[(I64, &closure_ptr), (I32, &idx_str)],
-            );
-            let new_bits = blk.bitcast_double_to_i64(new_box);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-            // Gen-GC Phase C2: the realloc'd array head is a (possibly young)
-            // heap pointer stored into an existing box — barrier the box parent
-            // so a minor GC can't miss it.
-            emit_write_barrier(ctx, &box_ptr, &new_bits);
-            return Ok(());
-        } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
-            let blk = ctx.block();
-            let box_ptr = blk.load(I64, &slot);
-            let new_bits = blk.bitcast_double_to_i64(new_box);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-            // Gen-GC Phase C2: barrier the box parent (see capture path).
-            emit_write_barrier(ctx, &box_ptr, &new_bits);
-            return Ok(());
-        }
-        // #5459: `array_id` is in `boxed_vars` but has no box location in THIS
-        // context — it's a module-level global accessed directly from a nested
-        // function (the load path read `@global`, not a box-get). Returning here
-        // would skip the realloc write-back entirely, so the relocated array
-        // header is never stored to the registered GC-root global slot: the old
-        // head is freed on the next GC and the global dangles (use-after-free /
-        // corrupted length). Fall through to the module-global store-back below
-        // instead of returning.
+    if crate::scope_env::access::write_back_boxed_local(ctx, array_id, new_box)? {
+        return Ok(());
     }
     if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
         let closure_ptr = super::current_closure_ptr_value(ctx, &format!("{what} captured"))?;

@@ -964,7 +964,7 @@ pub(crate) unsafe fn array_prototype_property_value(
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver_h =
             scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
-        let proto_h = scope.root_heap_word_u64(proto_bits);
+        let proto_h = scope.root_nanbox_u64(proto_bits);
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         if key.is_null() {
             return None;
@@ -976,7 +976,7 @@ pub(crate) unsafe fn array_prototype_property_value(
             as *const crate::StringHeader;
         return super::super::prototype_chain::resolve_inherited_field_from_prototype(
             receiver_addr,
-            proto_h.get_heap_word_u64(),
+            proto_h.get_nanbox_u64(),
             key,
         );
     }

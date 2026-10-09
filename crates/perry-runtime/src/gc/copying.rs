@@ -851,6 +851,7 @@ pub(super) fn last_untraced_decline_reason() -> &'static str {
 }
 
 mod remembered_scan;
+mod root_preflight;
 pub(super) use remembered_scan::*;
 
 pub(super) struct CopiedMinorEligibility {
@@ -1017,66 +1018,6 @@ impl CopiedMinorEligibility {
             preflight_skipped: self.preflight_skipped,
             ..CopyingNurseryTraceStats::default()
         }
-    }
-
-    pub(super) fn copy_only_root_preflight_reason(
-        _ptrs: &CopyingPointerSet,
-    ) -> (Option<CopiedMinorFallbackReason>, LegacyRootTraceStats) {
-        let (registered_rust_scanners, registered_ffi_scanners) = copy_only_root_scanner_counts();
-        let stats = LegacyRootTraceStats {
-            registered_rust_scanners,
-            registered_ffi_scanners,
-            ..LegacyRootTraceStats::default()
-        };
-        let reason = (registered_rust_scanners > 0 || registered_ffi_scanners > 0)
-            .then_some(CopiedMinorFallbackReason::CopyOnlyRoots);
-        (reason, stats)
-    }
-
-    pub(super) fn mutable_root_preflight_reason(
-        ptrs: &CopyingPointerSet,
-    ) -> Option<CopiedMinorFallbackReason> {
-        let mut checker =
-            CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungRoot);
-        visit_mutable_root_slots(|slot| unsafe {
-            checker.check_bits(slot.read());
-        });
-        let scanners: Vec<MutableRootScannerEntry> =
-            MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-        {
-            let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
-            for entry in scanners {
-                let (_, nanos) = super::scanner_profile::record_scanner(|| {
-                    (entry.scanner)(&mut visitor);
-                });
-                super::scanner_profile::note_scanner(entry.name, nanos, 0, 0, 0);
-            }
-            visit_ffi_mutable_registered_roots(&mut visitor);
-        }
-        checker.check_dirty_roots();
-        unsafe {
-            checker.drain();
-        }
-        checker.fallback_reason
-    }
-
-    pub(super) fn dirty_slot_preflight_reason(
-        ptrs: &CopyingPointerSet,
-    ) -> Option<CopiedMinorFallbackReason> {
-        let snapshot = remembered_dirty_snapshot();
-        let mut dirty_checker =
-            CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
-        scan_remembered_dirty_slots_copying(
-            &snapshot,
-            None,
-            |slot, _header, _external, _stats| unsafe {
-                dirty_checker.check_bits(slot.read());
-            },
-        );
-        unsafe {
-            dirty_checker.drain();
-        }
-        dirty_checker.fallback_reason
     }
 }
 
@@ -1296,7 +1237,10 @@ pub(super) fn run_copied_minor_attempt(
             if bits == 0 {
                 return;
             }
-            if let Some(new_bits) = collector.visit_value_bits(bits) {
+            if let Some(new_bits) = slot
+                .pointer_word(bits)
+                .and_then(|_| collector.visit_value_bits(bits))
+            {
                 slot.write(new_bits);
                 if let Some(trace) = trace.as_mut() {
                     root_source_for_mutable_slot(&mut trace.root_sources, slot.kind)

@@ -1579,7 +1579,9 @@ pub(super) fn compile_function(
     // bodies: their entry SSA values do not survive the CPS rewrite.
     if !f.is_async {
         let param_ids: std::collections::HashSet<u32> = f.params.iter().map(|p| p.id).collect();
-        super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
+        super::helpers::emit_callee_binding_resolutions(
+            &mut ctx, &f.body, &param_ids, None, false,
+        )?;
     }
 
     // Stable byte parameters indexed in loops resolve their backing once. This proof

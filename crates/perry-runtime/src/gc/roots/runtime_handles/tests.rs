@@ -32,7 +32,7 @@ fn heap_word_iterator_reads_refreshed_slots_after_stack_growth() {
     let _unrelated = scope.root_nanbox_f64(19.0);
     let start = RuntimeHandleScope::active_len_for_tests();
     let input = [11.0f64.to_bits(), 12.0f64.to_bits()];
-    let rooted = scope.root_heap_word_u64_slice_iter(&input);
+    let rooted = scope.root_nanbox_u64_slice_iter(&input);
     assert_eq!(rooted.len(), 2);
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), start + 2);
     let capacity = RuntimeHandleScope::capacity_for_tests();
@@ -48,14 +48,14 @@ fn heap_word_iterator_reads_refreshed_slots_after_stack_growth() {
                 stack: scope.stack,
                 _scope: PhantomData,
             }
-            .set_heap_word_u64(value.to_bits());
+            .set_nanbox_u64(value.to_bits());
         }
     }
     assert_eq!(
         rooted.collect::<Vec<_>>(),
         vec![21.0f64.to_bits(), 22.0f64.to_bits()]
     );
-    assert_eq!(scope.root_heap_word_u64_slice_iter(&[]).len(), 0);
+    assert_eq!(scope.root_nanbox_u64_slice_iter(&[]).len(), 0);
 }
 
 #[test]
@@ -105,11 +105,11 @@ fn ffi_indices_and_kind_checks_survive_growth_and_restore() {
     assert_eq!(js_ffi_root_get_nanbox(nanbox), 0);
 
     let scope = RuntimeHandleScope::new();
-    let root = scope.root_nanbox_f64(31.0);
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        root.get_heap_word_u64()
-    }))
-    .is_err());
+    let root = scope.root_raw_mut_ptr(std::ptr::null_mut::<u8>());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_u64() }))
+            .is_err()
+    );
     runtime_handle_stack_restore(base);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_f64() }))
@@ -188,7 +188,7 @@ fn native_argument_cells_are_marked_and_rewritten_in_place() {
     let cell = std::cell::UnsafeCell::new(f64::from_bits(POINTER_TAG | nursery as u64));
     let before = RuntimeHandleScope::active_len_for_tests();
     let scope = RuntimeHandleScope::new();
-    let root = unsafe { scope.root_heap_word_cell(&cell) };
+    let root = unsafe { scope.root_nanbox_cell(&cell) };
     scan_runtime_handle_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid));
     let header = unsafe { header_from_user_ptr(nursery) as *mut GcHeader };
     unsafe {
@@ -202,8 +202,8 @@ fn native_argument_cells_are_marked_and_rewritten_in_place() {
         expected,
         "the native constructor/replacer buffer must receive the collector rewrite"
     );
-    assert_eq!(root.get_heap_word_u64(), expected);
-    root.set_heap_word_u64(43.0f64.to_bits());
+    assert_eq!(root.get_nanbox_u64(), expected);
+    root.set_nanbox_u64(43.0f64.to_bits());
     assert_eq!(unsafe { *cell.get() }, 43.0);
     drop(scope);
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), before);

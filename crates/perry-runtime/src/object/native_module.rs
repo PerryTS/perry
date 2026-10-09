@@ -1304,7 +1304,7 @@ pub(crate) fn build_symbol_bound_method_closure(
         set_bound_native_closure_metadata(closure, display_name, spec_length)
     });
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-        crate::gc::runtime_write_barrier_root_heap_word(closure as u64)
+        crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8)
     });
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::value::js_nanbox_pointer(closure as i64)

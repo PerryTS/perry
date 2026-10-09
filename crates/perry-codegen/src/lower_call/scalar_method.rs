@@ -604,7 +604,10 @@ fn materialize_scalar_receiver(
                 .insert(class_name.to_string(), slot.clone());
             slot
         };
-        let keys_ptr = ctx.block().load(I64, &keys_slot);
+        let keys_bits = ctx.block().load(I64, &keys_slot);
+        let keys_ptr = ctx
+            .block()
+            .and(I64, &keys_bits, &crate::nanbox::POINTER_MASK.to_string());
         let shape_id = crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
         ctx.pending_declares.push((
             "js_object_alloc_class_inline_keys_stamped".to_string(),

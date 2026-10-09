@@ -9,7 +9,7 @@ crate::perry_thread_local! {
     /// through it returns `undefined`, or worse derefs an invalid header. Caching
     /// the global per thread means we only ever hand back a global this thread
     /// created, and never dereference another thread's pointer to "validate" it.
-    static THREAD_GLOBAL_THIS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    static THREAD_GLOBAL_THIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -53,7 +53,7 @@ pub extern "C" fn js_module_top_this() -> f64 {
     THREAD_MODULE_TOP_THIS.with(|c| c.set(val.to_bits()));
     // Keep it alive across GCs — the cell is a raw bits cache, not a scanned
     // root, so register the slot address as a global root once.
-    crate::gc::runtime_write_barrier_root_heap_word(obj as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(obj as *const u8);
     let slot = THREAD_MODULE_TOP_THIS.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(slot as i64);
     val
@@ -90,7 +90,9 @@ pub(crate) fn global_this_is_materialized() -> bool {
 /// `vm` context or an eval realm that `populate_global_this_builtins` also
 /// fills (each of those gets its own intrinsics).
 pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
-    !obj.is_null() && THREAD_GLOBAL_THIS.with(|c| c.get()) == obj as i64
+    !obj.is_null()
+        && THREAD_GLOBAL_THIS.with(|c| c.get())
+            == crate::value::js_nanbox_pointer(obj as i64).to_bits()
 }
 
 /// Issue #611: lazily allocate `globalThis` for computed global access.
@@ -98,7 +100,7 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
 pub extern "C" fn js_get_global_this() -> f64 {
     let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
     if mine != 0 {
-        return crate::value::js_nanbox_pointer(mine);
+        return f64::from_bits(mine);
     }
     // Register this thread's GC root scanners before the global exists, so the
     // global (and the `Array`/`Object` intrinsics it holds) is born under a live
@@ -113,20 +115,13 @@ pub extern "C" fn js_get_global_this() -> f64 {
     }
     // First access on this thread — allocate our own global.
     let new_ptr = js_object_alloc(0, 0) as i64;
-    THREAD_GLOBAL_THIS.with(|c| c.set(new_ptr));
-    // The thread-local cache above stores a *raw* heap pointer. Unlike
-    // `GLOBAL_THIS_PTR` (a scanned static that `scan_object_cache_roots_mut`
-    // relocates), this cache slot is otherwise invisible to the GC, so a
-    // copying collection that evacuates `globalThis` leaves the cache pointing
-    // at the stale from-space address. Later `js_get_global_this()` calls then
-    // read a dead object whose overflow fields (e.g. `globalThis.Error`) have
-    // already been rekeyed to the moved copy — the reads return `undefined`.
-    // Register the cache slot as a mutable global root (mirroring
-    // `js_module_top_this`) so the collector rewrites it to the forwarding
-    // address on every move; bare-pointer slots are handled by
-    // `mark_mutable_root_bits` / `rewrite_value_bits` (both decode through
-    // `gc::root_words::decode_root_word`).
-    crate::gc::runtime_write_barrier_root_heap_word(new_ptr as u64);
+    THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
+    // The thread-local cache stores the tagged JSValue, independently of
+    // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
+    // uses that encoding and every copying collection rewrites the cache too.
+    // Otherwise later js_get_global_this() calls could read the from-space
+    // object after its overflow fields were rekeyed to the moved copy.
+    crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
     let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(cache_slot as i64);
     // Publish to the process-global GC-root slot so this thread's collector marks
@@ -147,7 +142,11 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // likewise rewritten by `scan_object_cache_roots_mut`.) Falling back to
     // `new_ptr` keeps the pre-existing behaviour if the cache was cleared.
     let current = THREAD_GLOBAL_THIS.with(|c| c.get());
-    crate::value::js_nanbox_pointer(if current != 0 { current } else { new_ptr })
+    if current != 0 {
+        f64::from_bits(current)
+    } else {
+        crate::value::js_nanbox_pointer(new_ptr)
+    }
 }
 
 #[no_mangle]

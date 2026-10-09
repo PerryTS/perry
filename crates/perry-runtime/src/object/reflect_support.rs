@@ -293,7 +293,7 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     // from-space. Keep one caller-owned set of roots and re-read it before
     // every subsequent operation.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_heap_word_u64(obj.to_bits());
+    let obj_handle = scope.root_nanbox_u64(obj.to_bits());
     let key_handle = scope.root_nanbox_f64(key);
     let descriptor_handle = scope.root_nanbox_f64(descriptor);
 
@@ -303,7 +303,7 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     // view as non-extensible).
     match unsafe {
         super::typed_array_define_own_property(
-            f64::from_bits(obj_handle.get_heap_word_u64()),
+            f64::from_bits(obj_handle.get_nanbox_u64()),
             key_handle.get_nanbox_f64(),
             descriptor_handle.get_nanbox_f64(),
         )
@@ -318,7 +318,7 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     // (non-configurable but writable) `length` property.
     if let Some(ok) = unsafe {
         super::array_length_reflect_define(
-            f64::from_bits(obj_handle.get_heap_word_u64()),
+            f64::from_bits(obj_handle.get_nanbox_u64()),
             key_handle.get_nanbox_f64(),
             descriptor_handle.get_nanbox_f64(),
         )
@@ -326,19 +326,19 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
         return reflect_bool(ok);
     }
     let has_own = obj_value_has_own_key(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
     );
     // Redefining a non-configurable existing property fails.
     if has_own {
         if let Some((_writable, configurable)) = obj_value_attrs(
-            f64::from_bits(obj_handle.get_heap_word_u64()),
+            f64::from_bits(obj_handle.get_nanbox_u64()),
             key_handle.get_nanbox_f64(),
         ) {
             if !configurable
                 && !unsafe {
                     super::object_ops::reflect_nonconfigurable_define_allowed(
-                        f64::from_bits(obj_handle.get_heap_word_u64()),
+                        f64::from_bits(obj_handle.get_nanbox_u64()),
                         key_handle.get_nanbox_f64(),
                         descriptor_handle.get_nanbox_f64(),
                     )
@@ -347,12 +347,12 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
                 return reflect_bool(false);
             }
         }
-    } else if obj_value_no_extend(f64::from_bits(obj_handle.get_heap_word_u64())) {
+    } else if obj_value_no_extend(f64::from_bits(obj_handle.get_nanbox_u64())) {
         // Defining a brand-new property on a non-extensible object fails.
         return reflect_bool(false);
     }
     super::js_object_define_property(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
         descriptor_handle.get_nanbox_f64(),
     );

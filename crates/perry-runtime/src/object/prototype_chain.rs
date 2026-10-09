@@ -438,7 +438,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // that allocation may have moved.
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner_handle = scope.root_raw_mut_ptr(obj_ptr as *mut u8);
-    let prototype_handle = scope.root_heap_word_u64(proto_bits);
+    let prototype_handle = scope.root_nanbox_u64(proto_bits);
     let (prototype_serial, obj_ptr): (Option<u64>, *mut u8) =
         owner_handle.across_mut::<u8, _>(|| unsafe {
             let prototype = crate::value::JSValue::from_bits(proto_bits);
@@ -489,7 +489,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
         }
     }
     let obj_ptr = obj_ptr;
-    let proto_bits = prototype_handle.get_heap_word_u64();
+    let proto_bits = prototype_handle.get_nanbox_u64();
     // A per-instance prototype override invalidates class-keyed interception
     // verdicts (the overridden chain can differ from the class chain), and the
     // object itself must never satisfy a class-keyed plan again.
@@ -525,7 +525,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
-            let proto_handle = scope.root_heap_word_u64(proto_bits);
+            let proto_handle = scope.root_nanbox_u64(proto_bits);
             // The identity reads the receiver's class and classification and
             // the prototype's serial — never this receiver's meta word — so
             // it is taken before anything allocates. A prototype with no
@@ -555,7 +555,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                     crate::object::object_meta_ensure(obj)
                 });
                 obj = moved;
-                let word = proto_handle.get_heap_word_u64();
+                let word = proto_handle.get_nanbox_u64();
                 (*meta).prototype = word;
                 // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
                 // the record is an arena allocation, so the ordinary
@@ -566,7 +566,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                     word,
                 );
             }
-            let proto_bits = proto_handle.get_heap_word_u64();
+            let proto_bits = proto_handle.get_nanbox_u64();
             #[cfg(feature = "shape-mint-diag")]
             if link_kind != PrototypeLinkKind::ClassDefault {
                 crate::object::shape_mint_census::note_proto_divergence(

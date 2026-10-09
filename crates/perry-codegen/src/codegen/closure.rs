@@ -1406,7 +1406,7 @@ pub(super) fn compile_closure(
             &param_ids,
             Some(module_reassigned_locals),
             true,
-        );
+        )?;
     }
 
     // #10812: throw a catchable RangeError before the native stack runs out.

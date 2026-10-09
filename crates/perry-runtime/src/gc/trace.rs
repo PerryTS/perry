@@ -514,6 +514,19 @@ impl ValidPointerSet {
         }
         ptr >= self.range_min && ptr <= self.range_max
     }
+    /// A traced header proves reachability without asking whether a root was
+    /// valid. The census uses this only to account for reached blocks before
+    /// deciding whether an entire block may be reclaimed.
+    #[inline]
+    fn note_known_object_reached(&self, user: usize) {
+        if let Some(block) = self.census_block_at(user) {
+            let header_offset = user.wrapping_sub(block.base).wrapping_sub(GC_HEADER_SIZE);
+            if header_offset < block.extent {
+                self.block_census.note_reached(block.block_idx);
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn contains(&self, ptr: &usize) -> bool {
         if self.classifier_mode {
@@ -1625,6 +1638,7 @@ fn trace_one_worklist_header<const REMEMBER: bool>(
 ) {
     unsafe {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        valid_ptrs.note_known_object_reached(user_ptr as usize);
         // #6228: a FORWARDED header (array growth installs PERMANENT
         // forwarding stubs — types.rs set_forwarding_address — so stale
         // pre-growth pointers keep resolving for reads) must propagate

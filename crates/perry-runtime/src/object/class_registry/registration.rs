@@ -433,7 +433,7 @@ pub(crate) fn class_accessor_function_value(
         "name".to_string(),
         crate::object::PropertyAttrs::new(false, false, true),
     );
-    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 

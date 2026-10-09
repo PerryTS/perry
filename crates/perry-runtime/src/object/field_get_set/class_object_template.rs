@@ -864,7 +864,7 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     // Every handle lives in the caller's scope: the prototype handle is
     // returned, and a handle cannot outlive the scope that rooted it.
     let class = out.root_raw_mut_ptr(class);
-    let parent = out.root_heap_word_u64(parent_proto);
+    let parent = out.root_nanbox_u64(parent_proto);
     let proto = out.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, field_count));
     // The links `class_evaluation_prototype_value` makes, written into the
     // prototype's meta record directly: its evaluation (lexical owner) and its
@@ -874,7 +874,7 @@ pub(crate) unsafe fn prototype_from_template<'s>(
     });
     let owner =
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
-    let parent_bits = parent.get_heap_word_u64();
+    let parent_bits = parent.get_nanbox_u64();
     (*meta).private_evaluation_brand = owner.to_bits();
     crate::gc::runtime_write_barrier_slot(
         meta as usize,

@@ -912,7 +912,7 @@ pub unsafe extern "C" fn js_function_bind(
     } else {
         bound
     };
-    crate::gc::runtime_write_barrier_root_heap_word(bound as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(bound as *const u8);
     f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
 }
 
@@ -972,7 +972,7 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
         crate::object::set_builtin_closure_length(closure as usize, len);
         crate::object::set_builtin_closure_non_constructable(closure as usize);
     }
-    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8);
     f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
 }
 

@@ -208,7 +208,7 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
         let attrs = crate::object::PropertyAttrs::new(false, true, false);
         crate::object::set_property_attrs(closure as usize, "name".to_string(), attrs);
         crate::object::set_property_attrs(closure as usize, "length".to_string(), attrs);
-        crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+        crate::gc::runtime_write_barrier_root_raw_ptr(closure as *const u8);
         f64::from_bits(JSValue::pointer(closure as *mut u8).bits())
     }
 }

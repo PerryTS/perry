@@ -343,7 +343,7 @@ pub extern "C" fn js_object_define_property(
         // then return `NotTypedArray`; its private roots keep the operands live
         // only inside that helper, so the caller must re-read its own roots
         // before continuing into the expando/closure/ordinary paths.
-        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
         let desc_handle = scope.root_nanbox_f64(descriptor_value);
         let key_handle = scope.root_nanbox_f64(key_value);
         // #6748 follow-up: decode the descriptor's 6 fields in ONE pass when it
@@ -362,12 +362,12 @@ pub extern "C" fn js_object_define_property(
         // either write the element or reject with a TypeError).
         if !receiver_plain_object {
             match super::super::typed_array_define_own_property(
-                f64::from_bits(obj_value_handle.get_heap_word_u64()),
+                f64::from_bits(obj_value_handle.get_nanbox_u64()),
                 key_handle.get_nanbox_f64(),
                 desc_handle.get_nanbox_f64(),
             ) {
                 super::super::TypedArrayDefineOutcome::Defined => {
-                    return f64::from_bits(obj_value_handle.get_heap_word_u64());
+                    return f64::from_bits(obj_value_handle.get_nanbox_u64());
                 }
                 super::super::TypedArrayDefineOutcome::Rejected => {
                     throw_object_type_error(b"Cannot redefine property")
@@ -378,7 +378,7 @@ pub extern "C" fn js_object_define_property(
 
         // Everything below must start from the post-probe addresses. The
         // ordinary arm keeps re-reading these same handles via `across!`.
-        let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
         let descriptor_value = desc_handle.get_nanbox_f64();
         let key_value = key_handle.get_nanbox_f64();
 
@@ -400,7 +400,7 @@ pub extern "C" fn js_object_define_property(
             .filter(|addr| crate::buffer::is_registered_buffer(*addr))
             .filter(|addr| !crate::buffer::is_uint8array_buffer(*addr));
         if buffer_addr.is_some() {
-            let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
+            let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
             let current_addr = || crate::value::js_nanbox_get_pointer(current_obj()) as usize;
             let current_desc = || desc_handle.get_nanbox_f64();
             let current_key = || key_handle.get_nanbox_f64();
@@ -572,7 +572,7 @@ pub extern "C" fn js_object_define_property(
                 key_handle.get_nanbox_f64(),
                 desc_handle.get_nanbox_f64(),
             );
-            return f64::from_bits(obj_value_handle.get_heap_word_u64());
+            return f64::from_bits(obj_value_handle.get_nanbox_u64());
         }
         // Constructor refs use their static property storage.
         if let Some(target_cid) = super::super::class_ref_id(obj_value) {
@@ -587,7 +587,7 @@ pub extern "C" fn js_object_define_property(
                     descriptor_value,
                     desc_view.as_ref(),
                 );
-                return f64::from_bits(obj_value_handle.get_heap_word_u64());
+                return f64::from_bits(obj_value_handle.get_nanbox_u64());
             }
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
                 // #10480: a declared accessor — instance on the prototype ref,
@@ -622,7 +622,7 @@ pub extern "C" fn js_object_define_property(
                             .then(|| set_field.get_nanbox_u64())
                             .unwrap_or(0)
                     });
-                    let class_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                    let class_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
                     let descriptor_value = desc_handle.get_nanbox_f64();
                     let enumerable = desc_has_field(descriptor_value, b"enumerable")
                         .then(|| descriptor_enumerable(desc_handle.get_nanbox_f64()));
@@ -790,11 +790,11 @@ pub extern "C" fn js_object_define_property(
             // `closure_ptr` files the property under a dead address, where the
             // matching read can never find it. Root all three across the
             // coercion and read them back through their handles.
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let desc_handle = scope.root_nanbox_f64(descriptor_value);
             let closure_handle = scope.root_raw_mut_ptr(closure_ptr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
             let descriptor_value = desc_handle.get_nanbox_f64();
             let closure_ptr = closure_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
@@ -1017,11 +1017,11 @@ pub extern "C" fn js_object_define_property(
             // the raw local at risk is `addr` — the TypedArray's heap address,
             // resolved from `obj_value` *before* the coercion and dereferenced
             // as a `TypedArrayHeader` after it.
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let desc_handle = scope.root_nanbox_f64(descriptor_value);
             let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
             let descriptor_value = desc_handle.get_nanbox_f64();
             let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
@@ -1154,7 +1154,7 @@ pub extern "C" fn js_object_define_property(
         let obj_handle = scope.root_raw_mut_ptr(obj);
         let (key_str, mut obj) = obj_handle
             .across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
-        let mut obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let mut obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
         let mut descriptor_value = desc_handle.get_nanbox_f64();
         let mut key_value = key_handle.get_nanbox_f64();
         if key_str.is_null() {
@@ -1173,7 +1173,7 @@ pub extern "C" fn js_object_define_property(
                     });
                 obj = refreshed_obj;
                 key_str = refreshed_key;
-                obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
                 descriptor_value = desc_handle.get_nanbox_f64();
                 key_value = key_handle.get_nanbox_f64();
                 result

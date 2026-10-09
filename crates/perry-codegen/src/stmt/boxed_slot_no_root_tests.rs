@@ -196,8 +196,10 @@ fn a_boxed_locals_slot_is_a_native_gc_root() {
         "the unboxed twin must still lower a precise root:\n{f}"
     );
 
+    let slot = crate::testing::temp_slots::slot_holding(f, &box_reg)
+        .unwrap_or_else(|| panic!("GC box allocation must be stored in a root:\n{f}"));
     assert!(
-        f.contains(&format!("inttoptr i64 {box_reg} to ptr addrspace(1)")),
-        "GC box allocation must be stored in a relocatable root:\n{f}"
+        f.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+        "the box's own stored home must be relocatable:\n{f}"
     );
 }

@@ -15,8 +15,8 @@ fn gc_box_closure_and_payload_move_together() {
     let moved_closure =
         (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
     assert_ne!(moved_closure, closure);
-    let moved_cell =
-        crate::closure::js_closure_get_capture_ptr(moved_closure, 0) as *mut crate::r#box::Box;
+    let moved_cell = (crate::closure::js_closure_get_capture_bits(moved_closure, 0) as u64
+        & crate::value::POINTER_MASK) as *mut crate::r#box::Box;
     assert_ne!(
         moved_cell, cell,
         "capture must be rewritten to a moved cell"
@@ -81,8 +81,9 @@ fn gc_box_unreachable_closure_cycle_is_reclaimed_without_release() {
     js_shadow_slot_set(0, ptr_bits(closure as usize));
     gc_collect_minor();
     let live_closure = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    let live_cell =
-        crate::closure::js_closure_get_capture_ptr(live_closure as *const _, 0) as usize;
+    let live_cell = (crate::closure::js_closure_get_capture_bits(live_closure as *const _, 0)
+        as u64
+        & crate::value::POINTER_MASK) as usize;
     assert!(build_valid_pointer_set().contains(&live_cell));
     js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
     gc_collect_inner();

@@ -148,7 +148,7 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_raw_mut_ptr(obj);
     let class_id = class.with_const_ptr::<ObjectHeader, _>(|class| (*class).class_id);
-    let parent_proto = parent_proto.map(|bits| scope.root_heap_word_u64(bits));
+    let parent_proto = parent_proto.map(|bits| scope.root_nanbox_u64(bits));
 
     // Every evaluation after the template's first in this agent is born in
     // the shape that one reached (`class_object_template`).
@@ -158,7 +158,7 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 &scope,
                 class,
                 class_id,
-                parent_proto.get_heap_word_u64(),
+                parent_proto.get_nanbox_u64(),
             )
         }) {
             CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
@@ -252,7 +252,7 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_link_class_evaluation_prototype(
                 proto as usize,
-                parent_proto.get_heap_word_u64(),
+                parent_proto.get_nanbox_u64(),
             )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
@@ -262,7 +262,7 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                     class,
                     class_id,
                     members + 1,
-                    parent_proto.get_heap_word_u64(),
+                    parent_proto.get_nanbox_u64(),
                 )
             })
         });

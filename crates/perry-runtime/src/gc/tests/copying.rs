@@ -1295,13 +1295,13 @@ fn test_copying_minor_rewrites_shadow_and_global_roots() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let shadow_child = young_leaf();
     let global_child = young_leaf();
-    let mut global_slot = global_child as u64;
+    let mut global_slot = ptr_bits(global_child);
     js_shadow_slot_set(0, ptr_bits(shadow_child));
     js_gc_register_global_root(&mut global_slot as *mut u64 as i64);
 
     let _ = gc_collect_minor();
     let shadow_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    let global_after = global_slot as usize;
+    let global_after = (global_slot & POINTER_MASK) as usize;
 
     assert_ne!(shadow_after, shadow_child);
     assert_ne!(global_after, global_child);

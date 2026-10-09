@@ -101,13 +101,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &old_bits,
                             crate::nanbox::TAG_UNDEFINED_I64,
                         );
-                        let slot = ctx.func.alloca_entry(I64);
-                        ctx.func.entry_allocas_push_store(
-                            I64,
-                            crate::nanbox::TAG_UNDEFINED_I64,
-                            &slot,
-                        );
-                        ctx.block().store(I64, &rooted_bits, &slot);
+                        let slot = ctx.func.alloca_entry(DOUBLE);
+                        let undefined = crate::nanbox::double_literal(f64::from_bits(
+                            crate::nanbox::TAG_UNDEFINED,
+                        ));
+                        ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &slot);
+                        let rooted_value = ctx.block().bitcast_i64_to_double(&rooted_bits);
+                        ctx.block().store(DOUBLE, &rooted_value, &slot);
                         super::root_entry_alloca(ctx, &slot);
                         Some((slot, is_bigint))
                     };
@@ -145,8 +145,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
 
                     return Ok(if let Some((slot, is_bigint)) = postfix_result {
-                        let rooted_bits = ctx.block().load(I64, &slot);
-                        let rooted_result = ctx.block().bitcast_i64_to_double(&rooted_bits);
+                        let rooted_result = ctx.block().load(DOUBLE, &slot);
                         ctx.block().select(
                             crate::types::I1,
                             &is_bigint,

@@ -810,17 +810,18 @@ pub(super) fn emit_string_pool(
             ],
         );
         let global_ref = format!("@{}", global_name);
-        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &global_ref);
+        let keys_value = blk.call(DOUBLE, "js_nanbox_pointer", &[(I64, &arr)]);
+        crate::expr::emit_root_nanbox_store_on_block(blk, &keys_value, &global_ref);
         // #5042: register the per-class keys global as a GC root so the
-        // evacuation rewrite pass fixes up its raw pointer after the keys
+        // evacuation rewrite pass fixes up its encoded pointer after the keys
         // array is moved. The array lives in the longlived (old-gen) arena
         // and is held alive by the shape-cache scanner, so old-page defrag
         // (C4b) can relocate it; without registering this slot the codegen
         // global keeps a stale pointer and every `new ClassName()` afterwards
         // builds an instance over a forwarded/freed keys array. Mirrors the
         // module-var data-table and string-handle registrations above (this
-        // global holds a *raw* I64 pointer, which `mark_global_root_bits` and
-        // the evacuation `try_rewrite_value` raw fallback already handle).
+        // global holds a JSValue word; pointer consumers unbox that word,
+        // and marking/evacuation use the same precise source decoder).
         let addr_i64 = blk.ptrtoint(&global_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
 
@@ -1812,7 +1813,8 @@ pub(super) fn emit_string_pool(
             let blk = chunker.current_block();
             // Registration calls above can collect; load the canonical keys
             // afresh from their registered root immediately before the mint.
-            let keys = blk.load(I64, &format!("@{}", entry.0));
+            let keys_value = blk.load(DOUBLE, &format!("@{}", entry.0));
+            let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
                 "js_object_final_shape_id_for_class_keys_static_constfn",
@@ -1890,7 +1892,8 @@ pub(super) fn emit_string_pool(
             let blk = chunker.current_block();
             // Registration calls above can collect; load the canonical keys
             // afresh from their registered root immediately before the mint.
-            let keys = blk.load(I64, &format!("@{}", entry.0));
+            let keys_value = blk.load(DOUBLE, &format!("@{}", entry.0));
+            let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
                 "js_object_final_shape_id_for_class_keys_static_private",

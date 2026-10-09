@@ -27,7 +27,9 @@ pub(crate) fn scan_builtin_collection_method_roots_mut(
     for slot in [&BUILTIN_MAP_SET_VALUE_BITS, &BUILTIN_SET_ADD_VALUE_BITS] {
         slot.with(|slot| {
             let mut bits = slot.get();
-            if visitor.visit_heap_word_u64_slot(&mut bits) {
+            let mut ptr = bits as usize;
+            if visitor.visit_usize_slot(&mut ptr) {
+                bits = ptr as u64;
                 slot.set(bits);
             }
         });

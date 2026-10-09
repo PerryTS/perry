@@ -764,12 +764,9 @@ pub(crate) unsafe fn native_call_method_value_memo(
             (key, object)
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let object_handle = scope.root_heap_word_u64(object.to_bits());
+            let object_handle = scope.root_nanbox_u64(object.to_bits());
             let property_key = crate::object::js_to_property_key(key);
-            (
-                property_key,
-                f64::from_bits(object_handle.get_heap_word_u64()),
-            )
+            (property_key, f64::from_bits(object_handle.get_nanbox_u64()))
         };
     if !is_symbol_key && crate::symbol::js_is_symbol(property_key) != 0 {
         return js_native_call_method_value(object, property_key, args_ptr, args_len);

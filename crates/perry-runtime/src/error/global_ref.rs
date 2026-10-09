@@ -38,9 +38,9 @@ pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f
         // was extracted into a raw Rust local *before* the coercion and
         // dereferenced by `js_object_get_field_by_name` after it. Root the
         // receiver and re-derive the header from the refreshed value.
-        let g_handle = scope.root_heap_word_u64(g.to_bits());
+        let g_handle = scope.root_nanbox_u64(g.to_bits());
         let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
-        let g = f64::from_bits(g_handle.get_heap_word_u64());
+        let g = f64::from_bits(g_handle.get_nanbox_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() && !key.is_null() {
             let v = crate::object::js_object_get_field_by_name(gptr, key);
@@ -55,7 +55,7 @@ pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f
             // the property actually exists (as an OWN property — a global var
             // binding always is) before falling through to the throw.
             let has = crate::object::js_object_has_own(
-                f64::from_bits(g_handle.get_heap_word_u64()),
+                f64::from_bits(g_handle.get_nanbox_u64()),
                 name_handle.get_nanbox_f64(),
             );
             if crate::value::js_is_truthy(has) != 0 {
@@ -105,12 +105,12 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     // from the pre-coercion `gj`) and the coerced key string were raw Rust
     // locals across all of it, and `gptr` is the receiver of the WRITE-BACK at
     // the end. Root both and re-derive the header at each use.
-    let g_handle = scope.root_heap_word_u64(g.to_bits());
+    let g_handle = scope.root_nanbox_u64(g.to_bits());
     let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
     let key_handle = scope.root_string_ptr(key);
     let mut present = false;
     let old = if gj.is_pointer() && !key.is_null() {
-        let g = f64::from_bits(g_handle.get_heap_word_u64());
+        let g = f64::from_bits(g_handle.get_nanbox_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() {
             let v = crate::object::js_object_get_field_by_name(
@@ -119,7 +119,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
             );
             if !v.is_undefined()
                 || crate::object::js_object_has_own(
-                    f64::from_bits(g_handle.get_heap_word_u64()),
+                    f64::from_bits(g_handle.get_nanbox_u64()),
                     name_handle.get_nanbox_f64(),
                 )
                 .to_bits()
@@ -147,7 +147,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     let stepped =
         unsafe { crate::value::js_numeric_step(numeric_handle.get_nanbox_f64(), is_increment) };
     let stepped_handle = scope.root_nanbox_f64(stepped);
-    let g = f64::from_bits(g_handle.get_heap_word_u64());
+    let g = f64::from_bits(g_handle.get_nanbox_u64());
     let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
     crate::object::js_object_set_field_by_name(
         gptr,
@@ -197,12 +197,12 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
     // the not-defined path (`js_string_from_bytes`, `js_referenceerror_new`)
     // allocate on top of that, and `gptr` is the receiver of the final write.
     // Root the global, the coerced key and `value` for the whole helper.
-    let g_handle = scope.root_heap_word_u64(g.to_bits());
+    let g_handle = scope.root_nanbox_u64(g.to_bits());
     let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
     let key_handle = scope.root_string_ptr(key);
     let mut present = false;
     if gj.is_pointer() && !key.is_null() {
-        let g = f64::from_bits(g_handle.get_heap_word_u64());
+        let g = f64::from_bits(g_handle.get_nanbox_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() {
             let v = crate::object::js_object_get_field_by_name(
@@ -211,7 +211,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
             );
             if !v.is_undefined()
                 || crate::object::js_object_has_own(
-                    f64::from_bits(g_handle.get_heap_word_u64()),
+                    f64::from_bits(g_handle.get_nanbox_u64()),
                     name_handle.get_nanbox_f64(),
                 )
                 .to_bits()
@@ -228,7 +228,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
         let err_ptr = js_referenceerror_new(msg_str);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
     }
-    let g = f64::from_bits(g_handle.get_heap_word_u64());
+    let g = f64::from_bits(g_handle.get_nanbox_u64());
     let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
     crate::object::js_object_set_field_by_name(
         gptr,
@@ -253,9 +253,9 @@ pub extern "C" fn js_global_get_optional(name_value: f64) -> f64 {
     if gj.is_pointer() {
         // #6943: root the global across the GC-capable coercion and re-derive
         // its header afterwards — see `js_global_get_or_throw_unresolved`.
-        let g_handle = scope.root_heap_word_u64(g.to_bits());
+        let g_handle = scope.root_nanbox_u64(g.to_bits());
         let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
-        let g = f64::from_bits(g_handle.get_heap_word_u64());
+        let g = f64::from_bits(g_handle.get_nanbox_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() && !key.is_null() {
             let v = crate::object::js_object_get_field_by_name(gptr, key);

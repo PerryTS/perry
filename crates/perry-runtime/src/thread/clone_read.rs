@@ -12,7 +12,7 @@ use super::{fs_thread_codec, store_thread_array_slot, store_thread_object_field}
 use super::{SerializedValue, VIEW_KIND_DATA_VIEW};
 use super::{BIGINT_TAG, POINTER_MASK, TAG_UNDEFINED};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
-use crate::value::JSValue;
+use crate::value::{JSValue, POINTER_TAG};
 
 /// Deserialize a SerializedValue into a NaN-boxed JSValue.
 ///
@@ -144,7 +144,7 @@ impl<'s> Reader<'s> {
             SerializedValue::BoxedCapture(inner) => {
                 // The allocator roots its input; the closure's slot owns the box.
                 let value = self.value(inner);
-                return crate::r#box::js_box_alloc_bits(value as i64) as u64;
+                return POINTER_TAG | crate::r#box::js_box_alloc_bits(value as i64) as u64;
             }
             SerializedValue::ScopeCapture(slots) => return self.scope_capture(slots),
             SerializedValue::Uint8Array(bytes) => owned_uint8array(bytes),
@@ -315,7 +315,7 @@ impl<'s> Reader<'s> {
                 crate::r#box::scope::js_scope_set(base as i64, i as i32, bits as i64)
             });
         }
-        rooted.with_mut_ptr(|base: *mut u8| base as u64)
+        rooted.with_mut_ptr(|base: *mut u8| POINTER_TAG | base as u64)
     }
 
     unsafe fn view(

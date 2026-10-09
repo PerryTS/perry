@@ -19,7 +19,7 @@ fn bulk_boxed_birth_preserves_body_shape_flags_and_fresh_identity() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let cell = crate::r#box::js_box_alloc_bits(17.0f64.to_bits() as i64);
-    let captures = [cell as u64, crate::value::TAG_UNDEFINED];
+    let captures = [ptr_bits(cell as usize), crate::value::TAG_UNDEFINED];
     let count = crate::closure::CAPTURES_THIS_FLAG | crate::closure::NO_THIS_REBIND_FLAG | 2;
     let expected_shape = crate::closure::shape::birth_shape_for_body(&BODY);
     let first = crate::closure::js_closure_alloc_init_boxed(&BODY, count, captures.as_ptr());
@@ -37,7 +37,7 @@ fn bulk_boxed_birth_preserves_body_shape_flags_and_fresh_identity() {
             assert_eq!((*closure).shape_id, expected_shape);
             assert_eq!((*closure).capture_count, count);
             let slots = crate::closure::closure_capture_slots_mut(closure);
-            assert_eq!(*slots, cell as u64, "box identity stays shared");
+            assert_eq!(*slots, ptr_bits(cell as usize), "box identity stays shared");
             assert_eq!(*slots.add(1), captures[1]);
         }
     }
@@ -50,7 +50,7 @@ fn large_malloc_bulk_boxed_birth_preserves_young_captures() {
     register_runtime_handle_root_scanner_for_tests();
     let cell = crate::r#box::js_box_alloc_bits(17.0f64.to_bits() as i64);
     let mut captures = vec![crate::value::TAG_UNDEFINED; LARGE_OBJECT_THRESHOLD_BYTES / 8 + 64];
-    captures[0] = cell as u64;
+    captures[0] = ptr_bits(cell as usize);
     let closure = crate::closure::js_closure_alloc_init_boxed(
         std::ptr::null(),
         captures.len() as u32,
@@ -67,7 +67,8 @@ fn large_malloc_bulk_boxed_birth_preserves_young_captures() {
     js_shadow_slot_set(0, ptr_bits(closure as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(trace.copying_nursery.copied_objects > 0);
-    let current = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::r#box::Box;
+    let current = (crate::closure::js_closure_get_capture_bits(closure, 0) & POINTER_MASK)
+        as *mut crate::r#box::Box;
     assert_ne!(cell, current);
     assert_eq!(crate::r#box::js_box_get(current), 17.0);
 }
@@ -93,7 +94,7 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
             (*header_from_user_ptr(closure as *const u8)).gc_flags & GC_FLAG_TENURED,
             0
         );
-        crate::closure::closure_install_boxed_captures(closure, &[cell as u64]);
+        crate::closure::closure_install_boxed_captures(closure, &[ptr_bits(cell as usize)]);
     }
     assert!(
         remembered_set_size() > 0,
@@ -102,7 +103,8 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
     js_shadow_slot_set(0, ptr_bits(closure as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(trace.copying_nursery.copied_objects > 0);
-    let current = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::r#box::Box;
+    let current = (crate::closure::js_closure_get_capture_bits(closure, 0) & POINTER_MASK)
+        as *mut crate::r#box::Box;
     assert_ne!(cell, current);
     assert_eq!(crate::r#box::js_box_get(current), 17.0);
 }
@@ -115,12 +117,12 @@ fn bulk_boxed_birth_shades_captures_during_incremental_marking() {
     let cell = crate::r#box::js_box_alloc_bits(17.0f64.to_bits() as i64);
     let valid = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid);
-    let captures = [cell as u64];
+    let captures = [ptr_bits(cell as usize)];
     let closure =
         crate::closure::js_closure_alloc_init_boxed(std::ptr::null(), 1, captures.as_ptr());
     assert_eq!(
-        crate::closure::js_closure_get_capture_ptr(closure, 0),
-        cell as i64
+        crate::closure::js_closure_get_capture_bits(closure, 0),
+        ptr_bits(cell as usize)
     );
     drain_incremental_mark_barrier_seeds(&valid);
     assert_marked_user_ptr(cell as usize, "newborn capture box");
@@ -136,7 +138,11 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     let child = young_leaf();
     let cell = crate::r#box::js_box_alloc_bits(string_bits(child) as i64);
     let flags = crate::closure::CAPTURES_THIS_FLAG | crate::closure::NO_THIS_REBIND_FLAG;
-    let captures = [cell as u64, string_bits(child), 42.0f64.to_bits()];
+    let captures = [
+        ptr_bits(cell as usize),
+        string_bits(child),
+        42.0f64.to_bits(),
+    ];
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
@@ -154,13 +160,14 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     assert_ne!(installed[1], captures[1], "tagged root must be refreshed");
     assert_eq!(installed[2], captures[2], "numeric bits must stay exact");
     assert_eq!(
-        captures[0], cell as u64,
+        captures[0],
+        ptr_bits(cell as usize),
         "input buffer is not a mutable root"
     );
     assert_eq!(captures[1], string_bits(child));
     js_shadow_slot_set(0, ptr_bits(closure as usize));
-    let moved_cell =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::r#box::Box;
+    let moved_cell = (crate::closure::js_closure_get_capture_bits(closure, 0) & POINTER_MASK)
+        as *mut crate::r#box::Box;
     let moved_child = crate::closure::js_closure_get_capture_bits(closure, 1) & POINTER_MASK;
     assert_ne!(
         moved_cell, cell,
@@ -180,7 +187,7 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
         );
     }
 
-    let second_captures = [moved_cell as u64];
+    let second_captures = [ptr_bits(moved_cell as usize)];
     let second =
         crate::closure::js_closure_alloc_init_boxed(std::ptr::null(), 1, second_captures.as_ptr());
     assert_ne!(
@@ -194,10 +201,11 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     assert!(trace.copying_nursery.copied_objects > 0);
     let first = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::closure::ClosureHeader;
     let second = second_root.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
-    let first_cell = crate::closure::js_closure_get_capture_ptr(first, 0) as *mut crate::r#box::Box;
+    let first_cell = (crate::closure::js_closure_get_capture_bits(first, 0) & POINTER_MASK)
+        as *mut crate::r#box::Box;
     assert_eq!(
         first_cell as i64,
-        crate::closure::js_closure_get_capture_ptr(second, 0)
+        (crate::closure::js_closure_get_capture_bits(second, 0) & POINTER_MASK) as i64
     );
     crate::r#box::js_box_set(first_cell, 99.0);
     assert_eq!(crate::r#box::js_box_get(first_cell), 99.0);

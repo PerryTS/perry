@@ -219,38 +219,20 @@ fn emit_with_key(ctx: &mut FnCtx<'_>, property: &str) -> (String, String) {
 
 fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<String> {
     super::invalidate_local_write_facts(ctx, id);
-    if ctx.boxed_vars.contains(&id) && crate::scope_env::access::slot(ctx, id).is_some() {
-        let value_bits = ctx.block().bitcast_double_to_i64(value);
-        crate::scope_env::access::write_scoped(ctx, id, &value_bits)?;
+    if crate::scope_env::access::write_back_boxed_local(ctx, id, value)? {
+        // The shared writer decodes the container and shades its new edge.
     } else if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
         let closure_ptr = super::current_closure_ptr_value(ctx, "captured with-fallback set")?;
-        let idx_str = capture_idx.to_string();
-        if ctx.boxed_vars.contains(&id) {
-            let blk = ctx.block();
-            let box_ptr = blk.call(
-                I64,
-                "js_closure_get_capture_bits",
-                &[(I64, &closure_ptr), (I32, &idx_str)],
-            );
-            let value_bits = blk.bitcast_double_to_i64(value);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
-            emit_write_barrier(ctx, &box_ptr, &value_bits);
-        } else {
-            let value_bits = ctx.block().bitcast_double_to_i64(value);
-            ctx.block().call_void(
-                "js_closure_set_capture_bits",
-                &[(I64, &closure_ptr), (I32, &idx_str), (I64, &value_bits)],
-            );
-            emit_write_barrier(ctx, &closure_ptr, &value_bits);
-        }
-    } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
-        if let Some(slot) = ctx.locals.get(&id).cloned() {
-            let blk = ctx.block();
-            let box_ptr = blk.load(I64, &slot);
-            let value_bits = blk.bitcast_double_to_i64(value);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
-            emit_write_barrier(ctx, &box_ptr, &value_bits);
-        }
+        let value_bits = ctx.block().bitcast_double_to_i64(value);
+        ctx.block().call_void(
+            "js_closure_set_capture_bits",
+            &[
+                (I64, &closure_ptr),
+                (I32, &capture_idx.to_string()),
+                (I64, &value_bits),
+            ],
+        );
+        emit_write_barrier(ctx, &closure_ptr, &value_bits);
     } else if crate::expr::store_canonical_local_from_double(ctx, id, value, None) {
         // Repsel Phase 1: canonical-i32 local — the prelowered value entered
         // the (only) i32 slot through the NaN-safe ToInt32 conversion. This

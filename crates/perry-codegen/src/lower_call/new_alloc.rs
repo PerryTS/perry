@@ -583,7 +583,10 @@ fn emit_instance_alloc_inner(
                     .insert(class_name.to_string(), s.clone());
                 s
             };
-            let keys_ptr = ctx.block().load(I64, &keys_slot);
+            let keys_bits = ctx.block().load(I64, &keys_slot);
+            let keys_ptr =
+                ctx.block()
+                    .and(I64, &keys_bits, &crate::nanbox::POINTER_MASK.to_string());
             let shape_id =
                 crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
             ctx.pending_declares.push((

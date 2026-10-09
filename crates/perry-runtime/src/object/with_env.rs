@@ -155,9 +155,9 @@ pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
             // dereferenced by `js_object_get_field_by_name` below — was a raw
             // Rust local across the call.
             let scope = crate::gc::RuntimeHandleScope::new();
-            let g_handle = scope.root_heap_word_u64(g.to_bits());
+            let g_handle = scope.root_nanbox_u64(g.to_bits());
             let key = crate::builtins::js_string_coerce(name);
-            let gj = JSValue::from_bits(g_handle.get_heap_word_u64());
+            let gj = JSValue::from_bits(g_handle.get_nanbox_u64());
             let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
             if !gptr.is_null() && !key.is_null() {
                 let v = crate::object::js_object_get_field_by_name(gptr, key);

@@ -280,9 +280,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             (obj, obj_val, key)
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_heap_word_u64(obj.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj.to_bits());
             let key = unsafe { crate::object::js_to_property_key(key) };
-            let obj = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj = f64::from_bits(obj_handle.get_nanbox_u64());
             (obj, JSValue::from_bits(obj.to_bits()), key)
         }
     };

@@ -812,10 +812,10 @@ pub(crate) unsafe fn reflect_nonconfigurable_define_allowed(
     descriptor: f64,
 ) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_heap_word_u64(obj.to_bits());
+    let obj = scope.root_nanbox_u64(obj.to_bits());
     let key = scope.root_nanbox_f64(key);
     let descriptor = scope.root_nanbox_f64(descriptor);
-    let current_obj = f64::from_bits(obj.get_heap_word_u64());
+    let current_obj = f64::from_bits(obj.get_nanbox_u64());
     let owner = if crate::symbol::js_is_symbol(key.get_nanbox_f64()) != 0 {
         super::super::class_ref_id(current_obj)
             .and_then(super::super::class_value::class_value_if_minted)

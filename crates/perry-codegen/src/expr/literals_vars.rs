@@ -356,7 +356,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     let closure_ptr =
                         super::current_closure_ptr_value(ctx, "captured boxed local")?;
-                    let box_ptr = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
+                    let word = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
+                    let box_ptr = ctx.block().and(I64, &word, crate::nanbox::POINTER_MASK_I64);
                     let bits = emit_box_read(ctx, *id, &box_ptr, ctx.trusted_box_captures);
                     let value = ctx.block().bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
@@ -791,6 +792,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
+                    let box_ptr = ctx
+                        .block()
+                        .and(I64, &box_ptr, crate::nanbox::POINTER_MASK_I64);
                     let old_bits = emit_box_read(ctx, *id, &box_ptr, ctx.trusted_box_captures);
                     let blk = ctx.block();
                     let old = blk.bitcast_i64_to_double(&old_bits);
@@ -804,6 +808,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
+                    let box_ptr = ctx
+                        .block()
+                        .and(I64, &box_ptr, crate::nanbox::POINTER_MASK_I64);
                     ctx.block()
                         .call_void(setter, &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: `++`/`--` on a BigInt yields a heap
@@ -1266,6 +1273,7 @@ pub(crate) fn bind_lowered_value_to_local(
                     "js_closure_get_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str)],
                 );
+                let box_ptr = blk.and(I64, &box_ptr, crate::nanbox::POINTER_MASK_I64);
                 let v_bits = blk.bitcast_double_to_i64(v);
                 blk.call_void(setter, &[(I64, &box_ptr), (I64, &v_bits)]);
                 // Gen-GC Phase C2: barrier — box is the parent.

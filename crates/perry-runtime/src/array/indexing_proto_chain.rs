@@ -220,7 +220,7 @@ unsafe fn array_custom_array_prototype_from_bits(
 unsafe fn array_object_proto_index_get(receiver: f64, proto_bits: u64, index: u32) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
-    let proto = scope.root_heap_word_u64(proto_bits);
+    let proto = scope.root_nanbox_u64(proto_bits);
     let key = index.to_string();
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     if key_hdr.is_null() {
@@ -232,7 +232,7 @@ unsafe fn array_object_proto_index_get(receiver: f64, proto_bits: u64, index: u3
         as *const crate::StringHeader;
     crate::object::prototype_chain::resolve_inherited_field_from_prototype(
         receiver_addr,
-        proto.get_heap_word_u64(),
+        proto.get_nanbox_u64(),
         key_ptr,
     )
     .map(|v| f64::from_bits(v.bits()))
@@ -244,14 +244,14 @@ unsafe fn array_object_proto_index_get(receiver: f64, proto_bits: u64, index: u3
 /// without interpreting an ArrayHeader as an ObjectHeader (#9785).
 pub(crate) unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) -> usize {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_heap_word_u64(proto_bits);
+    let proto = scope.root_nanbox_u64(proto_bits);
     let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     if key_ptr.is_null() {
         return 0;
     }
     let key_handle = scope.root_nanbox_f64(crate::value::nanbox_string_key(key_ptr));
     for _ in 0..64 {
-        let bits = proto.get_heap_word_u64();
+        let bits = proto.get_nanbox_u64();
         if bits == crate::value::TAG_NULL
             || crate::proxy::js_proxy_is_proxy(f64::from_bits(bits)) != 0
         {
@@ -267,17 +267,17 @@ pub(crate) unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) 
         }
         let addr = crate::value::resolve_forwarding(addr);
         let value = crate::value::js_nanbox_pointer(addr as i64);
-        proto.set_heap_word_u64(value.to_bits());
+        proto.set_nanbox_u64(value.to_bits());
         if crate::object::obj_value_has_own_key(value, key_handle.get_nanbox_f64()) {
-            return crate::value::js_nanbox_get_pointer(f64::from_bits(proto.get_heap_word_u64()))
+            return crate::value::js_nanbox_get_pointer(f64::from_bits(proto.get_nanbox_u64()))
                 as usize;
         }
         let next =
-            crate::object::js_object_get_prototype_of(f64::from_bits(proto.get_heap_word_u64()));
-        if next.to_bits() == proto.get_heap_word_u64() {
+            crate::object::js_object_get_prototype_of(f64::from_bits(proto.get_nanbox_u64()));
+        if next.to_bits() == proto.get_nanbox_u64() {
             return 0;
         }
-        proto.set_heap_word_u64(next.to_bits());
+        proto.set_nanbox_u64(next.to_bits());
     }
     0
 }
@@ -285,7 +285,7 @@ pub(crate) unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) 
 /// #9192: `[[HasProperty]]`(index) through a NON-array custom `[[Prototype]]`.
 unsafe fn array_object_proto_index_has(proto_bits: u64, index: u32) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_heap_word_u64(proto_bits);
+    let proto = scope.root_nanbox_u64(proto_bits);
     let key = index.to_string();
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     if key_hdr.is_null() {
@@ -294,7 +294,7 @@ unsafe fn array_object_proto_index_has(proto_bits: u64, index: u32) -> bool {
     let key_handle = scope.root_nanbox_f64(crate::value::nanbox_string_key(key_hdr));
     let key_ptr = crate::value::js_nanbox_get_pointer(key_handle.get_nanbox_f64())
         as *const crate::StringHeader;
-    crate::object::prototype_value_has_property(proto.get_heap_word_u64(), key_ptr)
+    crate::object::prototype_value_has_property(proto.get_nanbox_u64(), key_ptr)
 }
 
 /// Spec `[[Get]]`(O, ToString(index)) for an ordinary Array receiver: own value

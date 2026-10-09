@@ -233,6 +233,24 @@ module globals, pending async work, caches, registries, and other side tables;
 helpers keep temporary values in `RuntimeHandleScope`/`RuntimeHandle` and must
 re-read a handle after a call that can collect.
 
+Root owners supply the representation. Generated globals and native
+statepoint homes keep JSValue words at rest; raw managed locals are boxed when
+stored and unboxed after a root reload. Runtime scanners and handles distinguish
+JSValues from pointer fields whose owners guarantee a GC header. Both feed one
+precise marker: decode the value tag, read the header's color, and enqueue an
+unmarked object. Normal root marking does not probe arena/page metadata or the
+malloc registry. A numeric word that resembles an address remains a number;
+native handle payloads are excluded by their value-encoding band. Closure
+capture cells and temporary roots obey the same producer contract.
+
+Legacy shadow-frame homes on WASI and ARM64 Windows can still mix raw pointers
+and JSValues. Their source kind retains the mixed decoder and validity probe;
+these are the documented untyped platform fallback. Structural header checks
+in verification builds and the existing evacuation verifier check precise
+roots without changing their release marking contract. Reached-block
+accounting belongs to tracing the admitted object, rather than validating
+every root that aliases it.
+
 The conservative native-stack scan is not part of the production default:
 `Auto` resolves to `SkipDisabled`. `PERRY_CONSERVATIVE_STACK_SCAN=full` is an
 explicit diagnostic/sensitivity arm. A full scan pins ambiguous roots and

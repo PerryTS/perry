@@ -17,7 +17,7 @@ pub(super) unsafe fn finish_regexp(
         object.with_mut_ptr::<ObjectHeader, _>(|object| {
             crate::object::prototype_chain::object_set_static_prototype(
                 object as usize,
-                proto.get_heap_word_u64(),
+                proto.get_nanbox_u64(),
             );
         });
     }
@@ -43,7 +43,7 @@ pub(super) unsafe fn apply_prototype(result: f64, proto: Option<crate::gc::Runti
         if addr != 0 {
             crate::object::prototype_chain::object_set_static_prototype(
                 addr,
-                proto.get_heap_word_u64(),
+                proto.get_nanbox_u64(),
             );
         }
     }
