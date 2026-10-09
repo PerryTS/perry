@@ -4,5 +4,7 @@ const worker = new Worker(new URL('./_helpers/net_payload_live_worker.ts', impor
 worker.on('message', (message: string) => {
   console.log(message);
   if (message === 'worker-live') worker.postMessage('continue');
+  // The Worker closed every socket it owned; end it explicitly (Perry's
+  // Worker does not yet exit on its own once a parentPort listener has run).
+  if (message === 'worker-closed') { clearTimeout(timer); worker.terminate(); }
 });
-worker.on('exit', (code: number) => { clearTimeout(timer); console.log('exit', code); });
