@@ -1402,7 +1402,14 @@ pub(crate) fn class_identity_has_surface(class_id: u32) -> bool {
 
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
-    let class_id = decl_prototype_identity_id(class_id);
+    class_decl_prototype_value_selected(decl_prototype_identity_id(class_id))
+}
+
+/// Continue the same prototype read after its outer generic-origin selection.
+/// The caller selects immediately before reading the raw CLASS word, without
+/// callbacks in between. Inner public projections deliberately remain intact:
+/// a chained alias and a parent getter retain their existing semantics.
+pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
     if class_id == crate::wasi::CLASS_ID_WASI {
         crate::wasi::ensure_wasi_prototype_for_subclass();
         let proto = class_prototype_object(class_id);
