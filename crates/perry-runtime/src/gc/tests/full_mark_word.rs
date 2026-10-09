@@ -97,7 +97,10 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
         let size = (*child_header).size;
         (*child_header).size = 0;
         let classifier_rejected = !trace::classifier_valid_object_start(child);
-        let red = std::panic::catch_unwind(|| valid.contains(&child));
+        // The armed census owns a drop-restoration guard and therefore is
+        // not RefUnwindSafe. This query only reads it; the deliberately
+        // modified header is restored immediately after the caught panic.
+        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| valid.contains(&child)));
         (*child_header).size = size;
         assert!(classifier_rejected);
         let error = red.expect_err("active differential gate must reject census disagreement");
