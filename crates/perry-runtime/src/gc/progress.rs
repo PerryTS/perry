@@ -3,8 +3,8 @@
 //! targets for the budgeted stepper, plus the debt-pacing gain constant used
 //! by `gc_mutator_assist_scaled_work_units` (policy.rs).
 
-/// Hard work budget for ordinary automatic GC steps once the collector is
-/// split into resumable phases.
+/// Initial work budget for ordinary automatic GC steps. The cycle grows its
+/// slice on each successful automatic poll so the barrier window is bounded.
 pub const GC_NORMAL_INCREMENTAL_WORK_UNITS: usize = 2_048;
 /// Soft telemetry target for ordinary automatic GC steps.
 pub const GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US: u64 = 2_000;
@@ -29,8 +29,9 @@ pub const GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT: u64 = 32;
 /// Runtime-visible classification for GC progress.
 ///
 /// Only `NormalIncremental` and `MutatorAssist` satisfy the low-pause
-/// invariant today defined by this contract: bounded by work units, not heap
-/// size. Explicit synchronous work and emergency full collections are allowed
+/// invariant defined by this contract: work-unit slices. Automatic slices
+/// grow toward completion; caller-requested slices keep their hard limit.
+/// Explicit synchronous work and emergency full collections are allowed
 /// to be unbounded only because they are separately requested or separately
 /// reported.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,7 +73,8 @@ impl GcProgressKind {
     }
 }
 
-/// Hard work-unit limit plus a soft pause target for telemetry.
+/// Initial automatic work budget plus a soft pause target for telemetry.
+/// Explicit step APIs apply their caller-supplied work limit exactly.
 ///
 /// `None` means the path is intentionally unbounded and must be labeled by its
 /// `GcProgressKind`.

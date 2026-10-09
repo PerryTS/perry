@@ -24,6 +24,7 @@ struct Debt {
     burst_at_full_start: usize,
     mature_at_full_start: usize,
     published: usize,
+    /// Old, external and registered malloc bytes after the last full.
     live_after_full: usize,
     backoff: u32,
     seen_arena: usize,
@@ -77,7 +78,12 @@ pub(super) fn due(old_pressure: usize, burst_boundary: bool) -> bool {
         let large_band = (8 * MIB).max(debt.live_after_full / 2);
         let scale = 1usize << debt.backoff;
         let burst_scale = 1usize << debt.burst_backoff;
-        let owed = debt.published >= band.saturating_mul(scale)
+        let owed = (debt.published >= band.saturating_mul(scale)
+            // Total allocation includes nursery garbage. A full pays mature
+            // growth; a stable old heap must leave this debt to minors.
+            && old_pressure.saturating_add(super::malloc::malloc_resident_bytes())
+                >= debt.live_after_full
+                .saturating_add(large_band.saturating_mul(scale)))
             || (burst_boundary
                 && debt.allocated >= large_band.saturating_mul(burst_scale)
                 // Nursery churn alone is paid cheaply by minors. Shared
@@ -119,16 +125,16 @@ pub(super) fn finish_full(live: usize, freed: usize) {
         // Cheap nursery garbage must not make a full look productive while
         // the mature live set remains unchanged. Allocate-black births can
         // mask reclaimed old bytes; conservatively credit the net reduction.
-        let productive = mature_reclaimed >= 4 * MIB && mature_reclaimed >= live / 4;
+        let productive = mature_reclaimed >= 4 * MIB && mature_reclaimed >= mature_live / 4;
         let boundary = previous.boundary_full;
-        let next_backoff = |previous: u32| {
+        let next_backoff = |shift: u32| {
             if productive { 0 }
-            else if live <= account.0.get().live_after_full.saturating_add(4 * MIB) {
-                (previous + 1).min(3)
-            } else { previous }
+            else if mature_live <= previous.live_after_full.saturating_add(4 * MIB) {
+                (shift + 1).min(3)
+            } else { shift }
         };
         account.0.set(Debt {
-            live_after_full: live,
+            live_after_full: mature_live,
             backoff: next_backoff(previous.backoff),
             burst: previous.burst.saturating_sub(previous.burst_at_full_start),
             burst_backoff: if boundary { next_backoff(previous.burst_backoff) }

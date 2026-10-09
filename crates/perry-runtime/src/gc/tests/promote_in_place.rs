@@ -1038,10 +1038,13 @@ fn a_promoting_minor_releases_eden_blocks_two_collections_found_idle() {
         trigger_guard.make_arena_trigger_due();
         assert!(super::super::gc_safepoint_moving_minor());
         trigger_guard.make_arena_trigger_due();
-        let step = loop {
-            let step = gc_runtime_safepoint();
-            if step.status != JS_GC_STEP_STATUS_ACTIVE {
-                break step;
+        let step = {
+            let _legacy = policy::force_legacy_gc_pacing();
+            loop {
+                let step = gc_runtime_safepoint();
+                if step.status != JS_GC_STEP_STATUS_ACTIVE {
+                    break step;
+                }
             }
         };
         assert_eq!(step.status, JS_GC_STEP_STATUS_COMPLETED);

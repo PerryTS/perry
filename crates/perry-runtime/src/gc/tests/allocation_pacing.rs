@@ -1,4 +1,6 @@
-use super::super::allocation_pacing::{burst_boundary, due, finish_full, test_debt};
+use super::super::allocation_pacing::{
+    burst_boundary, due, finish_full, note_allocation, test_debt,
+};
 use super::super::*;
 use super::support::*;
 
@@ -409,4 +411,57 @@ fn a_mid_task_full_does_not_erase_the_later_dead_buffer_opportunity() {
         "one completed boundary reclaim pays the burst"
     );
     js_shadow_frame_pop(frame);
+}
+
+#[test]
+fn stable_mature_heap_does_not_turn_nursery_debt_into_old_reclaim() {
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
+    let _isolation = GcTestIsolationGuard::new();
+    let _moving = policy::force_moving_gc_pacing();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let frame = js_shadow_frame_push(1);
+    let keep = crate::buffer::js_buffer_alloc(12 * MIB as i32, 7);
+    js_shadow_slot_set(0, ptr_bits(keep as usize));
+    {
+        let _boundary = allocation_pacing::BurstBoundaryGuard::enter();
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    }
+    let old = policy::old_gen_reclaimable_pressure_bytes();
+    assert!(
+        old >= 8 * MIB,
+        "fixture must exceed the mature pressure guard"
+    );
+    note_allocation(2 * 1024 * MIB, false);
+    assert!(
+        !due(old, false),
+        "nursery debt scheduled a full on unchanged old storage"
+    );
+    assert!(
+        !due(old, true),
+        "task boundary turned nursery garbage into old pressure"
+    );
+    // Genuine old growth still supplies a full-trace opportunity.
+    assert!(due(old.saturating_add(80 * MIB), false));
+    js_shadow_frame_pop(frame);
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
+#[test]
+fn malloc_heap_growth_can_request_full_without_old_arena_growth() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+    finish_full(0, 4 * MIB);
+    let old = policy::old_gen_reclaimable_pressure_bytes();
+    // Registered malloc objects are nongenerational, so their growth is
+    // mature pressure even when the old arena itself has not grown.
+    let p = gc_malloc(80 * MIB, GC_TYPE_STRING);
+    assert!(!p.is_null());
+    assert_eq!(policy::old_gen_reclaimable_pressure_bytes(), old);
+    assert!(super::super::malloc::malloc_resident_bytes() >= 80 * MIB);
+    note_allocation(2 * 1024 * MIB, false);
+    assert!(due(old, false), "malloc growth must still request a full");
+    let _boundary = allocation_pacing::BurstBoundaryGuard::enter();
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
+        .emit_after_current();
 }
