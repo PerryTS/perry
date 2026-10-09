@@ -248,9 +248,10 @@ fn owner_classifiers_project_without_remote_snapshots() {
 fn registering_thread_owns_a_block_mapped_by_another_thread() {
     // The from-space quarantine ring hands a retired block to whichever
     // thread evicts it. Registration on the new thread must move ownership.
-    let data = std::thread::spawn(|| unsafe { super::super::map(Kind::NurseryBlock, ALIGN) as usize })
-        .join()
-        .unwrap();
+    let data =
+        std::thread::spawn(|| unsafe { super::super::map(Kind::NurseryBlock, ALIGN) as usize })
+            .join()
+            .unwrap();
     assert!(data != 0, "LIVE SUBJECT: block mapped by another thread");
     assert_eq!(owned_generation(data), None);
     let mut starts = [1u64];
@@ -276,4 +277,39 @@ fn registering_thread_owns_a_block_mapped_by_another_thread() {
         .unwrap();
     assert!(set_space(data, ALIGN, HeapSpace::Unknown, Some(0)));
     unsafe { super::super::unmap(data as *mut u8, ALIGN) };
+}
+
+#[test]
+fn failed_commit_keeps_the_reservation_without_a_hole() {
+    unsafe {
+        // Find the slot the next map() will take, then force its commit to fail
+        // the way pre-6.12 kernels do (old range unmapped first).
+        let probe = super::super::map(Kind::OldBlock, ALIGN);
+        assert!(!probe.is_null(), "LIVE SUBJECT: reservation maps");
+        super::super::unmap(probe, ALIGN);
+        FORCE_COMMIT_FAILURE.with(|f| f.set(true));
+        let failed = super::super::map(Kind::OldBlock, ALIGN);
+        assert!(failed.is_null(), "forced commit failure must report null");
+        assert!(
+            classify(probe as usize).is_none(),
+            "failed slot must stay unpublished"
+        );
+        // A hole would let an unrelated mapping take the address.
+        let intruder = libc::mmap(
+            probe.cast(),
+            ALIGN,
+            libc::PROT_READ,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        let hole = intruder != libc::MAP_FAILED;
+        if hole {
+            libc::munmap(intruder, ALIGN);
+        }
+        assert!(!hole, "failed commit left a hole in the reservation");
+        let again = super::super::map(Kind::OldBlock, ALIGN);
+        assert!(!again.is_null(), "the slot is usable after the failure");
+        super::super::unmap(again, ALIGN);
+    }
 }
