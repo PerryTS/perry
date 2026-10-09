@@ -510,12 +510,6 @@ fn visit_metadata_nanbox_key(
 pub(crate) fn test_clear_class_side_table_roots() {
     super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
-
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
-        .write()
-        .unwrap()
-        .clear();
     FUNCTION_CLASS_IDS.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;

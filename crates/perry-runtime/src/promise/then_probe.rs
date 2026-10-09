@@ -77,7 +77,6 @@
 //! | `Object.defineProperty` / `Object.defineProperties` / `Reflect.defineProperty` | descriptor install ⇒ `prop_plan_epoch_bump()` (`object/descriptor_state.rs`), and/or the keys-array change above |
 //! | `delete Object.prototype.then` | `js_object_delete_field` ⇒ `prop_plan_epoch_bump()` (and a delete only ever makes the verdict MORE true) |
 //! | `Object.setPrototypeOf(Object.prototype, x)` / `__proto__ =` | instance-override recording ⇒ `prop_plan_epoch_bump()` (`object/prototype_chain.rs`) |
-//! | a vtable getter/method named `then` registered for the prototype's class id | `VTABLE_GEN` (`class_registry::vtable_generation`) |
 //! | an ACCESSOR `then` on `Object.prototype` (whatever it returns) | never memoized as "no `then`" at all — see [`compute_object_prototype_then`]; the getter is observable and must run on every probe |
 //! | a garbage collection RELOCATING `Object.prototype` or its keys array | both addresses are re-derived from live objects on every probe and compared; a relocation is an address mismatch, i.e. a miss |
 //! | `Object.prototype` itself being replaced | `proto_addr` is re-derived every probe and compared |
@@ -153,8 +152,6 @@ struct ProtoSignature {
     /// `object::prop_plan::PROP_PLAN_EPOCH` — descriptor installs and clears,
     /// prototype recording, deletes, and every GC collection.
     epoch: u64,
-    /// `class_registry::VTABLE_GEN` — getter/setter/method registration.
-    vtable_gen: u64,
 }
 
 /// Cached "`Object.prototype` has no reachable `then`" verdict plus the
@@ -231,7 +228,6 @@ fn object_prototype_has_no_then() -> bool {
         return false;
     }
     let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-    let vtable_gen = crate::object::vtable_generation();
     let Some((keys_addr, keys_len, obj_flags, class_id)) = (unsafe { proto_signature(proto_addr) })
     else {
         return false;
@@ -244,7 +240,6 @@ fn object_prototype_has_no_then() -> bool {
         obj_flags,
         class_id,
         epoch,
-        vtable_gen,
     };
     if let Some(v) = PROTO_VERDICT.with(|c| c.get()) {
         if v.signature == now {
@@ -277,7 +272,6 @@ fn object_prototype_has_no_then() -> bool {
         obj_flags: f,
         class_id: c,
         epoch: crate::object::prop_plan::prop_plan_semantic_epoch(),
-        vtable_gen: crate::object::vtable_generation(),
     });
     if after == Some(now) {
         PROTO_VERDICT.with(|c| {
@@ -555,8 +549,9 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
 
 // ── Admissible receiver class ids ──────────────────────────────────────────
 
-/// Memo for [`class_id_admissible`]. `VTABLE_GEN` covers method/getter/setter
-/// registration; the SEMANTIC epoch covers class-prototype-object registration
+/// Memo for [`class_id_admissible`]. Registration adds a class's members
+/// before any instance of it exists, so it cannot change a recorded verdict;
+/// the SEMANTIC epoch covers class-prototype-object registration
 /// and parent-static linking (both call `prop_plan_epoch_bump`). GC is
 /// deliberately not an input: it never adds a registry entry, and the
 /// dead-owner prune only ever REMOVES entries for objects that are dead, which
@@ -564,7 +559,6 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
 #[derive(Clone, Copy)]
 struct AdmissibleEntry {
     class_id: u32,
-    vtable_gen: u64,
     epoch: u64,
     admissible: bool,
 }
@@ -574,7 +568,6 @@ const ADMISSIBLE_SLOTS: usize = 16;
 const EMPTY_ADMISSIBLE: AdmissibleEntry = AdmissibleEntry {
     // 0 is answered without consulting the memo, so it is a safe "empty" tag.
     class_id: 0,
-    vtable_gen: 0,
     epoch: 0,
     admissible: false,
 };
@@ -612,11 +605,10 @@ fn class_id_admissible(class_id: u32) -> bool {
     if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let vtable_gen = crate::object::vtable_generation();
     let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
     let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) >> 12 & (ADMISSIBLE_SLOTS - 1);
     let e = ADMISSIBLE_MEMO.with(|t| t[slot].get());
-    if e.class_id == class_id && e.vtable_gen == vtable_gen && e.epoch == epoch {
+    if e.class_id == class_id && e.epoch == epoch {
         return e.admissible;
     }
     let admissible =
@@ -624,7 +616,6 @@ fn class_id_admissible(class_id: u32) -> bool {
     ADMISSIBLE_MEMO.with(|t| {
         t[slot].set(AdmissibleEntry {
             class_id,
-            vtable_gen,
             epoch,
             admissible,
         })
@@ -714,7 +705,6 @@ mod tests {
             obj_flags: 0,
             class_id: 0,
             epoch: 7,
-            vtable_gen: 11,
         }
     }
 
@@ -728,7 +718,7 @@ mod tests {
         let base = sample_signature();
         assert_eq!(base, sample_signature());
 
-        let mutations: [(&str, fn(&mut ProtoSignature)); 7] = [
+        let mutations: [(&str, fn(&mut ProtoSignature)); 6] = [
             ("proto_addr — Object.prototype replaced", |s| {
                 s.proto_addr += 8
             }),
@@ -744,9 +734,6 @@ mod tests {
                 "epoch — defineProperty / delete / setPrototypeOf / any GC",
                 |s| s.epoch += 1,
             ),
-            ("vtable_gen — getter or method registered", |s| {
-                s.vtable_gen += 1
-            }),
         ];
         for (why, mutate) in mutations {
             let mut changed = base;

@@ -1,6 +1,5 @@
 use super::*;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 
 /// Returns true if `class_id` corresponds to a registered class. Used by
 /// `js_value_typeof` (refs #618 / #420 followup) to distinguish a class
@@ -214,7 +213,6 @@ pub unsafe extern "C" fn js_register_class_method_with_entry(
             entry: entry as usize,
         },
     );
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
 }
 
 /// The ClassBody's own public instance accessor declaration for `class_id` +
@@ -468,7 +466,6 @@ pub unsafe extern "C" fn js_register_class_getter(
     let reg = registry.as_mut().unwrap();
     let vtable = reg.entry(class_id as u32).or_default();
     vtable.declare_accessor_half(&name, func_ptr as usize, false);
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
     drop(registry);
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
@@ -522,7 +519,6 @@ pub unsafe extern "C" fn js_register_class_setter(
         true,
         u32::try_from(spec_length).ok(),
     );
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
     drop(registry);
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
@@ -712,7 +708,6 @@ unsafe fn register_class_static_accessor_half(
             entry.set_length = set_length;
         }
     }
-    VTABLE_GEN.fetch_add(1, Ordering::Release);
     crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
 }
 

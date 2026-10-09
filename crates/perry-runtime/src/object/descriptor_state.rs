@@ -67,16 +67,6 @@ pub(crate) struct AccessorDescriptor {
     pub set: u64, // NaN-boxed closure f64 bits, 0 = absent
 }
 
-/// Retire existing class method guards when a prototype descriptor changes.
-pub(crate) fn invalidate_prototype_descriptor_guards(obj: usize, key: &str) {
-    if crate::array::object_prototype_addr_matches(obj)
-        || class_registry::is_registered_class_prototype_object(obj)
-        || class_registry::class_id_for_decl_prototype_object(obj).is_some()
-    {
-        class_registry::invalidate_class_prototype_fast_guards_for_method(key);
-    }
-}
-
 /// True when a write of `key` to a plain object whose prototype is the canonical
 /// `Object.prototype` might be intercepted there (inherited setter / non-writable
 /// data) and must therefore take the slow [[Set]] walk.
@@ -563,7 +553,6 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_data_descriptor_target(obj, &key, attrs);
-    invalidate_prototype_descriptor_guards(obj, &key);
     // Charter step 3: an ordinary object's attributes live with its keys
     // (recorded by the funnel above) and nowhere else.
     if unsafe {
@@ -591,9 +580,6 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
         .map(|&(key, attrs)| AttrsEdit::Data(key.as_bytes(), attrs.bits))
         .collect();
     note_descriptor_target_edits(obj, &edits);
-    for &(key, _) in entries {
-        invalidate_prototype_descriptor_guards(obj, key);
-    }
 }
 
 /// Remove a customized property descriptor for (obj, key), restoring default
@@ -819,7 +805,6 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
         None
     };
     note_accessor_descriptor_target(obj, &key, &acc);
-    invalidate_prototype_descriptor_guards(obj, &key);
     if in_keys {
         // Charter step 3: the pair lives in the key's slot.
         unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
@@ -877,7 +862,6 @@ pub(crate) fn install_fresh_accessor_property(
         ],
     );
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
-    invalidate_prototype_descriptor_guards(obj, &key);
     if in_keys {
         // The pair lives in the key's ordinary value slot.
         unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };

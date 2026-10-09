@@ -168,10 +168,25 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // anything by name. Its one capture is `C.prototype`'s ref, a non-pointer
     // that names no evaluation: the entry then runs in its receiver's
     // evaluation, as a vtable call of the same body does.
-    let value = match super::class_registry::class_method_entry(class_id, method_name) {
+    let own_entry = super::class_registry::class_method_entry(class_id, method_name);
+    if own_entry.is_none() {
+        // An inherited member IS the declaring class's method object: the
+        // same function value its own prototype slot holds, so
+        // `Sub.prototype.m === Base.prototype.m`, and a call of it runs the
+        // body without resolving the name again.
+        let owner = super::class_registry::method_owner_class_id(class_id, method_name);
+        if let Some(owner) = owner.filter(|&owner| {
+            owner != class_id
+                && super::class_registry::class_method_entry(owner, method_name).is_some()
+        }) {
+            return class_prototype_method_value_for_name(owner, method_name);
+        }
+    }
+    let value = match own_entry {
         Some(code) => class_method_entry_value(code, class_id, method_name),
         None => {
-            // An inherited or entry-less member: the name trampoline. Bounded
+            // An entry-less member (a runtime-registered native method with
+            // no closure-convention entry): the name trampoline. Bounded
             // leak: `js_class_method_bind` keeps the byte pointer for the
             // lifetime of the bound closure (it's stashed inside the closure's
             // capture frame). We leak one allocation per unique

@@ -692,30 +692,6 @@ pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
     }
 }
 
-/// Read ordinary ancestry from the receiver and each live prototype shape.
-/// Missing declaration holders are materialized from their birth facts.
-#[inline(always)]
-pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
-    let obj = value_addr(value) as *const ObjectHeader;
-    if obj.is_null() {
-        return None;
-    }
-    relinked_object_chain_answer(obj, value, start, want)
-}
-
-/// [`relinked_instance_chain_answer`] for a caller that already holds the
-/// receiver `obj` (`value`'s live `GC_TYPE_OBJECT`).
-#[inline(always)]
-pub(crate) fn relinked_object_chain_answer(
-    obj: *const ObjectHeader,
-    value: f64,
-    start: u32,
-    want: u32,
-) -> Option<bool> {
-    let _ = (value, start);
-    Some(unsafe { shape_ancestry::class_shape_reaches(obj, want, true) })
-}
-
 /// The parent-only half of [`class_chain_reaches`], used to continue a walk that
 /// has already stepped onto a generic origin. Separate so the two edges cannot
 /// recurse into each other without bound.

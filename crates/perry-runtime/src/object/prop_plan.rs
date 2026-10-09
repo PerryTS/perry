@@ -20,9 +20,10 @@
 //!
 //! ## Invalidation
 //! A verdict goes stale only when one of its inputs changes:
-//!   * vtable mutation (setter/getter/method registration, parent linking) —
-//!     tracked by the existing [`VTABLE_GEN`] generation counter, captured in
-//!     the entry and compared on lookup;
+//!   * class registration adds members to a class before any instance of
+//!     it exists (a per-evaluation class's later evaluations stand on their
+//!     own prototype, so their instances' recorded prototype differs), and
+//!     parent linking bumps the epoch below;
 //!   * descriptor installs/clears anywhere (a class prototype object may be
 //!     the target), `setPrototypeOf` recording, `Object.prototype` index
 //!     notes — these call [`prop_plan_epoch_bump`];
@@ -116,8 +117,6 @@ struct PlanEntry {
     key_ptr: usize,
     /// [`PROP_PLAN_EPOCH`] at record time.
     epoch: u64,
-    /// [`super::class_registry::VTABLE_GEN`] at record time.
-    vtable_gen: u64,
     /// The receiver's recorded `[[Prototype]]` (`ObjectMeta.prototype`, 0
     /// when its class implies it) the verdict was computed for. A class id
     /// alone does NOT name the chain: `F.prototype = other` re-points a
@@ -183,7 +182,6 @@ pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize, proto_bits: u64) -
             && e.class_id == class_id
             && e.proto_bits == proto_bits
             && e.epoch == PROP_PLAN_EPOCH.load(Ordering::Relaxed)
-            && e.vtable_gen == super::class_registry::vtable_generation()
     });
     if plan_diag_enabled() {
         static CHECKS: AtomicU64 = AtomicU64::new(0);
@@ -192,11 +190,10 @@ pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize, proto_bits: u64) -
         let h = HITS.fetch_add(hit as u64, Ordering::Relaxed) + hit as u64;
         if c % 1_000_000 == 0 {
             eprintln!(
-                "PLAN-DIAG checks={} hits={} epoch={} vgen={}",
+                "PLAN-DIAG checks={} hits={} epoch={}",
                 c,
                 h,
-                PROP_PLAN_EPOCH.load(Ordering::Relaxed),
-                super::class_registry::vtable_generation()
+                PROP_PLAN_EPOCH.load(Ordering::Relaxed)
             );
         }
     }
@@ -215,7 +212,6 @@ pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize, proto_bits: u64) 
         (*c.get())[slot] = PlanEntry {
             key_ptr,
             epoch: PROP_PLAN_EPOCH.load(Ordering::Relaxed),
-            vtable_gen: super::class_registry::vtable_generation(),
             proto_bits,
             class_id,
         };
@@ -318,10 +314,9 @@ pub(crate) fn read_plan_record(keys_id: usize, key_ptr: usize, field_idx: u32) {
 mod tests {
     use super::*;
 
-    /// A recorded verdict is invalidated by two PROCESS-global counters:
+    /// A recorded verdict is invalidated by the PROCESS-global
     /// `PROP_PLAN_EPOCH` (bumped by every GC cycle's dead-owner fan-out and
-    /// every descriptor install, on any thread) and `VTABLE_GEN` (bumped by
-    /// every class method/getter registration in any parallel test). A bump
+    /// every descriptor install, on any thread). A bump
     /// landing between record and check legitimately flushes the entry, so a
     /// single-shot `record → assert(check)` is order-dependent under
     /// default-parallel `cargo test` (#6965). Retry instead: a genuine
@@ -348,14 +343,6 @@ mod tests {
         assert!(!store_plan_check(7, key, 0));
         // Re-record under the new epoch works again.
         assert!(store_plan_records_and_hits(7, key));
-    }
-
-    #[test]
-    fn vtable_generation_bump_invalidates() {
-        let key = 0xBEEF_00F0usize;
-        assert!(store_plan_records_and_hits(9, key));
-        crate::object::class_registry::test_bump_vtable_generation();
-        assert!(!store_plan_check(9, key, 0));
     }
 
     /// A class id does not name a chain: after `F.prototype = other`, old and
@@ -417,8 +404,8 @@ mod zeroed_cache_tests {
                 assert_eq!(cache.len(), PLAN_CACHE_SIZE);
                 for e in cache.iter() {
                     assert_eq!(
-                        (e.key_ptr, e.epoch, e.vtable_gen, e.proto_bits, e.class_id),
-                        (0, 0, 0, 0, 0)
+                        (e.key_ptr, e.epoch, e.proto_bits, e.class_id),
+                        (0, 0, 0, 0)
                     );
                 }
             });

@@ -66,10 +66,12 @@
 //!   happened since the preheader?" One relaxed load, one compare, no
 //!   side-table probe, no rescan. Deliberately coarse — an unrelated array's
 //!   clear deopts a running loop, which errs in the safe direction.
-//! * `CLASS_SHAPE_GENERATION` — bumped only when a *class* stops being a
-//!   reliable shape (prototype surgery). A record installed under an older
-//!   generation is retired lazily on its next query, so one prototype write
-//!   retires every outstanding record at O(1) without enumerating arrays.
+//! * `CLASS_SHAPE_GENERATION` — bumped only when a live instance's
+//!   `[[Prototype]]` is replaced. A record installed under an older
+//!   generation is retired lazily on its next query, so one relink retires
+//!   every outstanding record at O(1) without enumerating arrays. A write to
+//!   a prototype object retires nothing: a proof is about the elements' own
+//!   fields, which no prototype member can shadow.
 //!
 //! A third counter, `ELEMENT_SHAPE_PROOF_SEQ`, is not an invalidation signal
 //! but an identity source: every *established* proof takes the next value and
@@ -129,8 +131,8 @@ struct ElementShapeRecord {
     /// re-proven with the same class after a break — nor by a *different*
     /// array being established at a recycled address.
     epoch: u64,
-    /// `CLASS_SHAPE_GENERATION` at install time. A prototype write bumps the
-    /// global and retires every record at once.
+    /// `CLASS_SHAPE_GENERATION` at install time. An instance relink bumps
+    /// the global and retires every record at once.
     /// Low-width snapshot keeps this hot side-table record at its original
     /// 24-byte size after adding `ordinary_shape_id`. Once the global counter
     /// exceeds `u32`, proofs simply stop establishing/fail closed; observable
@@ -183,8 +185,7 @@ pub(crate) fn test_array_subclass_prefix_store_hits() -> u64 {
 // process-wide generation was never *reachable* by a well-formed cross-thread
 // read — it only reached other tests. And it did: `CLASS_SHAPE_GENERATION` is
 // bumped by `invalidate_all_element_shapes()`, i.e. by ANY test anywhere in the
-// crate that writes a prototype method or swaps a `[[Prototype]]`
-// (`object::class_registry::prototype_methods`, `object::prototype_chain`).
+// crate that swaps an instance's `[[Prototype]]` (`object::prototype_chain`).
 // None of those take `ELEMENT_SHAPE_TEST_LOCK`, and asking them to would be the
 // opt-in-defence the `per_test_global!` module docs exist to argue against.
 // The symptom was `js_array_element_shape_class` returning **0** for an array
@@ -247,8 +248,8 @@ fn class_shape_generation() -> u64 {
 
 /// Retire **every** outstanding element-shape record at O(1).
 ///
-/// Called when a class stops being a reliable shape — a method written onto
-/// a prototype object, a `[[Prototype]]` swap. Records are not enumerated:
+/// Called when a live instance's `[[Prototype]]` is swapped. Records are not
+/// enumerated:
 /// each carries the generation it was installed under and fails its next
 /// query, which clears the bit. An array that is still homogeneous
 /// self-heals on the next [`ensure_element_shape`].
