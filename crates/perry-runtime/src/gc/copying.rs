@@ -242,8 +242,6 @@ static PREVIOUS_SURVIVOR_ESTIMATE: std::sync::atomic::AtomicUsize =
 /// reserve 100 MB of pointers.
 const SURVIVOR_ESTIMATE_CAP: usize = 1 << 21;
 
-
-
 pub(super) fn note_survivor_count_for_presizing(count: usize) {
     PREVIOUS_SURVIVOR_ESTIMATE.store(
         count.min(SURVIVOR_ESTIMATE_CAP),
@@ -1296,18 +1294,8 @@ pub(super) fn run_copied_minor_attempt(
     }
     // #9754: objects whose every slot the dirty scan visited in-body — the
     // post-cycle coverage restore skips them (see `scan_dirty_object_slots`).
-    // #9835: this set is rebuilt from EMPTY on every minor and reaches ~1,000
-    // entries (`[gc-restore-coverage] objects_skipped=1026..1116`), so it walked
-    // hashbrown's growth ladder and paid a `RawTable::reserve_rehash` at each
-    // power-of-two boundary — measured 217 leaf samples in `reserve_rehash` on a
-    // 3300-char claude-code reply (1.5 % of the turn), 111 of them under
-    // `PtrHashSet::insert` and the rest under this function and
-    // `restore_surviving_dirty_coverage`.
-    //
-    // Same treatment, and the same justification, as `PREVIOUS_SURVIVOR_ESTIMATE`
-    // above: the count is strongly autocorrelated between adjacent cycles (it is
-    // the same program in the same phase), over-estimating costs only untouched
-    // reserved bytes, and under-estimating falls back to ordinary growth.
+    // The scan reserves from its current owner snapshot. This avoids the
+    // growth ladder without carrying an estimate between unrelated cycles.
     let mut dirty_scan_covered = crate::fast_hash::new_ptr_hash_set();
     let mut remembered_entries = 0usize;
     let mut remembered_slots = 0usize;
