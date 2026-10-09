@@ -1909,6 +1909,14 @@ mod tests {
 
     #[test]
     fn static_declaration_parent_walk_can_publish_and_hit_an_absent_read() {
+        // Priming is declined once any worker agent exists, and that gate is
+        // sticky for the process; run in a fresh process so test order cannot
+        // decide it.
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "static_declaration_parent_walk_can_publish_and_hit_an_absent_read",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
         const BASE: u32 = 0x6E91;
