@@ -101,3 +101,44 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
         assert!(after.1 > before.1);
     });
 }
+
+#[test]
+fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
+    tests::run_with_fresh_arenas(|| unsafe {
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let null = f64::from_bits(crate::value::TAG_NULL);
+        crate::object::js_object_create(null); // Resolve the shape before poisoning storage.
+        let state = js_inline_arena_state();
+        sync_inline_arena_state();
+        let expected = (*state).data.add((*state).offset + GC_HEADER_SIZE);
+        let floor = expected.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        let poison = 0x0123_4567_89ab_cdef;
+        for i in 0..crate::object::INLINE_SLOT_FLOOR {
+            floor.add(i).write(poison);
+        }
+        let value = crate::object::js_object_create(null);
+        let obj = crate::value::js_nanbox_get_pointer(value) as *mut crate::object::ObjectHeader;
+        assert_eq!(
+            obj as *mut u8, expected,
+            "fixture must reach the poisoned birth"
+        );
+        assert_eq!(crate::object::object_live_slot_count(obj), 0);
+        for i in 0..crate::object::INLINE_SLOT_FLOOR {
+            assert_eq!(
+                floor.add(i).read(),
+                poison,
+                "zero-bound slack remains hidden"
+            );
+        }
+        let key = crate::string::js_string_from_bytes(b"late".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(obj, key, 73.0);
+        assert_eq!(
+            crate::object::js_object_get_field_by_name_f64(obj, key),
+            73.0
+        );
+        assert_eq!(
+            crate::array::js_array_length(crate::object::js_object_keys(obj)),
+            1
+        );
+    });
+}
