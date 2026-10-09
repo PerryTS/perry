@@ -1,0 +1,3 @@
+Share each observer-free full-mark slot's transient read/decode with old-to-young remembering, and remove the raw remembering path's duplicate generation lookup. Marking and tracking preserve their distinct acceptance rules; existing marks never suppress remembering, external slots retain their owner, and proxy/handle observers keep the original post-mark reread.
+
+Add coverage for already-marked and pinned children, rejected raw interior words, malloc/tagged distinctions, two copying minors, external LazyArray custody and a real slot-changing foreign observer, with independent negative controls. Fresh full-major attribution is pending; no performance result is claimed.
