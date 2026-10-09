@@ -10,7 +10,7 @@ use super::reactions::{
 use super::*;
 
 #[inline]
-unsafe fn store_promise_jsvalue_slot(promise: *mut Promise, slot: *mut f64, value: f64) {
+pub(super) unsafe fn store_promise_jsvalue_slot(promise: *mut Promise, slot: *mut f64, value: f64) {
     crate::gc::runtime_store_gc_jsvalue_slot(promise as usize, slot as usize, value.to_bits());
 }
 
@@ -312,6 +312,9 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
             });
         }
     }
+    unsafe {
+        super::step_completion::complete_step(promise, true);
+    }
     // Issue #84: an `await` busy-wait that called `js_timer_tick` (or any
     // tick fn) which then resolved this promise needs to skip the
     // following `js_wait_for_event` sleep — otherwise it blocks for the
@@ -468,6 +471,15 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
             return; // Already settled
         }
         super::async_step::trace_async_settle(promise, "reject");
+        // Preserve the pending completion in the now-unused fulfillment word
+        // before reason becomes the rejection result.
+        if (*promise).reason.to_bits() != 0 {
+            store_promise_jsvalue_slot(
+                promise,
+                std::ptr::addr_of_mut!((*promise).value),
+                (*promise).reason,
+            );
+        }
         (*promise).state = PromiseState::Rejected;
         release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
@@ -536,6 +548,9 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
                 enqueue_overflow_reactions(overflow_reactions, reason, false, &mut q);
             });
         }
+    }
+    unsafe {
+        super::step_completion::complete_step(promise, false);
     }
     // Issue #84: see js_promise_resolve — same wake reasoning.
     crate::event_pump::js_notify_promise_progress();
