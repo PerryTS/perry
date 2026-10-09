@@ -51,6 +51,10 @@ function arityCalls(): string {
   out.push(fs[2](1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11));
   out.push(fs[0](1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16));
   out.push(fs[0](1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17));
+  // Extra arguments never widen a short body's dynamic-call ABI.
+  const surplus: any[] = [];
+  for (let i = 0; i < 2048; i++) surplus.push(i);
+  out.push(fs[1](...surplus));
   // Under-application: the missing parameters are undefined.
   out.push(String(fs[3](1)));
   out.push(String(fs[5](1, 2)));
@@ -184,7 +188,7 @@ builders[1](21).then((v) => console.log("async", v));
 "#;
 
 /// node v26 on the fixture.
-const EXPECTED: &str = "arity z,1,3,6,36,45,abcdefghijklmnop,7,3,z,z,NaN,NaN\n\
+const EXPECTED: &str = "arity z,1,3,6,36,45,abcdefghijklmnop,7,3,z,z,0,NaN,NaN\n\
 bundling 1:0:,1:2:2|3,0:,2:4|5,6:0:1,6:2:3\n\
 bound b:1:2,c:1:3,c:1:undefined,o!,c:1:2,c:1:2\n\
 this 1,2,1\n\
