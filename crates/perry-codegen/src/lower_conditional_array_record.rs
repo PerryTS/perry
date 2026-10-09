@@ -8,6 +8,13 @@ fn pure(expr: &Expr) -> bool {
         | Expr::Number(_)
         | Expr::Integer(_)
         | Expr::Undefined => true,
+        // Strict equality with a Boolean literal cannot invoke JavaScript
+        // coercion or allocate, even when the other operand is unknown.
+        Expr::Compare {
+            op: CompareOp::Eq,
+            left,
+            right,
+        } => pure(left) && matches!(right.as_ref(), Expr::Bool(_)),
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
@@ -21,6 +28,18 @@ fn same(a: &Expr, b: &Expr) -> bool {
         (Expr::LocalGet(a), Expr::LocalGet(b)) => a == b,
         (Expr::Bool(a), Expr::Bool(b)) => a == b,
         (Expr::Undefined, Expr::Undefined) => true,
+        (
+            Expr::Compare {
+                op: CompareOp::Eq,
+                left: al,
+                right: ar,
+            },
+            Expr::Compare {
+                op: CompareOp::Eq,
+                left: bl,
+                right: br,
+            },
+        ) => same(al, bl) && same(ar, br),
         _ => false,
     }
 }

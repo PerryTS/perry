@@ -321,7 +321,18 @@ fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
 
 #[test]
 fn completion_flags_preserve_truthiness_without_boolean_constructor_evidence() {
-    for (done, constructed) in [(Expr::Bool(true), true), (Expr::LocalGet(1), false)] {
+    for (done, constructed) in [
+        (Expr::Bool(true), true),
+        (
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(1)),
+                right: Box::new(Expr::Bool(true)),
+            },
+            true,
+        ),
+        (Expr::LocalGet(1), false),
+    ] {
         let ll = ir(runtime(
             "arrayRecordFinish",
             vec![
@@ -343,4 +354,55 @@ fn completion_flags_preserve_truthiness_without_boolean_constructor_evidence() {
         #[cfg(feature = "llvm-inprocess")]
         crate::testing::verify_ir(&ll, "record_completion_flags").unwrap();
     }
+}
+
+#[test]
+fn constructed_done_predicate_keeps_normal_completion_outlined() {
+    let done = Expr::Compare {
+        op: perry_hir::CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(2)),
+        right: Box::new(Expr::Bool(true)),
+    };
+    let ll = ir(Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: perry_hir::CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(2)),
+            right: Box::new(Expr::Bool(true)),
+        }),
+        then_expr: Box::new(runtime(
+            "iteratorCloseIfNotDone",
+            vec![Expr::LocalGet(1), done.clone()],
+        )),
+        else_expr: Box::new(runtime(
+            "arrayRecordClose",
+            vec![
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                done,
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )),
+    });
+    // Numeric parameters also emit a specialized ABI; check each actual
+    // consumer body rather than conflating the two generated functions.
+    let bodies = ll
+        .split("\ndefine ")
+        .filter(|body| body.starts_with("internal double @perry_fn_array_record_unsigned__read$"))
+        .collect::<Vec<_>>();
+    assert!(!bodies.is_empty(), "{ll}");
+    for body in bodies {
+        assert_eq!(
+            body.matches("call double @js_array_record_finish(").count(),
+            1,
+            "{ll}"
+        );
+        assert!(!body.contains("call i32 @js_is_truthy("), "{body}");
+        assert!(
+            !body.contains("call double @js_array_record_close("),
+            "{body}"
+        );
+    }
+    #[cfg(feature = "llvm-inprocess")]
+    crate::testing::verify_ir(&ll, "constructed_done_completion").unwrap();
 }
