@@ -106,8 +106,22 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
 fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
     tests::run_with_fresh_arenas(|| unsafe {
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        let null = f64::from_bits(crate::value::TAG_NULL);
-        crate::object::js_object_create(null); // Resolve the shape before poisoning storage.
+        let proto = crate::object::js_object_alloc(0, 0);
+        let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+        let mut zero_bound = false;
+        for _ in 0..64 {
+            let value = crate::object::js_object_create(proto_value);
+            let obj =
+                crate::value::js_nanbox_get_pointer(value) as *mut crate::object::ObjectHeader;
+            if crate::object::object_live_slot_count(obj) == 0 {
+                zero_bound = true;
+                break;
+            }
+        }
+        assert!(
+            zero_bound,
+            "fixture must leave the birth-width tracking period"
+        );
         let state = js_inline_arena_state();
         sync_inline_arena_state();
         let expected = (*state).data.add((*state).offset + GC_HEADER_SIZE);
@@ -116,7 +130,7 @@ fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
         for i in 0..crate::object::INLINE_SLOT_FLOOR {
             floor.add(i).write(poison);
         }
-        let value = crate::object::js_object_create(null);
+        let value = crate::object::js_object_create(proto_value);
         let obj = crate::value::js_nanbox_get_pointer(value) as *mut crate::object::ObjectHeader;
         assert_eq!(
             obj as *mut u8, expected,
