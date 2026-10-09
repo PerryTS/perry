@@ -1749,18 +1749,28 @@ pub(crate) fn old_arena_walk_objects_on_pages(
     // RUN READER: a promoted page's list is built on demand.
     materialize_promoted_page_runs(pages.iter().copied());
 
+    // The index contains an object once on EVERY page its body overlaps.
+    // Visit selected pages in address order: if a header starts on or before
+    // the preceding selected page, this object was already emitted there.
+    // This removes the per-object exact set and its rehashes. The page index
+    // remains the single authority, including for objects spanning clean gaps.
+    let mut ordered_pages: Vec<_> = pages.iter().copied().collect();
+    ordered_pages.sort_unstable();
     let mut headers = Vec::new();
-    let mut seen = crate::fast_hash::new_ptr_hash_set();
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let index = index.borrow();
-        for page in pages {
-            if let Some(page_headers) = index.get(page) {
-                for header_addr in page_headers.iter(*page) {
-                    if seen.insert(header_addr) {
+        let mut previous_page = None;
+        for page in ordered_pages {
+            if let Some(page_headers) = index.get(&page) {
+                for header_addr in page_headers.iter(page) {
+                    if previous_page
+                        .is_none_or(|previous| generation_page_for_addr(header_addr) > previous)
+                    {
                         headers.push(header_addr);
                     }
                 }
             }
+            previous_page = Some(page);
         }
     });
 

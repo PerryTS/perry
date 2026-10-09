@@ -10,3 +10,10 @@ their owner, and batches old-page slot accounting across a parent's descriptors.
 Malloc slots no longer probe the old-page metadata table, where they have no
 entry. A negative control verifies that generation alone loses old side-buffer
 custody. Exact malloc-registry activation was already presized on main.
+
+Remove the old-page walk's per-object membership set by visiting selected pages
+in order: each spanning object belongs to its first selected overlapping page.
+The copying dirty scan reuses that uniqueness instead of building a second set
+for old owners. Exact deduplication remains for external and fallback entries.
+A spanning-object witness includes omitted first pages and clean gaps, with a
+negative control that duplicates owners by visiting each page independently.
