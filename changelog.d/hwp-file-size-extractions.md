@@ -1,0 +1,1 @@
+Keep property-read lowering and copying-GC modules below the 2,000-line source limit by extracting buffer-alias proof invalidation and test-only cohort observation state. The lowering order and GC behavior are unchanged.
