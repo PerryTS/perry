@@ -90,7 +90,10 @@ pub(crate) fn object_alloc_created(
     let no_collection = !fast.is_null();
     let mut obj = if no_collection {
         // The shape was just resolved and no collection can have retired it.
-        unsafe { init_unpublished(fast, 0, width, shape) };
+        // This final shape traces exactly `width` slots. A zero-bound birth
+        // can leave its physical floor hidden until stores publish slots;
+        // tracking/wide births must still initialize all traced slack.
+        unsafe { init_unpublished(fast, 0, width as usize, shape) };
         fast
     } else {
         object_alloc_unpublished(0, width)
@@ -358,22 +361,26 @@ pub(crate) fn object_alloc_unpublished(class_id: u32, field_count: u32) -> *mut 
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let total_size = header_size + alloc_field_count * std::mem::size_of::<JSValue>();
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
-    unsafe { init_unpublished(ptr, class_id, field_count, 0) };
+    unsafe { init_unpublished(ptr, class_id, alloc_field_count, 0) };
     ptr
 }
 
 /// Initialize storage before a birth shape is published. No collection point.
 #[inline(always)]
-unsafe fn init_unpublished(ptr: *mut ObjectHeader, class_id: u32, field_count: u32, shape: u32) {
+unsafe fn init_unpublished(
+    ptr: *mut ObjectHeader,
+    class_id: u32,
+    initialized_slots: usize,
+    shape: u32,
+) {
     let header_size = std::mem::size_of::<ObjectHeader>();
-    let alloc_field_count = (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = shape;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
-        for i in 0..alloc_field_count {
+        for i in 0..initialized_slots {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }

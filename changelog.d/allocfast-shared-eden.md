@@ -7,7 +7,8 @@ owned payloads. No pacing decisions, root rules or region descriptors change.
 
 Object.create carries its resolved birth shape through a successful
 no-collect allocation, avoiding redundant shape validation, a temporary zero
-shape stamp and a no-op layout lookup. Required undefined initialization stays.
+shape stamp and a no-op layout lookup. Zero-bound births skip hidden floor
+initialization; tracking and wide births still initialize every traced slot.
 Array growth retains geometric capacity growth and forwarding identity, but
 roots its source only on the collecting branch and avoids nursery barrier replay
 and repeated source classification. Header facts also skip metadata transfer
