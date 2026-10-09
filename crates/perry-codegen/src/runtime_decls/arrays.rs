@@ -361,8 +361,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     );
     module.declare_function(
         "js_array_record_abrupt",
-        crate::types::VOID,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        VOID,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
     );
     module.declare_function(
         "js_array_record_close",

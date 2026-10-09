@@ -219,7 +219,7 @@ impl IteratorRecordPlan {
                 )),
             };
         }
-        Expr::LocalGet(self.source)
+        Expr::LocalGet(self.array)
     }
 
     pub(crate) fn release(&self, extra: &[LocalId]) -> Vec<Stmt> {
@@ -243,12 +243,24 @@ impl IteratorRecordPlan {
         }
     }
 
-    pub(crate) fn guarded_get_iterator(&self) -> Expr {
-        Expr::Conditional {
+    pub(crate) fn guarded_get_iterator(&mut self, payload: LocalId) -> Expr {
+        let value = Expr::Conditional {
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(self.source)))),
-            else_expr: Box::new(Expr::Undefined),
-        }
+            else_expr: Box::new(Expr::LocalGet(self.source)),
+        };
+        // After GetIterator, the original source is no longer part of the
+        // protocol record. The same private payload owns either the proven
+        // array or the actual iterator; there is never a second live source.
+        self.array = payload;
+        runtime(
+            "arrayRecordPayload",
+            vec![
+                Expr::LocalGet(self.source),
+                Expr::LocalSet(payload, Box::new(value)),
+                Expr::LocalSet(self.source, Box::new(Expr::Undefined)),
+            ],
+        )
     }
 
     pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
@@ -702,7 +714,7 @@ mod tests {
     fn array_record_guards_allocations_and_reads_live_length() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![]), &mut setup);
+        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![]), &mut setup);
         assert_eq!(
             plan.array, plan.source,
             "the indexed record must reuse the source rather than a declared-array alias"
@@ -713,13 +725,32 @@ mod tests {
             if *id == plan.index && method == "arrayRecordIndex"
                 && matches!(args.as_slice(), [Expr::Integer(0)]))),
             "the cursor initializer must not acquire a signed i32 shadow");
-        assert!(matches!(plan.guarded_get_iterator(), Expr::Conditional {
+        let source = plan.source;
+        let Expr::NativeMethodCall { method, args, .. } = plan.guarded_get_iterator(99) else {
+            panic!("payload operation must retain the real initializer");
+        };
+        assert_eq!(method, "arrayRecordPayload");
+        assert_eq!(
+            plan.array, 99,
+            "one payload serves indexed reads and protocol calls"
+        );
+        assert!(
+            matches!(&args[2], Expr::LocalSet(id, value)
+            if *id == source && matches!(value.as_ref(), Expr::Undefined)),
+            "the original input must be released after payload capture"
+        );
+        let Expr::LocalSet(id, value) = &args[1] else {
+            panic!("capture the payload");
+        };
+        assert_eq!(*id, 99);
+        assert!(matches!(value.as_ref(), Expr::Conditional {
             condition, then_expr, else_expr,
         } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
                 if matches!(left.as_ref(), Expr::LocalGet(id) if *id == plan.use_iter)
                     && matches!(right.as_ref(), Expr::Bool(true)))
-            && matches!(*then_expr, Expr::GetIterator(_))
-            && matches!(*else_expr, Expr::Undefined)));
+            && matches!(then_expr.as_ref(), Expr::GetIterator(_))
+            && matches!(else_expr.as_ref(), Expr::LocalGet(id) if *id == source)));
+
         assert!(
             matches!(plan.next_init(99), Expr::Conditional { condition, then_expr, .. }
             if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }

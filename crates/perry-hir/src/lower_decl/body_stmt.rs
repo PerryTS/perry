@@ -1903,7 +1903,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 ctx.locals
                     .push((format!("__result_{}", result_id), result_id, Type::Any));
             }
-            let record = use_lazy_iter.then(|| {
+            let mut record = use_lazy_iter.then(|| {
                 crate::iterator_record::IteratorRecordPlan::new_typed(
                     ctx,
                     arr_expr.clone(),
@@ -1916,8 +1916,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 )
             });
             let arr_expr = record
-                .as_ref()
-                .map_or(arr_expr, |r| r.guarded_get_iterator());
+                .as_mut()
+                .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
             result.push(Stmt::Let {
                 id: arr_id,
                 name: format!("__arr_{}", arr_id),

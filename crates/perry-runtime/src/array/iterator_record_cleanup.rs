@@ -1,5 +1,4 @@
 //! Shared completion of compiler-owned array iterator records.
-use crate::value::TAG_TRUE;
 
 // Completion flags carry the already-constructed record predicates:
 // bit 0 selects the protocol, bit 1 is done, bit 2 is throw completion.
@@ -34,29 +33,21 @@ pub unsafe extern "C-unwind" fn js_array_record_finish(
 /// Exception capture, close-on-throw and rethrow have one runtime body.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_abrupt(
-    protocol: f64,
-    source: f64,
+    receiver: f64,
     index: f64,
-    iterator: f64,
     state: f64,
+    flags: u32,
 ) -> ! {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let source = scope.root_nanbox_f64(source);
-    let iterator = scope.root_nanbox_f64(iterator);
+    let receiver = scope.root_nanbox_f64(receiver);
     let error = scope.root_nanbox_f64(crate::exception::js_get_exception());
     crate::exception::js_clear_exception();
     let error = if state != 2.0 {
-        let protocol = protocol.to_bits() == TAG_TRUE;
-        let receiver = if protocol {
-            iterator.get_nanbox_f64()
-        } else {
-            source.get_nanbox_f64()
-        };
         js_array_record_finish(
-            receiver,
+            receiver.get_nanbox_f64(),
             index,
             error.get_nanbox_f64(),
-            u32::from(protocol) | 4,
+            flags | 4,
         )
     } else {
         error.get_nanbox_f64()
@@ -70,5 +61,5 @@ static KEEP_ARRAY_RECORD_FINISH: unsafe extern "C-unwind" fn(f64, f64, f64, u32)
     js_array_record_finish;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ARRAY_RECORD_ABRUPT: unsafe extern "C-unwind" fn(f64, f64, f64, f64, f64) -> ! =
+static KEEP_ARRAY_RECORD_ABRUPT: unsafe extern "C-unwind" fn(f64, f64, f64, u32) -> ! =
     js_array_record_abrupt;

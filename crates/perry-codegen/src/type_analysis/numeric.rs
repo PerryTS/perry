@@ -31,11 +31,9 @@ pub(crate) fn iterator_record_primitive_type(expr: &Expr) -> Option<HirType> {
         | "arrayRecordIndex"
         | "arrayRecordForBound"
         | "arrayRecordForUpdate" => Some(HirType::Number),
-        "iteratorStep"
-        | "arrayRecordNeedsIterator"
-        | "arrayRecordCloseAbsent"
-        | "arrayRecordEnter"
-        | "arrayRecordEnterCounted" => Some(HirType::Boolean),
+        "iteratorStep" | "arrayRecordNeedsIterator" | "arrayRecordCloseAbsent" => {
+            Some(HirType::Boolean)
+        }
         _ => None,
     }
 }
@@ -1125,30 +1123,3 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod record_entry_result_tests {
-    use super::*;
-    #[test]
-    fn array_record_entry_constructs_a_primitive_boolean_only_in_the_internal_module() {
-        for method in ["arrayRecordEnter", "arrayRecordEnterCounted"] {
-            for module in ["__perry_runtime", "user_module"] {
-                let expr = Expr::NativeMethodCall {
-                    module: module.into(),
-                    class_name: None,
-                    object: None,
-                    method: method.into(),
-                    args: vec![Expr::LocalGet(1)],
-                };
-                assert_eq!(
-                    iterator_record_primitive_type(&expr),
-                    if module == "__perry_runtime" {
-                        Some(HirType::Boolean)
-                    } else {
-                        None
-                    }
-                );
-            }
-        }
-    }
-}
