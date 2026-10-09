@@ -820,11 +820,16 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         if !crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) {
             return false;
         }
+        let pid = crate::object::shapes::object_shape_identity(obj);
+        // An explicit null edge ends every object's chain, including an ES5
+        // instance whose synthetic class has no declared-class surface.
+        if pid == crate::object::shapes::PROTO_ID_NULL {
+            return true;
+        }
         let implied = crate::object::shapes::class_proto_id((*obj).class_id);
         if implied == crate::object::shapes::PROTO_ID_DEFAULT {
             return false;
         }
-        let pid = crate::object::shapes::object_shape_identity(obj);
         pid != implied && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
     }
 }
@@ -1248,7 +1253,7 @@ mod tests {
 
         // "Individual" is read from the shape: a compiled class's instance
         // whose identity names anything but its class's prototype. Receivers
-        // with no class surface (class id 0) never are.
+        // with no class surface still carry an authoritative explicit null edge.
         const CLASS: u32 = 0x7A;
         let fresh = crate::object::js_object_alloc(CLASS, 0);
         assert!(!object_has_individual_class_prototype(fresh as usize));
@@ -1256,10 +1261,10 @@ mod tests {
         object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
         assert!(object_has_individual_class_prototype(evaluated as usize));
         assert!(unsafe { (*evaluated).meta }.is_null(), "no flag, no record");
-        assert!(!object_has_individual_class_prototype(
+        assert!(object_has_individual_class_prototype(
             class_default as usize
         ));
-        assert!(!object_has_individual_class_prototype(
+        assert!(object_has_individual_class_prototype(
             runtime_wired as usize
         ));
 
@@ -1515,3 +1520,26 @@ mod latch_drain_tests_7737 {
 #[cfg(test)]
 #[path = "proxy_reentry_tests.rs"]
 mod proxy_reentry_tests;
+
+#[cfg(test)]
+mod readpath_null_tests {
+    #[test]
+    fn synthetic_instance_null_edge_overrides_constructor_surface() {
+        use crate::object::{self, prototype_chain as chain};
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let cid = object::class_registry::prototype_objects::alloc_synthetic_class_id();
+        let prototype = object::js_object_alloc(0, 0);
+        object::class_registry::class_prototype_object_root_store(cid, prototype);
+        let instance = object::js_object_alloc(cid, 0);
+        chain::object_link_class_default_prototype(instance as usize,
+            crate::value::js_nanbox_pointer(prototype as i64).to_bits());
+        chain::object_set_user_prototype(instance as usize, crate::value::TAG_NULL);
+        assert!(chain::object_has_individual_class_prototype(instance as usize),
+            "the live null edge must be authoritative even for a synthetic class");
+        let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
+        unsafe {
+            object::js_object_set_field_by_name(prototype, key, crate::JSValue::number(42.0));
+            assert!(object::js_object_get_field_by_name(instance, key).is_undefined());
+        }
+    }
+}
