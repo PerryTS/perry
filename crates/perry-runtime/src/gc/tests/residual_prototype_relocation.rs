@@ -81,22 +81,15 @@ fn marked_prototype() -> usize {
 /// then takes a freed address as a key, and a key list later reads a garbage
 /// length from it, up to the end of the 2 MiB block (#12137).
 ///
-/// The same lazy build memoizes `%Object.prototype%` and the other intrinsic
-/// prototypes as raw addresses in the per-thread cache of
-/// `array::prototype_addr`. That cache needs its own scanner too: without it a
-/// copying minor moves `Object.prototype` and the cache keeps the old address.
-/// The next `setPrototypeOf` walks the new prototype's chain through that
-/// stale address, and once the nursery reuses it for a string the walk ends
-/// in `Reflect.get called on non-object`, which exits the test binary.
-///
 /// Register these tables as `gc_init` does: the atom and intern table holds
-/// its strings, the shape table and canonical keys trie follow moved keys
-/// arrays, and the prototype address cache follows moved intrinsics.
+/// its strings, and the shape table and canonical keys trie follow moved keys
+/// arrays. (The same lazy build also memoizes the intrinsic prototypes as raw
+/// addresses; every scoped test window registers that cache's scanner itself,
+/// see `ScopedRootScannerRegistryGuard::new`.)
 fn register_key_table_scanners() {
     gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::array::scan_prototype_addr_cache_roots_mut);
 }
 
 fn forget_owners(owners: &[usize]) {

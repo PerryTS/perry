@@ -324,6 +324,13 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
             assert!(!attrs.enumerable());
             assert!(!attrs.configurable());
         });
-        assert!(crate::object::descriptor_state::get_property_attrs(before, "tag").is_none());
+        // The old address is from-space: the nursery may already have reused
+        // it for another cell (a string, say), so it is never asked a
+        // descriptor question. What must hold is that the define left nothing
+        // under it in the one address-keyed store, the native-handle bag.
+        assert!(
+            crate::object::handle_expando::handle_property_bag(before as i64).is_null(),
+            "the attributes must not be filed under the evacuated address"
+        );
     }
 }

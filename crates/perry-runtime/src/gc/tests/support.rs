@@ -307,6 +307,14 @@ impl ScopedRootScannerRegistryGuard {
         // lifetime so collections see exactly the roots the test installs.
         let saved_mutable_roots =
             MUTABLE_ROOT_SCANNERS.with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
+        // The one runtime cache a lazy realm build fills inside any window:
+        // the memoized intrinsic prototype addresses. Without its scanner a
+        // copying minor moves `Object.prototype` and the cache keeps the old
+        // address; once the nursery reuses it (for a string, say), every
+        // inherited read walks a cell that is not an object. That is runtime
+        // state, not a root the test chose, so every window heals it exactly
+        // as `gc_init` does.
+        crate::gc::register_prototype_addr_cache_scanner();
         let prev_auto_init_suppressed = crate::gc::set_auto_gc_init_suppressed(true);
         // Opt out of the test build's full-conservative-scan default (see
         // `conservative_stack_scan_mode`): GC tests verify collection of objects

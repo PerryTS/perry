@@ -45,7 +45,8 @@ pub(crate) unsafe fn describe_value_for_type_error(value: f64) -> String {
 
 /// Is `value` a non-nullish object reference that `Object.defineProperty` /
 /// `Object.create` accepts as a descriptor / properties bag? (#2817)
-/// Functions/closures count as objects too.
+/// Functions/closures count as objects too; a Symbol, or any other cell that
+/// holds a primitive, does not.
 pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
     if crate::typedarray_props::typed_array_addr_from_value(value).is_some() {
         return true;
@@ -56,6 +57,9 @@ pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
         // resolves to a real heap object.
         let bits = value.to_bits();
         if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
+            if is_primitive_cell(bits as usize) {
+                return false;
+            }
             return is_valid_obj_ptr(bits as *const u8)
                 || crate::closure::is_closure_ptr(bits as usize);
         }
@@ -65,7 +69,26 @@ pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
     if ptr < 0x10000 {
         return false;
     }
+    // A Symbol is pointer-tagged but is a primitive: `Type(sym)` is Symbol,
+    // so every caller asking "is this an Object" must hear no. The address
+    // window alone admits it, and a define on it then reached the descriptor
+    // holder refusal (`HolderEdit::new`) and was dropped instead of throwing.
+    if crate::symbol::js_is_symbol(value) != 0 || is_primitive_cell(ptr) {
+        return false;
+    }
     is_valid_obj_ptr(ptr as *const u8) || crate::closure::is_closure_ptr(ptr)
+}
+
+/// Is `addr` a GC cell that holds a primitive (a string, symbol or bigint
+/// body)? Such a cell is never a property holder, whatever tag names it.
+/// Ownership is proved by allocator metadata before the kind is read.
+unsafe fn is_primitive_cell(addr: usize) -> bool {
+    crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
+        matches!(
+            (*header.as_ptr()).obj_type,
+            crate::gc::GC_TYPE_STRING | crate::gc::GC_TYPE_SYMBOL | crate::gc::GC_TYPE_BIGINT
+        )
+    })
 }
 
 /// Is `value` callable (a closure / function) — used to validate `get`/`set`

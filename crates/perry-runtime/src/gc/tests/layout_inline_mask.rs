@@ -212,9 +212,16 @@ fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
         let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
         assert_ne!(obj_after, obj as usize, "premise: the rooted object moved");
         let slot = unsafe {
-            *crate::object::gc_field_slot_range(obj_after as *mut crate::object::ObjectHeader, None)
-                .expect("the object must still enumerate its fields")
-                .slot(top)
+            // Read the slot through the moved object's own shape record, as
+            // the collector does: without one the range is the fail-closed
+            // empty answer and holds no slot to read.
+            let obj_after = obj_after as *mut crate::object::ObjectHeader;
+            *crate::object::gc_field_slot_range(
+                obj_after,
+                crate::object::shapes::object_shape_record(obj_after),
+            )
+            .expect("the object must still enumerate its fields")
+            .slot(top)
         };
         (slot & POINTER_MASK) as usize != child
     })

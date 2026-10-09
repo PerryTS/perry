@@ -26,3 +26,29 @@ for (let i = 0; i < holders.length; i++) {
   console.log("restricted", i, after.value, after.writable, after.enumerable, after.configurable);
 }
 console.log("proxy target", Object.getOwnPropertyDescriptor(target, "lane12201")!.writable);
+// A primitive is never a holder. Symbols are pointer-tagged, so the Object
+// test every define consults must still say no and throw, not drop the define.
+const primitives: any[] = [Symbol("p"), Symbol.iterator, "str", 7n, 1.5, true];
+for (const p of primitives) {
+  const kind = typeof p;
+  for (const [name, op] of [
+    ["defineProperty", () => Object.defineProperty(p, "lane12201", { value: 1 })],
+    ["defineProperties", () => Object.defineProperties(p, { lane12201: { value: 1 } })],
+    ["Reflect.defineProperty", () => Reflect.defineProperty(p, "lane12201", { value: 1 })],
+    ["create", () => Object.create(p)],
+    ["setPrototypeOf", () => Object.setPrototypeOf({}, p)],
+  ] as [string, () => unknown][]) {
+    try { op(); console.log(kind, name, "no throw"); }
+    catch (e: any) { console.log(kind, name, e.constructor.name); }
+  }
+  console.log(kind, "gopd", Object.getOwnPropertyDescriptor(p, "lane12201"),
+    "gopds", JSON.stringify(Object.getOwnPropertyDescriptors(p)).length > 1, "then", typeof p.then);
+  console.log(kind, "integrity", Object.isFrozen(p), Object.isSealed(p), Object.isExtensible(p),
+    Object.freeze(p) === p, Object.seal(p) === p, Object.preventExtensions(p) === p,
+    Object.isFrozen(p), Object.isSealed(p), Object.isExtensible(p));
+}
+// Promise combinators probe `then` on every element, primitives included.
+Promise.all([Promise.resolve(1), "plain", Symbol.iterator, 3n]).then((v) => console.log("all", v.length, String(v[1])));
+Promise.allSettled(["a", Symbol("q")]).then((v) => console.log("allSettled", v.length, v[1].status));
+Promise.race(["r", 2]).then((v) => console.log("race", v));
+Promise.any([Symbol("y"), "z"]).then((v) => console.log("any", typeof v));
