@@ -151,7 +151,7 @@ pub(crate) unsafe fn declaration_parent_identity(
 }
 
 #[cfg(test)]
-mod readpath_decl_identity_tests {
+mod readpath_decl_class_identity_tests {
     use super::*;
 
     #[test]
