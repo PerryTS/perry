@@ -502,151 +502,64 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // was forced through `js_value_length_f64` (issue #128
             // follow-up — correctness-safe, but ~10x slower on the
             // `.length` hot path). Tag check is platform-independent.
-            let recv_tag = blk.lshr(I64, &recv_bits, "48");
-            let recv_tag_masked = blk.and(I64, &recv_tag, "65533"); // 0xFFFD
-            let tag_ok = blk.icmp_eq(I64, &recv_tag_masked, "32765"); // 0x7FFD
-                                                                      // The tag check alone admits POINTER_TAG-boxed *handle-band*
-                                                                      // values — Web Fetch handles (Headers/Request/Response/Blob, id
-                                                                      // in [0x40000, 0xE0000)), net/http small handles, revocable-proxy
-                                                                      // ids — which are NaN-boxed registry ids, NOT heap pointers. A
-                                                                      // value statically typed Array/String/Named that actually holds
-                                                                      // such a handle at runtime (e.g. a `Response`/`Headers` reaching a
-                                                                      // `.length` site) would then `inttoptr` the bare id and load the
-                                                                      // GC-type byte at `id-8` and the length u32 at `id` — both
-                                                                      // unmapped low addresses → SIGSEGV (observed: doctor / mcp list
-                                                                      // crashing at the exact fetch-handle address). The IC-miss path
-                                                                      // (`js_object_get_field_ic_miss`) and the inline class-field guard
-                                                                      // already gate on `> HANDLE_BAND_TOP`; mirror that here so any
-                                                                      // handle-band receiver routes to the `js_value_length_f64` slow
-                                                                      // path, which classifies it by registry without dereferencing the
-                                                                      // raw id. `HANDLE_BAND_TOP` = 0xFFFFF (addr_class::HANDLE_BAND_MAX
-                                                                      // - 1).
-            let above_band = blk.icmp_ugt(I64, &recv_handle, "1048575"); // 0xFFFFF
-            let handle_ok = blk.and(I1, &tag_ok, &above_band);
-            // SSO receivers fail this guard → route to slow path
-            // `js_value_length_f64` which has an SSO branch (reads
-            // length from the tag byte, no heap access). Accepting
-            // SSO here is safe because the fast path's
-            // `safe_load_i32_from_ptr(&recv_handle)` would read
-            // arbitrary bytes at the SSO "pointer" address, but
-            // the subsequent phi feeds the slow-path result when
-            // handle_ok is false — so SSO flow is correct via the
-            // slow path already, no widening needed.
+            // Fold the Array/String tag union and the runtime-id band into
+            // one range guard before dereferencing either header byte.
+            let tagged = blk.and(I64, &recv_bits, &crate::nanbox::i64_literal(!(1u64 << 49)));
+            let base = crate::nanbox::i64_literal((0x7ffdu64 << 48) | 1048576);
+            let offset = blk.sub(I64, &tagged, &base);
+            let handle_ok = blk.icmp_ult(I64, &offset, "281474975662080");
 
+            let inline_typed_length = matches!(
+                crate::type_analysis::static_type_of(ctx, object),
+                Some(HirType::Named(name)) if matches!(name.as_str(),
+                    "Buffer" | "DataView" | "Int8Array" | "Uint8Array" |
+                    "Uint8ClampedArray" | "Int16Array" | "Uint16Array" |
+                    "Int32Array" | "Uint32Array" | "Float16Array" |
+                    "Float32Array" | "Float64Array" | "BigInt64Array" |
+                    "BigUint64Array")
+            );
             let check_gc_idx = ctx.new_block("plen.check_gc");
             let fast_idx = ctx.new_block("plen.fast");
-            let typed_array_idx = ctx.new_block("plen.typed_array");
             let slow_idx = ctx.new_block("plen.slow");
+            let typed_idx = inline_typed_length.then(|| ctx.new_block("plen.typed_array"));
             let merge_idx = ctx.new_block("plen.merge");
             let check_gc_label = ctx.block_label(check_gc_idx);
             let fast_label = ctx.block_label(fast_idx);
-            let typed_array_label = ctx.block_label(typed_array_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
             ctx.block()
                 .cond_br(&handle_ok, &check_gc_label, &slow_label);
 
             ctx.current_block = check_gc_idx;
-            let gc_type_addr = ctx.block().sub(I64, &recv_handle, "8");
-            let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
-            let gc_type = ctx.block().load(I8, &gc_type_ptr);
-            let is_array = ctx.block().icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-            let is_string = ctx.block().icmp_eq(I8, &gc_type, "3"); // GC_TYPE_STRING
-            let has_length = ctx.block().or(I1, &is_array, &is_string);
-            // Issue #233: a FORWARDED array's first 4 bytes are no
-            // longer length but the lower 32 bits of the forwarding
-            // pointer. Route those to the slow path
-            // (`js_value_length_f64`) which recognizes the flag and
-            // follows the chain. GcHeader layout: byte 0 = obj_type,
-            // byte 1 = gc_flags. Read the flags byte at handle-7
-            // (handle-8 is obj_type) and reject if FORWARDED (0x80).
-            let gc_flags_addr = ctx.block().sub(I64, &recv_handle, "7");
-            let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
-            let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
-            let fwd_bits = ctx.block().and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED = 0x80
-            let not_forwarded = ctx.block().icmp_eq(I8, &fwd_bits, "0");
-            let take_fast = ctx.block().and(I1, &has_length, &not_forwarded);
-            ctx.block()
-                .cond_br(&take_fast, &fast_label, &typed_array_label);
-
-            // Byte views and typed arrays keep a live length at payload +0,
-            // including shared storage: detach/resize update that word. Admit
-            // only these proven type bytes, not native-arena views. Own named
-            // metadata or prototype edits withdraw the accessor proof before
-            // publication; the cold edge uses its pooled literal key.
-            ctx.current_block = typed_array_idx;
-            let owning_byte = ctx.block().icmp_uge(I8, &gc_type, "64");
-            let indexed_byte = ctx.block().icmp_ule(I8, &gc_type, "76");
-            let is_typed_array = ctx.block().and(I1, &owning_byte, &indexed_byte);
-            let byte_header_idx = ctx.new_block("plen.byte_header");
-            let byte_header_label = ctx.block_label(byte_header_idx);
-            let view_check_idx = ctx.new_block("plen.view_check");
-            let view_check_label = ctx.block_label(view_check_idx);
-            ctx.block()
-                .cond_br(&is_typed_array, &byte_header_label, &view_check_label);
-
-            // An indexed view keeps its fixed length at payload +0. It is the
-            // live length while the view is not length-tracking and its link
-            // is a plain owner (no bag, so no own `length`) that is neither
-            // RESIZABLE nor DETACHED: only those change an owner's extent.
-            ctx.current_block = view_check_idx;
-            let view_lo = crate::runtime_abi::BYTES_TYPE_BASE | crate::runtime_abi::BYTES_TYPE_VIEW;
-            let view_hi = view_lo | 12;
-            let is_view_lo = ctx.block().icmp_uge(I8, &gc_type, &view_lo.to_string());
-            let is_view_hi = ctx.block().icmp_ule(I8, &gc_type, &view_hi.to_string());
-            let is_view = ctx.block().and(I1, &is_view_lo, &is_view_hi);
-            let view_header_idx = ctx.new_block("plen.view_header");
-            let view_header_label = ctx.block_label(view_header_idx);
-            ctx.block()
-                .cond_br(&is_view, &view_header_label, &slow_label);
-            ctx.current_block = view_header_idx;
-            let h = crate::expr::byte_cell::header_word(ctx.block(), &recv_handle);
-            let tracking = ctx.block().and(I64, &h, &(1u64 << 23).to_string());
-            let fixed = ctx.block().icmp_eq(I64, &tracking, "0");
-            let link_addr = ctx.block().add(
-                I64,
-                &recv_handle,
-                &crate::runtime_abi::BYTES_LINK.to_string(),
-            );
-            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
-            let link = ctx.block().load(PTR, &link_ptr);
-            let link = ctx.block().ptrtoint(&link, I64);
-            let ho = crate::expr::byte_cell::header_word(ctx.block(), &link);
-            let mask = 0xe0u64 | (1 << 24) | (1 << 30);
-            let state = ctx.block().and(I64, &ho, &mask.to_string());
-            let plain_owner = ctx.block().icmp_eq(
-                I64,
-                &state,
-                &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
-            );
-            let view_ok = ctx.block().and(I1, &fixed, &plain_owner);
-            let view_ok = ctx.block().and(I1, &view_ok, &not_forwarded);
-            let named_invalidated =
-                ctx.block()
-                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
-            let view_ok = ctx.block().and(I1, &view_ok, &named_pristine);
-            ctx.block().cond_br(&view_ok, &fast_label, &slow_label);
-
-            ctx.current_block = byte_header_idx;
-            let link_addr = ctx.block().add(
-                I64,
-                &recv_handle,
-                &crate::runtime_abi::BYTES_LINK.to_string(),
-            );
-            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
-            let link = ctx.block().load(PTR, &link_ptr);
-            let empty = ctx.block().icmp_eq(PTR, &link, "null");
-            let ta_header_ok = ctx.block().and(I1, &empty, &not_forwarded);
-            let named_invalidated =
-                ctx.block()
-                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
-            let ta_ok = ctx.block().and(I1, &ta_header_ok, &named_pristine);
-            ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
+            let header_addr = ctx.block().sub(I64, &recv_handle, "8");
+            let header_ptr = ctx.block().inttoptr(I64, &header_addr);
+            let header_word = ctx.block().load(crate::types::I16, &header_ptr);
+            // Clear only the Array/String difference; keep forwarding in the
+            // same admission word. Their live lengths share payload +0.
+            let live_kind = ctx.block().and(crate::types::I16, &header_word, "33021");
+            let take_fast = ctx.block().icmp_eq(crate::types::I16, &live_kind, "1");
+            let miss_label = typed_idx
+                .map(|idx| ctx.block_label(idx))
+                .unwrap_or_else(|| slow_label.clone());
+            ctx.block().cond_br(&take_fast, &fast_label, &miss_label);
+            if let Some(typed_idx) = typed_idx {
+                ctx.current_block = typed_idx;
+                let gc_type = ctx.block().trunc(crate::types::I16, &header_word, I8);
+                let flags = ctx.block().and(crate::types::I16, &header_word, "32768");
+                let not_forwarded = ctx.block().icmp_eq(crate::types::I16, &flags, "0");
+                composed_ics::emit_typed_length_guard(
+                    ctx,
+                    &recv_handle,
+                    &gc_type,
+                    &not_forwarded,
+                    &fast_label,
+                    &slow_label,
+                );
+            }
 
             ctx.current_block = fast_idx;
-            let fast_len_i32 = ctx.block().safe_load_i32_from_ptr(&recv_handle);
+            let fast_ptr = ctx.block().inttoptr(I64, &recv_handle);
+            let fast_len_i32 = ctx.block().load(I32, &fast_ptr);
             let fast_len = ctx.block().uitofp(I32, &fast_len_i32, DOUBLE);
             let fast_pred_label = ctx.block().label.clone();
             ctx.block().br(&merge_label);
