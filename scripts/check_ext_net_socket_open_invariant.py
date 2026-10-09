@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 EXCEPTIONS_PATH = ROOT / "scripts/ext_net_socket_open_exceptions.json"
 CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|.)|[^'\\\n])'")
 RAW_STRING_START = re.compile(r'(?:b|c)?r(#{0,255})"')
+
+
 def _blank(chars: list[str], start: int, end: int) -> None:
     """Replace a non-code range with spaces while preserving newlines."""
 
@@ -24,7 +26,7 @@ def _blank(chars: list[str], start: int, end: int) -> None:
             chars[index] = " "
 
 
-def mask_non_code(source: str) -> str:
+def mask_non_code(source: str, keep_strings: bool = False) -> str:
     """Mask Rust comments and literals without changing byte positions."""
 
     chars = list(source)
@@ -64,7 +66,8 @@ def mask_non_code(source: str) -> str:
             if end_marker < 0:
                 raise ValueError("unterminated raw string")
             end = end_marker + len(delimiter)
-            _blank(chars, index, end)
+            if not keep_strings:
+                _blank(chars, index, end)
             index = end
             continue
 
@@ -83,7 +86,8 @@ def mask_non_code(source: str) -> str:
                 end += 1
             else:
                 raise ValueError("unterminated string literal")
-            _blank(chars, index, end)
+            if not keep_strings:
+                _blank(chars, index, end)
             index = end
             continue
 
@@ -100,7 +104,7 @@ def mask_non_code(source: str) -> str:
 
 
 OPEN_NAME = re.compile(r"open", re.I)
-FIELD = re.compile(r"\b(\w+)\s*:\s*(?:bool|AtomicBool|Cell\s*<\s*bool\s*>)\b")
+FIELD = re.compile(r"\b(\w+)\s*:\s*(?:bool|Atomic\w+|Cell|Option|u8|u32|u64|usize|i32|i64)\b")
 TABLE = re.compile(r"\b(?:HashMap|BTreeMap|DashMap|IndexMap|HashSet|BTreeSet|Slab)\b")
 CANONICAL = ("crates/perry-ext-net/src/payload_transport.rs", "opened")
 
@@ -132,7 +136,7 @@ def evaluate(sources, registry):
                 transitions += 1
         # A JS-visible hidden latch is still duplicate state. Scan property
         # writes using original literal keys, after removing comments.
-        for match in re.finditer(r'\bown_set\s*\([^;]*?"([^"\n]*open[^"\n]*)"', source, re.I):
+        for match in re.finditer(r'\bown_set\s*\([^;]*?"([^"\n]*open[^"\n]*)"', mask_non_code(source, keep_strings=True), re.I):
             if match[1] != "allowHalfOpen":
                 errors.append(f"{path}: duplicate JS open property {match[1]}")
     if canonical != 1:
@@ -147,11 +151,11 @@ def self_test():
     good = {CANONICAL[0]: "struct SocketFields { opened: bool } fn connected() { s.opened = true; s.opened = true; s.opened = true; }"}
     registry = {"exceptions": []}
     assert not evaluate(good, registry)[1]
-    for bad in ["struct Second { is_open: bool }", "struct Second { has_opened: bool }", "static OPEN: AtomicBool = AtomicBool::new(false);", "static FLAGS: HashMap<u64, bool> = todo!();", 'fn f() { p::own_set(owner, "bunOpened", true); }']:
+    for bad in ["struct Second { is_open: bool }", "struct Second { has_opened: bool }", "static OPEN: AtomicBool = AtomicBool::new(false);", "struct Second { opened: Option<bool> }", "struct Second { is_open: u8 }", "static FLAGS: HashMap<u64, bool> = todo!();", 'fn f() { p::own_set(owner, "bunOpened", true); }']:
         assert evaluate(dict(good, extra=bad), registry)[1], bad
     assert evaluate({}, registry)[1]
     assert evaluate(good, {"exceptions": [{"path": "gone", "name": "open", "reason": "x"*50}]})[1]
-    assert not evaluate(dict(good, extra='// is_open: bool\n/* HashMap<u64, bool> */ fn f() { let s = "has_opened: bool"; }'), registry)[1]
+    assert not evaluate(dict(good, extra='// own_set(owner, "bunOpened", true);\n// is_open: bool\n/* HashMap<u64, bool> */ fn f() { let s = "has_opened: bool"; }'), registry)[1]
     print("socket-open self-test: OK (duplicate fields, atomic flag, table, JS latch, empty census, stale exception, masking)")
 
 def main():
