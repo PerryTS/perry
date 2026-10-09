@@ -217,15 +217,17 @@ fn queue_pending(server_handle: i64, request: HttpPendingRequest) {
 }
 
 /// The parser's owner is an ordinary child of the rooted Socket. `f` may
-/// allocate, but must not call JS, close/reopen the Socket, or enter the driver.
+/// allocate Rust state, but must not allocate JS, call JS, close/reopen the
+/// Socket, or enter the driver. Its ordinary parser edge cannot move here.
 fn with_conn<R>(socket: &RootedSocket, f: impl FnOnce(&mut Conn) -> R) -> Option<R> {
-    if !socket.is_current() {
-        return None;
+    unsafe {
+        socket
+            .with_current(|_, state| {
+                let parser = net::record_get(state, "parser");
+                np::payload_mut::<Conn>(parser, &PARSER).ok().map(f)
+            })
+            .flatten()
     }
-    let scope = TransientRootScope::enter();
-    let state = scope.root_nanbox(net::state(socket.value()));
-    let parser = scope.root_nanbox(net::own_get(state.get(), "parser"));
-    unsafe { np::payload_mut::<Conn>(parser.get(), &PARSER).ok().map(f) }
 }
 
 /// Visit children through the delegate's existing ordinary ownership graph.
@@ -272,20 +274,31 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
     let Some(owner) = (unsafe { np::link_event_owner(link) }) else {
         return;
     };
-    let socket = RootedSocket::new(owner);
-    if net::socket_link(socket.value()).is_err() {
+    if event.kind == tl::NET_DATA {
+        let bytes = unsafe { event.bytes() };
+        let received = unsafe {
+            RootedSocket::receive(
+                owner,
+                event.flags & tl::NET_FLAG_PLAINTEXT != 0,
+                bytes.len(),
+                true,
+                |socket, state| {
+                    let parser = net::record_get(state, "parser");
+                    np::payload_mut::<Conn>(parser, &PARSER)
+                        .ok()
+                        .map(|conn| feed_step(socket, conn, bytes))
+                },
+            )
+        };
+        match received {
+            Some((socket, Some(Some(step)))) => deliver_feed(&socket, bytes, step),
+            Some((socket, None)) => net::receive_tls(socket.value(), bytes),
+            _ => {}
+        }
         return;
     }
+    let socket = RootedSocket::new(owner);
     match event.kind {
-        tl::NET_DATA => {
-            let bytes = unsafe { event.bytes() };
-            if event.flags & tl::NET_FLAG_PLAINTEXT == 0 && net::tls_installed(socket.value()) {
-                net::receive_tls(socket.value(), bytes);
-            } else {
-                net::received(socket.value(), bytes.len());
-                on_data(&socket, bytes);
-            }
-        }
         tl::NET_EOF => on_eof(&socket),
         tl::NET_SHUTDOWN => {
             on_shutdown(&socket);
@@ -392,28 +405,31 @@ pub(crate) fn adopt_alpn_http1(socket: f64, server_handle: i64, leftover: Vec<u8
     with_conn(&socket, |_| ()).is_some()
 }
 
-fn on_data(id: &RootedSocket, bytes: &[u8]) {
-    park_idle(id);
-    with_conn(id, |connection| connection.handshaking = false);
-    feed(id, bytes);
-}
-
 /// Is this connection carrying a WebSocket rather than HTTP?
 fn is_websocket(id: &RootedSocket) -> bool {
     with_conn(id, |c| c.websocket).unwrap_or(false)
 }
 
-fn feed(id: &RootedSocket, bytes: &[u8]) {
-    if is_websocket(id) {
-        // Past the 101 these are frames, not HTTP. The connection, its id, its
-        // outstanding multishot read and its TLS layer are all unchanged — only
-        // who decodes the bytes.
-        perry_ext_ws::native_socket::on_data(id.value(), bytes);
-        return;
+fn feed_step(id: &RootedSocket, c: &mut Conn, bytes: &[u8]) -> Option<Step> {
+    c.handshaking = false;
+    if c.websocket {
+        return None;
     }
-    let known = with_conn(id, |c| c.input.extend_from_slice(bytes)).is_some();
-    if known {
-        decode(id);
+    c.input.extend_from_slice(bytes);
+    Some(decode_step(id, c))
+}
+
+fn deliver_feed(id: &RootedSocket, bytes: &[u8], step: Option<Step>) {
+    match step {
+        Some(step) => decode_after(id, Some(step)),
+        // End the HTTP borrow before WebSocket callbacks can close/reopen.
+        None => perry_ext_ws::native_socket::on_data(id.value(), bytes),
+    }
+}
+
+fn feed(id: &RootedSocket, bytes: &[u8]) {
+    if let Some(step) = with_conn(id, |c| feed_step(id, c, bytes)) {
+        deliver_feed(id, bytes, step);
     }
 }
 
@@ -423,121 +439,135 @@ fn feed(id: &RootedSocket, bytes: &[u8]) {
 /// is only `reset()` once the current response has been written, so a pipelined
 /// request stays in `input` and is dispatched afterwards. That is Node's
 /// per-connection serialization, and it is also what makes `res` unambiguous.
-fn decode(id: &RootedSocket) {
+enum Step {
+    Idle,
+    Again,
+    /// A decoded request, and whether the client is waiting for a
+    /// `100 Continue` before it sends the body.
+    Dispatch(HttpPendingRequest, bool),
+    /// A head with `Expect: 100-continue` was decoded: answer
+    /// `100 Continue` now, then keep decoding (the body follows it).
+    Continue,
+    Upgrade(Building),
+    /// A WebSocket upgrade an attached `WebSocketServer` will answer.
+    WebSocket(Building),
+    Failed(&'static str),
+}
+
+fn decode_step(id: &RootedSocket, c: &mut Conn) -> Step {
     loop {
-        enum Step {
-            Idle,
-            Again,
-            /// A decoded request, and whether the client is waiting for a
-            /// `100 Continue` before it sends the body.
-            Dispatch(HttpPendingRequest, bool),
-            /// A head with `Expect: 100-continue` was decoded: answer
-            /// `100 Continue` now, then keep decoding (the body follows it).
-            Continue,
-            Upgrade(Building),
-            /// A WebSocket upgrade an attached `WebSocketServer` will answer.
-            WebSocket(Building),
-            Failed(&'static str),
+        if c.destroyed || c.paused || c.handshaking {
+            return Step::Idle;
         }
-        let step = with_conn(id, |c| {
-            if c.destroyed || c.paused || c.handshaking {
-                return Step::Idle;
-            }
-            let step = match c.decoder.receive(&c.input) {
-                Ok(step) => step,
-                Err(e) => return Step::Failed(e.code),
-            };
-            let consumed = step.consumed;
-            let mut outcome = Step::Idle;
-            match step.event {
-                Some(http1::Event::Head(head)) => {
-                    let mut building = building_from(&head);
-                    // A client that sent `Expect: 100-continue` withholds the
-                    // body until it sees `100 Continue`, and this decoder only
-                    // dispatches a request at its END — so waiting for the
-                    // dispatch to send it deadlocked every such request
-                    // (#5080's test_http_100_continue_5080, a turnloop
-                    // regression: hyper sent it when the body was first
-                    // polled). Send it as soon as the head arrives, as hyper
-                    // did; a `'checkContinue'` listener still receives the
-                    // request, and its `writeContinue()` then has nothing left
-                    // to send.
-                    if building.expects_continue && building.version != 0 {
-                        building.continue_sent = true;
-                        outcome = Step::Continue;
-                    } else {
-                        outcome = Step::Again;
-                    }
-                    c.building = Some(building);
-                }
-                Some(http1::Event::Body(chunk)) => {
-                    if let Some(b) = c.building.as_mut() {
-                        b.body.extend_from_slice(chunk);
-                    }
+        let step = match c.decoder.receive(&c.input) {
+            Ok(step) => step,
+            Err(e) => return Step::Failed(e.code),
+        };
+        let consumed = step.consumed;
+        let mut outcome = Step::Idle;
+        match step.event {
+            Some(http1::Event::Head(head)) => {
+                let mut building = building_from(&head);
+                // A client that sent `Expect: 100-continue` withholds the
+                // body until it sees `100 Continue`, and this decoder only
+                // dispatches a request at its END — so waiting for the
+                // dispatch to send it deadlocked every such request
+                // (#5080's test_http_100_continue_5080, a turnloop
+                // regression: hyper sent it when the body was first
+                // polled). Send it as soon as the head arrives, as hyper
+                // did; a `'checkContinue'` listener still receives the
+                // request, and its `writeContinue()` then has nothing left
+                // to send.
+                if building.expects_continue && building.version != 0 {
+                    building.continue_sent = true;
+                    outcome = Step::Continue;
+                } else {
                     outcome = Step::Again;
                 }
-                Some(http1::Event::Trailers(_)) => outcome = Step::Again,
-                // `Upgrade` joins `End` here rather than getting its own arm.
-                // turnloop-http 0.1.0-alpha.7 made the REQUEST-mode decoder end
-                // an upgrade message with `Event::Upgrade` INSTEAD of
-                // `Event::End` (`upgrade_request` = CONNECT, or HTTP/1.1 with
-                // `Upgrade` + `Connection: upgrade`). Both mean the same thing
-                // on this side — the message is complete — and all the routing
-                // policy lives below, so they must not diverge.
-                //
-                // This was a silent regression waiting to happen: the old
-                // `Event::Upgrade` arm was written as unreachable and routed
-                // straight to `Step::Upgrade`, so once alpha.7 started raising
-                // it, every upgrade would have bypassed BOTH the attached
-                // `WebSocketServer` precedence and the `has_upgrade_listener`
-                // test (#4973: an upgrade with no listener is served as an
-                // ordinary request), and a CONNECT — which sets
-                // `upgrade_request` but never `Building::upgrade` — would have
-                // stopped being dispatched as a request at all. None of that is
-                // a compile error, because the arm already existed.
-                Some(http1::Event::End | http1::Event::Upgrade) => {
-                    outcome = match c.building.take() {
-                        // A WebSocket upgrade with a `WebSocketServer` attached
-                        // to this server is answered here, before the generic
-                        // `'upgrade'` route — that is `ws`'s own precedence,
-                        // and it is the case P5 had to decline.
-                        Some(building)
-                            if building.websocket
-                                && perry_ext_ws::has_attached_server(c.server_handle) =>
-                        {
-                            c.paused = true;
-                            Step::WebSocket(building)
-                        }
-                        // Node dispatches an upgrade request to `'upgrade'`
-                        // instead of `'request'` — but only when a listener
-                        // exists; with none it is served as an ordinary
-                        // request, which is #4973's rule.
-                        Some(building)
-                            if building.upgrade && has_upgrade_listener(c.server_handle) =>
-                        {
-                            c.paused = true;
-                            Step::Upgrade(building)
-                        }
-                        Some(building) => {
-                            c.requests += 1;
-                            c.seq += 1;
-                            c.paused = true;
-                            let (request, send_continue) = finish_request(id, c, building);
-                            Step::Dispatch(request, send_continue)
-                        }
-                        None => Step::Again,
-                    };
+                c.building = Some(building);
+            }
+            Some(http1::Event::Body(chunk)) => {
+                if let Some(b) = c.building.as_mut() {
+                    b.body.extend_from_slice(chunk);
                 }
-                Some(http1::Event::Informational(_)) => outcome = Step::Again,
-                None => {
-                    if consumed > 0 {
-                        outcome = Step::Again;
+                outcome = Step::Again;
+            }
+            Some(http1::Event::Trailers(_)) => outcome = Step::Again,
+            // `Upgrade` joins `End` here rather than getting its own arm.
+            // turnloop-http 0.1.0-alpha.7 made the REQUEST-mode decoder end
+            // an upgrade message with `Event::Upgrade` INSTEAD of
+            // `Event::End` (`upgrade_request` = CONNECT, or HTTP/1.1 with
+            // `Upgrade` + `Connection: upgrade`). Both mean the same thing
+            // on this side — the message is complete — and all the routing
+            // policy lives below, so they must not diverge.
+            //
+            // This was a silent regression waiting to happen: the old
+            // `Event::Upgrade` arm was written as unreachable and routed
+            // straight to `Step::Upgrade`, so once alpha.7 started raising
+            // it, every upgrade would have bypassed BOTH the attached
+            // `WebSocketServer` precedence and the `has_upgrade_listener`
+            // test (#4973: an upgrade with no listener is served as an
+            // ordinary request), and a CONNECT — which sets
+            // `upgrade_request` but never `Building::upgrade` — would have
+            // stopped being dispatched as a request at all. None of that is
+            // a compile error, because the arm already existed.
+            Some(http1::Event::End | http1::Event::Upgrade) => {
+                outcome = match c.building.take() {
+                    // A WebSocket upgrade with a `WebSocketServer` attached
+                    // to this server is answered here, before the generic
+                    // `'upgrade'` route — that is `ws`'s own precedence,
+                    // and it is the case P5 had to decline.
+                    Some(building)
+                        if building.websocket
+                            && perry_ext_ws::has_attached_server(c.server_handle) =>
+                    {
+                        c.paused = true;
+                        Step::WebSocket(building)
                     }
+                    // Node dispatches an upgrade request to `'upgrade'`
+                    // instead of `'request'` — but only when a listener
+                    // exists; with none it is served as an ordinary
+                    // request, which is #4973's rule.
+                    Some(building) if building.upgrade && has_upgrade_listener(c.server_handle) => {
+                        c.paused = true;
+                        Step::Upgrade(building)
+                    }
+                    Some(building) => {
+                        c.requests += 1;
+                        c.seq += 1;
+                        c.paused = true;
+                        let (request, send_continue) = finish_request(id, c, building);
+                        Step::Dispatch(request, send_continue)
+                    }
+                    None => Step::Again,
+                };
+            }
+            Some(http1::Event::Informational(_)) => outcome = Step::Again,
+            None => {
+                if consumed > 0 {
+                    outcome = Step::Again;
                 }
             }
-            c.input.drain(..consumed.min(c.input.len()));
-            outcome
-        });
+        }
+        c.input.drain(..consumed.min(c.input.len()));
+        if matches!(outcome, Step::Again) {
+            continue;
+        }
+        return outcome;
+    }
+}
+
+fn decode(id: &RootedSocket) {
+    decode_after(id, None);
+}
+
+fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
+    loop {
+        // Head/body/trailer steps do not run JS or allocate GC objects.
+        // Keep the same proven parser until an externally visible action.
+        let step = initial
+            .take()
+            .or_else(|| with_conn(id, |c| decode_step(id, c)));
         match step {
             None | Some(Step::Idle) => return,
             Some(Step::Again) => continue,
@@ -1143,12 +1173,6 @@ fn arm_idle(id: &RootedSocket) {
         return;
     }
     net::deadline_arm(id.value(), ms);
-}
-
-/// Disarm the idle close for the duration of an exchange, keeping the handle.
-/// Teardown still uses `cancel_idle`: there the handle really is going away.
-fn park_idle(id: &RootedSocket) {
-    net::deadline_park(id.value());
 }
 
 fn cancel_idle(id: &RootedSocket) {

@@ -57,13 +57,13 @@ pub(crate) fn initialize_server(
     });
     let state = scope.root_nanbox(state(owner.get()));
     p::own_set(owner.get(), "_connections", 0.0);
-    p::own_set(state.get(), "refed", f64::from_bits(JsValue::TRUE.bits()));
-    p::own_set(
+    p::record_set(state.get(), "refed", f64::from_bits(JsValue::TRUE.bits()));
+    p::record_set(
         state.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(options.0).bits()),
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "pauseOnConnect",
         f64::from_bits(JsValue::from_bool(options.1).bits()),
@@ -141,9 +141,10 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
         if np::link_lifecycle(server, &SERVER) == Ok(np::Lifecycle::Closed) {
             let state = scope.root_nanbox(state(owner.get()));
             let allow_half_open =
-                JsValue::from_bits(p::own_get(state.get(), "allowHalfOpen").to_bits()).to_bool();
+                JsValue::from_bits(p::record_get(state.get(), "allowHalfOpen").to_bits()).to_bool();
             let pause_on_connect =
-                JsValue::from_bits(p::own_get(state.get(), "pauseOnConnect").to_bits()).to_bool();
+                JsValue::from_bits(p::record_get(state.get(), "pauseOnConnect").to_bits())
+                    .to_bool();
             p::reopen_server(
                 server,
                 super::payload_io::ROUTE,
@@ -211,11 +212,11 @@ pub(crate) fn listen_tcp(
                 super::payload_io::ROUTE,
                 ServerFields {
                     allow_half_open: JsValue::from_bits(
-                        p::own_get(state.get(), "allowHalfOpen").to_bits(),
+                        p::record_get(state.get(), "allowHalfOpen").to_bits(),
                     )
                     .to_bool(),
                     pause_on_connect: JsValue::from_bits(
-                        p::own_get(state.get(), "pauseOnConnect").to_bits(),
+                        p::record_get(state.get(), "pauseOnConnect").to_bits(),
                     )
                     .to_bool(),
                     ..ServerFields::default()
@@ -261,20 +262,20 @@ fn finish_listen(owner: f64, path: Option<String>) {
     };
     let state = scope.root_nanbox(state(owner.get()));
     let group = scope.root_nanbox(closed::record(parts));
-    p::own_set(group.get(), "server", owner.get());
-    p::own_set(
+    p::record_set(group.get(), "server", owner.get());
+    p::record_set(
         group.get(),
         "closing",
         f64::from_bits(JsValue::FALSE.bits()),
     );
-    p::own_set(
+    p::record_set(
         group.get(),
         "listenerClosed",
         f64::from_bits(JsValue::FALSE.bits()),
     );
     let children = unsafe { perry_ffi::js_array_alloc(0) };
-    p::own_set(group.get(), "children", p::boxed_addr(children as i64));
-    p::own_set(state.get(), "activeGroup", group.get());
+    p::record_set(group.get(), "children", p::boxed_addr(children as i64));
+    p::record_set(state.get(), "activeGroup", group.get());
     let resource = scope.root_nanbox(provider::publish(
         state.get(),
         provider::SERVER,
@@ -284,7 +285,7 @@ fn finish_listen(owner: f64, path: Option<String>) {
     unsafe {
         (*p::server_ptr(server).unwrap()).ext.async_id = provider::id(resource.get());
     }
-    p::own_set(group.get(), provider::SERVER, resource.get());
+    p::record_set(group.get(), provider::SERVER, resource.get());
     events::queue_emit(owner.get(), "listening", &[]);
     provider::notify(resource.get());
 }
@@ -329,7 +330,7 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
         return owner.get();
     }
     once(owner.get(), "close", callback.get());
-    let group = scope.root_nanbox(p::own_get(state.get(), "activeGroup"));
+    let group = scope.root_nanbox(p::record_get(state.get(), "activeGroup"));
     let (path, options) = unsafe {
         let fields = &(*p::server_ptr(server).unwrap()).ext;
         (
@@ -356,22 +357,22 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
     unsafe {
         np::close_link(server, &SERVER);
     }
-    p::own_set(
+    p::record_set(
         state.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(options.0).bits()),
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "pauseOnConnect",
         f64::from_bits(JsValue::from_bool(options.1).bits()),
     );
     if JsValue::from_bits(group.get().to_bits()).is_pointer() {
-        p::own_set(group.get(), "closing", f64::from_bits(JsValue::TRUE.bits()));
+        p::record_set(group.get(), "closing", f64::from_bits(JsValue::TRUE.bits()));
         if owed {
             closed::append(state.get(), group.get());
         } else {
-            p::own_set(
+            p::record_set(
                 group.get(),
                 "listenerClosed",
                 f64::from_bits(JsValue::TRUE.bits()),
@@ -473,7 +474,7 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
     if key == "_connections" || key == "maxConnections" || key == "dropMaxConnection" {
         p::own_get(owner.get(), key)
     } else {
-        p::own_get(state.get(), key)
+        p::record_get(state.get(), key)
     }
 }
 
@@ -503,7 +504,7 @@ pub(crate) fn set_ref(owner: f64, referenced: bool) -> f64 {
         }
     }
     let state = scope.root_nanbox(state(owner.get()));
-    p::own_set(
+    p::record_set(
         state.get(),
         "refed",
         f64::from_bits(JsValue::from_bool(referenced).bits()),
@@ -518,24 +519,24 @@ fn array_ptr(value: f64) -> *mut ArrayHeader {
 fn finish_group(group: f64, synthetic: bool) {
     let scope = TransientRootScope::enter();
     let group = scope.root_nanbox(group);
-    let children = scope.root_nanbox(p::own_get(group.get(), "children"));
+    let children = scope.root_nanbox(p::record_get(group.get(), "children"));
     if unsafe { perry_ffi::js_array_length(array_ptr(children.get())) } != 0 {
         return;
     }
-    if !JsValue::from_bits(p::own_get(group.get(), "closing").to_bits()).to_bool()
-        || !JsValue::from_bits(p::own_get(group.get(), "listenerClosed").to_bits()).to_bool()
+    if !JsValue::from_bits(p::record_get(group.get(), "closing").to_bits()).to_bool()
+        || !JsValue::from_bits(p::record_get(group.get(), "listenerClosed").to_bits()).to_bool()
     {
         return;
     }
     // Consume the pending close before running user listeners. This is the
     // ordinary close callback's lifecycle, not a transport-generation latch.
-    p::own_set(
+    p::record_set(
         group.get(),
         "closing",
         f64::from_bits(JsValue::FALSE.bits()),
     );
-    let owner = scope.root_nanbox(p::own_get(group.get(), "server"));
-    let resource = scope.root_nanbox(p::own_get(group.get(), provider::SERVER));
+    let owner = scope.root_nanbox(p::record_get(group.get(), "server"));
+    let resource = scope.root_nanbox(p::record_get(group.get(), provider::SERVER));
     if synthetic {
         events::queue_emit_in(resource.get(), owner.get(), "close", &[], true);
     } else {
@@ -551,7 +552,7 @@ fn finish_pending(owner: f64, synthetic: bool) {
         return;
     }
     let state = scope.root_nanbox(state(owner.get()));
-    let array = scope.root_nanbox(p::own_get(state.get(), "closeCallbacks"));
+    let array = scope.root_nanbox(p::record_get(state.get(), "closeCallbacks"));
     if !JsValue::from_bits(array.get().to_bits()).is_pointer() {
         return;
     }
@@ -564,7 +565,7 @@ fn finish_pending(owner: f64, synthetic: bool) {
         })
         .collect();
     for group in groups {
-        if !JsValue::from_bits(p::own_get(group.get(), "listenerClosed").to_bits()).to_bool() {
+        if !JsValue::from_bits(p::record_get(group.get(), "listenerClosed").to_bits()).to_bool() {
             continue;
         }
         let group = scope.root_nanbox(closed::take(state.get(), closed::parts(group.get())));
@@ -585,7 +586,7 @@ pub(crate) fn listener_closed(owner: f64, event: &tl::NetCompletion) {
     if !JsValue::from_bits(group.get().to_bits()).is_pointer() {
         return;
     }
-    p::own_set(
+    p::record_set(
         group.get(),
         "listenerClosed",
         f64::from_bits(JsValue::TRUE.bits()),
@@ -601,7 +602,7 @@ pub(crate) fn child_closed(child: f64, group: f64) {
     if !JsValue::from_bits(group.get().to_bits()).is_pointer() {
         return;
     }
-    let children = scope.root_nanbox(p::own_get(group.get(), "children"));
+    let children = scope.root_nanbox(p::record_get(group.get(), "children"));
     let count = unsafe { perry_ffi::js_array_length(array_ptr(children.get())) };
     let values: Vec<_> = (0..count)
         .map(|index| {
@@ -628,8 +629,8 @@ pub(crate) fn child_closed(child: f64, group: f64) {
             } as i64);
         }
     }
-    p::own_set(group.get(), "children", p::boxed_addr(remaining.get()));
-    let server = scope.root_nanbox(p::own_get(group.get(), "server"));
+    p::record_set(group.get(), "children", p::boxed_addr(remaining.get()));
+    let server = scope.root_nanbox(p::record_get(group.get(), "server"));
     let count = JsValue::from_bits(p::own_get(server.get(), "_connections").to_bits()).to_number();
     p::own_set(server.get(), "_connections", (count - 1.0).max(0.0));
     finish_pending(server.get(), true);
@@ -641,7 +642,7 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     let server = link(owner.get());
     let _account = p::AccountServer(server);
     let state = scope.root_nanbox(state(owner.get()));
-    let group = scope.root_nanbox(p::own_get(state.get(), "activeGroup"));
+    let group = scope.root_nanbox(p::record_get(state.get(), "activeGroup"));
     let Some((allow_half_open, pause_on_connect, tls_config, snapshot)) = (unsafe {
         p::server_ptr(server).ok().and_then(|payload| {
             let fields = &(*payload).ext;
@@ -664,7 +665,7 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
         events::emit(owner.get(), "drop", &[]);
         return; // The runtime closes the accepted install slot on return.
     }
-    let resource = scope.root_nanbox(p::own_get(group.get(), provider::SERVER));
+    let resource = scope.root_nanbox(p::record_get(group.get(), provider::SERVER));
     let child = scope.root_nanbox(socket::new_socket_with_trigger(
         super::payload_io::ROUTE,
         p::undefined(),
@@ -699,14 +700,14 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     );
     p::own_set(child_state.get(), "server", owner.get());
     p::own_set(child_state.get(), "serverGroup", group.get());
-    let children = scope.root_nanbox(p::own_get(group.get(), "children"));
+    let children = scope.root_nanbox(p::record_get(group.get(), "children"));
     let updated = unsafe {
         perry_ffi::js_array_push(
             array_ptr(children.get()),
             JsValue::from_bits(child.get().to_bits()),
         )
     };
-    p::own_set(group.get(), "children", p::boxed_addr(updated as i64));
+    p::record_set(group.get(), "children", p::boxed_addr(updated as i64));
     p::own_set(owner.get(), "_connections", count + 1.0);
     if let Some(config) = tls_config {
         if let Err(message) = super::payload_tls::install_server(child.get(), config) {

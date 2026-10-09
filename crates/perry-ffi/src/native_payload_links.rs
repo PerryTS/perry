@@ -176,6 +176,13 @@ extern "C" {
         family: *const PayloadFamily,
         bytes: usize,
     );
+    fn js_perry_payload_project(
+        value: f64,
+        family: *const PayloadFamily,
+        link: *mut usize,
+        state: *mut f64,
+        miss: *mut i32,
+    ) -> *mut c_void;
     fn js_perry_payload_receiver_link(
         value: f64,
         family: *const PayloadFamily,
@@ -248,6 +255,40 @@ pub fn receiver_link(value: f64, family: &'static PayloadFamily) -> Result<Owner
     match unsafe { js_perry_payload_receiver_link(value, family, &mut miss) } {
         0 => Err(miss_code(miss)),
         raw => Ok(OwnerLink(raw)),
+    }
+}
+
+/// Borrowed facts for one callback-free window. Never retain any field across
+/// allocation, JS, close or reopen; state is an ordinary traced owner edge.
+pub struct PayloadWindow<T> {
+    /// The family's live native resource for this window.
+    pub payload: *mut T,
+    /// The receiver's stable owner link.
+    pub link: OwnerLink,
+    /// Its existing ordinary JS state, or undefined.
+    pub state: f64,
+}
+
+/// Validate the receiver once and obtain its payload, link and existing state.
+/// # Safety
+/// T matches the family; the receiver is rooted. End the window before any
+/// allocation, JS, release or reopen. No field is an independent GC root.
+pub unsafe fn project<T>(
+    value: f64,
+    family: &'static PayloadFamily,
+) -> Result<PayloadWindow<T>, PayloadMiss> {
+    let mut link = 0;
+    let mut state = f64::from_bits(crate::JsValue::UNDEFINED.bits());
+    let mut miss = 0;
+    let payload = js_perry_payload_project(value, family, &mut link, &mut state, &mut miss);
+    if payload.is_null() {
+        Err(miss_code(miss))
+    } else {
+        Ok(PayloadWindow {
+            payload: payload.cast(),
+            link: OwnerLink(link),
+            state,
+        })
     }
 }
 

@@ -450,6 +450,51 @@ pub unsafe extern "C" fn js_perry_payload_proto_inherit(proto: *mut c_void, pare
     np::PayloadPrototype::from_raw(proto.cast()).inherit(parent);
 }
 
+/// Project one callback-free window after one receiver/family validation.
+/// The state and link outputs are borrowed stack values, never retained.
+///
+/// # Safety
+/// family is static; the receiver is rooted. Outputs are writable stack slots.
+/// End all returned borrows before JS, allocation, close or reopen.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_project(
+    value: f64,
+    family: *const PerryPayloadFamily,
+    out_link: *mut usize,
+    out_state: *mut f64,
+    out_miss: *mut i32,
+) -> *mut c_void {
+    let Some(family) = checked_family(family) else {
+        write_miss(out_miss, -1);
+        return std::ptr::null_mut();
+    };
+    let Some(cell) = family_cell(value, family) else {
+        write_miss(out_miss, -1);
+        return std::ptr::null_mut();
+    };
+    if (*cell).finalized != 0
+        || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+        || (*cell).flags & np::CLOSING != 0
+        || (*cell).resource_ptr.is_null()
+    {
+        write_miss(out_miss, -2);
+        return std::ptr::null_mut();
+    }
+    // family_cell proved the object's class encoding, descriptor and vtable.
+    // Reading its existing state cannot allocate or invoke user code.
+    let obj = crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
+    let state = np::raw_js_state(obj).map_or_else(bytes_undefined, |state| {
+        f64::from_bits(crate::value::JSValue::object_ptr(state.cast()).bits())
+    });
+    // GC_STORE_AUDIT(STACK): borrowed outputs consumed before any safepoint.
+    out_link.write(cell as usize);
+    // GC_STORE_AUDIT(STACK): caller roots state before allocating or calling JS.
+    out_state.write(state);
+    (*cell).resource_ptr
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,7 +625,31 @@ mod tests {
                 state.get_nanbox_f64().to_bits(),
                 js_perry_payload_js_state(owner.get_nanbox_f64(), &family, 0).to_bits()
             );
+            let mut projected_link = 0;
+            let mut projected_state = bytes_undefined();
+            let mut miss = 0;
+            assert_eq!(
+                js_perry_payload_project(
+                    owner.get_nanbox_f64(),
+                    &family,
+                    &mut projected_link,
+                    &mut projected_state,
+                    &mut miss
+                ),
+                data.cast()
+            );
+            assert_eq!(projected_link, link);
+            assert_eq!(projected_state.to_bits(), state.get_nanbox_f64().to_bits());
             assert_eq!(js_perry_payload_close(owner.get_nanbox_f64(), &family), 0);
+            assert!(js_perry_payload_project(
+                owner.get_nanbox_f64(),
+                &family,
+                &mut projected_link,
+                &mut projected_state,
+                &mut miss
+            )
+            .is_null());
+            assert_eq!(miss, -2);
             assert_eq!(
                 js_perry_payload_lifecycle(owner.get_nanbox_f64(), &family),
                 3

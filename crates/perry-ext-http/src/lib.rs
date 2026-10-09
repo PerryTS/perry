@@ -107,8 +107,8 @@ use bytes::Bytes;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle, get_handle_mut,
     iter_handles_of_mut, json_stringify, notify_main_thread, register_agent_event_pump,
-    register_handle, with_handle_mut, ArrayHeader, GcRootVisitor, Handle, JsClosure,
-    JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    register_handle, with_handle_mut, ArrayHeader, Handle, JsClosure, JsString, JsValue,
+    ObjectHeader, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
@@ -329,16 +329,13 @@ fn client_has_pending() -> bool {
 }
 
 pub(crate) fn push_event(ev: PendingHttpEvent) {
-    // A completion can be produced by a transport thread acting for another
-    // agent. Its request (or idle Agent), not the producer, owns the callback.
-    let owner = match &ev {
-        PendingHttpEvent::AgentIdleExpire { agent_handle, .. } => {
-            with_handle_mut::<agent::AgentHandle, _, _>(*agent_handle, |agent| agent.owner_agent)
-        }
-        _ => with_handle_mut::<ClientRequestHandle, _, _>(pending_request_handle(&ev), |request| {
+    // The issuing request owns the callback, including transport completions
+    // produced on another thread. Idle expiry belongs to the socket payload
+    // and no longer creates a PendingHttpEvent.
+    let owner =
+        with_handle_mut::<ClientRequestHandle, _, _>(pending_request_handle(&ev), |request| {
             request.owner_agent
-        }),
-    };
+        });
     let Some(owner) = owner else { return };
     if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
         q.push((owner, ev));

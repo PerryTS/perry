@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn borrowed_ffi_dispatch_keeps_one_root_and_leaves_exit_to_its_owner() {
+    let base = js_ffi_root_scope_enter();
+    let index = js_ffi_root_push_nanbox(13.0f64.to_bits());
+    {
+        let view = unsafe { RuntimeHandleScope::borrow_ffi(base) };
+        let root = unsafe { view.ffi_nanbox_handle(index) };
+        assert_eq!(RuntimeHandleScope::active_len_for_tests(), base + 1);
+        {
+            let nested = RuntimeHandleScope::new();
+            for i in 0..257 {
+                nested.root_nanbox_f64(i as f64);
+            }
+            root.set_nanbox_f64(31.0);
+        }
+        assert_eq!(js_ffi_root_get_nanbox(index), 31.0f64.to_bits());
+        view.root_nanbox_f64(17.0);
+    }
+    // Dropping the borrowed view cannot truncate either the binding's roots
+    // or the arguments/listener roots added while delivering its event.
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), base + 2);
+    assert_eq!(js_ffi_root_get_nanbox(index), 31.0f64.to_bits());
+    js_ffi_root_scope_exit(base);
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), base);
+}
+
+#[test]
 fn heap_word_iterator_reads_refreshed_slots_after_stack_growth() {
     let scope = RuntimeHandleScope::new();
     let _unrelated = scope.root_nanbox_f64(19.0);

@@ -42,6 +42,7 @@ use event_emitter::{
     ns_prepend_once_listener2, ns_raw_listeners, ns_remove_all_listeners1, ns_remove_listener2,
     ns_set_max_listeners, remove_stream_listener_for_event, stream_listener_count_for_event,
 };
+pub(crate) use event_emitter::{emit_stream_event_rooted, RootedArgs};
 
 /// Dispatch `event` to the listeners registered on `stream` through node:stream's
 /// own emitter registry.
@@ -1840,14 +1841,14 @@ mod destroy_state;
 pub(crate) mod native_hooks;
 mod proto_methods;
 mod state_record;
-#[cfg(test)]
-pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+use state_record::*;
 pub(crate) use state_record::{
     is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
     store_record_payload_cell,
 };
-use state_record::*;
-pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+#[cfg(test)]
+pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;

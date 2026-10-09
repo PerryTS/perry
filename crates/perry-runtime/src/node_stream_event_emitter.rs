@@ -313,6 +313,23 @@ pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event
     stream_listener_count_for_event(stream, event) as f64
 }
 
+/// Callback-free listener facts for a short native event name. A negative
+/// answer asks the binding to use the ordinary accessor-aware dispatch path.
+/// # Safety
+/// event is readable for len bytes; stream is live for this read.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_stream_listener_count_fast(
+    stream: f64,
+    event: *const u8,
+    len: usize,
+) -> i64 {
+    let Some(event) = JSValue::try_short_string(std::slice::from_raw_parts(event, len)) else {
+        return -1;
+    };
+    listeners_of_fast(stream, f64::from_bits(event.bits()))
+        .map_or(-1, |list| listener_list_len(list) as i64)
+}
+
 pub(super) extern "C" fn ns_event_names(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -1624,7 +1641,7 @@ pub(super) fn has_stream_listeners(stream: f64, event: f64) -> bool {
 /// [`INLINE_ARGS`] are held without a heap allocation.
 const INLINE_ARGS: usize = 4;
 
-enum RootedArgs<'scope> {
+pub(crate) enum RootedArgs<'scope> {
     Inline(
         [Option<crate::gc::RuntimeHandle<'scope>>; INLINE_ARGS],
         usize,
@@ -1633,7 +1650,7 @@ enum RootedArgs<'scope> {
 }
 
 impl<'scope> RootedArgs<'scope> {
-    fn new(scope: &'scope crate::gc::RuntimeHandleScope, args: &[f64]) -> Self {
+    pub(crate) fn new(scope: &'scope crate::gc::RuntimeHandleScope, args: &[f64]) -> Self {
         if args.len() > INLINE_ARGS {
             return RootedArgs::Heap(scope.root_nanbox_f64_slice(args));
         }
@@ -1645,7 +1662,7 @@ impl<'scope> RootedArgs<'scope> {
     }
 
     /// The arguments as they are now (a collection may have moved them).
-    fn with_live<R>(&self, f: impl FnOnce(&[f64]) -> R) -> R {
+    pub(crate) fn with_live<R>(&self, f: impl FnOnce(&[f64]) -> R) -> R {
         match self {
             RootedArgs::Inline(handles, len) => {
                 let mut live = [0f64; INLINE_ARGS];
@@ -1671,6 +1688,18 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     let event_h = scope.root_nanbox_f64(event);
     let arg_handles = RootedArgs::new(&scope, args);
 
+    emit_stream_event_rooted(&scope, &stream_h, &event_h, &arg_handles)
+}
+
+/// Native events share their dispatch roots with the async-provider boundary.
+pub(crate) fn emit_stream_event_rooted(
+    scope: &crate::gc::RuntimeHandleScope,
+    stream_h: &crate::gc::RuntimeHandle<'_>,
+    event_h: &crate::gc::RuntimeHandle<'_>,
+    arg_handles: &RootedArgs<'_>,
+) -> f64 {
+    let stream = stream_h.get_nanbox_f64();
+    let event = event_h.get_nanbox_f64();
     let is_error = super::string_value_eq(event, b"error");
     if !is_error {
         // The shapes' answer for `this._events[type]`: no listener, or one.
@@ -1680,14 +1709,14 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
             }
             if is_callable_value(handler) {
                 let handler = scope.root_nanbox_f64(handler);
-                dispatch_listener(&stream_h, &event_h, &arg_handles, &handler, false);
+                dispatch_listener(stream_h, event_h, arg_handles, &handler, false);
                 return f64::from_bits(super::TAG_TRUE);
             }
         }
     }
     if is_error {
-        if let Some(first) = args.first() {
-            let first = scope.root_nanbox_f64(*first);
+        if let Some(first) = arg_handles.with_live(|args| args.first().copied()) {
+            let first = scope.root_nanbox_f64(first);
             let key = super::hidden_error_key();
             super::set_hidden_value(stream_h.get_nanbox_f64(), key, first.get_nanbox_f64());
             super::refresh_readable_aborted_flag(stream_h.get_nanbox_f64());
@@ -1701,7 +1730,7 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
                 let found = scope.root_nanbox_f64(found);
                 let monitor = error_monitor_event();
                 if !is_undefined(get_key(found.get_nanbox_f64(), monitor)) {
-                    let mut monitor_args = Vec::with_capacity(args.len() + 1);
+                    let mut monitor_args = Vec::new();
                     monitor_args.push(monitor);
                     arg_handles.with_live(|live| monitor_args.extend_from_slice(live));
                     emit_via_method(stream_h.get_nanbox_f64(), &monitor_args);
@@ -1732,7 +1761,7 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     if is_callable_value(handler) {
         // One listener: nothing to snapshot.
         let handler = scope.root_nanbox_f64(handler);
-        dispatch_listener(&stream_h, &event_h, &arg_handles, &handler, is_error);
+        dispatch_listener(stream_h, event_h, arg_handles, &handler, is_error);
         return f64::from_bits(super::TAG_TRUE);
     }
     // node clones the array before dispatch, so listeners added or removed
@@ -1747,7 +1776,7 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     };
     let listener_handles = scope.root_nanbox_f64_slice(&listener_values);
     for handle in &listener_handles {
-        dispatch_listener(&stream_h, &event_h, &arg_handles, handle, is_error);
+        dispatch_listener(stream_h, event_h, arg_handles, handle, is_error);
     }
     f64::from_bits(super::TAG_TRUE)
 }

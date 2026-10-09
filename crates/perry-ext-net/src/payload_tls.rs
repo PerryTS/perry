@@ -140,11 +140,27 @@ pub(crate) fn queued(link: OwnerLink) -> usize {
 pub(crate) fn write(owner: f64, bytes: &[u8], user: u64) -> Result<usize, tl::NetError> {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
-    let link = socket::link(owner.get());
-    let _account = p::AccountSocket(link);
-    unsafe {
-        let payload = p::socket_ptr(link).map_err(|_| bad_fd("write"))?;
-        let fields = &mut (*payload).ext;
+    let window =
+        unsafe { perry_ffi::native_payload::project::<p::SocketPayload>(owner.get(), &p::SOCKET) }
+            .map_err(|_| bad_fd("write"))?;
+    let _account = p::AccountSocket(window.link);
+    unsafe { write_proven(owner.get(), window, bytes, user) }
+}
+
+/// Submit through the caller's proven payload. `owner` is rooted and the
+/// window is current; the caller accounts retained bytes after submission.
+/// No JS may run before the native borrow ends. TLS drive
+/// runs only after that borrow, and may close or reopen the owner.
+pub(crate) unsafe fn write_proven(
+    owner: f64,
+    window: perry_ffi::native_payload::PayloadWindow<p::SocketPayload>,
+    bytes: &[u8],
+    user: u64,
+) -> Result<usize, tl::NetError> {
+    let link = window.link;
+    {
+        let payload = &mut *window.payload;
+        let fields = &mut payload.ext;
         if let Some(layer) = fields.tls.as_mut() {
             layer.session.write(bytes);
             layer.pending.push_back(TlsWrite {
@@ -160,15 +176,10 @@ pub(crate) fn write(owner: f64, bytes: &[u8], user: u64) -> Result<usize, tl::Ne
                 .map(|write| write.0.len())
                 .sum());
         } else {
-            return tl::link_write(
-                &mut *p::socket_core(link).map_err(|_| bad_fd("write"))?,
-                link,
-                bytes,
-                user,
-            );
+            return tl::link_write(&mut payload.core, link, bytes, user);
         }
     }
-    drive(owner.get());
+    drive(owner);
     Ok(queued(link))
 }
 
@@ -426,17 +437,17 @@ fn publish(owner: f64, facts: &crate::tls::HandshakeFacts) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(socket::state(owner.get()));
-    p::own_set(
+    p::record_set(
         state.get(),
         "tlsConnected",
         f64::from_bits(JsValue::TRUE.bits()),
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "encrypted",
         f64::from_bits(JsValue::TRUE.bits()),
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "authorized",
         f64::from_bits(JsValue::from_bool(facts.authorized).bits()),
@@ -446,11 +457,11 @@ fn publish(owner: f64, facts: &crate::tls::HandshakeFacts) {
         p::own_set(cipher.get(), "name", events::string(name));
         p::own_set(cipher.get(), "standardName", events::string(standard));
         p::own_set(cipher.get(), "version", events::string(facts.protocol));
-        p::own_set(state.get(), "cipher", cipher.get());
+        p::record_set(state.get(), "cipher", cipher.get());
     }
-    p::own_set(state.get(), "protocol", events::string(facts.protocol));
-    p::own_set(state.get(), "servername", events::string(&facts.servername));
-    p::own_set(
+    p::record_set(state.get(), "protocol", events::string(facts.protocol));
+    p::record_set(state.get(), "servername", events::string(&facts.servername));
+    p::record_set(
         state.get(),
         "alpnProtocol",
         if facts.alpn.is_empty() {
@@ -459,7 +470,7 @@ fn publish(owner: f64, facts: &crate::tls::HandshakeFacts) {
             events::string(&String::from_utf8_lossy(&facts.alpn))
         },
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "authorizationError",
         if facts.authorized {
@@ -468,12 +479,12 @@ fn publish(owner: f64, facts: &crate::tls::HandshakeFacts) {
             events::string("DEPTH_ZERO_SELF_SIGNED_CERT")
         },
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "peerCertificateDer",
         f64::from_bits(JsValue::from_object_ptr(perry_ffi::alloc_buffer(&facts.peer)).bits()),
     );
-    p::own_set(
+    p::record_set(
         state.get(),
         "ownCertificateDer",
         f64::from_bits(
@@ -486,11 +497,11 @@ pub(crate) fn settle_upgrade(owner: f64, failure: Option<&str>) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let promise = scope.root_nanbox(p::own_get(state.get(), "upgradePromise"));
+    let promise = scope.root_nanbox(p::record_get(state.get(), "upgradePromise"));
     if !JsValue::from_bits(promise.get().to_bits()).is_pointer() {
         return;
     }
-    p::own_set(state.get(), "upgradePromise", p::undefined());
+    p::record_set(state.get(), "upgradePromise", p::undefined());
     let promise = unsafe {
         perry_ffi::JsPromise::from_raw(
             JsValue::from_bits(promise.get().to_bits()).as_pointer::<perry_ffi::Promise>(),

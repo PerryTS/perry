@@ -6,6 +6,81 @@ fn undefined() -> f64 {
     bytes_undefined()
 }
 
+/// Emit directly from a native argument span. The emitter and provider hooks
+/// share one root scope; no intermediate JS array survives this dispatch.
+///
+/// # Safety
+/// args is readable for len NaN-boxed values, or null with len zero.
+/// event_bytes is readable for event_len bytes.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_event_emit_span_in_resource(
+    resource: f64,
+    owner: f64,
+    event_bytes: *const u8,
+    event_len: usize,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let resource = scope.root_nanbox_f64(resource);
+    let owner = scope.root_nanbox_f64(owner);
+    emit_span_rooted(&scope, &resource, &owner, event_bytes, event_len, args, len)
+}
+
+/// Borrow the binding's one dispatch scope and existing owner/resource roots.
+/// # Safety
+/// scope_base and both slot tokens belong to a live FFI scope on this thread.
+/// The byte/argument spans have the same contract as emit_span_in_resource.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_event_emit_span_rooted(
+    scope_base: usize,
+    resource_slot: usize,
+    owner_slot: usize,
+    event_bytes: *const u8,
+    event_len: usize,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::borrow_ffi(scope_base);
+    let resource = scope.ffi_nanbox_handle(resource_slot);
+    let owner = scope.ffi_nanbox_handle(owner_slot);
+    emit_span_rooted(&scope, &resource, &owner, event_bytes, event_len, args, len)
+}
+
+unsafe fn emit_span_rooted(
+    scope: &crate::gc::RuntimeHandleScope,
+    resource: &crate::gc::RuntimeHandle<'_>,
+    owner: &crate::gc::RuntimeHandle<'_>,
+    event_bytes: *const u8,
+    event_len: usize,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let args = if args.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args, len)
+    };
+    let args = crate::node_stream::RootedArgs::new(scope, args);
+    let event_bytes = std::slice::from_raw_parts(event_bytes, event_len);
+    let event = crate::value::JSValue::try_short_string(event_bytes).unwrap_or_else(|| {
+        crate::value::JSValue::string_ptr(crate::string::js_string_from_bytes(
+            event_bytes.as_ptr(),
+            event_len as u32,
+        ))
+    });
+    let event = scope.root_nanbox_f64(f64::from_bits(event.bits()));
+    let emit = || crate::node_stream::emit_stream_event_rooted(scope, owner, &event, &args);
+    #[cfg(test)]
+    if std::env::var("PERRY_TEST_NET_SABOTAGE").as_deref() == Ok("event_catch") {
+        return emit();
+    }
+    match crate::async_hooks::owned_provider_scope_rooted(scope, resource, emit) {
+        Ok(value) => value,
+        Err(error) => event_exception(error),
+    }
+}
+
 fn event_exception(error: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let error = scope.root_nanbox_f64(error);
@@ -114,6 +189,22 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
     } else {
         std::slice::from_raw_parts(args, len)
     };
+    if args.len() <= 4 {
+        let args = crate::node_stream::RootedArgs::new(&scope, args);
+        return match crate::async_hooks::owned_provider_scope_rooted(&scope, &resource, || {
+            args.with_live(|args| {
+                crate::closure::native_call_value_this(
+                    callback.get_nanbox_f64(),
+                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            })
+        }) {
+            Ok(value) => value,
+            Err(error) => event_exception(error),
+        };
+    }
     let args = scope.root_nanbox_f64_slice(args);
     let mut values = Vec::with_capacity(args.len());
     match crate::async_hooks::owned_provider_scope(resource.get_nanbox_f64(), || {

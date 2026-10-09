@@ -30,6 +30,11 @@ pub struct TransientRootScope {
 }
 
 impl TransientRootScope {
+    /// Existing scope token for a runtime dispatch that borrows these roots.
+    /// Valid only on this thread until this scope drops.
+    pub fn runtime_token(&self) -> usize {
+        self.base
+    }
     /// Snapshot the current stack depth; `Drop` truncates back to it.
     pub fn enter() -> Self {
         Self {
@@ -85,6 +90,10 @@ pub struct TransientRootedNanbox {
 }
 
 impl TransientRootedNanbox {
+    /// Existing root token, valid only while its creating scope remains live.
+    pub fn runtime_token(&self) -> usize {
+        self.index
+    }
     /// The post-collection value. Re-read at every use.
     pub fn get(&self) -> f64 {
         f64::from_bits(unsafe { js_ffi_root_get_nanbox(self.index) })

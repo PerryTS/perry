@@ -124,11 +124,11 @@ pub(crate) fn pipe(owner: f64, dest: f64, options: f64) -> f64 {
         perry_ffi::js_function_info!(drain, 0; with_flags(perry_ffi::FN_BUILTIN)),
         &[owner.get()],
     ));
-    p::own_set(record.get(), "dest", dest.get());
-    p::own_set(record.get(), "data", on_data.get());
-    p::own_set(record.get(), "end", on_end.get());
-    p::own_set(record.get(), "drain", on_drain.get());
-    let mut records = scope.root_nanbox(p::own_get(state.get(), "pipes"));
+    p::record_set(record.get(), "dest", dest.get());
+    p::record_set(record.get(), "data", on_data.get());
+    p::record_set(record.get(), "end", on_end.get());
+    p::record_set(record.get(), "drain", on_drain.get());
+    let mut records = scope.root_nanbox(p::record_get(state.get(), "pipes"));
     if !JsValue::from_bits(records.get().to_bits()).is_pointer() {
         records = scope.root_nanbox(p::boxed_addr(unsafe { perry_ffi::js_array_alloc(0) } as i64));
     }
@@ -138,7 +138,7 @@ pub(crate) fn pipe(owner: f64, dest: f64, options: f64) -> f64 {
             JsValue::from_bits(record.get().to_bits()),
         )
     };
-    p::own_set(state.get(), "pipes", p::boxed_addr(updated as i64));
+    p::record_set(state.get(), "pipes", p::boxed_addr(updated as i64));
     listen(owner.get(), "data", on_data.get(), false);
     if ends {
         listen(owner.get(), "end", on_end.get(), false);
@@ -154,7 +154,7 @@ pub(crate) fn unpipe(owner: f64, dest: f64) -> f64 {
     let dest = scope.root_nanbox(dest);
     socket::link(owner.get());
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let records = scope.root_nanbox(p::own_get(state.get(), "pipes"));
+    let records = scope.root_nanbox(p::record_get(state.get(), "pipes"));
     if !JsValue::from_bits(records.get().to_bits()).is_pointer() {
         return owner.get();
     }
@@ -169,7 +169,7 @@ pub(crate) fn unpipe(owner: f64, dest: f64) -> f64 {
     let mut keep = scope.root_addr(unsafe { perry_ffi::js_array_alloc(count) } as i64);
     let mut removed = Vec::new();
     for value in values {
-        let target = scope.root_nanbox(p::own_get(value.get(), "dest"));
+        let target = scope.root_nanbox(p::record_get(value.get(), "dest"));
         if JsValue::from_bits(dest.get().to_bits()).is_undefined()
             || target.get().to_bits() == dest.get().to_bits()
         {
@@ -184,12 +184,12 @@ pub(crate) fn unpipe(owner: f64, dest: f64) -> f64 {
         }
     }
     // Publish removal before any destination listener can pipe again.
-    p::own_set(state.get(), "pipes", p::boxed_addr(keep.get()));
+    p::record_set(state.get(), "pipes", p::boxed_addr(keep.get()));
     for record in removed {
-        let target = scope.root_nanbox(p::own_get(record.get(), "dest"));
-        let on_data = scope.root_nanbox(p::own_get(record.get(), "data"));
-        let on_end = scope.root_nanbox(p::own_get(record.get(), "end"));
-        let on_drain = scope.root_nanbox(p::own_get(record.get(), "drain"));
+        let target = scope.root_nanbox(p::record_get(record.get(), "dest"));
+        let on_data = scope.root_nanbox(p::record_get(record.get(), "data"));
+        let on_end = scope.root_nanbox(p::record_get(record.get(), "end"));
+        let on_drain = scope.root_nanbox(p::record_get(record.get(), "drain"));
         listen(owner.get(), "data", on_data.get(), true);
         if socket::is_callback(on_end.get()) {
             listen(owner.get(), "end", on_end.get(), true);

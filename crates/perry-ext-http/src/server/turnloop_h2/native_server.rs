@@ -27,7 +27,7 @@ fn with_codec<R>(socket: &RootedSocket, f: impl FnOnce(&mut H2Conn) -> R) -> Opt
     }
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let codec = scope.root_nanbox(net::own_get(state.get(), "h2"));
+    let codec = scope.root_nanbox(net::record_get(state.get(), "h2"));
     unsafe { np::payload_mut::<H2Conn>(codec.get(), &FAMILY).ok().map(f) }
 }
 
@@ -81,7 +81,7 @@ unsafe fn release(owner: f64) {
     }
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let codec = scope.root_nanbox(net::own_get(state.get(), "h2"));
+    let codec = scope.root_nanbox(net::record_get(state.get(), "h2"));
     np::close(codec.get(), &FAMILY);
 }
 
@@ -194,7 +194,7 @@ unsafe extern "C" fn secure_ready(closure: *const RawClosureHeader, _: JsThis) -
     };
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let alpn = net::own_get(state.get(), "alpnProtocol");
+    let alpn = net::record_get(state.get(), "alpnProtocol");
     let alpn = crate::server::types::jsvalue_to_owned_string(alpn);
     let choice = with_codec(&socket, |codec| {
         codec.handshaking = false;

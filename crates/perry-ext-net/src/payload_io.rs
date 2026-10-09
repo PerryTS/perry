@@ -56,6 +56,46 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     };
     let scope = TransientRootScope::enter();
     let original = scope.root_nanbox(owner);
+    if event.kind == tl::NET_DATA && event.flags & tl::NET_FLAG_STALE == 0 {
+        unsafe {
+            if let Ok(window) = np::project::<p::SocketPayload>(original.get(), &p::SOCKET) {
+                let payload = &mut *window.payload;
+                if payload.ext.tls.is_none() && !payload.ext.tls_parent {
+                    if let Some(listeners) = events::listener_count_fast(original.get(), "data") {
+                        let bytes = event.bytes();
+                        payload.ext.bytes_read =
+                            payload.ext.bytes_read.saturating_add(bytes.len() as u64);
+                        socket::refresh_timeout_proven(payload, window.link);
+                        socket::data_proven(&scope, &original, window, bytes, listeners);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    // Plain write acknowledgements carry no JS values. The completion's link
+    // pins its owner, and this one projection proves the callback-free window.
+    if event.kind == tl::NET_WROTE && event.user == 0 && event.flags & tl::NET_FLAG_STALE == 0 {
+        unsafe {
+            if let Ok(window) = np::project::<p::SocketPayload>(original.get(), &p::SOCKET) {
+                let payload = &mut *window.payload;
+                if payload.ext.tls.is_none()
+                    && !payload.ext.tls_parent
+                    && payload.ext.coalesced_users.is_empty()
+                    && !payload.ext.need_drain
+                {
+                    if tl::link_snapshot_handle(&mut payload.core, window.link).is_some() {
+                        payload.ext.bytes_written =
+                            payload.ext.bytes_written.saturating_add(event.len as u64);
+                        payload.ext.queued =
+                            event.queued.saturating_add(payload.ext.cork_bytes.len());
+                        socket::refresh_timeout_proven(payload, window.link);
+                    }
+                    return;
+                }
+            }
+        }
+    }
     let owner = scope.root_nanbox(
         if p::socket_link(original.get()).is_ok()
             && (event.kind == tl::NET_CLOSED || super::payload_tls::installed(link))
@@ -66,14 +106,14 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     .map(|parts| closed::peek(state.get(), parts))
                     .unwrap_or_else(p::undefined),
             );
-            let saved = scope.root_nanbox(p::own_get(pending.get(), "tlsWrapper"));
+            let saved = scope.root_nanbox(p::record_get(pending.get(), "tlsWrapper"));
             let wrapper = scope.root_nanbox(if p::socket_link(saved.get()).is_ok() {
                 saved.get()
             } else if event.kind != tl::NET_CLOSED
                 || (!JsValue::from_bits(pending.get().to_bits()).is_pointer()
                     && event.flags & tl::NET_FLAG_STALE == 0)
             {
-                let current = scope.root_nanbox(p::own_get(state.get(), "tlsWrapper"));
+                let current = scope.root_nanbox(p::record_get(state.get(), "tlsWrapper"));
                 if p::socket_link(current.get())
                     .is_ok_and(|own| unsafe { p::socket_ptr(own) }.is_ok())
                 {
@@ -210,7 +250,7 @@ pub(crate) fn connected(owner: f64) {
         return;
     }
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let connect = scope.root_nanbox(p::own_get(state.get(), provider::CONNECT));
+    let connect = scope.root_nanbox(p::record_get(state.get(), provider::CONNECT));
     events::emit_in(connect.get(), owner.get(), "connect", &[]);
     provider::retire(connect.get());
     if !matches(link, &snapshot) {
@@ -268,6 +308,22 @@ pub(crate) fn eof(owner: f64) {
 pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    // Most writes have no JS acknowledgement. Keep this callback-free window
+    // on the proven payload: no user Vec, callback roots or provider lookup.
+    unsafe {
+        if let Ok(window) = np::project::<p::SocketPayload>(owner.get(), &p::SOCKET) {
+            let payload = &mut *window.payload;
+            if user == 0 && payload.ext.coalesced_users.is_empty() && !payload.ext.need_drain {
+                if tl::link_snapshot_handle(&mut payload.core, window.link).is_none() {
+                    return;
+                }
+                payload.ext.bytes_written = payload.ext.bytes_written.saturating_add(len as u64);
+                payload.ext.queued = queued.saturating_add(payload.ext.cork_bytes.len());
+                socket::refresh_timeout_proven(payload, window.link);
+                return;
+            }
+        }
+    }
     let link = socket::link(owner.get());
     if snapshot(link).is_none() {
         return;
@@ -330,7 +386,7 @@ pub(crate) fn shutdown(owner: f64, user: u64) {
         return;
     };
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let resource = scope.root_nanbox(p::own_get(state.get(), provider::SHUTDOWN));
+    let resource = scope.root_nanbox(p::record_get(state.get(), provider::SHUTDOWN));
     let users = unsafe {
         p::socket_ptr(link).ok().map(|payload| {
             let fields = &mut (*payload).ext;
@@ -391,8 +447,8 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
             record = scope.root_nanbox(closed::record(
                 unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
             ));
-            let group = scope.root_nanbox(p::own_get(state.get(), "serverGroup"));
-            p::own_set(record.get(), "serverGroup", group.get());
+            let group = scope.root_nanbox(p::record_get(state.get(), "serverGroup"));
+            p::record_set(record.get(), "serverGroup", group.get());
         }
         socket::cache_before_release(owner.get(), link);
         if own != link {
@@ -401,7 +457,7 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
             let parent_record = scope.root_nanbox(closed::record(
                 unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
             ));
-            let group = scope.root_nanbox(p::own_get(parent_state.get(), "serverGroup"));
+            let group = scope.root_nanbox(p::record_get(parent_state.get(), "serverGroup"));
             p::own_set(parent_record.get(), "serverGroup", group.get());
             provider::capture_socket(parent_state.get(), parent_record.get());
             closed::append(parent_state.get(), parent_record.get());
@@ -442,19 +498,19 @@ fn emit_socket_closed(owner: f64, record: f64) {
     let record = scope.root_nanbox(record);
     let record_exists = JsValue::from_bits(record.get().to_bits()).is_pointer();
     let error = scope.root_nanbox(if record_exists {
-        p::own_get(record.get(), "error")
+        p::record_get(record.get(), "error")
     } else {
         p::undefined()
     });
     let group = scope.root_nanbox(if record_exists {
-        p::own_get(record.get(), "serverGroup")
+        p::record_get(record.get(), "serverGroup")
     } else {
         p::undefined()
     });
     let had_error = !JsValue::from_bits(error.get().to_bits()).is_undefined()
         && !JsValue::from_bits(error.get().to_bits()).is_null();
     let resource = scope.root_nanbox(if record_exists {
-        p::own_get(record.get(), provider::TCP)
+        p::record_get(record.get(), provider::TCP)
     } else {
         p::undefined()
     });
@@ -462,8 +518,8 @@ fn emit_socket_closed(owner: f64, record: f64) {
     if had_error {
         events::emit_in(resource.get(), owner.get(), "error", &[error.get()]);
     }
-    let had_handle =
-        !record_exists || p::own_get(record.get(), "hadHandle").to_bits() != JsValue::FALSE.bits();
+    let had_handle = !record_exists
+        || p::record_get(record.get(), "hadHandle").to_bits() != JsValue::FALSE.bits();
     let args = if had_handle {
         vec![f64::from_bits(JsValue::from_bool(had_error).bits())]
     } else {
@@ -494,8 +550,8 @@ unsafe extern "C" fn closed_wrapper_tick(closure: *const RawClosureHeader, _: Js
     if np::link_lifecycle(own, &p::SOCKET) == Ok(np::Lifecycle::Closed) {
         return p::undefined();
     }
-    p::own_set(state.get(), "tlsParent", p::undefined());
-    p::own_set(
+    p::record_set(state.get(), "tlsParent", p::undefined());
+    p::record_set(
         state.get(),
         "destroyed",
         f64::from_bits(JsValue::TRUE.bits()),

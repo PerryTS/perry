@@ -44,7 +44,7 @@ pub(crate) fn transport_link(owner: f64) -> Result<OwnerLink, PayloadMiss> {
         return Ok(own);
     }
     let state = unsafe { p::socket_state(own, false) };
-    let parent = p::own_get(state, "tlsParent");
+    let parent = p::record_get(state, "tlsParent");
     if JsValue::from_bits(parent.to_bits()).is_undefined() {
         Ok(own)
     } else {
@@ -84,8 +84,8 @@ pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
     initialize_open_state(owner.get(), state.get());
     p::own_set(owner.get(), "_parent", parent.get());
     let parent_state = scope.root_nanbox(self::state(transport_owner.get()));
-    p::own_set(state.get(), "tlsParent", transport_owner.get());
-    p::own_set(parent_state.get(), "tlsWrapper", owner.get());
+    p::record_set(state.get(), "tlsParent", transport_owner.get());
+    p::record_set(parent_state.get(), "tlsWrapper", owner.get());
     if !open {
         for key in [
             "bytesRead",
@@ -99,8 +99,8 @@ pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
             "peerPort",
             "peerFamily",
         ] {
-            let value = scope.root_nanbox(p::own_get(parent_state.get(), key));
-            p::own_set(state.get(), key, value.get());
+            let value = scope.root_nanbox(p::record_get(parent_state.get(), key));
+            p::record_set(state.get(), key, value.get());
         }
     }
     if open {
@@ -112,8 +112,8 @@ pub(crate) fn new_tls_wrapper(parent: f64) -> f64 {
             provider::CONNECT,
             provider::SHUTDOWN,
         ] {
-            let value = scope.root_nanbox(p::own_get(parent_state.get(), key));
-            p::own_set(state.get(), key, value.get());
+            let value = scope.root_nanbox(p::record_get(parent_state.get(), key));
+            p::record_set(state.get(), key, value.get());
         }
         unsafe {
             p::set_route(parent_link, super::payload_io::TLS_SUBSYSTEM)
@@ -155,7 +155,7 @@ pub(crate) fn initialize_socket(
         None => p::alloc_socket(route, fields),
     });
     let state = scope.root_nanbox(state(owner.get()));
-    p::own_set(
+    p::record_set(
         state.get(),
         "allowHalfOpen",
         f64::from_bits(JsValue::from_bool(allow_half_open).bits()),
@@ -195,10 +195,10 @@ fn initialize_open_state(owner: f64, state: f64) {
         "writableEnded",
         "unconnectedWriteFailed",
     ] {
-        p::own_set(state.get(), key, f64::from_bits(JsValue::FALSE.bits()));
+        p::record_set(state.get(), key, f64::from_bits(JsValue::FALSE.bits()));
     }
     for key in ["bytesRead", "bytesWritten"] {
-        p::own_set(state.get(), key, 0.0);
+        p::record_set(state.get(), key, 0.0);
     }
     for key in [
         "closeError",
@@ -222,11 +222,11 @@ fn initialize_open_state(owner: f64, state: f64) {
         "tlsWrapper",
         "tlsParent",
     ] {
-        p::own_set(state.get(), key, p::undefined());
+        p::record_set(state.get(), key, p::undefined());
     }
-    p::own_set(state.get(), "refed", f64::from_bits(JsValue::TRUE.bits()));
+    p::record_set(state.get(), "refed", f64::from_bits(JsValue::TRUE.bits()));
     let callbacks = unsafe { perry_ffi::js_array_alloc(0) };
-    p::own_set(state.get(), "callbacks", p::boxed_addr(callbacks as i64));
+    p::record_set(state.get(), "callbacks", p::boxed_addr(callbacks as i64));
     let _ = owner;
 }
 
@@ -298,14 +298,15 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
                 super::payload_prototype::throw_miss::<()>(PayloadMiss::Closed)
             });
             let allow =
-                JsValue::from_bits(p::own_get(state.get(), "allowHalfOpen").to_bits()).to_bool();
+                JsValue::from_bits(p::record_get(state.get(), "allowHalfOpen").to_bits()).to_bool();
             (*p::socket_ptr(socket).expect("reopened Socket"))
                 .ext
                 .allow_half_open = allow;
             initialize_open_state(owner.get(), state.get());
         }
     }
-    if JsValue::from_bits(p::own_get(state.get(), "unconnectedWriteFailed").to_bits()).to_bool() {
+    if JsValue::from_bits(p::record_get(state.get(), "unconnectedWriteFailed").to_bits()).to_bool()
+    {
         return owner.get();
     }
     let busy = unsafe {
@@ -332,7 +333,7 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
     let tcp = scope.root_nanbox(if needs_tcp {
         prepare_tcp(owner.get(), u64::MAX)
     } else {
-        p::own_get(state.get(), provider::TCP)
+        p::record_get(state.get(), provider::TCP)
     });
     let connect = scope.root_nanbox(provider::publish(
         state.get(),
@@ -420,14 +421,14 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
     };
     let state = scope.root_nanbox(state(owner.get()));
     if let Some((read, written, read_ended, write_ended, local, peer)) = cached {
-        p::own_set(state.get(), "bytesRead", read as f64);
-        p::own_set(state.get(), "bytesWritten", written as f64);
-        p::own_set(
+        p::record_set(state.get(), "bytesRead", read as f64);
+        p::record_set(state.get(), "bytesWritten", written as f64);
+        p::record_set(
             state.get(),
             "readableEnded",
             f64::from_bits(JsValue::from_bool(read_ended).bits()),
         );
-        p::own_set(
+        p::record_set(
             state.get(),
             "writableEnded",
             f64::from_bits(JsValue::from_bool(write_ended).bits()),
@@ -435,9 +436,9 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
         for (key, address) in [("local", local), ("peer", peer)] {
             if let Some(address) = address {
                 let endpoint = scope.root_nanbox(events::string(&address.ip().to_string()));
-                p::own_set(state.get(), &format!("{key}Address"), endpoint.get());
-                p::own_set(state.get(), &format!("{key}Port"), address.port() as f64);
-                p::own_set(
+                p::record_set(state.get(), &format!("{key}Address"), endpoint.get());
+                p::record_set(state.get(), &format!("{key}Port"), address.port() as f64);
+                p::record_set(
                     state.get(),
                     &format!("{key}Family"),
                     events::string(if address.is_ipv4() { "IPv4" } else { "IPv6" }),
@@ -459,11 +460,11 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
             "peerPort",
             "peerFamily",
         ] {
-            let value = scope.root_nanbox(p::own_get(parent_state.get(), key));
-            p::own_set(state.get(), key, value.get());
+            let value = scope.root_nanbox(p::record_get(parent_state.get(), key));
+            p::record_set(state.get(), key, value.get());
         }
     }
-    p::own_set(
+    p::record_set(
         state.get(),
         "destroyed",
         f64::from_bits(JsValue::TRUE.bits()),
@@ -482,7 +483,7 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     }
     let state = scope.root_nanbox(state(owner.get()));
     if own == socket {
-        let wrapper = scope.root_nanbox(p::own_get(state.get(), "tlsWrapper"));
+        let wrapper = scope.root_nanbox(p::record_get(state.get(), "tlsWrapper"));
         if let Ok(wrapper_link) = p::socket_link(wrapper.get()) {
             if wrapper.get().to_bits() != owner.get().to_bits()
                 && link(wrapper.get()) == socket
@@ -507,8 +508,8 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         } else {
             [0; 4]
         }));
-        p::own_set(record.get(), "error", error_value.get());
-        p::own_set(
+        p::record_set(record.get(), "error", error_value.get());
+        p::record_set(
             record.get(),
             "hadHandle",
             f64::from_bits(JsValue::TRUE.bits()),
@@ -535,7 +536,7 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     let close_record = scope.root_nanbox(super::payload_closed::record(parts.unwrap_or([0; 4])));
     let parent = scope.root_nanbox(unsafe { np::link_event_owner(socket) }.unwrap_or(owner.get()));
     let parent_state = scope.root_nanbox(self::state(parent.get()));
-    let wrapper = scope.root_nanbox(p::own_get(parent_state.get(), "tlsWrapper"));
+    let wrapper = scope.root_nanbox(p::record_get(parent_state.get(), "tlsWrapper"));
     if p::socket_link(wrapper.get()).is_ok() {
         p::own_set(close_record.get(), "tlsWrapper", wrapper.get());
     }
@@ -563,7 +564,7 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
                 p::undefined()
             },
         );
-        let group = scope.root_nanbox(p::own_get(state.get(), "serverGroup"));
+        let group = scope.root_nanbox(p::record_get(state.get(), "serverGroup"));
         p::own_set(close_record.get(), "serverGroup", group.get());
     }
     let result = unsafe {
@@ -581,12 +582,12 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         }
     };
     if had_error {
-        p::own_set(
+        p::record_set(
             state.get(),
             "hadError",
             f64::from_bits(JsValue::TRUE.bits()),
         );
-        p::own_set(state.get(), "closeError", error_value.get());
+        p::record_set(state.get(), "closeError", error_value.get());
     }
     cache_before_release(owner.get(), socket);
     if own != socket {
@@ -632,7 +633,7 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
             let parent_record =
                 scope.root_nanbox(super::payload_closed::record(parts.unwrap_or([0; 4])));
             p::own_set(parent_record.get(), "tlsWrapper", owner.get());
-            let group = scope.root_nanbox(p::own_get(parent_state.get(), "serverGroup"));
+            let group = scope.root_nanbox(p::record_get(parent_state.get(), "serverGroup"));
             p::own_set(parent_record.get(), "serverGroup", group.get());
             provider::capture_socket(parent_state.get(), parent_record.get());
             super::payload_closed::append(parent_state.get(), parent_record.get());
@@ -646,7 +647,7 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
                 "hadHandle",
                 f64::from_bits(JsValue::FALSE.bits()),
             );
-            let group = scope.root_nanbox(p::own_get(parent_state.get(), "serverGroup"));
+            let group = scope.root_nanbox(p::record_get(parent_state.get(), "serverGroup"));
             p::own_set(parent_record.get(), "serverGroup", group.get());
             provider::capture_socket(parent_state.get(), parent_record.get());
             super::payload_io::queue_socket_closed(parent.get(), parent_record.get());
@@ -679,7 +680,7 @@ fn register_callback(owner: f64, callback: f64) -> u64 {
         fields.callback_seq
     };
     let state = scope.root_nanbox(state(owner.get()));
-    let callbacks = scope.root_nanbox(p::own_get(state.get(), "callbacks"));
+    let callbacks = scope.root_nanbox(p::record_get(state.get(), "callbacks"));
     let entry = scope.root_addr(unsafe { perry_ffi::js_array_alloc(2) } as i64);
     unsafe {
         let entry_ptr = perry_ffi::js_array_push(
@@ -696,7 +697,7 @@ fn register_callback(owner: f64, callback: f64) -> u64 {
             array_ptr(callbacks.get()),
             JsValue::from_object_ptr(entry.get() as *mut ArrayHeader),
         );
-        p::own_set(state.get(), "callbacks", p::boxed_addr(updated as i64));
+        p::record_set(state.get(), "callbacks", p::boxed_addr(updated as i64));
     }
     user
 }
@@ -710,7 +711,7 @@ pub(crate) fn take_callback(owner: f64, user: u64) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(state(owner.get()));
-    let callbacks = scope.root_nanbox(p::own_get(state.get(), "callbacks"));
+    let callbacks = scope.root_nanbox(p::record_get(state.get(), "callbacks"));
     unsafe {
         let callbacks_ptr = array_ptr(callbacks.get());
         if callbacks_ptr.is_null() || perry_ffi::js_array_length(callbacks_ptr) == 0 {
@@ -758,12 +759,12 @@ pub(crate) fn cancel_callbacks(owner: f64, state: f64, error: f64) {
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(state);
     let error = scope.root_nanbox(error);
-    let callbacks = scope.root_nanbox(p::own_get(state.get(), "callbacks"));
+    let callbacks = scope.root_nanbox(p::record_get(state.get(), "callbacks"));
     if unsafe { perry_ffi::js_array_length(array_ptr(callbacks.get())) } == 0 {
         return;
     }
     let replacement = unsafe { perry_ffi::js_array_alloc(0) };
-    p::own_set(state.get(), "callbacks", p::boxed_addr(replacement as i64));
+    p::record_set(state.get(), "callbacks", p::boxed_addr(replacement as i64));
     let resource = scope.root_nanbox(provider::resource(owner.get()));
     let job = scope.root_addr(perry_ffi::alloc_closure(
         perry_ffi::js_function_info!(cancel_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
@@ -792,10 +793,11 @@ fn unopened_write_failure(owner: f64, callback: f64) {
     let callback = scope.root_nanbox(callback);
     register_callback(owner.get(), callback.get());
     let state = scope.root_nanbox(state(owner.get()));
-    if JsValue::from_bits(p::own_get(state.get(), "unconnectedWriteFailed").to_bits()).to_bool() {
+    if JsValue::from_bits(p::record_get(state.get(), "unconnectedWriteFailed").to_bits()).to_bool()
+    {
         return;
     }
-    p::own_set(
+    p::record_set(
         state.get(),
         "unconnectedWriteFailed",
         f64::from_bits(JsValue::TRUE.bits()),
@@ -821,34 +823,39 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
     } else {
         callback.get()
     });
-    let socket = link(owner.get());
-    let _account = p::AccountSocket(socket);
-    let lifecycle = unsafe { np::link_lifecycle(socket, &SOCKET) };
-    if lifecycle == Ok(np::Lifecycle::Closed) {
-        if is_callback(callback.get()) {
-            let error = error(
-                "ERR_STREAM_DESTROYED",
-                "Cannot call write after a stream was destroyed",
-            );
-            events::queue_call(owner.get(), callback.get(), &[error]);
-        }
-        return f64::from_bits(JsValue::FALSE.bits());
-    }
+    // Conversion may materialize an SSO string. Prove the receiver only after
+    // that allocation, then retain the same native window until JS can run.
     let bytes = unsafe { crate::jsvalue_to_socket_bytes(chunk.get()) }.unwrap_or_default();
-    let unopened = unsafe {
-        let fields =
-            &(*p::socket_ptr(socket).unwrap_or_else(super::payload_prototype::throw_miss)).ext;
-        !fields.opened && !fields.connecting && fields.cork_depth == 0
+    let window = match unsafe { np::project::<p::SocketPayload>(owner.get(), &SOCKET) } {
+        Ok(window) => window,
+        Err(miss) => {
+            let socket = link(owner.get());
+            if unsafe { np::link_lifecycle(socket, &SOCKET) } == Ok(np::Lifecycle::Closed) {
+                if is_callback(callback.get()) {
+                    let error = error(
+                        "ERR_STREAM_DESTROYED",
+                        "Cannot call write after a stream was destroyed",
+                    );
+                    events::queue_call(owner.get(), callback.get(), &[error]);
+                }
+                return f64::from_bits(JsValue::FALSE.bits());
+            }
+            super::payload_prototype::throw_miss(miss)
+        }
+    };
+    let socket = window.link;
+    let _account = p::AccountSocket(socket);
+    let (unopened, ended) = unsafe {
+        let fields = &(*window.payload).ext;
+        (
+            !fields.opened && !fields.connecting && fields.cork_depth == 0,
+            fields.write_ended,
+        )
     };
     if unopened {
         unopened_write_failure(owner.get(), callback.get());
         return f64::from_bits(JsValue::FALSE.bits());
     }
-    let ended = unsafe {
-        (*p::socket_ptr(socket).unwrap_or_else(super::payload_prototype::throw_miss))
-            .ext
-            .write_ended
-    };
     if ended {
         let error = scope.root_nanbox(error("ERR_STREAM_WRITE_AFTER_END", "write after end"));
         if is_callback(callback.get()) {
@@ -857,10 +864,19 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
         destroy(owner.get(), error.get());
         return f64::from_bits(JsValue::FALSE.bits());
     }
-    let user = register_callback(owner.get(), callback.get());
+    let (user, window) = if is_callback(callback.get()) {
+        let user = register_callback(owner.get(), callback.get());
+        // Callback registration allocates, so its old projection ends here.
+        let window = unsafe { np::project::<p::SocketPayload>(owner.get(), &SOCKET) }
+            .unwrap_or_else(super::payload_prototype::throw_miss);
+        (user, window)
+    } else {
+        (0, window)
+    };
+    let payload = window.payload;
+    let may_run_js = unsafe { (*payload).ext.tls.is_some() };
     let corked = unsafe {
-        let fields =
-            &mut (*p::socket_ptr(socket).unwrap_or_else(super::payload_prototype::throw_miss)).ext;
+        let fields = &mut (*window.payload).ext;
         if fields.cork_depth != 0 {
             fields.queued = fields.queued.saturating_add(bytes.len());
             fields.cork_bytes.extend_from_slice(&bytes);
@@ -873,10 +889,12 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
         }
     };
     if !corked {
-        let result = super::payload_tls::write(owner.get(), &bytes, user);
+        let result = unsafe { super::payload_tls::write_proven(owner.get(), window, &bytes, user) };
         match result {
             Ok(queued) => unsafe {
-                if let Ok(payload) = p::socket_ptr(socket) {
+                if !may_run_js {
+                    (*payload).ext.queued = queued;
+                } else if let Ok(payload) = p::socket_ptr(socket) {
                     (*payload).ext.queued = queued;
                 }
             },
@@ -887,12 +905,18 @@ pub(crate) fn write(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64
             }
         }
     }
-    if unsafe { p::socket_ptr(socket) }.is_err() {
-        return f64::from_bits(JsValue::FALSE.bits());
-    }
+    // A TLS drive can invoke JS and replace the payload. Plain submission and
+    // corking cannot; use their proven pointer rather than validating again.
+    let payload = if may_run_js && !corked {
+        match unsafe { p::socket_ptr(socket) } {
+            Ok(payload) => payload,
+            Err(_) => return f64::from_bits(JsValue::FALSE.bits()),
+        }
+    } else {
+        payload
+    };
     let below = unsafe {
-        let fields =
-            &mut (*p::socket_ptr(socket).unwrap_or_else(super::payload_prototype::throw_miss)).ext;
+        let fields = &mut (*payload).ext;
         let below = fields.queued < HIGH_WATER_MARK;
         fields.need_drain |= !below;
         below
@@ -1025,7 +1049,7 @@ pub(crate) fn end(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64 {
     }
     let snapshot = super::payload_io::snapshot(socket);
     let state = scope.root_nanbox(state(owner.get()));
-    let tcp = scope.root_nanbox(p::own_get(state.get(), provider::TCP));
+    let tcp = scope.root_nanbox(p::record_get(state.get(), provider::TCP));
     let shutdown = scope.root_nanbox(provider::publish(
         state.get(),
         provider::SHUTDOWN,
@@ -1154,7 +1178,7 @@ pub(crate) fn set_ref(owner: f64, referenced: bool) -> f64 {
         }
     }
     let state = scope.root_nanbox(state(owner.get()));
-    p::own_set(
+    p::record_set(
         state.get(),
         "refed",
         f64::from_bits(JsValue::from_bool(referenced).bits()),
@@ -1169,18 +1193,18 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
     let _account = p::AccountSocket(socket);
     let state = scope.root_nanbox(state(owner.get()));
     if key == "destroyed" {
-        return p::own_get(state.get(), key);
+        return p::record_get(state.get(), key);
     }
     if key == "writableHighWaterMark" || key == "readableHighWaterMark" {
         return HIGH_WATER_MARK as f64;
     }
     if key == "_readableState" || key == "_writableState" {
-        let cached = scope.root_nanbox(p::own_get(state.get(), key));
+        let cached = scope.root_nanbox(p::record_get(state.get(), key));
         if JsValue::from_bits(cached.get().to_bits()).is_pointer() {
             return cached.get();
         }
         let object = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
-        p::own_set(state.get(), key, object.get());
+        p::record_set(state.get(), key, object.get());
         return object.get();
     }
     enum Scalar {
@@ -1291,7 +1315,7 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
                 "remoteFamily" => "peerFamily",
                 key => key,
             };
-            p::own_get(state.get(), key)
+            p::record_get(state.get(), key)
         }
     }
 }
@@ -1330,11 +1354,15 @@ pub(crate) fn refresh_timeout(socket: OwnerLink) {
         let Ok(payload) = p::socket_ptr(socket) else {
             return;
         };
-        let timeout = (*payload).ext.timeout_ms;
-        if timeout != 0 {
-            let core = std::ptr::addr_of_mut!((*payload).core);
-            let _ = tl::link_deadline_arm(&mut *core, socket, timeout);
-        }
+        refresh_timeout_proven(&mut *payload, socket);
+    }
+}
+
+/// Call only inside a callback-free projected window.
+pub(crate) fn refresh_timeout_proven(payload: &mut p::SocketPayload, socket: OwnerLink) {
+    let timeout = payload.ext.timeout_ms;
+    if timeout != 0 {
+        let _ = tl::link_deadline_arm(&mut payload.core, socket, timeout);
     }
 }
 
@@ -1461,38 +1489,80 @@ pub(crate) fn flow(owner: f64) {
     queue_read_end(owner.get());
 }
 
+/// Owned policy copied out before allocating a chunk or invoking listeners.
+enum DataDelivery {
+    Silent,
+    Readable,
+    Chunk(Option<String>),
+}
+
+fn data_delivery(payload: &mut p::SocketPayload, bytes: &[u8], listeners: usize) -> DataDelivery {
+    let fields = &mut payload.ext;
+    if fields.paused || fields.raw_consumer || (listeners == 0 && fields.flowing != Some(true)) {
+        fields.read_buffer.extend(bytes.iter().copied());
+        return if fields.raw_consumer {
+            DataDelivery::Silent
+        } else {
+            DataDelivery::Readable
+        };
+    }
+    if listeners == 0 {
+        DataDelivery::Silent
+    } else {
+        DataDelivery::Chunk(fields.encoding.clone())
+    }
+}
+
+/// The completion already proved this plain socket. No native borrow crosses
+/// chunk allocation or a listener; its resource is rooted once for dispatch.
+/// # Safety
+/// window is a live callback-free projection and owner is rooted in scope.
+pub(crate) unsafe fn data_proven(
+    scope: &TransientRootScope,
+    owner: &perry_ffi::TransientRootedNanbox,
+    window: np::PayloadWindow<p::SocketPayload>,
+    bytes: &[u8],
+    listeners: usize,
+) {
+    let delivery = data_delivery(&mut *window.payload, bytes, listeners);
+    if !matches!(delivery, DataDelivery::Chunk(_)) {
+        p::account_socket(window.link);
+    }
+    let resource = scope.root_nanbox(p::record_get(window.state, provider::TCP));
+    deliver_data(scope, owner, &resource, delivery, bytes);
+}
+
 pub(crate) fn data(owner: f64, bytes: &[u8]) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    let listeners = events::listener_count(owner.get(), "data");
     let socket = link(owner.get());
     let _account = p::AccountSocket(socket);
-    let listeners = events::listener_count(owner.get(), "data");
-    let mut buffered = false;
-    let encoding = unsafe {
-        p::socket_ptr(socket).ok().and_then(|payload| {
-            let fields = &mut (*payload).ext;
-            if fields.paused
-                || fields.raw_consumer
-                || (listeners == 0 && fields.flowing != Some(true))
-            {
-                fields.read_buffer.extend(bytes.iter().copied());
-                buffered = !fields.raw_consumer;
-                return None;
-            }
-            // Explicit resume consumes an unread stream, as in Node. Keeping
-            // these bytes would postpone EOF forever when there is no data
-            // listener, stranding its peer and a closing server's last child.
-            if listeners == 0 {
-                return None;
-            }
-            Some(fields.encoding.clone())
-        })
+    let delivery = unsafe {
+        p::socket_ptr(socket)
+            .ok()
+            .map(|payload| data_delivery(&mut *payload, bytes, listeners))
     };
-    let Some(encoding) = encoding else {
-        if buffered {
-            events::emit(owner.get(), "readable", &[]);
+    if let Some(delivery) = delivery {
+        let resource = scope.root_nanbox(provider::resource(owner.get()));
+        deliver_data(&scope, &owner, &resource, delivery, bytes);
+    }
+}
+
+fn deliver_data(
+    scope: &TransientRootScope,
+    owner: &perry_ffi::TransientRootedNanbox,
+    resource: &perry_ffi::TransientRootedNanbox,
+    delivery: DataDelivery,
+    bytes: &[u8],
+) {
+    let encoding = match delivery {
+        DataDelivery::Silent => return,
+        DataDelivery::Readable => {
+            events::emit_rooted(scope, resource, owner, "readable", &[]);
+            return;
         }
-        return;
+        DataDelivery::Chunk(encoding) => encoding,
     };
     let value = match encoding.as_deref() {
         Some("hex") => events::string(
@@ -1505,7 +1575,7 @@ pub(crate) fn data(owner: f64, bytes: &[u8]) {
         Some(_) => events::string(&String::from_utf8_lossy(bytes)),
         None => f64::from_bits(JsValue::from_object_ptr(perry_ffi::alloc_buffer(bytes)).bits()),
     };
-    events::emit(owner.get(), "data", &[value]);
+    events::emit_rooted(scope, resource, owner, "data", &[value]);
 }
 
 fn base64_encode(bytes: &[u8]) -> String {

@@ -171,10 +171,14 @@ pub(crate) unsafe fn account_socket(link: OwnerLink) {
     let Ok(payload) = socket_ptr(link) else {
         return;
     };
-    let fields = (*payload).ext.retained_bytes();
-    let core = std::ptr::addr_of_mut!((*payload).core);
-    let bytes =
-        std::mem::size_of::<SocketPayload>() + fields + tl::link_retained_bytes(&mut *core, link);
+    account_socket_proven(&mut *payload, link);
+}
+/// Restate retained bytes without repeating a live payload proof.
+pub(crate) unsafe fn account_socket_proven(payload: &mut SocketPayload, link: OwnerLink) {
+    let fields = payload.ext.retained_bytes();
+    let bytes = std::mem::size_of::<SocketPayload>()
+        + fields
+        + tl::link_retained_bytes(&mut payload.core, link);
     np::link_set_external_bytes(link, &SOCKET, bytes);
 }
 pub(crate) unsafe fn account_server(link: OwnerLink) {
@@ -253,6 +257,9 @@ pub(crate) fn attach_socket(owner: f64, route: u8, fields: SocketFields) -> bool
     super::payload_io::register();
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    // A subclass can be the family's first instance. Adopt and install the
+    // canonical prototype before attaching its cell, just as alloc_in does.
+    np::prototype(&SOCKET, "net");
     let bytes = std::mem::size_of::<SocketPayload>() + fields.retained_bytes();
     if !unsafe {
         np::attach_to_object(
@@ -273,6 +280,7 @@ pub(crate) fn attach_server(owner: f64, route: u8, fields: ServerFields) -> bool
     super::payload_io::register();
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
+    np::prototype(&SERVER, "net");
     let bytes =
         std::mem::size_of::<ServerPayload>() + fields.path.as_ref().map_or(0, String::capacity);
     if !unsafe {
@@ -311,6 +319,9 @@ pub(crate) unsafe fn server_ptr(link: OwnerLink) -> Result<*mut ServerPayload, P
 pub(crate) fn own_get(owner: f64, key: &str) -> f64 {
     f64::from_bits(perry_ffi::object_field_by_name(JsValue::from_bits(owner.to_bits()), key).bits())
 }
+pub(crate) fn record_get(owner: f64, key: &str) -> f64 {
+    f64::from_bits(perry_ffi::object_record_field(JsValue::from_bits(owner.to_bits()), key).bits())
+}
 pub(crate) fn own_set(owner: f64, key: &str, value: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
@@ -322,6 +333,20 @@ pub(crate) fn own_set(owner: f64, key: &str, value: f64) {
             key.get() as *const perry_ffi::StringHeader,
             value.get(),
         );
+    }
+}
+
+/// Set an opaque binding record. Existing data keys use the ordinary slot
+/// barrier without allocating a key; only the record's birth adds keys.
+pub(crate) fn record_set(record: f64, key: &str, value: f64) {
+    if !unsafe {
+        perry_ffi::object_record_set(
+            JsValue::from_bits(record.to_bits()),
+            key,
+            JsValue::from_bits(value.to_bits()),
+        )
+    } {
+        own_set(record, key, value);
     }
 }
 

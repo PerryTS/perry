@@ -187,10 +187,10 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let mut queue = HTTP_PENDING_EVENTS.lock().unwrap();
     let index = queue
         .iter()
-        .position(|entry| matches!(entry.event, PendingHttpEvent::Upgrade { request_handle: id, .. } if id == request_handle))
+        .position(|(_, event)| matches!(event, PendingHttpEvent::Upgrade { request_handle: id, .. } if *id == request_handle))
         .unwrap();
     let event = queue.remove(index);
-    if let PendingHttpEvent::Upgrade { socket_handle, .. } = event.event {
+    if let PendingHttpEvent::Upgrade { socket_handle, .. } = event.1 {
         assert_rewritten(upgrade_socket, socket_handle);
     }
     drop(queue);

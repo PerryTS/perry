@@ -113,6 +113,29 @@ pub struct RuntimeHandleScope {
 }
 
 impl RuntimeHandleScope {
+    /// Borrow the binding's existing dispatch scope without owning its exit.
+    /// # Safety
+    /// base names a live FFI scope on this thread; the view cannot outlive it.
+    pub(crate) unsafe fn borrow_ffi(base: usize) -> std::mem::ManuallyDrop<Self> {
+        let stack = runtime_handle_stack();
+        assert!(base <= stack.len());
+        std::mem::ManuallyDrop::new(Self { base, stack })
+    }
+
+    /// View an existing FFI root instead of pushing the same value twice.
+    /// # Safety
+    /// index belongs to the live borrowed FFI scope and holds a NaN-box slot.
+    pub(crate) unsafe fn ffi_nanbox_handle(&self, index: usize) -> RuntimeHandle<'_> {
+        assert!(
+            index >= self.base
+                && matches!(self.stack.get(index), Some(RuntimeHandleSlot::Nanbox(_)))
+        );
+        RuntimeHandle {
+            index,
+            stack: self.stack,
+            _scope: PhantomData,
+        }
+    }
     #[inline]
     pub fn new() -> Self {
         let stack = runtime_handle_stack();

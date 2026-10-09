@@ -41,9 +41,16 @@
     },
     {
       "file": "crates/perry-ext-http/src/lib.rs",
-      "name": "HTTP_PENDING_EVENTS",
+      "name": "CLIENT_REQUESTS_INFLIGHT",
       "verdict": "not_a_gc_pointer",
-      "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) \u2014 no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
+      "why": "Set of (issuing AgentId u64, ClientRequest registry Handle i64) routing identities. mark_request inserts only Outbound.request_handle returned by perry-ffi register_handle; neither component is a GC heap address or NaN-boxed value. Request/response callbacks and actual Socket values remain in app records visited and rewritten by root_scanner::scan_http_roots. Per-agent retirement removes these scalar identities."
+    },
+    {
+      "file": "crates/perry-ext-http/src/lib.rs",
+      "name": "HTTP_PENDING_EVENTS",
+      "verdict": "covered_elsewhere",
+      "why": "Agent-tagged pending events retain the actual Socket heap address in Upgrade.socket_handle. The registered HTTP root scanner visits and rewrites that slot for the issuing agent. Other variants carry registry request/response handles, strings or bytes; callbacks live in the app records scanned by the same scanner.",
+      "scanner": "root_scanner::scan_http_roots (crates/perry-ext-http/src/root_scanner.rs)"
     },
     {
       "file": "crates/perry-ext-http/src/server/server.rs",
