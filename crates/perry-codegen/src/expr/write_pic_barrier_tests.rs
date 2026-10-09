@@ -376,8 +376,9 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
         "the barrier gate must be a LIVE header test: {barrier_branch}"
     );
     assert!(
-        barrier_pred.contains("and i8") && barrier_pred.contains(", 32"),
-        "the barrier gate must mask GC_FLAG_TENURED out of the parent's gc_flags:\n{barrier_pred}"
+        barrier_pred.contains("and i8") && barrier_pred.contains(", 34"),
+        "the barrier gate must mask GC_FLAG_TENURED | GC_FLAG_ARENA out of the parent's \
+         gc_flags:\n{barrier_pred}"
     );
     assert!(
         barrier_pred.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),

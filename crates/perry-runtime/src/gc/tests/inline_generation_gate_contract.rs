@@ -6,23 +6,22 @@
 //!
 //! ```text
 //! parent_may_need_remembering(parent) :=
-//!       (header(parent).gc_flags & GC_FLAG_TENURED) != 0
+//!       (header(parent).gc_flags & (GC_FLAG_TENURED | GC_FLAG_ARENA)) != GC_FLAG_ARENA
 //!    || PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT != 0
 //! ```
 //!
 //! Two independent obligations, and this file pins both.
 //!
-//! **1. `Old ⟹ TENURED`.** The remembered set only ever needs an entry when
-//! `barrier_parent_needs_remembering` classifies the parent `Old`, so skipping
-//! the call on a TENURED-clear header is sound exactly while no live old-gen
-//! object can lack the bit. Nothing in the allocator enforces that:
+//! **1. `Old ⟹ TENURED`, and malloc parents are never skipped.** Old and
+//! malloc parents both owe entries for their young words. A TENURED-clear
+//! arena header can skip the call only while no live old-gen object lacks
+//! that bit. Nothing in the allocator enforces that:
 //! `arena_alloc_gc_old` writes `GC_FLAG_ARENA | gc_birth_extra_flags()` and
 //! leaves `GC_FLAG_TENURED` to each of its eight callers. A ninth caller that
 //! forgets it compiles, passes every existing test, and strands a live child in
 //! generated code only. `every_old_gen_birth_path_sets_tenured` is what turns
-//! that into a red build, and `barrier_parent_needs_remembering` carries the
-//! matching `debug_assert!` so every old-parent store in every debug/test run
-//! re-checks it.
+//! that into a red build. `neither_gate_skips_a_malloc_parent` checks the
+//! production large-capture closure birth as well.
 //!
 //! **2. The incremental clause is not optional.** Skipping the call also skips
 //! `barrier_child_prologue`'s `incremental_mark_barrier_value` — the
@@ -39,14 +38,16 @@ use super::super::*;
 use super::support::*;
 use std::sync::atomic::Ordering;
 
-/// The exact flag comparand emitted by `emit_parent_may_need_remembering_check`
-/// (codegen spells it `"32"`). Kept as a literal so a drift on either side has
-/// to be mirrored by hand rather than silently inherited.
-const CODEGEN_GC_FLAG_TENURED: u8 = 0x20;
+/// The exact mask and comparand emitted by
+/// `emit_parent_may_need_remembering_check` (codegen spells them `"34"` and
+/// `"2"`). Kept as literals so a drift on either side has to be mirrored by
+/// hand rather than silently inherited.
+const CODEGEN_GATE_MASK: u8 = 0x22;
+const CODEGEN_GATE_SKIP_VALUE: u8 = 0x02;
 
 /// The codegen predicate, reproduced exactly.
 fn codegen_parent_may_need_remembering(parent_flags: u8, incremental_active: u32) -> bool {
-    parent_flags & CODEGEN_GC_FLAG_TENURED != 0 || incremental_active != 0
+    parent_flags & CODEGEN_GATE_MASK != CODEGEN_GATE_SKIP_VALUE || incremental_active != 0
 }
 
 fn header_flags(user_ptr: usize) -> u8 {
@@ -56,9 +57,53 @@ fn header_flags(user_ptr: usize) -> u8 {
 #[test]
 fn codegen_tenured_comparand_matches_the_runtime_flag() {
     assert_eq!(
-        CODEGEN_GC_FLAG_TENURED, GC_FLAG_TENURED,
-        "codegen emits `and i8 %gc_flags, {CODEGEN_GC_FLAG_TENURED}` — if the runtime flag moves, \
+        CODEGEN_GATE_MASK,
+        GC_FLAG_TENURED | GC_FLAG_ARENA,
+        "codegen emits `and i8 %gc_flags, {CODEGEN_GATE_MASK}` — if a runtime flag moves, \
          the emitted gate silently tests the wrong bit"
+    );
+    assert_eq!(
+        CODEGEN_GATE_SKIP_VALUE, GC_FLAG_ARENA,
+        "codegen skips the call only when the masked byte is exactly GC_FLAG_ARENA \
+         (an untenured arena parent)"
+    );
+    for flags in 0..=u8::MAX {
+        assert_eq!(
+            codegen_parent_may_need_remembering(flags, 0),
+            crate::gc::parent_flags_may_need_remembering(flags),
+            "the emitted gate and the runtime twin disagree on gc_flags={flags:#04x}"
+        );
+    }
+}
+
+/// A malloc parent (`GC_FLAG_ARENA` clear, never TENURED) owes the remembered
+/// set what an old one does, so neither gate may skip it. The large-capture
+/// closure is the production birth that lands there.
+///
+/// Sabotage that this catches: the TENURED-only gate both sides used before,
+/// which skipped every malloc parent and left a large closure's young captures
+/// unremembered (`gc::tests::malloc_parent_remembering`).
+#[test]
+fn neither_gate_skips_a_malloc_parent() {
+    let _guard = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    assert!(crate::gc::incremental_mark_barrier_globally_idle());
+    let captures = vec![crate::value::TAG_UNDEFINED; LARGE_OBJECT_THRESHOLD_BYTES / 8 + 64];
+    let closure = crate::closure::js_closure_alloc_init(
+        std::ptr::null(),
+        captures.len() as u32,
+        captures.as_ptr(),
+    ) as usize;
+    let flags = header_flags(closure);
+    assert_eq!(flags & GC_FLAG_ARENA, 0, "premise: the closure is a malloc parent");
+    assert_eq!(flags & GC_FLAG_TENURED, 0, "premise: a malloc parent is never TENURED");
+    assert!(
+        unsafe { crate::gc::newborn_parent_needs_barrier(closure) },
+        "the runtime twin must take the barrier for a malloc parent"
+    );
+    assert!(
+        codegen_parent_may_need_remembering(flags, 0),
+        "the emitted gate must take the barrier for a malloc parent"
     );
 }
 

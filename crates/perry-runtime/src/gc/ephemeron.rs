@@ -239,6 +239,14 @@ impl CopyingNurseryCollector {
         for n in 0..self.ephemerons.tables.len() {
             let table = self.ephemerons.tables[n];
             let header = header_from_user_ptr(table.cast());
+            // The entries are inline in the table, so the table's generation
+            // is every value slot's: outside the old arena (a malloc table) is
+            // `GcMutableSlot::external`'s answer, and needs the `(page, owner)`
+            // remembered form.
+            let external = !matches!(
+                crate::arena::classify_heap_generation(table as usize),
+                crate::arena::HeapGeneration::Old
+            );
             for i in 0..(*table).len {
                 let entry = (*table).entries().add(i as usize);
                 if let Some(bits) = self.rewrite_value_bits((*entry).key) {
@@ -248,7 +256,7 @@ impl CopyingNurseryCollector {
                     && !crate::weakref::weak_target_should_clear_copied((*entry).key, &self.ptrs)
                 {
                     // Bypass the weak-slot skip for this proven conditional edge.
-                    self.visit_slot_with_weak_fact(&mut (*entry).value, header, false, false);
+                    self.visit_slot_with_weak_fact(&mut (*entry).value, header, false, external);
                 }
             }
         }

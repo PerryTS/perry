@@ -27,18 +27,18 @@ pub(super) unsafe fn weak_holder_fact(header: *mut GcHeader) -> bool {
     crate::weakref::is_weak_holder_header(header)
 }
 
-/// The parent's half of `barrier_parent_needs_remembering`, decided once per
-/// traced object instead of once per slot.
+/// `barrier_parent_needs_remembering`, decided once per traced object instead
+/// of once per slot.
 ///
-/// `barrier_parent_needs_remembering(parent, external)` is
-/// `Old(parent) || (external && malloc_gc_parent_addr(parent))`. Both parent
-/// terms read only the parent's address and header, which do not change while
-/// that object's slots are visited (the visit moves CHILDREN), so the per-slot
-/// question reduces to this three-way answer plus, for a malloc parent only,
-/// the slot's own generation. `skip_remembering` — a per-cycle proof that no
-/// entry can be created — folds into `Never`, so a whole-block promoting cycle
-/// classifies neither the parent nor any slot. Before this every slot paid a
-/// page-map classification of its own address for an answer nothing read.
+/// The predicate reads only the parent's address and header, which do not
+/// change while that object's slots are visited (the visit moves CHILDREN).
+/// `skip_remembering` — a per-cycle proof that no entry can be created —
+/// folds into `Never`, so a whole-block promoting cycle classifies no parent
+/// at all. Before this every slot paid a page-map classification of its own
+/// address for an answer nothing read.
+///
+/// A malloc parent is `Always`: its slots all lie outside the old arena, so
+/// the old per-slot `external` test it used to need could only answer yes.
 ///
 /// Witness: `gc::tests::copy_slot_hoists::the_per_object_remembering_fact_*`,
 /// which checks it against `barrier_parent_needs_remembering` itself, with a
@@ -47,7 +47,6 @@ pub(super) unsafe fn weak_holder_fact(header: *mut GcHeader) -> bool {
 pub(super) enum ParentRemembering {
     Never,
     Always,
-    ExternalSlotsOnly,
 }
 
 impl ParentRemembering {
@@ -61,25 +60,16 @@ impl ParentRemembering {
         if copy_hoist_sabotage::forgetting_remembering() {
             return Self::Never;
         }
-        if matches!(
-            crate::arena::classify_heap_generation(parent),
-            crate::arena::HeapGeneration::Old
-        ) {
+        if super::barrier::barrier_parent_needs_remembering(parent) {
             Self::Always
-        } else if super::barrier::malloc_gc_parent_addr(parent) {
-            Self::ExternalSlotsOnly
         } else {
             Self::Never
         }
     }
 
     #[inline(always)]
-    pub(super) fn for_slot(self, slot: GcMutableSlot) -> bool {
-        match self {
-            Self::Never => false,
-            Self::Always => true,
-            Self::ExternalSlotsOnly => slot.external(),
-        }
+    pub(super) fn for_slot(self, _slot: GcMutableSlot) -> bool {
+        self == Self::Always
     }
 }
 
@@ -296,7 +286,6 @@ impl CopyingNurseryCollector {
                     && !skip
                     && barrier_parent_needs_remembering(
                         (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
-                        external,
                     )
             },
             move || external,
@@ -323,7 +312,6 @@ impl CopyingNurseryCollector {
                     && !skip_remembering
                     && barrier_parent_needs_remembering(
                         (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
-                        external,
                     )
             },
             move || external,

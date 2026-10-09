@@ -293,17 +293,18 @@ fn check_generation_predicate(body: &str, cond: &str) -> Result<(), String> {
     };
     let tenured_def = def_of(body, &tenured)
         .ok_or_else(|| format!("tenured clause {tenured} is not defined in its block"))?;
-    if !tenured_def.starts_with("icmp ne i8") {
+    if !(tenured_def.starts_with("icmp ne i8") && tenured_def.ends_with(", 2")) {
         return Err(format!(
-            "tenured clause must be `icmp ne i8`, got `{tenured_def}`"
+            "tenured clause must be `icmp ne i8 …, 2` (GC_FLAG_ARENA), got `{tenured_def}`"
         ));
     }
     let masked = operand(tenured_def, 0).ok_or("tenured icmp names no register")?;
     let masked_def = def_of(body, &masked)
         .ok_or_else(|| format!("tenured mask {masked} is not defined in its block"))?;
-    if !(masked_def.starts_with("and i8") && masked_def.ends_with(", 32")) {
+    if !(masked_def.starts_with("and i8") && masked_def.ends_with(", 34")) {
         return Err(format!(
-            "tenured clause must mask GC_FLAG_TENURED (`and i8 …, 32`), got `{masked_def}`"
+            "tenured clause must mask GC_FLAG_TENURED | GC_FLAG_ARENA (`and i8 …, 34`), \
+             got `{masked_def}`"
         ));
     }
     let flags = operand(masked_def, 0).ok_or("tenured mask names no register")?;

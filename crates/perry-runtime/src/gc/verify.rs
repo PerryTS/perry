@@ -604,7 +604,7 @@ unsafe fn remember_retained_old_to_young_slots(
         return;
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    if !barrier_parent_needs_remembering(user_ptr as usize, true) {
+    if !barrier_parent_needs_remembering(user_ptr as usize) {
         return;
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {

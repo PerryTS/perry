@@ -22,7 +22,7 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
 ) {
     if let Some(sticky) = sticky {
         let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if barrier_parent_needs_remembering(user, true) {
+        if barrier_parent_needs_remembering(user) {
             trace_heap_rewrite_slots_impl::<true>(header, valid_ptrs, worklist, Some(sticky));
             return;
         }

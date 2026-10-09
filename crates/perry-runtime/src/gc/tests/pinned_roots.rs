@@ -8,7 +8,7 @@
 //! pinned parent is freed and its cell handed back: the read-back differs.
 
 use super::super::*;
-use super::support::{ptr_bits, CopyingNurseryTestGuard};
+use super::support::{ptr_bits, reset_remembered_set, CopyingNurseryTestGuard};
 use crate::gc::pin::pinned_mark_sabotage;
 use crate::object::ObjectHeader;
 
@@ -133,6 +133,12 @@ fn build_parent(birth: Birth, pin: bool) -> *mut ObjectHeader {
 fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
     let _guard = pinned_guard();
     let parent = build_parent(birth, pin);
+    if matches!(birth, Birth::Malloc) && matches!(collection, Collection::Minor) {
+        // Isolate the malloc parent's pin/shadow-root tracing in both positive
+        // controls and sabotages. Its stores now correctly remember the child,
+        // which would independently retain it and mask a missing pin trace.
+        reset_remembered_set();
+    }
     match collection {
         Collection::Full => crate::gc::js_gc_collect(),
         Collection::Minor => {
