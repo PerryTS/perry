@@ -1,16 +1,9 @@
 //! Bounded read-site facts for declared-class instances.
 //!
-//! A bare CLASS ShapeId identifies the receiver's own keys but does not pin
-//! `C.prototype`: the class registry can replace that pointer without a
-//! receiver restamp. Every writer that can replace it bumps the class
-//! lookup-surface generation (`class_registry::class_lookup_surface_gen_bump`),
-//! so an entry records the generation under which its direct link was last
-//! proved. While the generation is unchanged the link is the recorded holder
-//! (or first hop) and the GC-leaf read front answers the entry
-//! ([`leaf_answer`]) from shape words alone, as it answers the site's own
-//! holder entry. A changed generation declines there; the collecting miss arm
-//! re-reads the live direct prototype, and a match re-proves the entry under
-//! the new generation.
+//! A bare CLASS ShapeId names its prototype through the identity word.
+//! Each hit compares that live word with the rooted first hop, then checks
+//! every hop and holder shape. Publication and replacement are ordinary
+//! shape-link facts; no process-wide generation is needed.
 //! The entries belong to one PicCache site (word 2 points to its bounded
 //! process-lifetime record), never to a process-global `(shape, key)` table.
 //!
@@ -71,9 +64,11 @@ struct Entry {
     /// A multi-shape absent proof appends `ABSENT_BUCKETS` u32 ids, outside
     /// the chain prefix the root scan visits. Reused or freed on overwrite.
     hops: *mut Hop,
-    /// The class lookup-surface generation under which the receiver's direct
-    /// link was last proved to be `holder` (depth 1) or `hops[0]`.
-    generation: u64,
+    /// The receiver identity's word (`shapes::identity_word_slot`): a stable
+    /// slot of the primary agent's pages, recorded when the entry is proved.
+    /// A hit loads it and compares it with the direct link, so publishing or
+    /// replacing the class's prototype declines the entry with two loads.
+    word: *const u64,
 }
 
 const EMPTY: Entry = Entry {
@@ -86,7 +81,7 @@ const EMPTY: Entry = Entry {
     holder: 0,
     holder_shape: 0,
     hops: std::ptr::null_mut(),
-    generation: 0,
+    word: std::ptr::null(),
 };
 
 impl Entry {
@@ -301,15 +296,16 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
 // place. Shape-only leaf hits decline rather than consulting the registry.
 #[inline]
 unsafe fn reprove_direct(e: &mut Entry, recv: *const ObjectHeader) -> bool {
-    let generation = crate::object::class_lookup_surface_generation();
-    if e.generation != generation {
-        let direct = if e.depth == 1 { e.holder } else { (*e.hops).0 };
-        if class_link(recv).map(|link| link as usize) != Some(direct) {
-            return false;
-        }
-        e.generation = generation;
-    }
-    true
+    let _ = recv;
+    identity_matches(e)
+}
+
+#[inline]
+unsafe fn identity_matches(e: &Entry) -> bool {
+    let direct = if e.depth == 1 { e.holder } else { (*e.hops).0 };
+    // SAFETY: a non-null `word` is a stable identity-word slot; pages never
+    // move or shrink, so the address outlives every entry that names it.
+    !e.word.is_null() && *e.word == crate::value::POINTER_TAG | direct as u64
 }
 
 /// The entry's answer once the receiver and its direct link are proved: the
@@ -352,7 +348,7 @@ unsafe fn value_of(e: &Entry) -> Option<u64> {
 }
 
 /// The site's class entry for `recv` from the GC-leaf read front: loads and
-/// compares only. Answers only an entry whose generation is current (the
+/// compares only. Answers only an entry whose identity word matches (the
 /// direct link is the recorded one) and whose hops are pinned by their
 /// ShapeIds; anything else declines (`None`) to the collecting miss arm.
 ///
@@ -385,26 +381,24 @@ pub(super) unsafe fn leaf_bits(c: &PicCache, recv: *const ObjectHeader, token: i
 #[cold]
 #[inline(never)]
 unsafe fn leaf_site_bits(s: &Site, recv: *const ObjectHeader, token: i64) -> u64 {
-    let generation = crate::object::class_lookup_surface_generation();
     let class_id = (*recv).class_id;
     let e = &s.primary_class;
-    if e.token == token && e.class_id == class_id && e.generation == generation && e.pinned_hops {
+    if e.token == token && e.class_id == class_id && identity_matches(e) && e.pinned_hops {
         return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
     }
     if s.entries.is_empty() && s.holders.is_empty() && s.next & (SHARED_MASK << CURSOR_BITS) == 0 {
         return crate::value::TAG_HOLE;
     }
-    secondary_leaf_bits(s, token, class_id, generation)
+    secondary_leaf_bits(s, token, class_id)
 }
 
 /// Neither a monomorphic ordinary nor a matching first class answer enters
 /// this scan. Its loop bounds and scratch registers stay out of the front.
 #[cold]
 #[inline(never)]
-unsafe fn secondary_leaf_bits(s: &Site, token: i64, class_id: u32, generation: u64) -> u64 {
+unsafe fn secondary_leaf_bits(s: &Site, token: i64, class_id: u32) -> u64 {
     for e in &s.entries {
-        if e.token == token && e.class_id == class_id && e.generation == generation && e.pinned_hops
-        {
+        if e.token == token && e.class_id == class_id && identity_matches(e) && e.pinned_hops {
             return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
         }
     }
@@ -419,7 +413,7 @@ unsafe fn secondary_leaf_bits(s: &Site, token: i64, class_id: u32, generation: u
     crate::value::TAG_HOLE
 }
 
-/// Re-prove class links when their generation changes, or serve a saved
+/// Compare the live class identity word, or serve a saved
 /// ordinary answer. Getters keep the collecting path and original receiver.
 #[cold]
 #[inline(never)]
@@ -561,8 +555,15 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     }) {
         return;
     }
-    let s = site_mut(cache);
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    // The walk proved the direct link through this identity's word, so the
+    // slot exists; an identity without one has nothing a hit could compare.
+    let Some(word) = prototype_identity(token as u32)
+        .and_then(crate::object::shapes::identity_word_slot)
+    else {
+        return;
+    };
+    let s = site_mut(cache);
     // Filling the ways alone is not evidence of churn. Arm sharing only
     // after an absent way has actually been replaced by a different shape.
     if w.slot.is_none() && s.next & ABSENT_CHURN != 0 {
@@ -630,7 +631,7 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         holder: w.holder,
         holder_shape: w.holder_shape,
         hops,
-        generation: crate::object::class_lookup_surface_generation(),
+        word,
     };
     PRIMES.fetch_add(1, Ordering::Relaxed);
     super::super::stats_report_enabled();
@@ -731,7 +732,6 @@ mod tests;
 #[cold]
 #[inline(never)]
 unsafe fn probe_shared_leaf(s: &Site, class_id: u32, token: i64) -> f64 {
-    let generation = crate::object::class_lookup_surface_generation();
     let mut shared = (s.next >> CURSOR_BITS) & SHARED_MASK;
     while shared != 0 {
         let i = shared.trailing_zeros() as usize;
@@ -739,10 +739,7 @@ unsafe fn probe_shared_leaf(s: &Site, class_id: u32, token: i64) -> f64 {
         let e = s.class_entry(i);
         // Shared bits name only absent sets; replacement clears the bit.
         // The primary scan already handled the group's primary token.
-        if e.class_id == class_id
-            && e.generation == generation
-            && *e.receiver_bucket(token as u32) != 0
-        {
+        if e.class_id == class_id && identity_matches(e) && *e.receiver_bucket(token as u32) != 0 {
             return f64::from_bits(if valid_chain(e) {
                 crate::value::TAG_UNDEFINED
             } else {
@@ -790,7 +787,7 @@ unsafe fn same_absence(e: &Entry, w: &Walk, walked: &[Hop], class_id: u32, pid: 
         && e.depth as usize == w.depth
         && e.holder == w.holder
         && e.holder_shape == w.holder_shape
-        && e.generation == crate::object::class_lookup_surface_generation()
+        && identity_matches(e)
         && prototype_identity(e.token as u32) == Some(pid)
         && e.hops() == walked
 }

@@ -57,7 +57,7 @@
 //!    `proto_validity` ([`ChainStoreEntry::validity`]);
 //! 3. the chain itself: `setPrototypeOf` / `__proto__` anywhere (semantic
 //!    epoch), class-prototype-object registration or replacement
-//!    (`class_lookup_surface_gen_bump`, which bumps `proto_validity`), and a
+//!    (the displaced holder changes ShapeId), and a
 //!    Proxy on the chain (the predicate refuses it, so no entry exists);
 //! 4. the receiver's own [[Prototype]] — the `proto_id` its shape records,
 //!    which every prototype change on the receiver transitions.

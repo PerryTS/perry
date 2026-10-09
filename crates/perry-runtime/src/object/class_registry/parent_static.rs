@@ -1086,7 +1086,7 @@ pub(crate) fn lookup_static_method_owner(
 /// Spec `Function.prototype.length` for a class method named `name` — the
 /// count of formal parameters, excluding a trailing rest param and the
 /// synthesized `arguments` slot (neither contributes to `.length`). Walks the
-/// instance vtable chain, then the static-method table. Used to stamp the
+/// materialized declaration function, then the static-method table. Used to stamp the
 /// bound-method closure's length so `C.prototype.m.length` is correct
 /// (Test262 .../class/{gen,async}-method/...-trailing-comma + length tests).
 /// Note: does not subtract for default-valued params (the registry doesn't
@@ -1113,32 +1113,15 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
             }
         }
     }
-    if let Ok(guard) = CLASS_VTABLE_REGISTRY.read() {
-        if let Some(reg) = guard.as_ref() {
-            let mut cid = class_id;
-            let mut depth = 0usize;
-            while cid != 0 && depth < 32 {
-                if let Some(vt) = reg.get(&cid) {
-                    if let Some(e) = vt.methods.get(name) {
-                        let mut len = e.param_count;
-                        if e.has_rest {
-                            len = len.saturating_sub(1);
-                        }
-                        if e.has_synthetic_arguments {
-                            len = len.saturating_sub(1);
-                        }
-                        return Some(len);
-                    }
-                }
-                match get_parent_class_id(cid) {
-                    Some(p) if p != 0 && p != cid => {
-                        cid = p;
-                        depth += 1;
-                    }
-                    _ => break,
-                }
-            }
-        }
+    // This is function materialization, including a computed ClassBody
+    // member while its evaluation prototype is being filled. Consume the
+    // declaration's function value rather than building a canonical holder,
+    // which would evaluate the superclass's prototype a second time.
+    let declaration = crate::object::class_prototype_method_value_for_name(class_id, name);
+    if let Some((_, params, synthetic, rest)) =
+        unsafe { crate::object::native_module::class_method_value_target(declaration.to_bits()) }
+    {
+        return Some(params.saturating_sub(u32::from(synthetic) + u32::from(rest)));
     }
     // Static methods: prefer the default-aware spec length recorded by codegen
     // (params before the first default/rest), walking the parent chain; fall
@@ -1642,64 +1625,89 @@ pub unsafe extern "C" fn js_class_static_method_call(
 // dense parent table it reads; it is re-exported through `object::mod` unchanged.
 pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 
-/// Look up a method by name in the class vtable, walking the parent chain.
-/// Returns `Some((func_ptr, param_count, has_synthetic_arguments, has_rest))`
-/// if found, `None` otherwise.
-/// Used by `js_assimilate_thenable` (refs #586) and other runtime callers
-/// that need to probe a class for a method without invoking it.
-///
-/// A declared method removed from its class's materialized prototype object
-/// (`delete C.prototype.m`) is not provided by that class: the prototype
-/// object's own keys are the truth, the vtable entry only names the body.
-/// The walk then continues to the parent, as the JS prototype chain does.
-pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool, bool)> {
-    let mut cur = class_id;
-    for _ in 0..32 {
-        let found = {
-            let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-            let reg = registry.as_ref()?;
-            reg.get(&cur)
-                .and_then(|vt| vt.methods.get(name))
-                .map(|entry| {
-                    (
-                        entry.func_ptr,
-                        entry.param_count,
-                        entry.has_synthetic_arguments,
-                        entry.has_rest,
-                    )
-                })
-        };
-        if let Some(entry) = found {
-            // Checked with the registry lock released: the deletedness probe
-            // reads the class tables again.
-            if !super::class_proto_key_deleted(cur, name) {
-                return Some(entry);
-            }
+/// The data method value on the class identity's real prototype chain.
+/// Materialization is a no-move window: legacy callers can hold raw
+/// receiver/argument pointers while asking this question.
+pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let existing = class_holder_prototype(class_id);
+    let start = if existing.is_null() {
+        let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
+        if !v.is_pointer() {
+            return None;
         }
-        match instance_chain_parent_class_id(cur) {
-            Some(pid) => cur = pid,
-            None => return None,
+        v.as_pointer::<ObjectHeader>() as *const ObjectHeader
+    } else {
+        existing as *const ObjectHeader
+    };
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+    match unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) } {
+        crate::object::native_call_method::class_holder::ChainMethod::Data { value, .. } => {
+            Some(value)
         }
+        _ => None,
     }
-    None
 }
 
-/// The next class on an INSTANCE chain after `cid`: the declared parent,
-/// unless a user operation (`Object.setPrototypeOf(C.prototype, X)`,
-/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of `cid`'s
-/// prototype object. That prototype's recorded link is then the chain, and a
-/// walk over declared class members must stop at `cid`: the parent's methods,
-/// getters and setters are off the chain (the generic read continues on the
-/// recorded link). The static side (`C.__proto__`) is a different object and
-/// keeps the declared parent.
-///
-/// The relink check runs only when a declared parent exists, so a walk that
-/// answers from the receiver's own class, or reaches a root class, pays
-/// nothing for it.
-#[inline]
-pub(crate) fn instance_chain_parent_class_id(cid: u32) -> Option<u32> {
-    match get_parent_class_id(cid) {
-        Some(pid) if pid != 0 && !super::class_decl_prototype_relinked(cid) => Some(pid),
+/// Raw-body callers read the prototype's function object, never class
+/// dispatch metadata. Private methods materialize their lexical owner's
+/// function object in the existing method-value store, separate from properties.
+pub(crate) fn class_method_slot_target(
+    class_id: u32,
+    name: &str,
+) -> Option<(usize, u32, bool, bool)> {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let value = if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
+        name.as_bytes(),
+    ) {
+        let owner = class_method_slot_owner(class_id, name)?;
+        crate::object::native_module::class_non_property_method_value(owner, name)
+            .or_else(|| class_method_slot_value(class_id, name))?
+    } else {
+        class_method_slot_value(class_id, name)?
+    };
+    unsafe { crate::object::native_module::class_method_value_target(value) }
+}
+
+/// The holder's owner identity, when a data property exists on the chain.
+pub(crate) fn class_method_slot_owner(class_id: u32, name: &str) -> Option<u32> {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let existing = class_holder_prototype(class_id);
+    let start = if existing.is_null() {
+        let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
+        if !v.is_pointer() {
+            return None;
+        }
+        v.as_pointer::<ObjectHeader>() as *const ObjectHeader
+    } else {
+        existing as *const ObjectHeader
+    };
+    if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
+        name.as_bytes(),
+    ) {
+        let mut hop = start;
+        for _ in 0..128 {
+            if !unsafe {
+                crate::object::native_call_method::class_holder::shape_answers(hop as usize)
+            } {
+                break;
+            }
+            let cid = unsafe { (*hop).class_id };
+            if crate::object::class_has_own_method(cid, name) {
+                return Some(cid);
+            }
+            match unsafe { crate::object::native_call_method::class_holder::next_holder(hop) } {
+                Ok(Some(next)) if next != hop => hop = next,
+                _ => break,
+            }
+        }
+        return None;
+    }
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+    match unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) } {
+        crate::object::native_call_method::class_holder::ChainMethod::Data { holder, .. } => {
+            Some(unsafe { (*holder).class_id })
+        }
         _ => None,
     }
 }
@@ -1714,31 +1722,6 @@ pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
         return false;
     }
     crate::object::class_registry::class_prototype_object_addr_index_contains(ptr)
-}
-
-/// Walk the prototype chain of `class_id` and return the id of the class that
-/// actually OWNS the method `name` (the prototype where it is defined). Used to
-/// make method-as-value identity stable: a class method is a single shared
-/// function object, so every read of it — `c.m`, `C.prototype.m`, `c2.m` —
-/// must resolve to the canonical value keyed by the OWNING class, not the
-/// (possibly derived) class of the receiver. Returns `None` when no class in
-/// the chain declares the method.
-pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
-    let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-    let reg = registry.as_ref()?;
-    let mut cur = class_id;
-    for _ in 0..32 {
-        if let Some(vt) = reg.get(&cur) {
-            if vt.methods.contains_key(name) {
-                return Some(cur);
-            }
-        }
-        match instance_chain_parent_class_id(cur) {
-            Some(pid) => cur = pid,
-            None => return None,
-        }
-    }
-    None
 }
 
 #[cfg(test)]

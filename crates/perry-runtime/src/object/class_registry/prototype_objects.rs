@@ -454,11 +454,15 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
 /// about which object holds `C.prototype.m`.
 #[inline]
 pub(crate) fn class_holder_prototype(class_id: u32) -> *mut ObjectHeader {
-    let declared = crate::object::class_decl_prototype_object(class_id);
-    if !declared.is_null() {
-        return declared;
+    let word = crate::object::shapes::identity_prototype_word(
+        crate::object::shapes::class_identity_proto_id(class_id),
+    );
+    let value = crate::JSValue::from_bits(word);
+    if value.is_pointer() {
+        value.as_pointer::<ObjectHeader>() as *mut ObjectHeader
+    } else {
+        std::ptr::null_mut()
     }
-    class_prototype_object(class_id)
 }
 
 /// Lookup helper for the dispatch chain walk: returns the prototype
@@ -610,19 +614,6 @@ unsafe fn evaluated_parent_instance_field(
     None
 }
 
-/// Has a user operation (`Object.setPrototypeOf(C.prototype, X)`,
-/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of class
-/// `cid`'s declared prototype? Then `get_parent_class_id(cid)` no longer
-/// names the next hop of an instance chain, and walks over the class
-/// registry must stop at `cid` (the recorded link continues the chain).
-///
-/// An unmaterialized prototype has never been observed, so nothing can have
-/// relinked it: the empty table entry answers `false`.
-pub(crate) fn class_decl_prototype_relinked(cid: u32) -> bool {
-    let decl_proto = class_decl_prototype_object(cid);
-    !decl_proto.is_null() && unsafe { decl_prototype_relinked(cid, decl_proto) }
-}
-
 /// Is `decl_proto` (class `cid`'s declaration prototype) standing on
 /// anything but what its declaration links it to — the parent class's
 /// declaration prototype, or `Object.prototype` for a base class? Read from
@@ -736,14 +727,14 @@ unsafe fn relinked_decl_prototype_field(
 /// up in `get_field_by_name.rs` plugged the same hole on the direct-vtable
 /// door for #1021/NestJS; this is that door's chain-walk twin.
 ///
-/// The exclusion is keyed on `class_instance_has_member` — the exact
+/// The exclusion is keyed on `class_instance_has_method` — the exact
 /// "is this a prototype method / getter / setter of the chain" predicate —
 /// plus the `constructor` back-edge, and NOT on "skip the decl-prototype
 /// entirely": a blanket skip would also hide a user's own
 /// `Object.defineProperty(C.prototype, ...)` data field from this walk.
 ///
 /// #9467: `constructor` is the one decl-prototype data field that is NOT an
-/// instance member by `class_instance_has_member`'s definition, and walking
+/// instance member by `class_instance_has_method`'s definition, and walking
 /// into it from the constructor side answered `C.constructor === C`. Node says
 /// `C.constructor === Function` — a constructor object's own chain is
 /// `C → Function.prototype`, with no back-edge to `C`; only
@@ -809,7 +800,7 @@ unsafe fn resolve_proto_chain_field_inner(
             }
         }
     }
-    // Resolved once: `class_instance_has_member` already walks the parent
+    // Resolved once: `class_instance_has_method` already walks the parent
     // chain, so a parent's instance method is excluded from a subclass's
     // constructor read too.
     let skip_decl_prototype = constructor_side && !key.is_null() && {
@@ -819,7 +810,7 @@ unsafe fn resolve_proto_chain_field_inner(
             .map(|name| {
                 // #9467: `C.prototype.constructor` is `C`; `C.constructor` is
                 // `Function` (the class-ref arm's tail fallback), never `C`.
-                name == "constructor" || crate::object::class_instance_has_member(class_id, name)
+                name == "constructor" || crate::object::class_instance_has_method(class_id, name)
             })
             .unwrap_or(false)
     };

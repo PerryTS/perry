@@ -20,6 +20,8 @@ struct SeedRecord {
     logical_key_count: u32,
     live_inline_slot_count: u32,
     proto_id: u64,
+    /// Pointer-free class identity word: the worker builds its own holder.
+    class_word: u64,
     rep: u64,
     infos: Vec<super::shapes_store::ConstFnSlotInfo>,
     to_any: u32,
@@ -46,7 +48,8 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
             // A record whose identity names a prototype object holds a
             // pointer into THIS agent's heap (`shapes_prototype`); a worker
             // mints its own.
-            && !super::proto_id_carries_word(r.proto_id)
+            && (!super::proto_id_carries_word(r.proto_id)
+                || (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&r.proto_id))
         {
             // Copy key BYTES while the source agent owns the record. A worker
             // builds its own canonical keys, so no moving source key pointer
@@ -78,6 +81,13 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
                 logical_key_count: r.logical_key_count,
                 live_inline_slot_count: r.live_inline_slot_count,
                 proto_id: r.proto_id,
+                class_word: if (super::PROTO_ID_CLASS..super::PROTO_ID_MIXED).contains(&r.proto_id)
+                    && super::identity_prototype_word(r.proto_id) != 0
+                {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    0
+                },
                 rep: r.rep,
                 infos: r.constfn_infos().to_vec(),
                 to_any: r.deprecation_targets().1,
@@ -93,6 +103,9 @@ pub(crate) fn worker_shape_seed() -> WorkerShapeSeed {
 /// outlined allocator its exact-descriptor fallback.
 pub(crate) fn install_worker_shape_seed(seed: &WorkerShapeSeed) {
     for r in seed.0.iter() {
+        if r.class_word != 0 {
+            super::write_identity_word(r.proto_id, r.class_word);
+        }
         let names: Vec<&[u8]> = r.names.iter().map(Vec::as_slice).collect();
         let keys = unsafe { crate::object::static_shapes::canonical_keys_for_names(&names) };
         let _ = super::shapes_slot_list::install_external_shape_id_with_constfn(
@@ -232,4 +245,46 @@ mod tests {
         .join()
         .expect("spawner panicked");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn s7b_worker_seeds_an_unbuilt_class_word_without_a_foreign_pointer() {
+    std::thread::spawn(|| {
+        crate::object::class_image::enter_current_thread_image();
+        const CID: u32 = 0x511a;
+        let k =
+            crate::object::js_build_class_keys_array(CID, 1, b"x\0".as_ptr(), 2, 0) as usize as u64;
+        let id = super::js_object_shape_id_for_class_keys(k, 1, CID, 0);
+        let proto = crate::object::js_object_alloc(0, 0);
+        super::write_identity_word(
+            super::class_proto_id(CID),
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
+        let seed = worker_shape_seed();
+        assert!(seed
+            .0
+            .iter()
+            .any(|r| r.id == id && r.class_word == crate::value::TAG_UNDEFINED));
+        let image = crate::object::class_image::current_image_handle();
+        std::thread::spawn(move || {
+            crate::object::class_image::adopt_image(image);
+            let _agent = crate::agent::enter_worker_agent();
+            crate::gc::ensure_gc_initialized();
+            assert_eq!(
+                super::identity_prototype_word(super::class_proto_id(CID)),
+                0
+            );
+            install_worker_shape_seed(&seed);
+            assert_eq!(
+                super::identity_prototype_word(super::class_proto_id(CID)),
+                crate::value::TAG_UNDEFINED
+            );
+            assert!(!crate::promise::then_probe::class_identity_empty(CID));
+        })
+        .join()
+        .unwrap();
+    })
+    .join()
+    .unwrap();
 }

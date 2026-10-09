@@ -42,52 +42,27 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
 /// Does `method_name` on an instance of `class_id` still resolve to the
 /// compiled body `expected_func_ptr`?
 ///
-/// The runtime twin of codegen's `holder_shape_guard::holders_guard`, with
-/// the same proof shape S5 gave generated direct arms: every prototype holder
-/// from the receiver's class up to the declaring class is either not built
-/// yet (a lazy holder is pristine: any mutation first materializes it) or
-/// still carries its compiler-published birth shape P
-/// (`js_register_class_prototype_shape`). P encodes the holder's keys, its
-/// ConstFn method lanes and its prototype link, so an equal ShapeId proves
-/// that no holder on the path gained, replaced, redefined or deleted the
-/// method and that the path itself is unchanged. The holder is the one
-/// instance reads walk and prototype-method registration writes
-/// ([`crate::object::class_holder_prototype`]); a holder with no published P
-/// proves nothing and declines.
+/// A built holder chain resolves the name through its shapes. The data slot
+/// carries the declaration's function object, including its retained raw
+/// body ABI. A lazy holder declines until a collecting path materializes it.
 fn declared_method_resolves_to(class_id: u32, method_name: &str, expected_func_ptr: usize) -> bool {
     if class_id == 0 || expected_func_ptr == 0 {
         return false;
     }
-    let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() else {
+    let holder = crate::object::class_holder_prototype(class_id);
+    if holder.is_null() {
         return false;
-    };
-    let Some(registry) = registry.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    for _ in 0..32 {
-        let holder = crate::object::class_holder_prototype(cid);
-        if !holder.is_null() {
-            let identity = crate::object::decl_prototype_identity_id(cid);
-            let birth = registry
-                .get(&identity)
-                .map_or(0, |vtable| vtable.prototype_birth_shape);
-            // SAFETY: a live, registry-rooted prototype object of this agent.
-            if birth == 0 || unsafe { crate::object::shapes::object_shape_stamp(holder) } != birth {
-                return false;
-            }
-        }
-        if let Some(vtable) = registry.get(&cid) {
-            if let Some(entry) = vtable.methods.get(method_name) {
-                return entry.func_ptr == expected_func_ptr;
-            }
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => break,
-        }
     }
-    false
+    let key =
+        crate::object::native_call_method::class_holder::MethodKey::bytes(method_name.as_bytes());
+    let value = match unsafe {
+        crate::object::native_call_method::class_holder::chain_method(holder, &key)
+    } {
+        crate::object::native_call_method::class_holder::ChainMethod::Data { value, .. } => value,
+        _ => return false,
+    };
+    unsafe { crate::object::class_method_value_target(value) }
+        .is_some_and(|target| target.0 == expected_func_ptr)
 }
 
 fn method_direct_call_contract(

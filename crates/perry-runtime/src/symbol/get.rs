@@ -1114,11 +1114,11 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                     // Read the method off the class and return a bound method so
                     // iteration-protocol consumers (`[...x]`, `for…of`,
                     // `Math.max(...x)`, destructuring) can drive `.next()`. Guard
-                    // on `method_owner_class_id` first: `js_class_method_bind`
+                    // on `class_method_slot_owner` first: `js_class_method_bind`
                     // otherwise mints a bound closure for a non-existent method.
                     if let Some(method_name) = well_known_symbol_method_name(sym_key) {
                         if let Some(owner) =
-                            crate::object::method_owner_class_id(class_id, method_name)
+                            crate::object::class_method_slot_owner(class_id, method_name)
                         {
                             if let Some(value) = class_iterator_prototype_override(
                                 receiver_f64,

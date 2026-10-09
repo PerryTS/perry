@@ -59,9 +59,12 @@ mod shapes_slot_list;
 mod shapes_store;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
+#[cfg(test)]
+pub(crate) use shapes_prototype::clear_class_identity_words;
 pub(crate) use shapes_prototype::{
-    identity_word_slot, note_full_trace_begin, proto_id_carries_word, prune_dead_shape_prototypes,
-    scan_shape_prototype_words_mut, shape_prototype_word,
+    identity_prototype_word, identity_word_slot, note_full_trace_begin, proto_id_carries_word,
+    prune_dead_shape_prototypes, scan_shape_prototype_words_mut, shape_prototype_word,
+    write_identity_word,
 };
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
@@ -1461,7 +1464,10 @@ pub(crate) fn shape_word_may_be_linked(header_word: u32) -> bool {
 /// `proto_id`.
 #[inline]
 pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
-    if proto_id == PROTO_ID_NULL {
+    if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
+        // The identity word is an implied class link, not an instance override.
+        SHAPE_ID_KIND_PLAIN
+    } else if proto_id == PROTO_ID_NULL {
         SHAPE_ID_KIND_NULL
     } else if shapes_prototype::proto_id_carries_word(proto_id) {
         SHAPE_ID_KIND_WORD
@@ -4626,6 +4632,17 @@ fn vtable_class(class_id: u32) -> u32 {
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
+/// The CLASS word of a class identity, including a closed-literal id that
+/// later collides with a declaration. Receiver birth classification is a
+/// separate fact: an anon receiver can have DEFAULT while its class acquires
+/// a holder, and probes must observe that publication.
+pub(crate) fn class_identity_proto_id(class_id: u32) -> u64 {
+    if class_id == 0 {
+        return PROTO_ID_DEFAULT;
+    }
+    PROTO_ID_CLASS | u64::from(crate::object::class_generic_origin(class_id).unwrap_or(class_id))
+}
+
 /// The prototype identity an instance of `class_id` is BORN with, before any
 /// prototype is recorded on it.
 pub(crate) fn class_proto_id(class_id: u32) -> u64 {
@@ -4874,6 +4891,10 @@ unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) 
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
     let proto_id = (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id;
+    if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
+        // CLASS is an implied link, rather than an instance override.
+        return 0;
+    }
     if proto_id != PROTO_ID_NULL {
         return shapes_prototype::identity_prototype_word(proto_id);
     }

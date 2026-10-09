@@ -303,11 +303,9 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         if super::super::class_registry::get_parent_class_id(class_id).is_some() {
             return None;
         }
-        if super::super::class_registry::CLASS_VTABLE_REGISTRY
-            .read()
-            .ok()
-            .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
-            .unwrap_or(false)
+        if crate::object::shapes::identity_prototype_word(
+            crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+        ) != 0
         {
             return None;
         }

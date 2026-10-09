@@ -40,12 +40,10 @@
 //!   can shadow the answer;
 //! * an ADMISSIBLE class id ([`class_id_admissible`]): `0` (a plain object
 //!   literal), or an anonymous SHAPE id that the class registries provably
-//!   know nothing about — no vtable entry, no class prototype object of either
-//!   flavour, no parent edge. That excludes every class instance, every
+//!   know nothing about — an empty CLASS identity word and no parent edge. That excludes every class instance, every
 //!   plain-function-constructor instance, the native-module namespace id,
 //!   WeakMap/WeakSet, Map/Set iterators, DisposableStack, boxed String,
-//!   AbortSignal and TTY hosts, so no `CLASS_VTABLE_REGISTRY` getter or method
-//!   named `then` and no class prototype chain is in play;
+//!   AbortSignal and TTY hosts, so no class holder chain is in play;
 //! * the receiver carries no native-this alias (`native_this_alias::object_alias`)
 //!   — `js_object_get_field_by_name_f64` forwards a MISSED read to an aliased
 //!   native handle, a layer above the lookup this module models;
@@ -560,6 +558,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
 struct AdmissibleEntry {
     class_id: u32,
     epoch: u64,
+    identity_word: u64,
     admissible: bool,
 }
 
@@ -569,6 +568,7 @@ const EMPTY_ADMISSIBLE: AdmissibleEntry = AdmissibleEntry {
     // 0 is answered without consulting the memo, so it is a safe "empty" tag.
     class_id: 0,
     epoch: 0,
+    identity_word: 0,
     admissible: false,
 };
 
@@ -591,7 +591,7 @@ crate::perry_thread_local! {
 ///    (`WeakMap`/`WeakSet`, Map/Set iterators, `DisposableStack`, boxed
 ///    `String`, `AbortSignal`, TTY …), which are recognised by *constant
 ///    comparison* in their arms and never appear in any registry.
-/// 2. [`class_registry_inert`] — the class registries actually know nothing
+/// 2. [`class_identity_empty`] — the class registries actually know nothing
 ///    about the id. Without this, admitting anon shapes would rest on two
 ///    COMPILE-TIME facts nothing checks at runtime (`is_closed_shape` refusing
 ///    getters/setters/methods, and codegen skipping `js_register_class_name`
@@ -607,46 +607,32 @@ fn class_id_admissible(class_id: u32) -> bool {
     }
     let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
     let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) >> 12 & (ADMISSIBLE_SLOTS - 1);
+    let identity_word = crate::object::shapes::identity_prototype_word(
+        crate::object::shapes::class_identity_proto_id(class_id),
+    );
     let e = ADMISSIBLE_MEMO.with(|t| t[slot].get());
-    if e.class_id == class_id && e.epoch == epoch {
+    if e.class_id == class_id && e.epoch == epoch && e.identity_word == identity_word {
         return e.admissible;
     }
     let admissible =
-        crate::object::is_anon_shape_class_id(class_id) && class_registry_inert(class_id);
+        crate::object::is_anon_shape_class_id(class_id) && class_identity_empty(class_id);
     ADMISSIBLE_MEMO.with(|t| {
         t[slot].set(AdmissibleEntry {
             class_id,
             epoch,
+            identity_word,
             admissible,
         })
     });
     admissible
 }
 
-/// `true` when every `class_id != 0` arm of the property-read path resolves
-/// nothing for `class_id`: no vtable (getters, setters, methods), no class
-/// prototype object of either flavour, and no parent edge. Those four
-/// registries are the entire input to `resolve_proto_chain_field_with_receiver`,
-/// the ordinary prototype read, `lookup_class_method_in_chain` and the
-/// `CLASS_VTABLE_REGISTRY` getter/method dispatch in the dynamic getter.
-pub(crate) fn class_registry_inert(class_id: u32) -> bool {
-    if crate::object::get_parent_class_id(class_id).is_some() {
-        return false;
-    }
-    if !crate::object::class_prototype_object(class_id).is_null() {
-        return false;
-    }
-    if !crate::object::class_decl_prototype_object(class_id).is_null() {
-        return false;
-    }
-    match crate::object::CLASS_VTABLE_REGISTRY.read() {
-        Ok(guard) => match guard.as_ref() {
-            Some(map) => !map.contains_key(&class_id),
-            None => true,
-        },
-        // A poisoned lock is not a proof of anything.
-        Err(_) => false,
-    }
+/// An empty CLASS identity has no declared or published holder surface.
+pub(crate) fn class_identity_empty(class_id: u32) -> bool {
+    crate::object::get_parent_class_id(class_id).is_none()
+        && crate::object::shapes::identity_prototype_word(
+            crate::object::shapes::class_identity_proto_id(class_id),
+        ) == 0
 }
 
 // ── Verification mode ──────────────────────────────────────────────────────
@@ -696,6 +682,34 @@ fn verify_against_spec_path(value: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s7b_negative_probe_observes_unbuilt_holder_publication() {
+        let cid = 190_703;
+        unsafe {
+            crate::object::js_register_anon_shape_class_id(cid);
+        }
+        assert!(class_id_admissible(cid), "the negative memo must be live");
+        unsafe {
+            crate::object::js_register_class_method(
+                cid as i64,
+                b"then".as_ptr(),
+                4,
+                probe_body as *const () as usize as i64,
+                0,
+                0,
+                0,
+            );
+        }
+        assert!(
+            !class_id_admissible(cid),
+            "publication must retire the cached negative without an epoch bump"
+        );
+    }
+
+    extern "C" fn probe_body(_this: f64) -> f64 {
+        0.0
+    }
 
     fn sample_signature() -> ProtoSignature {
         ProtoSignature {

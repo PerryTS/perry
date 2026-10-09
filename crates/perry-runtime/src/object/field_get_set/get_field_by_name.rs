@@ -142,7 +142,9 @@ pub(crate) fn class_value_get_field(
             && class_id != 0
             && class_has_own_method(class_id, name)
         {
-            let value = class_prototype_method_value_for_name(class_id, name);
+            let value = crate::object::class_method_slot_value(class_id, name)
+                .map(f64::from_bits)
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             return JSValue::from_bits(value.to_bits());
         }
         if name == "constructor"
@@ -216,7 +218,9 @@ pub(crate) fn class_value_get_field(
         // static methods are resolved below via
         // `lookup_static_method_in_chain`.
         if is_prototype_ref && class_id != 0 && class_has_own_method(class_id, name) {
-            let value = class_prototype_method_value_for_name(class_id, name);
+            let value = crate::object::class_method_slot_value(class_id, name)
+                .map(f64::from_bits)
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             return JSValue::from_bits(value.to_bits());
         }
         if is_prototype_ref {
@@ -889,7 +893,7 @@ fn get_field_by_name_past_data_probe(
                     // so check the class chain first and fall through to the normal
                     // class/prototype resolution when it shadows the backing size.
                     let class_id = super::super::js_object_get_class_id(obj);
-                    // #7341: BOTH helpers below allocate — `class_instance_has_member`
+                    // #7341: BOTH helpers below allocate — `class_instance_has_method`
                     // builds a `String` for its cache probe, and `subclass_backing_of`
                     // calls `js_string_from_bytes` to materialise its constant
                     // `BACKING_KEY` on every call. Either can drive an evacuating
@@ -906,7 +910,7 @@ fn get_field_by_name_past_data_probe(
                     // costs nothing on it.
                     let obj_h = &size_arm_obj;
                     let has_inherited_size = class_id != 0
-                        && super::super::native_module::class_instance_has_member(class_id, "size");
+                        && super::super::native_module::class_instance_has_method(class_id, "size");
                     if !has_inherited_size {
                         let obj_now = obj_h.get_raw_const_ptr::<ObjectHeader>();
                         let boxed = f64::from_bits(JSValue::pointer(obj_now as *const u8).bits());

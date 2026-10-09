@@ -104,7 +104,7 @@ fn decl_prototype_method_slot_is_a_constfn_lane_of_its_body() {
 }
 
 #[test]
-fn a_method_without_an_entry_keeps_the_name_trampoline() {
+fn a_method_without_an_entry_keeps_its_body_on_the_function_object() {
     let cid = 0x6E32;
     register(cid, b"Old");
     unsafe { register_method(cid, b"m", None) };
@@ -112,14 +112,223 @@ fn a_method_without_an_entry_keeps_the_name_trampoline() {
     let closure = (m & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     unsafe {
         assert!(crate::closure::is_closure_ptr(closure as usize));
-        assert_eq!(
+        assert_ne!(
             (*closure).code(),
             crate::closure::BOUND_METHOD_FUNC_PTR,
-            "no entry: the trampoline"
+            "native declarations retain their body without redispatch"
         );
         assert_eq!(
             crate::object::class_method_entry_source_func_ptr(closure),
+            Some(method_body as *const () as usize)
+        );
+    }
+}
+
+#[test]
+fn ordinary_four_capture_closure_has_no_declaration_body() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E33;
+    register(cid, b"Capture");
+    let home = crate::object::class_value::class_value(cid);
+    let f = crate::closure::js_closure_alloc(crate::fn_info!(entry_body, 0), 4);
+    unsafe {
+        crate::closure::closure_install_boxed_captures(
+            f,
+            &[
+                home.to_bits(),
+                crate::value::INT32_TAG
+                    | crate::object::native_module::CLASS_PROTOTYPE_REF_FLAG
+                    | 123,
+                crate::value::INT32_TAG
+                    | crate::object::native_module::CLASS_PROTOTYPE_REF_FLAG
+                    | 456,
+                0.0f64.to_bits(),
+            ],
+        );
+        assert_eq!(
+            crate::object::native_module::class_method_value_target(
+                crate::value::js_nanbox_pointer(f as i64).to_bits()
+            ),
             None
         );
     }
+}
+
+extern "C" fn private_getter(_this: f64) -> f64 {
+    42.0
+}
+
+#[test]
+fn s7b_private_accessor_reads_its_materialized_pair() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E34;
+    register(cid, b"PrivatePair");
+    unsafe {
+        super::js_register_class_getter(
+            cid as i64,
+            b"#x".as_ptr(),
+            2,
+            private_getter as *const () as usize as i64,
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                super::class_private_instance_getter_value(cid, "#x", 0.0),
+                Some(42.0)
+            );
+        }
+    }
+}
+
+#[test]
+fn s7b_private_accessor_pair_cannot_collide_with_method_names() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E36;
+    register(cid, b"PrivateNamespace");
+    // A computed public method can spell an internal-looking prefix or the
+    // private member's spelling. Both method entries must remain distinct
+    // from the accessor pair in the existing materialized-value store.
+    let names = ["\0private-accessor:#x", "#x"];
+    let mut methods = Vec::new();
+    for name in names {
+        unsafe { register_method(cid, name.as_bytes(), None) };
+        methods.push(crate::object::class_prototype_method_value_for_name(cid, name).to_bits());
+    }
+    unsafe {
+        super::js_register_class_getter(
+            cid as i64,
+            b"#x".as_ptr(),
+            2,
+            private_getter as *const () as usize as i64,
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                super::class_private_instance_getter_value(cid, "#x", 0.0),
+                Some(42.0)
+            );
+        }
+    }
+    for (name, method) in names.into_iter().zip(methods) {
+        assert_eq!(
+            crate::object::class_prototype_method_value_for_name(cid, name).to_bits(),
+            method
+        );
+    }
+}
+
+#[test]
+fn s7b_detached_instance_does_not_recover_a_declaration_method() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E35;
+    register(cid, b"Detached");
+    unsafe { register_method(cid, b"m", None) };
+    class_decl_prototype_value(cid);
+    let obj = crate::object::js_object_alloc(cid, 0);
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    // Both an empty recorded chain and null must prevent a canonical
+    // declaration fallback in the method-as-value path.
+    let empty = crate::object::js_object_alloc(0, 0);
+    for prototype in [
+        crate::value::js_nanbox_pointer(empty as i64).to_bits(),
+        crate::value::TAG_NULL,
+    ] {
+        crate::object::prototype_chain::object_set_user_prototype(obj as usize, prototype);
+        assert_eq!(
+            crate::object::js_class_method_bind(receiver, b"m".as_ptr(), 1).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+}
+
+#[test]
+fn s7b_non_property_owner_walk_stops_at_an_exotic_holder() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E37;
+    register(cid, b"ArrayHop");
+    let prototype = crate::object::class_decl_prototype_value(cid);
+    let array = crate::array::js_array_alloc(0);
+    crate::object::prototype_chain::object_set_user_prototype(
+        (prototype.to_bits() & crate::value::POINTER_MASK) as usize,
+        crate::value::js_nanbox_pointer(array as i64).to_bits(),
+    );
+    assert_eq!(
+        crate::object::class_method_slot_target(cid, "#missing"),
+        None
+    );
+}
+
+#[test]
+fn s7b_literal_symbol_alias_method_cannot_be_recovered_after_delete() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E38;
+    let name = b"@@iterator";
+    register(cid, b"LiteralAlias");
+    unsafe {
+        super::js_register_class_string_member_order(
+            cid as i64,
+            name.as_ptr(),
+            name.len() as i64,
+            0,
+            0,
+        );
+        register_method(cid, name, None);
+    }
+    let prototype = crate::object::class_decl_prototype_value(cid);
+    assert!(crate::object::class_method_slot_target(cid, "@@iterator").is_some());
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let holder =
+        (prototype.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+    assert_eq!(crate::object::js_object_delete_field(holder, key), 1);
+    assert_eq!(
+        crate::object::class_method_slot_target(cid, "@@iterator"),
+        None
+    );
+}
+
+#[test]
+fn s7b_evaluation_method_materialization_does_not_build_a_template_holder() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E3A;
+    register(cid, b"ComputedBody");
+    unsafe { register_method(cid, b"m", None) };
+    let class = crate::object::js_class_evaluation_object(cid, 6, 0, std::ptr::null_mut());
+    let brand = crate::value::js_nanbox_pointer(class as i64);
+    assert!(crate::object::class_holder_prototype(cid).is_null());
+    let method = crate::object::class_evaluation_method_value_for_name(cid, "m", brand);
+    assert_ne!(method.to_bits(), crate::value::TAG_UNDEFINED);
+    assert!(
+        crate::object::class_holder_prototype(cid).is_null(),
+        "materializing an evaluation method must not re-evaluate its superclass prototype"
+    );
+}
+
+#[test]
+fn s7b_anon_shape_identity_has_no_class_surface() {
+    // An object literal's id is registered for `typeof` and may carry
+    // literal methods, but its [[Prototype]] is Object.prototype: it must
+    // never build a declaration holder or publish a CLASS word.
+    let cid = 0x6E3C;
+    unsafe {
+        crate::object::js_register_class_id(cid);
+        crate::object::js_register_anon_shape_class_id(cid);
+        register_method(cid, b"f", None);
+    }
+    assert!(!super::state::class_identity_has_surface(cid));
+    assert_eq!(
+        crate::object::shapes::identity_prototype_word(
+            crate::object::shapes::PROTO_ID_CLASS | u64::from(cid)
+        ),
+        0,
+        "a literal's method registration must not publish an unbuilt class word"
+    );
+    assert_eq!(
+        class_decl_prototype_value(cid).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "a literal's id must not build a declaration holder"
+    );
+    // A declared class keeps its surface; the anon mark alone decides nothing
+    // for a named collision.
+    let declared = 0x6E3D;
+    register(declared, b"Declared");
+    unsafe { crate::object::js_register_anon_shape_class_id(declared) };
+    assert!(super::state::class_identity_has_surface(declared));
 }

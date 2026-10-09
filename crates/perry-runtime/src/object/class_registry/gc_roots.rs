@@ -5,6 +5,7 @@ enum ClassSideTableRootSlot {
     PrototypeMethodValue {
         class_id: u32,
         name: String,
+        kind: ClassDeclarationValueKind,
     },
     PrototypeObject {
         class_id: u32,
@@ -182,10 +183,11 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
 
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let cache = cache.borrow();
-        for ((class_id, name), _) in cache.iter() {
+        for ((class_id, name, kind), _) in cache.iter() {
             slots.push(ClassSideTableRootSlot::PrototypeMethodValue {
                 class_id: *class_id,
                 name: name.clone(),
+                kind: *kind,
             });
         }
     });
@@ -283,9 +285,17 @@ fn scan_class_side_table_root_slot(
     slot: &ClassSideTableRootSlot,
 ) {
     match slot {
-        ClassSideTableRootSlot::PrototypeMethodValue { class_id, name } => {
+        ClassSideTableRootSlot::PrototypeMethodValue {
+            class_id,
+            name,
+            kind,
+        } => {
             CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-                if let Some(value_bits) = cache.borrow_mut().get_mut(&(*class_id, name.clone())) {
+                if let Some(value_bits) =
+                    cache
+                        .borrow_mut()
+                        .get_mut(&(*class_id, name.clone(), *kind))
+                {
                     visitor.visit_nanbox_u64_slot(value_bits);
                 }
             });
@@ -524,7 +534,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
     crate::object::class_value::test_clear_class_decl_prototype_links();
     // Test-only map reset has the same invalidation contract as production
     // registry stores: a still-live accessor site must decline its old link.
-    super::class_lookup_surface_gen_bump();
+    crate::object::shapes::clear_class_identity_words();
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
@@ -582,7 +592,11 @@ pub(crate) fn test_class_prototype_method_value_root_bits(class_id: u32, name: &
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         cache
             .borrow()
-            .get(&(class_id, name.to_string()))
+            .get(&(
+                class_id,
+                name.to_string(),
+                ClassDeclarationValueKind::Method,
+            ))
             .copied()
             .unwrap_or(0)
     })
@@ -610,7 +624,10 @@ pub(crate) fn test_seed_class_decl_prototype_object_root(class_id: u32, addr: us
     // objects before replacement, independent of production's prototype mark.
     let proto = addr as *mut ObjectHeader;
     let displaced = crate::object::class_value::class_decl_prototype_link_store(class_id, proto);
-    super::class_lookup_surface_gen_bump();
+    crate::object::shapes::write_identity_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+        crate::value::POINTER_TAG | proto as u64,
+    );
     if !displaced.is_null() && displaced != proto {
         super::state::retire_displaced_decl_prototype(displaced);
     }

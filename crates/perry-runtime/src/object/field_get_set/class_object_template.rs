@@ -829,18 +829,19 @@ enum ProtoFill {
 
 /// The function object one evaluation's prototype holds for method `name` of
 /// template `class_id`: it runs the method's closure-convention entry, and its
-/// one capture is its home, class object `class`. `None` when the template
+/// home capture names class object `class`. `None` when the template
 /// registered no entry for `name`.
 pub(crate) unsafe fn evaluation_method_value(class_id: u32, name: &str, class: f64) -> Option<f64> {
     let code = super::super::class_registry::class_method_entry(class_id, name)?;
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_nanbox_f64(class);
-    let f = static_method_value(code);
-    if f.is_null() {
-        return None;
-    }
-    set_static_method_home(f, class.get_nanbox_f64());
-    Some(crate::value::js_nanbox_pointer(f as i64))
+    Some(
+        crate::object::native_module::class_method_entry_declaration_value(
+            class_id,
+            code,
+            class.get_nanbox_f64(),
+        ),
+    )
 }
 
 /// Build the prototype object of class object `class` (template `class_id`)
@@ -895,11 +896,12 @@ pub(crate) unsafe fn prototype_from_template<'s>(
             ProtoFill::Constructor => class
                 .with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
             ProtoFill::Method(code) => {
-                let f = static_method_value(code);
-                class.with_mut_ptr::<ObjectHeader, _>(|c| {
-                    set_static_method_home(f, crate::value::js_nanbox_pointer(c as i64))
+                let home = class.with_const_ptr::<ObjectHeader, _>(|c| {
+                    crate::value::js_nanbox_pointer(c as i64)
                 });
-                crate::value::js_nanbox_pointer(f as i64)
+                crate::object::native_module::class_method_entry_declaration_value(
+                    class_id, code, home,
+                )
             }
         };
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
@@ -1015,16 +1017,16 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
     let class_id = (*obj).class_id;
     // The evaluation's class object names the template: `obj`'s own brand
     // (an evaluation prototype, or an instance of one evaluation).
-    let template =
+    let template_cell =
         crate::object::private_evaluation_brand_value(crate::value::js_nanbox_pointer(obj as i64))
             .filter(|class| crate::object::class_registry::is_class_object_value(*class))
             .and_then(|class| {
                 class_object_template_cell(
                     JSValue::from_bits(class.to_bits()).as_pointer::<ObjectHeader>(),
                 )
-            })
-            .and_then(|c| c.proto_template())
-            .and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
+            });
+    let template_facts = template_cell.and_then(|c| c.proto_template());
+    let template = template_facts.and_then(|t| crate::object::shapes::shape_descriptor_by_id(t.1));
     if let Some(template) = template {
         // The template's prototype keys, all still there: marking the
         // prototype (its first instance) restamps its shape but keeps them.
@@ -1053,17 +1055,31 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
     let Some(name) = crate::string::header_str_checked(key) else {
         return false;
     };
-    let mut cid = class_id;
-    for _ in 0..32 {
-        if super::super::class_registry::class_method_entry(cid, name).is_some() {
-            return true;
-        }
-        match super::super::class_registry::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => return false,
+    if let (Some(cell), Some(facts), Some(template)) = (template_cell, template_facts, template) {
+        let keys = template.keys as usize as *const crate::ArrayHeader;
+        if let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
+            keys,
+            template.logical_key_count,
+            name.as_bytes(),
+        ) {
+            if (slot as usize) < facts.2
+                && matches!(cell.proto_fill(slot as usize), ProtoFill::Method(_))
+            {
+                return true;
+            }
         }
     }
-    false
+    // Only an existing canonical holder can prove a template-chain method.
+    // Building one would re-evaluate a user superclass prototype getter.
+    let holder = super::super::class_registry::class_holder_prototype(class_id);
+    if holder.is_null() {
+        return false;
+    }
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+    matches!(
+        crate::object::native_call_method::class_holder::chain_method(holder, &key),
+        crate::object::native_call_method::class_holder::ChainMethod::Data { .. }
+    )
 }
 
 /// The evaluation prototype of class object `obj`, read from the slot the

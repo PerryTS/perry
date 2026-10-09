@@ -204,7 +204,7 @@ const SYNTHETIC_CLASS_ID_END: u32 =
 /// not a class id. The one place a class id becomes a table position (the
 /// compiled band's offset is the id itself, which is what
 /// [`class_value_cached`]'s fast path reads).
-fn class_value_band(class_id: u32) -> Option<(usize, u32)> {
+pub(super) fn class_value_band(class_id: u32) -> Option<(usize, u32)> {
     match class_id {
         0 => None,
         1..FIRST_RUNTIME_CLASS_ID => Some((0, class_id)),

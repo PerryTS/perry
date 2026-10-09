@@ -5,6 +5,16 @@ use crate::object::class_image::{
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+/// Distinct declaration namespaces in the existing rooted value store.
+/// A computed method may have any string name, including internal-looking
+/// prefixes, so a private accessor pair must never reserve a string key.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum ClassDeclarationValueKind {
+    Method,
+    NonPropertyMethod,
+    PrivateAccessor,
+}
+
 crate::perry_thread_local! {
     /// Backing LLVM globals for declared static fields, keyed exactly like
     /// `CLASS_DYNAMIC_PROPS`. Direct compiled reads use these cells, while
@@ -57,10 +67,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
     if unsafe { crate::object::shapes::pristine_declaration_holder(proto) } {
         return false;
     }
-    let declared = name == "constructor"
-        || class_own_accessor_ptrs(class_id, name).is_some()
-        || super::super::native_module::class_has_own_method(class_id, name);
-    if !declared || proto_member_has_no_string_key(class_id, name) {
+    if proto_member_has_no_string_key(class_id, name) {
         return false;
     }
     // SAFETY: `proto` is this realm's live decl prototype; nothing below
@@ -81,7 +88,7 @@ pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
 /// well-known-symbol method (`@@iterator` stands in for `[Symbol.iterator]`,
 /// which lives under its symbol key). A source method literally named
 /// `"@@iterator"` has a string-member order registration and is a real key.
-fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool {
+pub(crate) fn proto_member_has_no_string_key(class_id: u32, name: &str) -> bool {
     if name.starts_with('#') {
         return true;
     }
@@ -304,10 +311,24 @@ pub(crate) fn class_prototype_method_value_cache_root_store(
     method_name: String,
     value_bits: u64,
 ) {
+    class_declaration_value_root_store(
+        class_id,
+        method_name,
+        ClassDeclarationValueKind::Method,
+        value_bits,
+    );
+}
+
+pub(crate) fn class_declaration_value_root_store(
+    class_id: u32,
+    name: String,
+    kind: ClassDeclarationValueKind,
+    value_bits: u64,
+) {
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         cache
             .borrow_mut()
-            .insert((class_id, method_name), value_bits);
+            .insert((class_id, name, kind), value_bits);
     });
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
 }
@@ -694,16 +715,23 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
         unsafe {
             super::construct::forget_birth_record_of_class(old as *mut ObjectHeader, class_id)
         };
+        retire_displaced_decl_prototype(old as *mut ObjectHeader);
     }
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
-    // A materialized prototype object can carry arbitrary later-added
-    // properties, so every cache that answered "this class chain resolves
-    // nothing" must retire. Bumped HERE rather than at the call sites: five
-    // of them (`ensure_function_prototype_object`, `js_object_create`,
-    // the per-evaluation class-object heritage path, and the lazy
-    // tls/tty/wasi installers) bump nothing of their own (#10696).
-    super::class_lookup_surface_gen_bump();
+    // The effective holder is the CLASS identity's word. A declared
+    // holder has precedence over the synthetic input, as on ordinary Get.
+    if class_decl_prototype_object(class_id).is_null()
+        && ((super::prototype_objects::SYNTHETIC_CLASS_ID_BASE
+            ..super::prototype_objects::SYNTHETIC_CLASS_ID_END)
+            .contains(&class_id)
+            || !super::is_class_object_ptr(proto_ptr as *const u8))
+    {
+        crate::object::shapes::write_identity_word(
+            crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+            crate::value::POINTER_TAG | proto_ptr as u64,
+        );
+    }
 }
 
 /// `Object.setPrototypeOf(Ctor, proto)`: the class function object's
@@ -784,8 +812,10 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
 fn link_decl_prototype_object(class_id: u32, proto_ptr: *mut ObjectHeader) {
     let displaced =
         crate::object::class_value::class_decl_prototype_link_store(class_id, proto_ptr);
-    // The lookup-surface generation exists for exactly this store (#10696).
-    super::class_lookup_surface_gen_bump();
+    crate::object::shapes::write_identity_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
+        crate::value::POINTER_TAG | proto_ptr as u64,
+    );
     if !displaced.is_null() && displaced != proto_ptr {
         retire_displaced_decl_prototype(displaced);
     }
@@ -945,9 +975,8 @@ fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
 /// equal.
 ///
 /// Same origin edge `instanceof` uses (#7575) and the display name uses
-/// (#7632), applied to the third and last identity surface. METHOD DISPATCH is
-/// unaffected: it runs off the per-class-id vtable, not this object, so each
-/// specialization keeps its own monomorphized bodies.
+/// (#7632), applied to the third and last identity surface. Method dispatch
+/// uses the prototype holder named by the specialization's shape.
 pub(crate) fn decl_prototype_identity_id(class_id: u32) -> u32 {
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
@@ -958,23 +987,6 @@ pub(crate) fn decl_prototype_identity_id(class_id: u32) -> u32 {
 #[inline]
 pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
     crate::object::class_value::class_decl_prototype_link(decl_prototype_identity_id(class_id))
-}
-
-pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
-    let mut names = Vec::new();
-    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-        if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
-            // The real class constructor is stored in `Class::constructor`,
-            // not in the instance-method vtable. An entry named
-            // `"constructor"` here is therefore an ordinary method, most
-            // notably `class C { ["constructor"]() {} }`. It must replace the
-            // implicit `C.prototype.constructor` data property when the
-            // reflective prototype object is materialized.
-            names.extend(vtable.methods.keys().cloned());
-        }
-    }
-    order_class_string_member_names(class_id, false, &mut names);
-    names
 }
 
 fn internal_symbol_dispatch_alias(name: &str) -> bool {
@@ -1032,11 +1044,33 @@ pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> V
                 names.extend(map.keys().cloned());
             }
         }
-    } else if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-        if let Some(vtable) = registry.as_ref().and_then(|all| all.get(&class_id)) {
-            names.extend(vtable.methods.keys().cloned());
-            names.extend(vtable.accessors.keys().cloned());
+    } else {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let holder = class_holder_prototype(class_id);
+        let holder = if holder.is_null() {
+            let value = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
+            if !value.is_pointer() {
+                return names;
+            }
+            value.as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        } else {
+            holder
+        };
+        // Reflect the current holder's keys, including deletion/recreation
+        // order, rather than reconstructing them from declaration input.
+        unsafe {
+            let keys = crate::object::object_keys(holder);
+            let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+            for i in 0..keys.count() {
+                let value = crate::array::js_array_get(keys.arr(), i);
+                if let Some(bytes) = crate::string::js_string_key_bytes(value, &mut short) {
+                    if let Ok(name) = std::str::from_utf8(bytes) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
         }
+        return names;
     }
     names.retain(|name| !name.starts_with('#'));
     order_class_string_member_names(class_id, is_static, &mut names);
@@ -1242,7 +1276,7 @@ unsafe fn class_method_entry_object_of(bits: u64, home: u64) -> bool {
     }
     let closure = value.as_pointer::<crate::closure::ClosureHeader>();
     crate::closure::is_closure_ptr(closure as usize)
-        && crate::closure::real_capture_count((*closure).capture_count) == 1
+        && crate::closure::real_capture_count((*closure).capture_count) >= 1
         && crate::closure::js_closure_get_capture_bits(closure, 0) == home
 }
 
@@ -1351,6 +1385,21 @@ pub fn async_local_storage_prototype_value() -> f64 {
     super::function_prototype::js_function_prototype_value_for_read(func_value)
 }
 
+/// Does CLASS identity `class_id` stand for a class with a prototype surface
+/// (a declaration, or a registered runtime class)? An object literal's
+/// anon-shape id is registered for `typeof` and may carry literal methods,
+/// but its [[Prototype]] is `Object.prototype`: it has no declaration holder,
+/// publishes no CLASS word and stays on ordinary property lookup. A declared
+/// class whose id collides with an anon shape keeps its name.
+pub(crate) fn class_identity_has_surface(class_id: u32) -> bool {
+    class_id != 0
+        && if super::is_anon_shape_class_id(class_id) {
+            super::class_meta::class_has_name(class_id)
+        } else {
+            is_class_id_registered(class_id) || super::class_meta::class_has_name(class_id)
+        }
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
     let class_id = decl_prototype_identity_id(class_id);
@@ -1361,7 +1410,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
             .then(|| crate::value::js_nanbox_pointer(proto as i64))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
     }
-    if class_id == 0 || class_name_for_id(class_id).is_none() {
+    if !class_identity_has_surface(class_id) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
@@ -1553,7 +1602,7 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
 }
 
 pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {
-    if class_id == 0 || class_name_for_id(class_id).is_none() {
+    if !class_identity_has_surface(class_id) {
         return None;
     }
     let proto = class_decl_prototype_value(class_id);

@@ -459,7 +459,7 @@ fn set_multi_absent_id(c: &mut HolderEntry, i: usize, id: u32) {
 /// The site's class and saved ordinary entries for `recv`, from the GC-leaf
 /// read front, asked after [`entry_answer`] declined: a class instance's
 /// inherited data or absent key, proved by the receiver's ShapeId and class
-/// id, the class lookup-surface generation (its direct link) and the hop and
+/// id, its identity word (its direct link) and the hop and
 /// holder ShapeIds. Loads and compares only; declines with `TAG_HOLE`.
 ///
 /// # Safety
@@ -738,7 +738,14 @@ pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const Obje
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
         next_from_word(recv, word)
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
-        crate::object::class_decl_prototype_object(pid as u32)
+        {
+            let bits = crate::object::shapes::identity_prototype_word(pid);
+            let value = crate::JSValue::from_bits(bits);
+            if !value.is_pointer() {
+                return None;
+            }
+            value.as_pointer::<ObjectHeader>()
+        }
     } else {
         return None;
     };

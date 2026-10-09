@@ -98,7 +98,9 @@ pub(crate) use class_registry::async_resource_prototype_value;
 pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
-pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
+pub(crate) use class_registry::{
+    construct_rooted_arguments, scan_current_new_target_root_mut, ClassDeclarationValueKind,
+};
 pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
@@ -194,15 +196,15 @@ pub mod method_site;
 mod slot_store;
 pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
 mod namespace_create;
-mod native_call_method;
+pub(crate) mod native_call_method;
 pub(crate) mod native_get;
 // `pub(crate)` since #340/#341: a family that owns its prototypes outside this
 // module (`timer.rs`) installs their method names and `.length` through here.
 pub(crate) mod native_module;
 mod nm_namespace_hooks;
-pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
+pub(crate) use native_module::{class_instance_has_method, class_method_value_target};
 pub(crate) use native_module::{
     class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
 };
@@ -575,7 +577,7 @@ pub fn global_this_root_slot_for_test() -> i64 {
 // This handles cases like Object.assign() adding many fields to an object
 // that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
 crate::perry_thread_local! {
-    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String), u64>> =
+    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String, ClassDeclarationValueKind), u64>> =
         RefCell::new(HashMap::new());
 }
 

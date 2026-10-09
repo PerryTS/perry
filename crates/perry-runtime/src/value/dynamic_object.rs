@@ -677,39 +677,6 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         }
     }
 
-    // Check the vtable for a method before falling back to field lookup. A
-    // class accessor is a real accessor property of the class's prototype, so
-    // the ordinary `[[Get]]` below finds it (an own data property shadowing it
-    // included).
-    let class_id = (*obj_header).class_id;
-    if class_id != 0 {
-        if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
-            if let Some(ref reg) = *registry {
-                if let Some(vtable) = reg.get(&class_id) {
-                    if vtable.methods.contains_key(property_name) {
-                        let heap_name = {
-                            let layout =
-                                std::alloc::Layout::from_size_align(property_name.len().max(1), 1)
-                                    .unwrap();
-                            let ptr = std::alloc::alloc(layout);
-                            std::ptr::copy_nonoverlapping(
-                                property_name.as_ptr(),
-                                ptr,
-                                property_name.len(),
-                            );
-                            ptr
-                        };
-                        return crate::object::js_class_method_bind(
-                            obj_value,
-                            heap_name,
-                            property_name.len(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     // #8220: root the receiver across the key-string allocation. `ptr` was
     // extracted at the top of this function from the NaN-boxed `obj_value` and
     // is a raw `*const` to a nursery-eligible heap object. An intern-cache miss

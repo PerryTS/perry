@@ -69,6 +69,15 @@ pub fn class_name_for_id(class_id: u32) -> Option<String> {
     guard.as_ref()?.get(&class_id).cloned()
 }
 
+/// Was `class_id` registered with a user-visible name? [`class_name_for_id`]
+/// without cloning the name, for the identity predicates on read misses.
+pub(crate) fn class_has_name(class_id: u32) -> bool {
+    CLASS_NAMES
+        .read()
+        .ok()
+        .is_some_and(|guard| guard.as_ref().is_some_and(|names| names.contains_key(&class_id)))
+}
+
 /// #9413: `class_id → the class's original source text`. Populated by codegen
 /// via `js_register_class_source_static` (or the copying
 /// `js_register_class_source` for an image that can be unloaded), exactly as
@@ -720,12 +729,14 @@ pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
 /// `modifyOwnPropertyDescriptors` produced Unions whose `recur` was gone
 /// ("recur is not a function" at OpenCode startup).
 ///
-/// A registered class NAME plus a non-empty prototype vtable is positive
+/// A registered class NAME plus a published CLASS holder word is positive
 /// evidence of a real declared class; an anon shape has neither.
 pub fn declared_class_outranks_anon_shape(class_id: u32) -> bool {
     is_anon_shape_class_id(class_id)
         && class_name_for_id(class_id).is_some()
-        && !super::class_decl_prototype_method_names(class_id).is_empty()
+        && crate::object::shapes::identity_prototype_word(
+            crate::object::shapes::class_identity_proto_id(class_id),
+        ) != 0
 }
 
 /// True if `class_id` was registered via `js_register_anon_shape_class_id`.
@@ -777,6 +788,11 @@ mod anon_shape_collision_tests {
                 methods,
                 ..ClassVTable::default()
             },
+        );
+        drop(guard);
+        crate::object::shapes::write_identity_word(
+            crate::object::shapes::class_identity_proto_id(class_id),
+            crate::value::TAG_UNDEFINED,
         );
     }
 

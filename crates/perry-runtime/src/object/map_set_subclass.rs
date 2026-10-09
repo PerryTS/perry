@@ -278,7 +278,8 @@ pub(crate) fn subclass_has_iterator_override(value: f64) -> bool {
         // The built-in Map/Set iterator is a runtime default, NOT a class vtable
         // method, so a hit here means the user declared one.
         let class_id = crate::object::js_object_get_class_id(obj);
-        if class_id != 0 && crate::object::method_owner_class_id(class_id, "@@iterator").is_some() {
+        if class_id != 0 && crate::object::class_method_slot_owner(class_id, "@@iterator").is_some()
+        {
             return true;
         }
         false

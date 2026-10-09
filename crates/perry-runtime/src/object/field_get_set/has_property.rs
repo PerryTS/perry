@@ -1275,7 +1275,7 @@ unsafe fn ordinary_has_property(
                     // very same chain: `"m" in new C()` was false for any member that
                     // is not a vtable method — notably a method added by ASSIGNMENT
                     // (`C.prototype.m = fn`, stored on the prototype itself), which the
-                    // `class_instance_has_member` vtable fallback below does not cover.
+                    // `class_instance_has_method` vtable fallback below does not cover.
                     // That divergence silently emptied `for…in` over an instance: the
                     // #6147 for-in desugar re-checks every snapshotted key with
                     // `key in obj` (so a key deleted mid-iteration is not visited), and
@@ -1311,11 +1311,8 @@ unsafe fn ordinary_has_property(
             }
         }
     }
-    // Wall 10 — a class instance's prototype METHODS live in
-    // `CLASS_VTABLE_REGISTRY` and may have no physical key the walk above can
-    // see. Check the class chain so `'method' in instance` is `true` (e.g.
-    // NestJS's app Proxy gating on `'listen' in receiver`). Accessors are real
-    // properties of the class prototype, which the walk visits.
+    // A class's lazy holder may not have existed when the first walk started.
+    // Materialize it and ask its actual shape chain for membership.
     if super::super::prototype_chain::object_static_prototype(obj_ptr as usize).is_none() {
         if let Some(name) = key_name {
             let class_id = unsafe { (*obj_ptr).class_id };

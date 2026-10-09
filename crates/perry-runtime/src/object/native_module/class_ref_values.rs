@@ -72,89 +72,70 @@ pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
 }
 
 pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
-    let registry = match CLASS_VTABLE_REGISTRY.read() {
-        Ok(g) => g,
-        Err(_) => return false,
+    let _no_move = crate::gc::GcSuppressScope::new();
+    if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
+        method_name.as_bytes(),
+    ) {
+        if class_non_property_method_value(class_id, method_name).is_some() {
+            return true;
+        }
+    }
+    let existing = crate::object::class_holder_prototype(class_id);
+    let start = if existing.is_null() {
+        let proto =
+            JSValue::from_bits(crate::object::class_decl_prototype_value(class_id).to_bits());
+        if !proto.is_pointer() {
+            return false;
+        }
+        proto.as_pointer::<ObjectHeader>() as *const ObjectHeader
+    } else {
+        existing as *const ObjectHeader
     };
-    registry
-        .as_ref()
-        .and_then(|reg| reg.get(&class_id))
-        .map(|vtable| vtable.methods.contains_key(method_name))
-        .unwrap_or(false)
+    let key =
+        crate::object::native_call_method::class_holder::MethodKey::bytes(method_name.as_bytes());
+    matches!(unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) },
+        crate::object::native_call_method::class_holder::ChainMethod::Data { holder, .. } if holder == start)
 }
 
-/// Does the class chain rooted at `class_id` DECLARE a prototype method,
-/// getter or setter named `name` (one `delete` has not removed)? A filter over
-/// class metadata ("may this chain resolve `name`?") for paths that must not
-/// materialize a prototype; it never answers a property query itself.
-pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, true, false)
-}
-
-/// Wall 10 — `name in instance` for a class instance whose walk found nothing:
-/// true when `name` is a prototype METHOD anywhere in the instance's class
-/// chain. Methods registered in `CLASS_VTABLE_REGISTRY` may have no physical
-/// key the ordinary own-key + prototype walk in `js_object_has_property` can
-/// see, which made `'method' in instance` wrongly `false` (NestJS's app Proxy
-/// gates routing on `'listen' in receiver`). Accessors are not consulted: they
-/// are real properties of the class prototype, which that walk visits.
-///
-/// It answers for an instance's chain, so it stops where that chain leaves the
-/// declared classes: past a class whose prototype a user relinked, the parent's
-/// methods are not inherited (`instance_chain_parent_class_id`), and the
-/// ordinary walk has already read the recorded link.
+/// A method membership query is a data slot read from the actual chain.
 pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, false, true)
-}
-
-/// `instance_chain`: the walk answers for an instance's `[[Prototype]]` chain
-/// and stops at a relinked class prototype. The member filter keeps the
-/// declared chain: it serves constructor-side reads, whose chain is the
-/// constructor's own and does not change when `C.prototype` is relinked.
-fn class_chain_declares(class_id: u32, name: &str, accessors: bool, instance_chain: bool) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    let registry = match CLASS_VTABLE_REGISTRY.read() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let Some(reg) = registry.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    let mut depth = 0u32;
-    while cid != 0 && depth < 32 {
-        if let Some(vtable) = reg.get(&cid) {
-            // Honor `delete C.prototype.m`: a deleted key must report `false`
-            // from `'m' in new C()`, matching the descriptor/static lookup paths.
-            if !super::class_registry::class_proto_key_deleted(cid, name)
-                && (vtable.methods.contains_key(name)
-                    || (accessors && vtable.accessor_decl(name).is_some()))
-            {
-                return true;
-            }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let existing = crate::object::class_holder_prototype(class_id);
+    let start = if existing.is_null() {
+        let proto =
+            JSValue::from_bits(crate::object::class_decl_prototype_value(class_id).to_bits());
+        if !proto.is_pointer() {
+            return false;
         }
-        let parent = if instance_chain {
-            super::class_registry::instance_chain_parent_class_id(cid)
-        } else {
-            super::class_registry::get_parent_class_id(cid)
-        };
-        match parent {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
+        proto.as_pointer::<ObjectHeader>() as *const ObjectHeader
+    } else {
+        existing as *const ObjectHeader
+    };
+    let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+    !matches!(
+        unsafe { crate::object::native_call_method::class_holder::chain_method(start, &key) },
+        crate::object::native_call_method::class_holder::ChainMethod::Absent
+    )
 }
 
 pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
     if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let cache = cache.borrow();
-        if let Some(bits) = cache.get(&(class_id, method_name.to_string())).copied() {
+        if let Some(bits) = cache
+            .get(&(
+                class_id,
+                method_name.to_string(),
+                ClassDeclarationValueKind::Method,
+            ))
+            .or_else(|| {
+                cache.get(&(
+                    class_id,
+                    method_name.to_string(),
+                    ClassDeclarationValueKind::NonPropertyMethod,
+                ))
+            })
+            .copied()
+        {
             return Some(bits);
         }
         None
@@ -162,117 +143,250 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
         return f64::from_bits(bits);
     }
 
-    // A method `class_id` declares itself is a function object of its own
-    // body: it runs the method's closure-convention entry, whose
-    // JsFunctionInfo is what the prototype's shape records for the slot (a
-    // ConstFn lane), so neither a call through it nor a slot read resolves
-    // anything by name. Its one capture is `C.prototype`'s ref, a non-pointer
-    // that names no evaluation: the entry then runs in its receiver's
-    // evaluation, as a vtable call of the same body does.
-    let own_entry = super::class_registry::class_method_entry(class_id, method_name);
-    if own_entry.is_none() {
-        // An inherited member IS the declaring class's method object: the
-        // same function value its own prototype slot holds, so
-        // `Sub.prototype.m === Base.prototype.m`, and a call of it runs the
-        // body without resolving the name again.
-        let owner = super::class_registry::method_owner_class_id(class_id, method_name);
-        if let Some(owner) = owner.filter(|&owner| {
-            owner != class_id
-                && super::class_registry::class_method_entry(owner, method_name).is_some()
-        }) {
-            return class_prototype_method_value_for_name(owner, method_name);
-        }
-    }
-    let value = match own_entry {
-        Some(code) => class_method_entry_value(code, class_id, method_name),
-        None => {
-            // An entry-less member (a runtime-registered native method with
-            // no closure-convention entry): the name trampoline. Bounded
-            // leak: `js_class_method_bind` keeps the byte pointer for the
-            // lifetime of the bound closure (it's stashed inside the closure's
-            // capture frame). We leak one allocation per unique
-            // `(class_id, method_name)` pair the program ever asks for, so the
-            // total leak is bounded by the static set of decorated method
-            // descriptors. The cache below short-circuits repeat queries.
-            let leaked = intern_class_method_name(class_id, method_name);
-            let class_ref = class_prototype_ref_value(class_id);
-            // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
-            // canonical short-circuit would call back into this function and
-            // recurse). The captured receiver is the prototype-ref, which
-            // doubles as the "canonical class method" marker that
-            // `dispatch_bound_method` keys on.
-            build_bound_method_closure(class_ref, leaked.as_ptr(), leaked.len())
-        }
+    // The registry is read only to materialize this declaration's function
+    // object. Calls and probes subsequently read the holder's slot.
+    let declaration = {
+        let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
+        registry
+            .as_ref()
+            .and_then(|r| r.get(&class_id))
+            .and_then(|c| c.methods.get(method_name))
+            .map(|m| {
+                (
+                    m.func_ptr,
+                    m.param_count,
+                    m.has_synthetic_arguments,
+                    m.has_rest,
+                    m.entry,
+                )
+            })
     };
-    class_prototype_method_value_cache_root_store(
+    let Some((body, params, synthetic, rest, entry)) = declaration else {
+        if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
+            method_name.as_bytes(),
+        ) {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        return crate::object::class_method_slot_value(class_id, method_name)
+            .map(f64::from_bits)
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+    };
+    let value = class_method_declaration_value(
+        class_prototype_ref_value(class_id),
+        method_name,
+        body,
+        params,
+        synthetic,
+        rest,
+        entry,
+    );
+    // The immutable declaration input distinguishes a literal alias-looking
+    // string key from a private or symbol member at materialization. Readers
+    // use this typed function-value entry, never reclassify a deleted key.
+    let kind =
+        if crate::object::class_registry::proto_member_has_no_string_key(class_id, method_name) {
+            ClassDeclarationValueKind::NonPropertyMethod
+        } else {
+            ClassDeclarationValueKind::Method
+        };
+    crate::object::class_registry::class_declaration_value_root_store(
         class_id,
         method_name.to_string(),
+        kind,
         value.to_bits(),
     );
     value
 }
 
+/// A materialized lexical/symbol member, separate from public properties.
+pub(crate) fn class_non_property_method_value(class_id: u32, name: &str) -> Option<u64> {
+    let _ = class_prototype_method_value_for_name(class_id, name);
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        cache
+            .borrow()
+            .get(&(
+                class_id,
+                name.to_string(),
+                ClassDeclarationValueKind::NonPropertyMethod,
+            ))
+            .copied()
+    })
+}
+
 /// The function object of declared class `class_id`'s method `name` whose
-/// closure-convention entry is `code` (its JsFunctionInfo): one capture,
+/// closure-convention entry is `code` (its JsFunctionInfo): capture 0 is
 /// `C.prototype`'s ref. Built once per method (the caller caches it), which
 /// is also when the entry's code is given the method's name: module init
 /// registers none, so a class costs nothing per method until a method value
 /// exists.
-fn class_method_entry_value(code: usize, class_id: u32, name: &str) -> f64 {
-    let f = crate::closure::js_closure_alloc(code as *const crate::closure::JsFunctionInfo, 1);
+/// Materialize a method from immutable image input. Capture 0 is its home;
+/// the remaining non-pointer captures retain the legacy body ABI for private
+/// calls, native declarations and source reflection, without registry reads.
+pub(crate) fn class_method_declaration_value(
+    home: f64,
+    name: &str,
+    body: usize,
+    params: u32,
+    synthetic: bool,
+    rest: bool,
+    entry: usize,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let home = scope.root_nanbox_f64(home);
+    let info = if entry != 0 {
+        entry as *const crate::closure::JsFunctionInfo
+    } else {
+        &NATIVE_CLASS_METHOD_INFO
+    };
+    let f = crate::closure::js_closure_alloc(info, 4);
     if f.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let entry_code = unsafe { (*f).code() } as usize;
-    if !name.is_empty() && crate::builtins::function_name_for_ptr(entry_code).is_none() {
+    if entry != 0
+        && !name.is_empty()
+        && crate::builtins::function_name_for_ptr(entry_code).is_none()
+    {
         unsafe {
             crate::builtins::js_register_function_name(
                 entry_code as *const u8,
                 name.as_ptr(),
                 name.len() as u32,
-            )
-        };
+            );
+        }
     }
-    // No allocation since `f` was made: the capture is a non-pointer.
+    let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
             f,
-            &[class_prototype_ref_value(class_id).to_bits()],
-        )
+            &[
+                home.get_nanbox_f64().to_bits(),
+                crate::value::TAG_HOLE | ((body as u64 & 0xffff_ffff) << 8),
+                crate::value::TAG_HOLE | (((body as u64 >> 32) & 0xffff_ffff) << 8),
+                (facts as f64).to_bits(),
+            ],
+        );
+    }
+    let f = scope.root_raw_mut_ptr(f);
+    if entry == 0 {
+        let length = params.saturating_sub(u32::from(synthetic) + u32::from(rest));
+        f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+            crate::object::set_builtin_closure_length(ptr as usize, length);
+        });
+        f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+            crate::object::set_builtin_closure_non_constructable(ptr as usize);
+        });
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = scope.root_string_ptr(key);
+        f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+            let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::value::js_nanbox_string(key as i64)
+            });
+            crate::closure::closure_define_data_with_attrs(
+                ptr as usize,
+                "name",
+                value,
+                crate::object::PropertyAttrs::new(false, false, true),
+            );
+        });
+    }
+    crate::value::js_nanbox_pointer(f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64)
+}
+
+pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, home: f64) -> f64 {
+    let declaration = {
+        let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
+        registry
+            .as_ref()
+            .and_then(|r| r.get(&class_id))
+            .and_then(|c| c.methods.iter().find(|(_, m)| m.entry == entry))
+            .map(|(name, m)| {
+                (
+                    name.clone(),
+                    m.func_ptr,
+                    m.param_count,
+                    m.has_synthetic_arguments,
+                    m.has_rest,
+                )
+            })
     };
-    crate::value::js_nanbox_pointer(f as i64)
+    let Some((name, body, params, synthetic, rest)) = declaration else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    class_method_declaration_value(home, &name, body, params, synthetic, rest, entry)
+}
+
+static NATIVE_CLASS_METHOD_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of_native_args(native_class_method, 0);
+
+unsafe extern "C" fn native_class_method(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let (body, params, synthetic, rest) =
+        class_method_value_target(crate::value::POINTER_TAG | closure as u64)
+            .expect("materialized native method carries its body");
+    super::class_registry::call_vtable_method_value(
+        body,
+        this.as_f64(),
+        args,
+        len,
+        params,
+        synthetic,
+        rest,
+        None,
+    )
+}
+
+/// A declaration function object's retained raw-body ABI. Arbitrary function
+/// values have no legacy target and are called through their JsFunctionInfo.
+pub(crate) unsafe fn class_method_value_target(value: u64) -> Option<(usize, u32, bool, bool)> {
+    let v = JSValue::from_bits(value);
+    if !v.is_pointer() || !crate::closure::is_closure_ptr(v.as_pointer::<u8>() as usize) {
+        return None;
+    }
+    let closure = v.as_pointer::<crate::closure::ClosureHeader>();
+    if crate::closure::real_capture_count((*closure).capture_count) != 4 {
+        return None;
+    }
+    let home = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0));
+    if class_prototype_ref_id(home).is_none() && !super::class_registry::is_class_object_value(home)
+    {
+        return None;
+    }
+    let low = crate::closure::js_closure_get_capture_bits(closure, 1);
+    let high = crate::closure::js_closure_get_capture_bits(closure, 2);
+    // Opaque ABI words in the existing non-pointer hole band. They never
+    // escape the function object. A JavaScript value cannot contain a hole
+    // with a payload, and two canonical holes would name the rejected null
+    // body, so an ordinary capture list cannot forge this convention.
+    let payload = 0xffff_ffffu64 << 8;
+    if low & !payload != crate::value::TAG_HOLE || high & !payload != crate::value::TAG_HOLE {
+        return None;
+    }
+    let body = ((low >> 8) & 0xffff_ffff) | (((high >> 8) & 0xffff_ffff) << 32);
+    if body == 0 {
+        return None;
+    }
+    let facts = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 3)) as u64;
+    Some((
+        body as usize,
+        facts as u32,
+        facts & (1 << 32) != 0,
+        facts & (1 << 33) != 0,
+    ))
 }
 
 /// The method body a class method's function object runs, for its retained
 /// source text: `closure` runs the closure-convention entry of a method of the
-/// class its one capture names (`C.prototype`'s ref for a declared class, the
+/// class its home capture names (`C.prototype`'s ref for a declared class, the
 /// evaluation's class object for a per-evaluation template).
 pub(crate) unsafe fn class_method_entry_source_func_ptr(
     closure: *const crate::closure::ClosureHeader,
 ) -> Option<usize> {
-    if closure.is_null()
-        || crate::closure::real_capture_count((*closure).capture_count) != 1
-        || (*closure).info.is_null()
-    {
-        return None;
-    }
-    let home = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0));
-    let class_id = class_prototype_ref_id(home).or_else(|| {
-        super::class_registry::is_class_object_value(home).then(|| {
-            crate::object::js_object_get_class_id(
-                JSValue::from_bits(home.to_bits()).as_pointer::<ObjectHeader>(),
-            )
-        })
-    })?;
-    let info = (*closure).info as usize;
-    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-    guard
-        .as_ref()?
-        .get(&class_id)?
-        .methods
-        .values()
-        .find(|m| m.entry == info)
-        .map(|m| m.func_ptr)
+    class_method_value_target(crate::value::POINTER_TAG | closure as u64).map(|m| m.0)
 }
 
 #[no_mangle]
@@ -284,5 +398,7 @@ pub extern "C" fn js_class_prototype_method_value(class_ref: f64, method_key: f6
     let Some(method_name) = method_name else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    class_prototype_method_value_for_name(class_id, &method_name)
+    crate::object::class_method_slot_value(class_id, &method_name)
+        .map(f64::from_bits)
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }

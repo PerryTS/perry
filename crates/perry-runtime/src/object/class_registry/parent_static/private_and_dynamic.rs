@@ -126,12 +126,18 @@ pub(crate) fn register_class_dynamic_static_accessor(
             set: set_bits.map(|_| set.get_nanbox_u64()).unwrap_or(have.set),
             raw_get: if get_bits.is_some() { 0 } else { have.raw_get },
             raw_set: if set_bits.is_some() { 0 } else { have.raw_set },
-            static_get: if get_bits.is_some() { 0 } else { have.static_get },
-            static_set: if set_bits.is_some() { 0 } else { have.static_set },
+            static_get: if get_bits.is_some() {
+                0
+            } else {
+                have.static_get
+            },
+            static_set: if set_bits.is_some() {
+                0
+            } else {
+                have.static_set
+            },
         };
-        let enumerable = enumerable
-            .or(existing.map(|(_, e, _)| e))
-            .unwrap_or(false);
+        let enumerable = enumerable.or(existing.map(|(_, e, _)| e)).unwrap_or(false);
         let configurable = configurable
             .or(existing.map(|(_, _, c)| c))
             .unwrap_or(false);
@@ -269,14 +275,46 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
 /// not properties: they live only in the class's private-accessor record, are
 /// never inherited, and are never shadowed by a public string property with
 /// the same spelling.
-fn class_private_accessor_decl(class_id: u32, name: &str) -> Option<AccessorDecl> {
-    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-    guard
-        .as_ref()?
-        .get(&class_id)?
-        .private_accessors
-        .get(name)
-        .copied()
+fn class_private_accessor_pair(
+    class_id: u32,
+    name: &str,
+) -> Option<crate::object::accessor_pair::Accessor> {
+    let key = name.to_string();
+    if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|c| {
+        c.borrow()
+            .get(&(
+                class_id,
+                key.clone(),
+                ClassDeclarationValueKind::PrivateAccessor,
+            ))
+            .copied()
+    }) {
+        return unsafe { crate::object::accessor_pair::pair_of_value(bits) };
+    }
+    // Immutable declaration input is consumed once to materialize the private
+    // accessor's pair. Private members are not prototype properties.
+    let decl = {
+        let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+        guard
+            .as_ref()?
+            .get(&class_id)?
+            .private_accessors
+            .get(name)
+            .copied()?
+    };
+    let acc = crate::object::accessor_pair::Accessor {
+        raw_get: decl.get,
+        raw_set: decl.set,
+        ..Default::default()
+    };
+    let pair = unsafe { crate::object::accessor_pair::pair_new(acc) };
+    class_declaration_value_root_store(
+        class_id,
+        key,
+        ClassDeclarationValueKind::PrivateAccessor,
+        crate::value::POINTER_TAG | pair as u64,
+    );
+    Some(acc)
 }
 
 /// Invoke an instance-private getter on its lexical declaring class. `None`
@@ -286,12 +324,14 @@ pub(crate) unsafe fn class_private_instance_getter_value(
     name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    let getter = class_private_accessor_decl(class_id, name)?.get;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let getter = class_private_accessor_pair(class_id, name)?.raw_get;
     if getter == 0 {
         return None;
     }
     let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
-    Some(f(receiver))
+    Some(f(receiver.get_nanbox_f64()))
 }
 
 /// Invoke an instance-private setter on its lexical declaring class. `false`
@@ -302,14 +342,17 @@ pub(crate) unsafe fn class_private_instance_setter_apply(
     receiver: f64,
     value: f64,
 ) -> bool {
-    let Some(decl) = class_private_accessor_decl(class_id, name) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let value = scope.root_nanbox_f64(value);
+    let Some(decl) = class_private_accessor_pair(class_id, name) else {
         return false;
     };
-    if decl.set == 0 {
+    if decl.raw_set == 0 {
         return false;
     }
-    let f = crate::closure::body_call::js_method_body_fn!(decl.set as *const u8; value);
-    let _ = f(receiver, value);
+    let f = crate::closure::body_call::js_method_body_fn!(decl.raw_set as *const u8; value);
+    let _ = f(receiver.get_nanbox_f64(), value.get_nanbox_f64());
     true
 }
 

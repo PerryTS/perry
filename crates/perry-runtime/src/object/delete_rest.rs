@@ -312,7 +312,9 @@ pub extern "C" fn js_object_delete_field(
                         return 0;
                     }
                     if name == "constructor"
-                        || super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                        || super::key_attrs::object_key_entry(obj, name.as_bytes())
+                            & super::key_attrs::ENTRY_ACCESSOR
+                            != 0
                         || super::native_module::class_has_own_method(cid, name)
                     {
                         // The member's storage is this object's key (removed

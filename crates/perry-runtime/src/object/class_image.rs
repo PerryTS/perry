@@ -509,7 +509,7 @@ mod tests {
 
     /// The `func_ptr` dynamic dispatch would call for `class_id.method()`.
     fn dispatch_target(class_id: u32, method: &str) -> Option<usize> {
-        crate::object::lookup_class_method_in_chain(class_id, method).map(|(ptr, ..)| ptr)
+        crate::object::class_method_slot_target(class_id, method).map(|(ptr, ..)| ptr)
     }
 
     /// #8546 — two application images register the SAME class id with

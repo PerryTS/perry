@@ -268,7 +268,7 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
     ))
     .ok()?;
     let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
-        crate::object::class_registry::lookup_class_method_in_chain(class_id, name)?;
+        crate::object::class_registry::class_method_slot_target(class_id, name)?;
     Some(crate::object::class_registry::call_vtable_method(
         func_ptr,
         receiver.to_bits() as i64,

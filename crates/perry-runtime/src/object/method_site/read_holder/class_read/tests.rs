@@ -1,5 +1,20 @@
 use super::*;
 
+// These isolated cache fixtures use boxed headers rather than class
+// materialization. Publish the same identity edge a real holder would have.
+unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, walk: &Walk) {
+    let direct = if walk.depth == 1 {
+        walk.holder
+    } else {
+        walk.hops[0].0
+    };
+    let pid =
+        crate::object::shapes::shape_proto_id(crate::object::shapes::object_shape_stamp(recv))
+            .unwrap();
+    crate::object::shapes::write_identity_word(pid, crate::value::POINTER_TAG | direct as u64);
+    super::publish(cache, recv, walk);
+}
+
 pub(super) fn pinned_shape(generation: u64) -> u32 {
     crate::object::shapes::shape_descriptor_ensure_with_generation(
         std::ptr::null(),
@@ -423,16 +438,21 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
     let e = unsafe { &(*record).primary_class };
     assert!(e.multi_absent());
     assert_eq!(e.slot & !MULTI_ABSENT, 24);
-    crate::object::class_registry::class_lookup_surface_gen_bump();
+    crate::object::shapes::write_identity_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(unsafe { (*receivers[0]).class_id }),
+        0,
+    );
     for r in &receivers {
         let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
         assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
     }
+    assert_eq!(unsafe { try_shared_hit(record, receivers[5]) }, None);
+    crate::object::test_seed_class_decl_prototype_object_root(CID, a as usize);
     assert_eq!(
         unsafe { try_shared_hit(record, receivers[5]) },
         Some(crate::value::TAG_UNDEFINED)
     );
-    // A same-identity generation re-proof covers the whole set.
+    // Restoring the identity's live word validates the whole receiver set.
     for r in &receivers {
         let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
         assert_eq!(
@@ -603,7 +623,7 @@ fn deep_entry_compares_every_hop() {
     // Fake headers carry admitted shape descriptors; the comparison
     // checks below exercise every shape the real walk records.
     let mut e = *e;
-    e.generation = crate::object::class_lookup_surface_generation();
+
     assert_eq!(
         unsafe { pinned_answer(&e) },
         Some(crate::value::TAG_UNDEFINED)
@@ -717,7 +737,9 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         holder: a as usize,
         holder_shape: proto_shape,
         hops: std::ptr::null_mut(),
-        generation: 0,
+        word: crate::object::shapes::shape_proto_id(recv_shape)
+            .and_then(crate::object::shapes::identity_word_slot)
+            .map_or(std::ptr::null(), |word| word as *const u64),
     };
     assert_eq!(
         unsafe { answer(&mut entry, recv) },

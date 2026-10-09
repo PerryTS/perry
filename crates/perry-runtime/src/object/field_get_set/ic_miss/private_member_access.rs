@@ -197,7 +197,7 @@ pub(crate) unsafe fn private_member_call_by_name(
     }
 
     let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
-        super::super::class_registry::lookup_class_method_in_chain(class_id, name)?;
+        super::super::class_registry::class_method_slot_target(class_id, name)?;
     let receiver_value = receiver.get_nanbox_f64();
     let private_brand = current_private_lexical_brand(class_id)
         .map(f64::from_bits)
@@ -406,31 +406,26 @@ pub extern "C" fn js_private_brand_check(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
-    let evaluation_verdict =
-        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
-    let has_declaring_brand =
-        evaluation_verdict.unwrap_or_else(
-            || {
-                if is_static != 0 {
-                    super::super::class_ref_id(obj) == Some(declaring_class_id)
-                } else {
-                    private_instance_element_is_present(
-                        obj,
-                        declaring_class_id,
-                        field_name_ptr,
-                        field_name_len,
-                        kind,
-                    )
-                }
-            },
-        );
+    let evaluation_verdict = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
+    let has_declaring_brand = evaluation_verdict.unwrap_or_else(|| {
+        if is_static != 0 {
+            super::super::class_ref_id(obj) == Some(declaring_class_id)
+        } else {
+            private_instance_element_is_present(
+                obj,
+                declaring_class_id,
+                field_name_ptr,
+                field_name_len,
+                kind,
+            )
+        }
+    });
     if !has_declaring_brand {
         return false_value;
     }
     if is_static != 0 && kind == 0 {
         let name = interned.unwrap_or("");
-        if !static_private_field_key(declaring_class_id, name)
-            .is_present(obj_root.get_nanbox_f64())
+        if !static_private_field_key(declaring_class_id, name).is_present(obj_root.get_nanbox_f64())
         {
             return false_value;
         }
@@ -542,7 +537,8 @@ pub extern "C" fn js_private_lexical_brand_capture(receiver: f64, is_static: i32
             return owner;
         }
     }
-    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow().last().copied())
+    PRIVATE_LEXICAL_BRAND_STACK
+        .with(|stack| stack.borrow().last().copied())
         .map(f64::from_bits)
         .or_else(|| private_evaluation_brand_value(receiver))
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
@@ -562,7 +558,8 @@ pub extern "C" fn js_private_lexical_brand_pop() -> f64 {
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_PRIVATE_LEXICAL_CAPTURE: extern "C" fn(f64, i32) -> f64 = js_private_lexical_brand_capture;
+static KEEP_PRIVATE_LEXICAL_CAPTURE: extern "C" fn(f64, i32) -> f64 =
+    js_private_lexical_brand_capture;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_PRIVATE_LEXICAL_PUSH: extern "C" fn(f64) -> f64 = js_private_lexical_brand_push;
@@ -665,7 +662,11 @@ mod repeated_evaluation_tests {
                 "each evaluation creates a fresh private name"
             );
             assert_ne!(first_brand, second_brand, "and a brand of its own");
-            assert_ne!(first_brand, u64::from(62_531u32), "neither is the shared class's");
+            assert_ne!(
+                first_brand,
+                u64::from(62_531u32),
+                "neither is the shared class's"
+            );
         }
     }
 

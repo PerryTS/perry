@@ -1,34 +1,30 @@
 use super::*;
 use std::collections::HashMap;
 
-/// Returns true if `class_id` corresponds to a registered class. Used by
-/// `js_value_typeof` (refs #618 / #420 followup) to distinguish a class
-/// reference (NaN-boxed INT32 with class_id payload) from a regular int32
-/// numeric value — JS spec says `typeof <class>` is "function", but
-/// Perry's INT32_TAG storage shape is shared with numeric int32, so the
-/// runtime needs an explicit registry check. Consults both
-/// REGISTERED_CLASS_IDS (every class) and CLASS_VTABLE_REGISTRY (classes
-/// with methods) so even classes registered before the explicit-id call
-/// runs still detect via the vtable.
+/// A registered class identity; method registration also publishes it here.
 pub fn is_class_id_registered(class_id: u32) -> bool {
-    if class_id == 0 {
-        return false;
+    class_id != 0
+        && REGISTERED_CLASS_IDS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|set| set.contains(&class_id)))
+            .unwrap_or(false)
+}
+
+/// An unbuilt holder is a CLASS identity fact. Registration precedes
+/// instances, and publishing its surface makes negative probes decline.
+fn publish_unbuilt_holder(class_id: u32) {
+    let pid = crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id);
+    if crate::object::shapes::identity_prototype_word(pid) == 0
+        && (!super::is_anon_shape_class_id(class_id)
+            || super::class_meta::class_has_name(class_id))
+    {
+        crate::object::shapes::write_identity_word(pid, crate::value::TAG_UNDEFINED);
     }
-    if let Ok(guard) = REGISTERED_CLASS_IDS.read() {
-        if let Some(set) = guard.as_ref() {
-            if set.contains(&class_id) {
-                return true;
-            }
-        }
-    }
-    let registry = match CLASS_VTABLE_REGISTRY.read() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    registry
-        .as_ref()
-        .map(|m| m.contains_key(&class_id))
-        .unwrap_or(false)
+    let mut registered = REGISTERED_CLASS_IDS.write().unwrap();
+    registered
+        .get_or_insert_with(Default::default)
+        .insert(class_id);
 }
 
 pub(crate) fn record_class_string_member_order(
@@ -213,6 +209,8 @@ pub unsafe extern "C" fn js_register_class_method_with_entry(
             entry: entry as usize,
         },
     );
+    drop(registry);
+    publish_unbuilt_holder(class_id as u32);
 }
 
 /// The ClassBody's own public instance accessor declaration for `class_id` +
@@ -467,6 +465,14 @@ pub unsafe extern "C" fn js_register_class_getter(
     let vtable = reg.entry(class_id as u32).or_default();
     vtable.declare_accessor_half(&name, func_ptr as usize, false);
     drop(registry);
+    publish_unbuilt_holder(class_id as u32);
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        cache.borrow_mut().remove(&(
+            class_id as u32,
+            name.clone(),
+            ClassDeclarationValueKind::PrivateAccessor,
+        ));
+    });
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
         &name,
@@ -520,6 +526,14 @@ pub unsafe extern "C" fn js_register_class_setter(
         u32::try_from(spec_length).ok(),
     );
     drop(registry);
+    publish_unbuilt_holder(class_id as u32);
+    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
+        cache.borrow_mut().remove(&(
+            class_id as u32,
+            name.clone(),
+            ClassDeclarationValueKind::PrivateAccessor,
+        ));
+    });
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
         &name,
