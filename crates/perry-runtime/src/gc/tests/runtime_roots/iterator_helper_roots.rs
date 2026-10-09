@@ -508,14 +508,15 @@ fn raw_iterator_adapters_refresh_arguments_after_wrapper_birth_relocation() {
         let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         prepare();
         unsafe {
-            // A builtin iterator takes get_iterator's non-allocating fast
-            // return, placing the forced allocation inside wrapper birth for
-            // BOTH adapter entrypoints. Generic Symbol lookup has its own
-            // allocation/rooting contract and is outside this witness.
-            let array = crate::array::js_array_alloc(1);
-            let array = crate::array::js_array_push_f64(array, 1.0);
-            let iterator =
-                crate::array::array_values_iter(crate::value::js_nanbox_pointer(array as i64));
+            let iterator = if builtin {
+                let array = crate::array::js_array_alloc(1);
+                let array = crate::array::js_array_push_f64(array, 1.0);
+                crate::array::array_values_iter(crate::value::js_nanbox_pointer(array as i64))
+            } else {
+                // Ordinary sources traverse allocating GetIterator probes
+                // before wrapper birth, so both stages must preserve roots.
+                source(1.0, f64::from_bits(TAG_UNDEFINED))
+            };
             let callback = map_callback();
             js_shadow_slot_set(0, iterator.to_bits());
             js_shadow_slot_set(1, callback.to_bits());
@@ -562,5 +563,139 @@ fn raw_iterator_adapters_refresh_arguments_after_wrapper_birth_relocation() {
                 js_shadow_slot_get(0)
             );
         }
+    }
+}
+
+extern "C" fn moving_iterator_getter(c: *const ClosureHeader, this: JsThis) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let c = scope.root_raw_const_ptr(c);
+    let this = scope.root_nanbox_f64(this.as_f64());
+    record(6);
+    move_nursery();
+    assert_eq!(this.get_nanbox_f64().to_bits(), js_shadow_slot_get(0));
+    crate::closure::js_closure_get_capture_f64(c.get_raw_const_ptr(), 0)
+}
+
+extern "C" fn moving_get_iterator_factory(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this.as_f64());
+    record(8);
+    move_nursery();
+    assert_eq!(
+        this.get_nanbox_f64().to_bits(),
+        js_shadow_slot_get(0),
+        "factory must receive the original iterable after getter relocation"
+    );
+    unsafe {
+        let iterable =
+            crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as *const ObjectHeader;
+        source(
+            1.0,
+            f64::from_bits(crate::object::js_object_get_field(iterable, 0).bits()),
+        )
+    }
+}
+
+extern "C" fn moving_missing_iterator(c: *const ClosureHeader, this: JsThis) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this.as_f64());
+    let event = crate::closure::js_closure_get_capture_f64(c, 0) as u64;
+    record(event);
+    move_nursery();
+    assert_eq!(this.get_nanbox_f64().to_bits(), js_shadow_slot_get(0));
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[test]
+fn get_iterator_refreshes_receiver_after_moving_symbol_getter() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _age = crate::gc::tenuring::set_survivals_for_test(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    prepare();
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let iterable = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
+        let key = crate::string::intern_ascii_literal(b"payload");
+        crate::object::js_object_set_field_by_name(iterable.get_raw_mut_ptr(), key, 73.0);
+        let factory = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(moving_get_iterator_factory, 0),
+            0,
+        ));
+        let getter = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(moving_iterator_getter, 0),
+            1,
+        ));
+        crate::closure::js_closure_set_capture_f64(
+            getter.get_raw_const_ptr::<ClosureHeader>().cast_mut(),
+            0,
+            crate::value::js_nanbox_pointer(factory.get_raw_const_ptr::<ClosureHeader>() as i64),
+        );
+        let symbol = crate::symbol::well_known_symbol("iterator");
+        crate::symbol::set_symbol_accessor_property(
+            boxed(iterable.get_raw_mut_ptr()),
+            crate::value::js_nanbox_pointer(symbol as i64),
+            crate::value::js_nanbox_pointer(getter.get_raw_const_ptr::<ClosureHeader>() as i64)
+                .to_bits(),
+            TAG_UNDEFINED,
+        );
+        let before = boxed(iterable.get_raw_mut_ptr());
+        js_shadow_slot_set(0, before.to_bits());
+        let iterator = crate::symbol::js_get_iterator(before);
+        assert_relocated(crate::value::js_nanbox_get_pointer(before) as usize);
+        assert_eq!(
+            ORDER.with(Cell::get),
+            68,
+            "getter precedes exactly one factory call"
+        );
+        let iterator = crate::value::js_nanbox_get_pointer(iterator) as *const ObjectHeader;
+        assert_eq!(
+            crate::object::js_object_get_field(iterator, 3).to_number(),
+            73.0
+        );
+    }
+}
+
+#[test]
+fn get_iterator_fallback_follows_both_moving_symbol_lookups() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _age = crate::gc::tenuring::set_survivals_for_test(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    prepare();
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let iterator = scope.root_nanbox_f64(source(1.0, f64::from_bits(TAG_UNDEFINED)));
+        for (name, event) in [("iterator", 1.0), ("asyncIterator", 2.0)] {
+            let getter = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(moving_missing_iterator, 0),
+                1,
+            ));
+            crate::closure::js_closure_set_capture_f64(
+                getter.get_raw_const_ptr::<ClosureHeader>().cast_mut(),
+                0,
+                event,
+            );
+            let symbol = crate::symbol::well_known_symbol(name);
+            crate::symbol::set_symbol_accessor_property(
+                iterator.get_nanbox_f64(),
+                crate::value::js_nanbox_pointer(symbol as i64),
+                crate::value::js_nanbox_pointer(getter.get_raw_const_ptr::<ClosureHeader>() as i64)
+                    .to_bits(),
+                TAG_UNDEFINED,
+            );
+        }
+        let before = iterator.get_nanbox_f64();
+        js_shadow_slot_set(0, before.to_bits());
+        let result = crate::symbol::js_get_iterator(before);
+        assert_relocated(crate::value::js_nanbox_get_pointer(before) as usize);
+        assert_eq!(
+            ORDER.with(Cell::get),
+            12,
+            "sync lookup precedes async lookup, once each"
+        );
+        assert_eq!(
+            result.to_bits(),
+            js_shadow_slot_get(0),
+            "fallback must return the current source"
+        );
     }
 }
