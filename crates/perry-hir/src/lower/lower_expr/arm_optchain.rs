@@ -70,6 +70,69 @@ fn capture_base(
     }
 }
 
+/// One step of an optional chain's lowered short-circuit spine.
+enum SpineFrame {
+    /// A `?.` guard: `condition ? then_expr : <rest of the spine>`.
+    Guard(Box<Expr>, Box<Expr>),
+    /// A temporary the chain bound for the rest of the spine (a link's
+    /// receiver, evaluated once inside the upstream guard).
+    Temp(LocalId, Box<Expr>),
+}
+
+/// Split the lowered value of an optional chain into its short-circuit frames
+/// (outermost first) and the live expression at the end of the spine.
+///
+/// Only called on a value the AST says an optional chain produced
+/// (`receiver_is_optional_chain`). Each `?.` link lowers to a Conditional whose
+/// then-branch is the short-circuit result `undefined` and whose else-branch
+/// continues the chain (possibly through a temporary binding that link's
+/// receiver), so a chain of several links is a spine of such frames. A user's
+/// own ternary cannot sit on that spine: it is only part of a chain inside
+/// parentheses, which end the chain.
+fn split_short_circuit_spine(mut value: Expr) -> (Expr, Vec<SpineFrame>) {
+    let mut frames = Vec::new();
+    loop {
+        match value {
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } if frames.is_empty() || matches!(*then_expr, Expr::Undefined) => {
+                frames.push(SpineFrame::Guard(condition, then_expr));
+                value = *else_expr;
+            }
+            Expr::ScopedTemp {
+                id,
+                value: init,
+                body,
+            } if !frames.is_empty() => {
+                frames.push(SpineFrame::Temp(id, init));
+                value = *body;
+            }
+            live => return (live, frames),
+        }
+    }
+}
+
+/// Re-wrap `live` in the frames [`split_short_circuit_spine`] removed.
+fn rebuild_short_circuit_spine(frames: Vec<SpineFrame>, live: Expr) -> Expr {
+    frames
+        .into_iter()
+        .rev()
+        .fold(live, |live, frame| match frame {
+            SpineFrame::Guard(condition, then_expr) => Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr: Box::new(live),
+            },
+            SpineFrame::Temp(id, value) => Expr::ScopedTemp {
+                id,
+                value,
+                body: Box::new(live),
+            },
+        })
+}
+
 fn bind_bases(mut body: Expr, bindings: Vec<(LocalId, Expr)>) -> Expr {
     for (id, value) in bindings.into_iter().rev() {
         body = Expr::ScopedTemp {
@@ -122,16 +185,22 @@ pub(crate) fn lower_opt_chain_expr(
             // short-circuit skips the rest (#11910 — guarding the whole
             // upstream Conditional again evaluated it twice, calling `o.m`
             // twice).
-            let (obj_expr, upstream) = match obj_expr {
-                Expr::Conditional {
-                    condition,
-                    then_expr,
-                    else_expr,
-                } if !opt_chain.optional && receiver_is_optional_chain(&member.obj) => {
-                    (*else_expr, Some((condition, then_expr)))
-                }
-                other => (other, None),
-            };
+            //
+            // An upstream chain of several `?.` links lowers to NESTED guards
+            // (`o?.s?.x()` is `o == null ? undefined : (o.s == null ?
+            // undefined : o.s.x())`), so the live branch is the end of the
+            // whole short-circuit spine, not the outer guard's else branch:
+            // continuing `.y` on the inner guard read `.y` of its
+            // `undefined` short-circuit result and threw.
+            let (obj_expr, upstream) =
+                if !opt_chain.optional && receiver_is_optional_chain(&member.obj) {
+                    match split_short_circuit_spine(obj_expr) {
+                        (live, frames) if !frames.is_empty() => (live, Some(frames)),
+                        (live, _) => (live, None),
+                    }
+                } else {
+                    (obj_expr, None)
+                };
             // A call continued by this link is bound once (the codegen reads
             // an optional method call's method once only in this form).
             let (obj_expr, call_temp) = match obj_expr {
@@ -188,7 +257,7 @@ pub(crate) fn lower_opt_chain_expr(
             // `===` only matches null, leaving undefined to
             // fall through and dereference (returning
             // `[object Object]` for Map.get's missing value).
-            if let Some((condition, then_expr)) = upstream {
+            if let Some(frames) = upstream {
                 // The link itself is not optional: a nullish upstream value
                 // throws from the property read, as in node.
                 let live = match call_temp {
@@ -200,11 +269,7 @@ pub(crate) fn lower_opt_chain_expr(
                     None => prop_expr,
                 };
                 return Ok(bind_bases(
-                    Expr::Conditional {
-                        condition,
-                        then_expr,
-                        else_expr: Box::new(live),
-                    },
+                    rebuild_short_circuit_spine(frames, live),
                     bindings,
                 ));
             }
@@ -407,12 +472,16 @@ pub(crate) fn lower_opt_chain_expr(
                 // If check_expr is already a Conditional from an inner optional chain,
                 // nest the outer call inside its else branch instead of creating another Conditional.
                 // This avoids duplicating side-effecting expressions (like ArrayShift/ArrayPop).
-                if let Expr::Conditional {
-                    condition: inner_cond,
-                    then_expr: inner_then,
-                    else_expr: inner_else,
-                } = check_expr
-                {
+                if let Expr::Conditional { .. } = check_expr {
+                    // The receiver is the live end of the upstream chain's
+                    // whole short-circuit spine (several `?.` links nest
+                    // their guards), not just the outer guard's else branch.
+                    let (inner_else, mut upstream_frames) = split_short_circuit_spine(check_expr);
+                    let SpineFrame::Guard(inner_cond, inner_then) = upstream_frames.remove(0)
+                    else {
+                        unreachable!("a Conditional spine starts with its guard");
+                    };
+                    let inner_else = Box::new(inner_else);
                     // Evaluate the live continuation once, inside the upstream
                     // guard. Hoisting it outside would run getters/calls on
                     // the nullish short-circuit path.
@@ -528,7 +597,10 @@ pub(crate) fn lower_opt_chain_expr(
                         Expr::Conditional {
                             condition: inner_cond,
                             then_expr: inner_then,
-                            else_expr: Box::new(bind_bases(*else_expr, live_bindings)),
+                            else_expr: Box::new(rebuild_short_circuit_spine(
+                                upstream_frames,
+                                bind_bases(*else_expr, live_bindings),
+                            )),
                         },
                         bindings,
                     ));
