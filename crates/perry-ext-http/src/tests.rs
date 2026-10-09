@@ -66,6 +66,12 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let request_once_callback = young_gc_root();
     let request_once_wrapper = young_gc_root();
     let incoming_listener = young_gc_root();
+    let request_socket = young_gc_root();
+    let incoming_socket = young_gc_root();
+    let upgrade_socket = young_gc_root();
+    let create_connection = young_gc_root();
+    let active_socket = young_gc_root();
+    let free_socket = young_gc_root();
     let mut request_listeners = HashMap::new();
     request_listeners.insert(
         "error".to_string(),
@@ -80,6 +86,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         }],
     );
     let request_handle = register_handle(ClientRequestHandle {
+        surface: client_request_surface::ClientRequestSurfaceState::default(),
         owner_agent: perry_ffi::agent_post::current_agent(),
         async_id: 0,
         method: "GET".to_string(),
@@ -99,11 +106,12 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         close_emitted: false,
         agent_handle: 0,
         agent_key: "localhost::".to_string(),
-        request_create_connection: 0,
+        request_create_connection: create_connection,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
-        socket_handle: 0,
+        socket_handle: request_socket,
+        socket_snapshot: None,
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
@@ -127,10 +135,24 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         encoding: None,
         decoder_pending: Vec::new(),
         pipes: Vec::new(),
-        socket_handle: 0,
+        socket_handle: incoming_socket,
         request_handle,
         http_version: (1, 1),
         complete: true,
+    });
+
+    let agent_handle = register_handle(agent::AgentHandle {
+        active_socket_handles: HashMap::from([("peer".into(), vec![active_socket])]),
+        free_socket_handles: HashMap::from([("peer".into(), vec![free_socket])]),
+        ..Default::default()
+    });
+    push_event(PendingHttpEvent::Upgrade {
+        request_handle,
+        status: 101,
+        status_message: "Switching Protocols".into(),
+        headers: Vec::new(),
+        socket_handle: upgrade_socket,
+        head: Vec::new(),
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -139,6 +161,8 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         let req = get_handle::<ClientRequestHandle>(request_handle)
             .expect("request handle should remain live");
         assert_rewritten(response_callback, req.response_callback);
+        assert_rewritten(request_socket, req.socket_handle);
+        assert_rewritten(create_connection, req.request_create_connection);
         assert_rewritten(response_raw_wrapper, req.response_raw_wrapper);
         assert_rewritten(request_listener, req.listeners["error"][0].callback);
         assert_rewritten(request_once_callback, req.listeners["timeout"][0].callback);
@@ -149,6 +173,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         let msg = get_handle::<IncomingMessageHandle>(incoming_handle)
             .expect("incoming message handle should remain live");
         assert_rewritten(incoming_listener, msg.listeners["data"][0]);
+        assert_rewritten(incoming_socket, msg.socket_handle);
         assert_eq!(msg.request_handle, request_handle);
         assert_eq!(
             js_http_incoming_message_req(incoming_handle).to_bits(),
@@ -156,8 +181,22 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
             "client IncomingMessage.req must expose its paired ClientRequest"
         );
     }
+    let agent = get_handle::<agent::AgentHandle>(agent_handle).unwrap();
+    assert_rewritten(active_socket, agent.active_socket_handles["peer"][0]);
+    assert_rewritten(free_socket, agent.free_socket_handles["peer"][0]);
+    let mut queue = HTTP_PENDING_EVENTS.lock().unwrap();
+    let index = queue
+        .iter()
+        .position(|entry| matches!(entry.event, PendingHttpEvent::Upgrade { request_handle: id, .. } if id == request_handle))
+        .unwrap();
+    let event = queue.remove(index);
+    if let PendingHttpEvent::Upgrade { socket_handle, .. } = event.event {
+        assert_rewritten(upgrade_socket, socket_handle);
+    }
+    drop(queue);
     drop_handle(request_handle);
     drop_handle(incoming_handle);
+    drop_handle(agent_handle);
 }
 
 /// The streamed-response drain (`ResponseHead` → N×`ResponseChunk` →
@@ -174,6 +213,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
 /// no live codegen — only the handle registry the other tests already use.
 fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
     let request_handle = register_handle(ClientRequestHandle {
+        surface: client_request_surface::ClientRequestSurfaceState::default(),
         owner_agent: perry_ffi::agent_post::current_agent(),
         async_id: 0,
         method: "GET".to_string(),
@@ -198,6 +238,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         agent_queued: false,
         reused_socket: false,
         socket_handle: 0,
+        socket_snapshot: None,
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),

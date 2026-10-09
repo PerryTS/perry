@@ -40,14 +40,15 @@ fn server(https: bool) -> i64 {
     }
 }
 
-fn queue(server_handle: i64, request_handle: i64, raw_socket_id: i64) {
+fn queue(server_handle: i64, request_handle: i64, raw_socket_value: f64) {
     TURNLOOP_UPGRADES
         .lock()
         .unwrap()
         .push_back(HttpPendingUpgrade {
             server_handle,
             request_handle,
-            raw_socket_id,
+            raw_socket_value,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             ws_id: 0,
             head: vec![0xff, 0, 0x80],
         });
@@ -66,8 +67,11 @@ fn delivery(https: bool) {
     })
     .unwrap();
     let request = perry_ffi::register_handle(String::from("request"));
-    let socket = perry_ffi::reserve_handle_id();
-    assert!(perry_ext_net::adopt_turnloop_upgrade(socket));
+    let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
+        0,
+        f64::from_bits(TAG_UNDEFINED),
+    ));
+    let socket = socket.get();
     queue(server, request, socket);
     assert_eq!(drain_upgrades(server), 1);
     unsafe {
@@ -78,10 +82,10 @@ fn delivery(https: bool) {
         );
         assert_eq!(
             closure_capture_f64(callback.get() as *const _, 2).to_bits(),
-            POINTER_TAG | socket as u64
+            socket.to_bits()
         );
         assert_eq!(
-            perry_ext_net::js_net_socket_get_destroyed(socket).to_bits(),
+            perry_ext_net::native_transport::get(socket, "destroyed").to_bits(),
             0x7ffc_0000_0000_0003
         );
     }
@@ -93,7 +97,7 @@ fn delivery(https: bool) {
     unsafe {
         assert_eq!(closure_capture_f64(callback.get() as *const _, 0), 1.0);
         assert_eq!(
-            perry_ext_net::js_net_socket_get_destroyed(socket).to_bits(),
+            perry_ext_net::native_transport::get(socket, "destroyed").to_bits(),
             0x7ffc_0000_0000_0004
         );
     }
@@ -103,31 +107,45 @@ fn delivery(https: bool) {
 
 #[test]
 fn https_upgrade_delivers_once_then_releases_unclaimed_upgrade() {
-    delivery(true);
+    worker(|| delivery(true));
 }
 
 #[test]
 fn http_upgrade_delivers_once_then_releases_unclaimed_upgrade() {
-    delivery(false);
+    worker(|| delivery(false));
 }
 
 #[test]
 fn deleted_server_releases_unclaimed_raw_upgrade() {
-    let server = server(true);
-    perry_ffi::drop_handle(server);
-    let request = perry_ffi::register_handle(String::from("request"));
-    let socket = perry_ffi::reserve_handle_id();
-    assert!(perry_ext_net::adopt_turnloop_upgrade(socket));
-    queue(server, request, socket);
-    assert_eq!(drain_upgrades(server), 1);
-    assert!(perry_ffi::get_handle::<String>(request).is_none());
-    unsafe {
+    worker(|| {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let server = server(true);
+        perry_ffi::drop_handle(server);
+        let request = perry_ffi::register_handle(String::from("request"));
+        let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
+            0,
+            f64::from_bits(TAG_UNDEFINED),
+        ));
+        let socket = socket.get();
+        queue(server, request, socket);
+        assert_eq!(drain_upgrades(server), 1);
+        assert!(perry_ffi::get_handle::<String>(request).is_none());
         assert_eq!(
-            perry_ext_net::js_net_socket_get_destroyed(socket).to_bits(),
+            perry_ext_net::native_transport::get(socket, "destroyed").to_bits(),
             0x7ffc_0000_0000_0004
         );
-    }
+    });
 }
 
 static OBSERVE_INFO: perry_ffi::JsFunctionInfo =
     perry_ffi::JsFunctionInfo::of(observe as perry_ffi::JsBody3).with_declared(3);
+
+fn worker(body: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        body();
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}

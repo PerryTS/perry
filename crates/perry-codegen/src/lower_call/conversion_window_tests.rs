@@ -115,15 +115,15 @@ fn ui_table_call_roots_first_string_pointer_across_second_conversion() {
 fn native_table_call_roots_first_string_pointer_across_second_conversion() {
     // U2: `lower_native_module_dispatch` took `js_value_to_str_ptr_for_ffi` of
     // each `StrPtr` argument in order.
-    let sig = super::native_module_lookup("net", true, "check", Some("BlockList"))
-        .expect("net.BlockList.check resolves");
+    let sig = super::native_module_lookup("http", true, "appendHeader", Some("ServerResponse"))
+        .expect("http.ServerResponse.appendHeader resolves");
     let ir = compile_stmt(
         native(
-            "net",
-            Some("BlockList"),
+            "http",
+            Some("ServerResponse"),
             Some(object("recv")),
-            "check",
-            vec![object("address"), object("family")],
+            "appendHeader",
+            vec![object("name"), object("value")],
         ),
         CompileOptions::default(),
     );

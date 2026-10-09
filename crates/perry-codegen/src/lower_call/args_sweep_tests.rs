@@ -188,8 +188,7 @@ fn console_instance_call_roots_receiver_across_arguments() {
 
 #[test]
 fn native_instance_method_roots_receiver_across_arguments() {
-    let sig = super::native_module_lookup("net", true, "write", Some("Socket"))
-        .expect("net.Socket.write resolves");
+    assert!(super::native_module_lookup("net", true, "write", Some("Socket")).is_none());
     assert_first_operand_rooted(
         native(
             "net",
@@ -198,8 +197,8 @@ fn native_instance_method_roots_receiver_across_arguments() {
             "write",
             vec![collecting("chunk")],
         ),
-        sig.runtime,
-        "native-table instance receiver",
+        "js_native_call_method_nullsafe",
+        "ordinary Socket receiver",
     );
 }
 
