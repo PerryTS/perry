@@ -3161,7 +3161,7 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    emit_array_region_guard, emit_typed_f64_region_guard,
+    emit_array_region_guard, emit_typed_f64_region_guard, lower_record_index,
     numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts, ArrayRegionDense,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;

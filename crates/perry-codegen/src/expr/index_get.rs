@@ -831,6 +831,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } = index.as_ref()
             {
                 if module == "__perry_runtime" && method == "arrayRecordIndex" {
+                    if let Some(value) = crate::array_record_stack::read(ctx, object, &args[0])? {
+                        return Ok(value);
+                    }
                     let repair_slot = receiver_repair_slot(ctx, object);
                     return rooting::with_operands_rooted(
                         ctx,
@@ -1287,12 +1290,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // keys on an array claim are handled below by an SSO-tag guard;
             // heap strings remain pointers and are classified inside the
             // established array-key fallback before object lookup.
-            // The record's entry proof selects this same guarded backend.
-            // Its erased Any hint does not require the unrelated typed-array
-            // and byte-buffer dispatch at every residual indexed read.
             let declared_array_claim =
-                crate::type_analysis::declared_array_property_claim(ctx, object)
-                    || crate::array_record_stack::indexed_source(ctx, object, index);
+                crate::type_analysis::declared_array_property_claim(ctx, object);
             let claimed_array =
                 recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
             let recv_unknown = recv_unknown && !claimed_array;
@@ -1763,3 +1762,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
 #[cfg(test)]
 mod array_record_tests;
+
+pub(crate) fn lower_record_index(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    record: &str,
+    payload_slot: &str,
+    index_slot: &str,
+) -> Result<String> {
+    guarded_array::lower_record_index(ctx, array, index, record, payload_slot, index_slot)
+}

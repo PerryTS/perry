@@ -295,16 +295,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
     Ok(None)
 }
 
-/// Entry has proved an ordinary array on the indexed arm. Keep the private
-/// binding's actual Any hint, and select the existing guarded-array backend
-/// only for its compiler-owned unsigned record cursor.
-pub(crate) fn indexed_source(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+/// The existing loop planner consumes its raw-load proof before this hook.
+/// A remaining record read keeps the existing guarded array word/load, while
+/// forwarding, descriptors, prototypes and holes use the one cold dispatcher.
+pub(crate) fn read(ctx: &mut FnCtx<'_>, object: &Expr, index: &Expr) -> Result<Option<String>> {
     let Expr::LocalGet(id) = object else {
-        return false;
+        return Ok(None);
     };
-    runtime(index, "arrayRecordIndex").is_some()
-        && ctx
-            .array_stack_records
-            .get(id)
-            .is_some_and(|r| r.payload == *id)
+    let Some(r) = ctx
+        .array_stack_records
+        .get(id)
+        .filter(|r| r.payload == *id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let value = crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
+        crate::expr::lower_record_index(
+            ctx,
+            &values[0],
+            &values[1],
+            &r.base,
+            &r.fields[0],
+            &r.fields[2],
+        )
+    })?;
+    Ok(Some(value))
 }

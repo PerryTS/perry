@@ -1207,3 +1207,60 @@ pub(super) fn lower_packed_f64_loop_index_get(
     );
     value
 }
+
+/// An entry-proven ordinary array and the record's unsigned cursor use the
+/// same header word and slot load as this backend. All non-packed operations
+/// share its established runtime getter through the record's cold ABI.
+pub(crate) fn lower_record_index(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    record: &str,
+    payload_slot: &str,
+    index_slot: &str,
+) -> Result<String> {
+    let fast = ctx.new_block("record.read.fast");
+    let load = ctx.new_block("record.read.load");
+    let cold = ctx.new_block("record.read.cold");
+    let merge = ctx.new_block("record.read.merge");
+    let fl = ctx.block_label(fast);
+    let ll = ctx.block_label(load);
+    let cl = ctx.block_label(cold);
+    let ml = ctx.block_label(merge);
+    let bits = ctx.block().bitcast_double_to_i64(array);
+    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let invalidated = ctx
+        .block()
+        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let prototype_clear = ctx.block().icmp_eq(I8, &invalidated, "0");
+    let safe = ctx.block().and(I1, &safe, &prototype_clear);
+    ctx.block().cond_br(&safe, &fl, &cl);
+    ctx.current_block = fast;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let length_ptr = ctx.block().inttoptr(I64, &handle);
+    let length = ctx.block().load(I32, &length_ptr);
+    let in_bounds = ctx.block().icmp_ult(I32, &i, &length);
+    ctx.block().cond_br(&in_bounds, &ll, &cl);
+    ctx.current_block = load;
+    let value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    let bits = ctx.block().bitcast_double_to_i64(&value);
+    let hole = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
+    let fp = ctx.block().label.clone();
+    ctx.block().cond_br(&hole, &cl, &ml);
+    ctx.current_block = cold;
+    ctx.block().store_volatile(DOUBLE, array, payload_slot);
+    ctx.block().store(DOUBLE, index, index_slot);
+    let value_cold = ctx.block().call(
+        DOUBLE,
+        "js_array_record_stack_dispatch",
+        &[(crate::types::PTR, record), (I32, "5")],
+    );
+    let cp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = merge;
+    Ok(ctx
+        .block()
+        .phi(DOUBLE, &[(&value, &fp), (&value_cold, &cp)]))
+}
