@@ -18,7 +18,9 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
         dirty_pages_scanned: snapshot.dirty_pages.len(),
         ..RememberedSetTraceStats::default()
     };
-    let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
+    let mut seen_headers = crate::fast_hash::new_ptr_hash_set_with_capacity(
+        snapshot.external_dirty_entries.len() + snapshot.fallback_headers.len(),
+    );
 
     let mut scan_header =
         |header: *mut GcHeader, old_walk: bool, stats: &mut RememberedSetTraceStats| unsafe {
