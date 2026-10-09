@@ -255,7 +255,6 @@ fn method_inline_probe_enabled() -> bool {
 pub(crate) fn emit_inline_direct_method_shape_probe(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
-    _method_guard_slot: &str,
 ) -> (String, String) {
     let deref_idx = ctx.new_block("method_probe.deref");
     let read_idx = ctx.new_block("method_probe.read");
@@ -907,7 +906,6 @@ pub(super) fn emit_guarded_direct_method_call(
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
-    let method_guard_slot_str = (entry.dispatch_hash & 0xffff).to_string();
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let site_id = if shape_only_guard {
         None
@@ -1016,8 +1014,7 @@ pub(super) fn emit_guarded_direct_method_call(
         super::holder_shape_guard::method_guard(ctx, receiver_class_name, property)
     };
     if multi_arm {
-        let (cid, shape_id) =
-            emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
+        let (cid, shape_id) = emit_inline_direct_method_shape_probe(ctx, recv_box);
         let mut holder_candidates = vec![(expected_class_id, receiver_class_name.to_string())];
         holder_candidates.extend(subclass_arms.iter().filter_map(|arm| {
             ctx.class_ids
@@ -1124,7 +1121,6 @@ pub(super) fn emit_guarded_direct_method_call(
                 (DOUBLE, recv_box),
                 (I32, &expected_class_id_str),
                 (I32, &expected_shape_id),
-                (I32, &method_guard_slot_str),
             ],
         )
     } else {

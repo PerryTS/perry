@@ -299,12 +299,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I32, PTR, I64, PTR],
     );
-    module.declare_function(
-        "js_method_direct_shape_guard",
-        I32,
-        &[DOUBLE, I32, I32, I32],
-    );
-    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR, I32]);
+    module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I32]);
+    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
     module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",
         I32,
@@ -804,4 +800,31 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
 
     declare_stdlib_ffi(module);
     declare_stdlib_ffi_part2(module);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn s7b_direct_method_shape_guards_use_the_runtime_arity() {
+        let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+        super::declare_phase_b_objects(&mut module);
+        for (name, parameters) in [
+            ("js_method_direct_shape_guard", "double, i32, i32"),
+            ("js_method_direct_shape_class", "double, ptr"),
+        ] {
+            let declaration = module
+                .declaration_lines()
+                .find(|(n, _)| *n == name)
+                .unwrap()
+                .1;
+            let actual = declaration
+                .split_once('(')
+                .unwrap()
+                .1
+                .split_once(')')
+                .unwrap()
+                .0;
+            assert_eq!(actual, parameters, "runtime ABI for {name}");
+        }
+    }
 }

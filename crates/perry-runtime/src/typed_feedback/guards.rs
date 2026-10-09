@@ -1241,7 +1241,6 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 pub unsafe extern "C" fn js_method_direct_shape_class(
     receiver: f64,
     out_shape_id: *mut u32,
-    _method_guard_slot: u32,
 ) -> u32 {
     if !out_shape_id.is_null() {
         *out_shape_id = 0;
@@ -1288,13 +1287,12 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
     receiver: f64,
     expected_class_id: u32,
     expected_shape_id: u32,
-    method_guard_slot: u32,
 ) -> i32 {
     if expected_class_id == 0 || !crate::object::shapes::is_shape_id(expected_shape_id) {
         return 0;
     }
     let mut shape_id = 0;
-    let class_id = js_method_direct_shape_class(receiver, &mut shape_id, method_guard_slot);
+    let class_id = js_method_direct_shape_class(receiver, &mut shape_id);
     (class_id == expected_class_id && shape_id == expected_shape_id) as i32
 }
 
@@ -1537,7 +1535,7 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const crate::closure::JsFunctionInfo, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
+    #[used(compiler)] static G4: unsafe extern "C" fn(f64, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G4B: unsafe extern "C" fn(f64, *mut u32, u32) -> u32 = js_method_direct_shape_class;
+    #[used(compiler)] static G4B: unsafe extern "C" fn(f64, *mut u32) -> u32 = js_method_direct_shape_class;
 }

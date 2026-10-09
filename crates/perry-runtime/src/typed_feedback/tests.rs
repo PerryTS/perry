@@ -1441,7 +1441,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G4",
-            "static G4: unsafe extern \"C\" fn(f64, u32, u32, u32) -> i32",
+            "static G4: unsafe extern \"C\" fn(f64, u32, u32) -> i32",
             "js_method_direct_shape_guard",
         ),
         (
@@ -2159,16 +2159,10 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     let expected_shape_id = shape_id(obj);
     let method_name = "direct_shape_target_1061";
     let _ = method_name;
-    let method_slot = 0;
 
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            )
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
         },
         1
     );
@@ -2178,7 +2172,6 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
                 receiver,
                 class_id.wrapping_add(1),
                 expected_shape_id,
-                method_slot,
             )
         },
         0
@@ -2196,12 +2189,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     );
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            )
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
         },
         1
     );
@@ -2213,12 +2201,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
         let original_reserved = (*gc)._reserved;
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
         assert_eq!(
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            ),
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id,),
             0
         );
         (*gc)._reserved = original_reserved;
@@ -2232,12 +2215,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     }
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            )
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
         },
         0
     );
@@ -2259,12 +2237,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     );
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            )
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
         },
         1,
         "a different method name must not poison this direct guard",
@@ -2284,12 +2257,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     );
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(
-                receiver,
-                class_id,
-                expected_shape_id,
-                method_slot,
-            )
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
         },
         1,
         "unrelated holder mutation must not retire this receiver layout proof",
