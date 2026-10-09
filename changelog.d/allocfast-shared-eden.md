@@ -9,4 +9,5 @@ no-collect allocation, avoiding redundant shape validation, a temporary zero
 shape stamp and a no-op layout lookup. Required undefined initialization stays.
 Array growth retains geometric capacity growth and forwarding identity, but
 roots its source only on the collecting branch and avoids nursery barrier replay
-and repeated source classification. No cache, side table or latch is added.
+and repeated source classification. Header facts also skip metadata transfer
+for arrays that cannot own a record. No cache, side table or latch is added.

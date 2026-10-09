@@ -248,14 +248,22 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let new_header =
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
-        crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        // Header-carried layout facts were copied above. Only these two
+        // authoritative bits can owe an address-keyed array record a move.
+        if (*old_header).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*old_header)._reserved
+                & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_ELEMENT_SHAPE)
+                != 0
+        {
+            crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        }
         if reserve != 0 {
             // Array expandos, sparse numeric indices and exec-result values
             // live in the reserve slots. Growth is not a collector move, so
             // carry them to the replacement head explicitly (barriered) before
             // the old address becomes a forwarding stub (#9371, #9201).
             crate::array::carry_named_props_reserve(arr, new_ptr, reserve);
-        } else {
+        } else if (*old_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
             // An array that was full at its first named property keeps them in
             // the address-keyed fallback table; rekey it before the old
             // address becomes a forwarding stub (#9371, #9201).
