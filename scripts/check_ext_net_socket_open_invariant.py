@@ -104,7 +104,7 @@ def mask_non_code(source: str, keep_strings: bool = False) -> str:
 
 
 OPEN_NAME = re.compile(r"open", re.I)
-FIELD = re.compile(r"\b(\w+)\s*:\s*(?:bool|Atomic\w+|Cell|Option|u8|u32|u64|usize|i32|i64)\b")
+FIELD = re.compile(r"\b(\w+)\s*:\s*(?:[A-Za-z_]\w*\s*::\s*)*(?:bool|Atomic\w+|Cell|Option|OnceCell|OnceLock|LazyLock|[ui](?:8|16|32|64|128|size))\b")
 TABLE = re.compile(r"\b(?:HashMap|BTreeMap|DashMap|IndexMap|HashSet|BTreeSet|Slab)\b")
 CANONICAL = ("crates/perry-ext-net/src/payload_transport.rs", "opened")
 TRANSITIONS = {
@@ -113,6 +113,18 @@ TRANSITIONS = {
     "crates/perry-ext-net/src/payload_server.rs",
 }
 
+def socket_fields_ranges(code):
+    """Find each SocketFields body without admitting later function bodies."""
+    ranges = []
+    for declaration in re.finditer(r"\bstruct\s+SocketFields\s*\{", code):
+        depth = 1
+        for index in range(declaration.end(), len(code)):
+            depth += (code[index] == "{") - (code[index] == "}")
+            if depth == 0:
+                ranges.append((declaration.end(), index))
+                break
+    return ranges
+
 def evaluate(sources, registry):
     errors, sites, used = [], [], set()
     exceptions = {(e["path"], e["name"]): e for e in registry["exceptions"]}
@@ -120,6 +132,7 @@ def evaluate(sources, registry):
     transitions = set()
     for path, source in sources.items():
         code = mask_non_code(source)
+        payload_ranges = socket_fields_ranges(code) if path == CANONICAL[0] else []
         for match in FIELD.finditer(code):
             name = match[1]
             if not OPEN_NAME.search(name):
@@ -129,9 +142,7 @@ def evaluate(sources, registry):
             if key == CANONICAL:
                 # The declaration must belong to the payload extension,
                 # rather than a replacement flag in another struct.
-                prefix = code[:match.start()]
-                head = prefix.rfind("struct SocketFields")
-                if head >= 0 and prefix[head:].count("{") > prefix[head:].count("}"):
+                if any(start <= match.start() < end for start, end in payload_ranges):
                     canonical += 1
                 else:
                     errors.append(f"{path}: opened is outside SocketFields")
@@ -164,11 +175,13 @@ def self_test():
     good.update({path: "fn connected() { s.opened = true; }" for path in TRANSITIONS})
     registry = {"exceptions": []}
     assert not evaluate(good, registry)[1]
-    for bad in ["struct Second { is_open: bool }", "struct Second { has_opened: bool }", "static OPEN: AtomicBool = AtomicBool::new(false);", "struct Second { opened: Option<bool> }", "struct Second { is_open: u8 }", "static FLAGS: HashMap<u64, bool> = todo!();", 'fn f() { p::own_set(owner, "bunOpened", true); }']:
+    for bad in ["struct Second { is_open: bool }", "struct Second { has_opened: bool }", "static OPEN: AtomicBool = AtomicBool::new(false);", "struct Second { opened: Option<bool> }", "struct Second { is_open: u8 }", "struct Second { is_open: u16 }", "static OPENED: OnceLock<bool> = OnceLock::new();", "static FLAGS: HashMap<u64, bool> = todo!();", 'fn f() { p::own_set(owner, "bunOpened", true); }']:
         assert evaluate(dict(good, extra=bad), registry)[1], bad
     assert evaluate({}, registry)[1]
     assert evaluate({CANONICAL[0]: good[CANONICAL[0]]}, registry)[1]
     assert evaluate(dict(good, **{CANONICAL[0]: "struct Other { opened: bool }"}), registry)[1]
+    assert evaluate(dict(good, **{CANONICAL[0]: "struct SocketFields {} fn fake() { let opened: bool; }"}), registry)[1]
+    assert evaluate(dict(good, extra="static OPENED: std::sync::atomic::AtomicBool = todo!();"), registry)[1]
     assert evaluate(good, {"exceptions": [{"path": "gone", "name": "open", "reason": "x"*50}]})[1]
     assert not evaluate(dict(good, extra='// own_set(owner, "bunOpened", true);\n// is_open: bool\n/* HashMap<u64, bool> */ fn f() { let s = "has_opened: bool"; }'), registry)[1]
     print("socket-open self-test: OK (duplicate fields, atomic flag, table, JS latch, empty census, stale exception, masking)")
