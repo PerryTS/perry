@@ -1,4 +1,3 @@
-mod precise_root_ownership;
 mod adopt_census;
 mod alloc;
 mod allocation_pacing;
@@ -84,6 +83,7 @@ mod oldgen;
 mod os_tag;
 mod pinned_roots;
 mod precise_root_contract;
+mod precise_root_ownership;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
