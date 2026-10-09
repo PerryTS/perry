@@ -118,6 +118,19 @@ fn new_f_and_object_create_of_its_prototype_share_a_shape() {
 #[test]
 fn s7b_class_identity_publishes_and_replaces_its_holder_word() {
     let _no_move = crate::gc::GcSuppressScope::new();
+    let declared = 190_708;
+    unsafe { crate::object::js_register_class_name(declared, b"".as_ptr(), 0) };
+    let declared_pid = super::super::PROTO_ID_CLASS | u64::from(declared);
+    assert_eq!(
+        identity_prototype_word(declared_pid),
+        crate::value::TAG_UNDEFINED
+    );
+    let declared_holder = crate::object::class_decl_prototype_value(declared).to_bits();
+    assert_eq!(
+        declared_holder & crate::value::TAG_MASK,
+        crate::value::POINTER_TAG
+    );
+    assert_eq!(identity_prototype_word(declared_pid), declared_holder);
     let cid = 190_702;
     let pid = super::super::PROTO_ID_CLASS | u64::from(cid);
     let recv = js_object_alloc(cid, 0);

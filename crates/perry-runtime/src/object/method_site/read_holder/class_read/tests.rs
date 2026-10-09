@@ -2,7 +2,7 @@ use super::*;
 
 // These isolated cache fixtures use boxed headers rather than class
 // materialization. Publish the same identity edge a real holder would have.
-unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, walk: &Walk) {
+pub(super) unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, walk: &Walk) {
     let direct = if walk.depth == 1 {
         walk.holder
     } else {
@@ -600,7 +600,8 @@ fn deep_entry_compares_every_hop() {
     }
     let _lock = crate::gc::global_side_table_test_lock();
     let base = crate::object::shapes::SHAPE_ID_BASE;
-    let recv = shaped(base + 1);
+    let recv_shape = receiver_shape(0x0C3C_9012, 20_999);
+    let recv = shaped(recv_shape);
     let chain: Vec<Box<ObjectHeader>> = (0..CLASS_READ_MAX_DEPTH as u32 - 1)
         .map(|i| shaped(pinned_shape(20_000 + u64::from(i))))
         .collect();
@@ -612,7 +613,7 @@ fn deep_entry_compares_every_hop() {
     // allocation, and this test drives only the published words.
     cache[HOLDER_STATE] = STATE_REGISTERED;
     unsafe { publish(&mut cache, &*recv, &w) };
-    let token = (PIC_ID_TOKEN_BIT | u64::from(base + 1)) as i64;
+    let token = (PIC_ID_TOKEN_BIT | u64::from(recv_shape)) as i64;
     let s = unsafe { site(&cache) }.expect("published site");
     let e = s.class_entries().find(|e| e.token == token).expect("entry");
     assert_eq!(

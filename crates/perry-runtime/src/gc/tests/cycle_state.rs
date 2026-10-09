@@ -1758,6 +1758,22 @@ fn full_cycle_parent_closure_store_after_root_scan_preserves_new_value() {
 fn full_cycle_bound_prototype_method_cache_after_root_scan_marks_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    extern "C" fn late_bound(_this: f64) -> f64 {
+        0.0
+    }
+    // Materialize a real declaration; an absent method is now undefined,
+    // rather than a fabricated callable that redispatches by name.
+    unsafe {
+        crate::object::js_register_class_method(
+            0x5104,
+            b"lateBound".as_ptr(),
+            9,
+            late_bound as *const () as usize as i64,
+            0,
+            0,
+            0,
+        );
+    }
 
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
