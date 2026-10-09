@@ -800,3 +800,41 @@ pub const AGENT_PTR_CLASS_VALUES: usize = 3;
 
 /// Declaration class function capture holding its immutable prototype link.
 pub const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+
+/// `PERRY_NANBOX_OPERANDS` (`perry-runtime/src/value/tags.rs`): the read-only
+/// table x86-64 generated code reads its most frequent 64-bit operands from
+/// instead of encoding each use as a 10-byte `movabs`
+/// (`perry-codegen/src/inprocess/nanbox_operands.rs`): NaN-box tags, masks
+/// and their negations, and the method-site word masks. Every entry needs a
+/// 64-bit immediate; the set is the head of the `movabs` census of compiled
+/// programs (Claude Code, tsc). Codegen finds an operand's entry by value,
+/// so order and length are free to change; the runtime asserts the NaN-box
+/// entries against its own constants.
+pub const NANBOX_OPERANDS: [u64; 26] = [
+    0x7FFD_0000_0000_0000, // POINTER_TAG
+    0x7FFC_0000_0000_0010, // TAG_HOLE (also METHOD_SITE_BY_NAME)
+    0xFFFF_0000_0000_0000, // TAG_MASK
+    0x7FF8_0000_0000_0000, // the canonical NaN
+    TAG_UNDEFINED,
+    TAG_UNDEFINED.wrapping_neg(),
+    0x7FFD_0000_0000_0000_u64.wrapping_neg(), // -POINTER_TAG: payload = bits - POINTER_TAG
+    0x7FFF_0000_0000_0000,                    // STRING_TAG
+    (1 << 48) - RECEIVER_HANDLE_FLOOR as u64, // pointer payload span above the handle band
+    (1 << 47) - RECEIVER_HANDLE_FLOOR as u64, // user address span above the handle band
+    0x7FF9_0000_0000_0000,                    // SHORT_STRING_TAG
+    0x7FFC_0000_0000_0004,                    // TAG_TRUE
+    (0x7FFD_0000_0000_0000 + RECEIVER_HANDLE_FLOOR as u64).wrapping_neg(), // -(POINTER_TAG + floor)
+    0xFFFF_FFFF_0000_0000,                    // the ShapeId half of an object's header word
+    !METHOD_SITE_NATIVE_ARGS,
+    METHOD_SITE_SPILL,     // bit 62, also the token bit of a static ShapeId operand
+    0xFFFD_0000_0000_0000, // collapses POINTER_TAG and STRING_TAG
+    0x7FFE_0000_0000_0000, // INT32_TAG
+    (1 << 48) - 4096,      // masks a 48-bit address down to its page
+    ((METHOD_SITE_SHAPE_ONLY_FROM as u64) << 32) - 1, // below the exotic ShapeId band
+    METHOD_SITE_FUNCTION_BAG,
+    0x7FFA_0000_0000_0000, // BIGINT_TAG
+    0x7FFC_0000_0000_0011, // TAG_TDZ
+    0x7FFC_0000_0000_0003, // TAG_FALSE
+    0x7FFC_0000_0000_0002, // TAG_NULL
+    0x7FFC_0000_0000_0000, // TAG_MARKER
+];

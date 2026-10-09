@@ -45,6 +45,12 @@ pub struct LlFunction {
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
+    /// The module links the runtime's NaN-box operand table into the same
+    /// image, so the backend may read 64-bit NaN-box operands from it
+    /// (`inprocess/nanbox_operands.rs`); rendered as the
+    /// `"perry-nanbox-operands"` attribute on the define line, so the IR
+    /// states it for the emitter that runs on another thread.
+    pub nanbox_operands: bool,
     /// When true (and `force_inline` is not), emit the `inlinehint` attribute.
     /// Unlike `alwaysinline`, `inlinehint` only *raises* LLVM's inline
     /// threshold for this callee — LLVM keeps its `-O3` growth budget and can
@@ -286,6 +292,7 @@ impl LlFunction {
             force_inline: false,
             pre_statepoint_inline: false,
             no_inline: false,
+            nanbox_operands: false,
             inline_hint: false,
             hot_loop_callee: false,
             alloc_hot: false,
@@ -984,8 +991,13 @@ impl LlFunction {
             Some(p) => format!(" personality ptr @{}", p),
             None => String::new(),
         };
+        let nanbox_operands = if self.nanbox_operands {
+            " \"perry-nanbox-operands\""
+        } else {
+            ""
+        };
         format!(
-            "define {}{}{} @{}({}){}{}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{}{}{} {{",
             linkage,
             cconv,
             self.return_type,
@@ -994,6 +1006,7 @@ impl LlFunction {
             attrs,
             size_attrs,
             frame_pointer,
+            nanbox_operands,
             gc_strategy,
             personality
         )

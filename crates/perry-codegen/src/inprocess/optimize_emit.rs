@@ -189,6 +189,10 @@ pub(super) fn optimize_and_emit(
         }
     }
 
+    // After every IR-level fold has seen the constants: NaN-box operands of
+    // the marked functions become reads of the runtime's table.
+    super::nanbox_operands::apply(module, effective_target);
+
     // Last change to the module before emission, so it sees exactly the
     // functions that become symbols (see `crate::function_order`).
     super::function_layout::apply(
