@@ -127,12 +127,13 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, bag: f64) -> f6
             return reflect_non_object_typeerror("defineProperty");
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_heap_word_u64(obj.to_bits());
-        let bag = scope.root_heap_word_u64(bag.to_bits());
+        // Public operands can use the admitted legacy raw object ABI. Convert
+        // them allocation-free before the collecting ToPropertyKey call.
+        let receiver =
+            scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(obj));
+        let bag =
+            scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(bag));
         let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
-        let bag = scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(
-            f64::from_bits(bag.get_heap_word_u64()),
-        ));
         let descriptor = crate::object::object_ops::decode_property_descriptor(&scope, &bag);
         nanbox_bool(crate::object::object_ops::define_own_property_decoded(
             &scope,
@@ -149,7 +150,7 @@ pub(crate) unsafe fn proxy_define_own_property_decoded(
     key: &crate::gc::RuntimeHandle<'_>,
     descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> bool {
-    let obj = f64::from_bits(receiver.get_heap_word_u64());
+    let obj = f64::from_bits(receiver.get_nanbox_u64());
     let _proxy_pin = pin_proxy_for_native_call(obj);
     let id = lookup(obj).expect("decoded proxy receiver");
     let (target, handler, revoked) = PROXIES.with(|proxies| {
@@ -161,7 +162,7 @@ pub(crate) unsafe fn proxy_define_own_property_decoded(
         revoked_return();
         return false;
     }
-    let target = scope.root_heap_word_u64(target.to_bits());
+    let target = scope.root_nanbox_u64(target.to_bits());
     let handler = scope.root_nanbox_f64(handler);
     let trap = scope.root_nanbox_f64(handler_trap(handler.get_nanbox_f64(), "defineProperty"));
     if trap.get_nanbox_u64() == TAG_UNDEFINED || trap.get_nanbox_u64() == TAG_NULL {
@@ -179,7 +180,7 @@ pub(crate) unsafe fn proxy_define_own_property_decoded(
         handler.get_nanbox_f64(),
         trap.get_nanbox_f64(),
         &[
-            f64::from_bits(target.get_heap_word_u64()),
+            f64::from_bits(target.get_nanbox_u64()),
             key.get_nanbox_f64(),
             bag.get_nanbox_f64(),
         ],
@@ -188,7 +189,7 @@ pub(crate) unsafe fn proxy_define_own_property_decoded(
         return false;
     }
     invariants::enforce_define_property_invariant(
-        f64::from_bits(target.get_heap_word_u64()),
+        f64::from_bits(target.get_nanbox_u64()),
         key.get_nanbox_f64(),
         descriptor,
     );

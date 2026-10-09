@@ -166,14 +166,14 @@ pub(super) fn enforce_define_property_invariant(
 ) {
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let target = scope.root_heap_word_u64(target.to_bits());
+        let target = scope.root_nanbox_u64(target.to_bits());
         let key = scope.root_nanbox_f64(property_key);
         let current = scope.root_nanbox_f64(crate::object::js_object_get_own_property_descriptor(
-            f64::from_bits(target.get_heap_word_u64()),
+            f64::from_bits(target.get_nanbox_u64()),
             key.get_nanbox_f64(),
         ));
         let extensible = crate::value::js_is_truthy(crate::object::js_object_is_extensible(
-            f64::from_bits(target.get_heap_word_u64()),
+            f64::from_bits(target.get_nanbox_u64()),
         )) != 0;
         let setting_config_false = descriptor.flag(b"configurable") == Some(false);
         if current.get_nanbox_u64() == TAG_UNDEFINED {

@@ -46,8 +46,10 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
             throw_object_type_error(b"Object.defineProperties called on non-object");
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let target = scope.root_heap_word_u64(target.to_bits());
-        let properties = scope.root_heap_word_u64(properties.to_bits());
+        // Legacy raw object operands are admitted at this public boundary only;
+        // normalize them before any enumeration or descriptor callback.
+        let target = scope.root_nanbox_f64(normalize_descriptor_operand(target));
+        let properties = scope.root_nanbox_f64(normalize_descriptor_operand(properties));
         // longjmp skips Drop. Own both buffers outside the catch and borrow them
         // into its body. On Err, their handles have been truncated: never read
         // an entry; free the owned buffers before rethrowing the rooted error.
@@ -58,19 +60,19 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
             accounted_bytes: 0,
         };
         let outcome = crate::exception::catch_js_throw(|| {
-            let value = f64::from_bits(properties.get_heap_word_u64());
+            let value = f64::from_bits(properties.get_nanbox_u64());
             if matches!(
                 value.to_bits(),
                 crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
             ) {
                 throw_object_type_error(b"Cannot convert undefined or null to object");
             }
-            let properties = scope.root_heap_word_u64(if definition_target_is_object(value) {
+            let properties = scope.root_nanbox_u64(if definition_target_is_object(value) {
                 value.to_bits()
             } else {
                 super::super::js_object_coerce(value).to_bits()
             });
-            let current_properties = || f64::from_bits(properties.get_heap_word_u64());
+            let current_properties = || f64::from_bits(properties.get_nanbox_u64());
             let proxy = crate::proxy::js_proxy_is_proxy(current_properties()) != 0;
             let names = if proxy {
                 crate::proxy::js_proxy_own_keys(current_properties())
@@ -153,7 +155,7 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
             drop(storage);
             crate::exception::js_throw(error.get_nanbox_f64());
         }
-        f64::from_bits(target.get_heap_word_u64())
+        f64::from_bits(target.get_nanbox_u64())
     }
 }
 

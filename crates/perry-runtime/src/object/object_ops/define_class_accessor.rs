@@ -35,7 +35,7 @@ pub(super) unsafe fn define_declared_class_accessor(
         else {
             return false;
         };
-        let proto = scope.root_heap_word_u64(proto.to_bits());
+        let proto = scope.root_nanbox_u64(proto.to_bits());
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
         let key = scope.root_nanbox_f64(key);

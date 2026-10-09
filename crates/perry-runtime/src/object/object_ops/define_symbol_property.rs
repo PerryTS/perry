@@ -12,7 +12,7 @@ pub(super) unsafe fn define_symbol_property(
     let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let receiver_handle = scope.root_nanbox_u64(receiver_value.to_bits());
     let key_handle = scope.root_nanbox_f64(key_value);
-    let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
+    let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
     let current_key = || key_handle.get_nanbox_f64();
 
     let _holder_edit = super::super::descriptor_state::HolderEdit::new(

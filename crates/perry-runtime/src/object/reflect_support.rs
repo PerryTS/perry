@@ -287,7 +287,7 @@ pub(crate) unsafe fn reflect_define_property_decoded(
     descriptor: &super::object_ops::DescView<'_>,
 ) -> bool {
     match super::typed_array_define_own_property(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
         descriptor,
     ) {
@@ -297,7 +297,7 @@ pub(crate) unsafe fn reflect_define_property_decoded(
     }
     // ArraySetLength coerces value before rejecting flags and can leave a
     // partial shrink on failure. Preserve the exotic's own ordering/verdict.
-    let value = f64::from_bits(obj_handle.get_heap_word_u64());
+    let value = f64::from_bits(obj_handle.get_nanbox_u64());
     let array =
         crate::value::addr_class::try_read_tracked_gc_header(extract_obj_ptr(value) as usize)
             .is_some_and(|header| {
@@ -319,12 +319,12 @@ pub(crate) unsafe fn reflect_define_property_decoded(
         );
     }
     let current = scope.root_nanbox_f64(super::js_object_get_own_property_descriptor(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
     ));
     if current.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
         if crate::value::js_is_truthy(super::js_object_is_extensible(f64::from_bits(
-            obj_handle.get_heap_word_u64(),
+            obj_handle.get_nanbox_u64(),
         ))) == 0
         {
             return false;
@@ -337,7 +337,7 @@ pub(crate) unsafe fn reflect_define_property_decoded(
     }
     super::object_ops::apply_property_descriptor(
         scope,
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
         descriptor,
     )

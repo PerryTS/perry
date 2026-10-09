@@ -305,7 +305,11 @@ pub(crate) unsafe fn typed_array_define_own_property(
         return obj_value;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_heap_word_u64(obj_value.to_bits());
+    // typed_array_addr_from_value admits tagged and legacy raw receivers.
+    // Normalize at this boundary before the numeric value conversion can run JS.
+    let receiver = scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(
+        obj_value,
+    ));
     let owner_root = scope.root_raw_mut_ptr(ta);
     let owner = ta as usize;
     let len = typed_array_owner_length(owner);
@@ -326,7 +330,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 let value = descriptor.read_named(b"value");
                 typed_array_owner_set(owner, index, f64::from_bits(value.bits()));
             }
-            f64::from_bits(receiver.get_heap_word_u64())
+            f64::from_bits(receiver.get_nanbox_u64())
         }
         TypedArrayStringKeyKind::IntegerIndex => {
             throw_type_error(b"Invalid typed array index");
@@ -387,7 +391,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 };
                 let get_bits = scope.root_nanbox_u64(get_bits);
                 let set_field = descriptor.read_named(b"set");
-                let obj_value = f64::from_bits(receiver.get_heap_word_u64());
+                let obj_value = f64::from_bits(receiver.get_nanbox_u64());
                 let set_bits = if !has_set {
                     prior_set.get_nanbox_u64()
                 } else if set_field.is_undefined() {
@@ -447,7 +451,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 crate::object::PropertyAttrs::new(writable, enumerable, configurable),
             );
             let _ = key;
-            f64::from_bits(receiver.get_heap_word_u64())
+            f64::from_bits(receiver.get_nanbox_u64())
         }
     }
 }

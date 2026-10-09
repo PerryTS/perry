@@ -146,17 +146,16 @@ pub extern "C" fn js_object_define_property(obj: f64, key: f64, bag: f64) -> f64
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_heap_word_u64(obj.to_bits());
-        let bag = scope.root_heap_word_u64(bag.to_bits());
+        // This entry also admits legacy module raw object operands. Normalize
+        // before any collecting key conversion, then keep JSValue roots only.
+        let receiver = scope.root_nanbox_f64(normalize_descriptor_operand(obj));
+        let bag = scope.root_nanbox_f64(normalize_descriptor_operand(bag));
         let key = scope.root_nanbox_f64(super::super::js_to_property_key(key));
-        let bag = scope.root_nanbox_f64(normalize_descriptor_operand(f64::from_bits(
-            bag.get_heap_word_u64(),
-        )));
         let descriptor = decode_property_descriptor(&scope, &bag);
         if !define_own_property_decoded(&scope, &receiver, &key, &descriptor) {
             throw_definition_rejected(&scope, &receiver, &key);
         }
-        f64::from_bits(receiver.get_heap_word_u64())
+        f64::from_bits(receiver.get_nanbox_u64())
     }
 }
 
@@ -167,7 +166,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     receiver: &crate::gc::RuntimeHandle<'_>,
     key: &crate::gc::RuntimeHandle<'_>,
 ) -> ! {
-    let obj = f64::from_bits(receiver.get_heap_word_u64());
+    let obj = f64::from_bits(receiver.get_nanbox_u64());
     if crate::proxy::js_proxy_is_proxy(obj) != 0 {
         throw_object_type_error(b"'defineProperty' on proxy: trap returned falsish");
     }
@@ -177,7 +176,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     ));
     let no_extend = current.get_nanbox_u64() == crate::value::TAG_UNDEFINED
         && crate::value::js_is_truthy(js_object_is_extensible(f64::from_bits(
-            receiver.get_heap_word_u64(),
+            receiver.get_nanbox_u64(),
         ))) == 0;
     let name = describe_value_for_type_error(key.get_nanbox_f64());
     let message = if no_extend {
@@ -210,13 +209,13 @@ pub(crate) unsafe fn define_own_property_decoded(
     key: &crate::gc::RuntimeHandle<'_>,
     descriptor: &DescView<'_>,
 ) -> bool {
-    let current = f64::from_bits(receiver.get_heap_word_u64());
+    let current = f64::from_bits(receiver.get_nanbox_u64());
     if crate::array::subclass_elements::backed_value(current).is_some()
         && crate::array::subclass_elements::key_of_value(key.get_nanbox_f64()).is_some()
     {
         crate::array::subclass_elements::deopt_value(current);
     }
-    if crate::proxy::js_proxy_is_proxy(f64::from_bits(receiver.get_heap_word_u64())) != 0 {
+    if crate::proxy::js_proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
         return crate::proxy::proxy_define_own_property_decoded(scope, receiver, key, descriptor);
     }
     super::super::reflect_support::reflect_define_property_decoded(scope, receiver, key, descriptor)
@@ -280,7 +279,7 @@ pub(crate) unsafe fn apply_property_descriptor(
             }
         }
 
-        let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
+        let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
         let key_handle = scope.root_nanbox_f64(key_value);
         let target = crate::JSValue::from_bits(obj_value.to_bits());
         if target.is_pointer()
@@ -472,7 +471,7 @@ pub(crate) unsafe fn apply_property_descriptor(
         // reflective C.prototype read. Define the descriptor on that holder.
         if let Some(cid) = super::super::class_prototype_ref_id(obj_value) {
             let proto = super::super::class_registry::class_decl_prototype_value(cid);
-            let proto = scope.root_heap_word_u64(proto.to_bits());
+            let proto = scope.root_nanbox_u64(proto.to_bits());
             return define_own_property_decoded(scope, &proto, &key_handle, descriptor);
         }
         // Constructor refs use their static property storage.
@@ -520,7 +519,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                             .then(|| set_field.get_nanbox_u64())
                             .unwrap_or(0)
                     });
-                    let class_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                    let class_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
 
                     let enumerable = descriptor
                         .has_named(b"enumerable")
@@ -680,10 +679,10 @@ pub(crate) unsafe fn apply_property_descriptor(
             // `closure_ptr` files the property under a dead address, where the
             // matching read can never find it. Root all three across the
             // coercion and read them back through their handles.
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let closure_handle = scope.root_raw_mut_ptr(closure_ptr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
 
             let closure_ptr = closure_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
@@ -779,7 +778,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                 };
                 let get_bits = scope.root_nanbox_u64(get_bits);
                 let set_field = descriptor.read_named(b"set");
-                let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+                let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
                 let set_bits = if !has_set {
                     prior_set.get_nanbox_u64()
                 } else if set_field.is_undefined() {
@@ -849,10 +848,10 @@ pub(crate) unsafe fn apply_property_descriptor(
             // the raw local at risk is `addr` — the TypedArray's heap address,
             // resolved from `obj_value` *before* the coercion and dereferenced
             // as a `TypedArrayHeader` after it.
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
 
             let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
             if key_str.is_null() {
@@ -901,7 +900,7 @@ pub(crate) unsafe fn apply_property_descriptor(
         let obj_handle = scope.root_raw_mut_ptr(obj);
         let (key_str, mut obj) = obj_handle
             .across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
-        let mut obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+        let mut obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
 
         let mut key_value = key_handle.get_nanbox_f64();
         if key_str.is_null() {
@@ -920,7 +919,7 @@ pub(crate) unsafe fn apply_property_descriptor(
                     });
                 obj = refreshed_obj;
                 key_str = refreshed_key;
-                obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                obj_value = f64::from_bits(obj_value_handle.get_nanbox_u64());
 
                 key_value = key_handle.get_nanbox_f64();
                 result
