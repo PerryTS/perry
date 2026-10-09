@@ -107,12 +107,17 @@ OPEN_NAME = re.compile(r"open", re.I)
 FIELD = re.compile(r"\b(\w+)\s*:\s*(?:bool|Atomic\w+|Cell|Option|u8|u32|u64|usize|i32|i64)\b")
 TABLE = re.compile(r"\b(?:HashMap|BTreeMap|DashMap|IndexMap|HashSet|BTreeSet|Slab)\b")
 CANONICAL = ("crates/perry-ext-net/src/payload_transport.rs", "opened")
+TRANSITIONS = {
+    "crates/perry-ext-net/src/native_transport.rs",
+    "crates/perry-ext-net/src/payload_io.rs",
+    "crates/perry-ext-net/src/payload_server.rs",
+}
 
 def evaluate(sources, registry):
     errors, sites, used = [], [], set()
     exceptions = {(e["path"], e["name"]): e for e in registry["exceptions"]}
     canonical = 0
-    transitions = 0
+    transitions = set()
     for path, source in sources.items():
         code = mask_non_code(source)
         for match in FIELD.finditer(code):
@@ -122,7 +127,14 @@ def evaluate(sources, registry):
             key = path, name
             sites.append(f"{path}:{code[:match.start()].count(chr(10))+1}: {name}")
             if key == CANONICAL:
-                canonical += 1
+                # The declaration must belong to the payload extension,
+                # rather than a replacement flag in another struct.
+                prefix = code[:match.start()]
+                head = prefix.rfind("struct SocketFields")
+                if head >= 0 and prefix[head:].count("{") > prefix[head:].count("}"):
+                    canonical += 1
+                else:
+                    errors.append(f"{path}: opened is outside SocketFields")
             elif key in exceptions and len(exceptions[key].get("reason", "")) >= 40:
                 used.add(key)
             else:
@@ -133,7 +145,7 @@ def evaluate(sources, registry):
             if match[1] not in {"opened", "allow_half_open"}:
                 errors.append(f"{path}: second open assignment {match[1]}")
             if match[1] == "opened" and re.match(r"\s*true\b", code[match.end():]):
-                transitions += 1
+                transitions.add(path)
         # A JS-visible hidden latch is still duplicate state. Scan property
         # writes using original literal keys, after removing comments.
         for match in re.finditer(r'\bown_set\s*\([^;]*?"([^"\n]*open[^"\n]*)"', mask_non_code(source, keep_strings=True), re.I):
@@ -141,19 +153,22 @@ def evaluate(sources, registry):
                 errors.append(f"{path}: duplicate JS open property {match[1]}")
     if canonical != 1:
         errors.append(f"expected exactly one SocketFields.opened declaration, found {canonical}")
-    if transitions < 3:
-        errors.append(f"opened transition census {transitions} below three production transitions")
+    for path in TRANSITIONS - transitions:
+        errors.append(f"missing production opened transition: {path}")
     for key in exceptions.keys() - used:
         errors.append(f"stale exception: {key}")
     return sites, errors
 
 def self_test():
-    good = {CANONICAL[0]: "struct SocketFields { opened: bool } fn connected() { s.opened = true; s.opened = true; s.opened = true; }"}
+    good = {CANONICAL[0]: "struct SocketFields { opened: bool }"}
+    good.update({path: "fn connected() { s.opened = true; }" for path in TRANSITIONS})
     registry = {"exceptions": []}
     assert not evaluate(good, registry)[1]
     for bad in ["struct Second { is_open: bool }", "struct Second { has_opened: bool }", "static OPEN: AtomicBool = AtomicBool::new(false);", "struct Second { opened: Option<bool> }", "struct Second { is_open: u8 }", "static FLAGS: HashMap<u64, bool> = todo!();", 'fn f() { p::own_set(owner, "bunOpened", true); }']:
         assert evaluate(dict(good, extra=bad), registry)[1], bad
     assert evaluate({}, registry)[1]
+    assert evaluate({CANONICAL[0]: good[CANONICAL[0]]}, registry)[1]
+    assert evaluate(dict(good, **{CANONICAL[0]: "struct Other { opened: bool }"}), registry)[1]
     assert evaluate(good, {"exceptions": [{"path": "gone", "name": "open", "reason": "x"*50}]})[1]
     assert not evaluate(dict(good, extra='// own_set(owner, "bunOpened", true);\n// is_open: bool\n/* HashMap<u64, bool> */ fn f() { let s = "has_opened: bool"; }'), registry)[1]
     print("socket-open self-test: OK (duplicate fields, atomic flag, table, JS latch, empty census, stale exception, masking)")
