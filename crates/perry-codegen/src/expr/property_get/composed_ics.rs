@@ -200,8 +200,33 @@ pub(super) fn lower_symbol_then_named_property_ic(
 pub(super) fn emit_array_subclass_length_ic(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
-    _recv_bits: &str,
-    _recv_handle: &str,
+    recv_bits: &str,
+    recv_handle: &str,
+    outer_merge_label: &str,
+) -> (String, String) {
+    // An ordinary length site has already tested the typed-array tier inline.
+    // Its cold tier stays inline too, so the proven case never crosses a call
+    // boundary or re-tests that tier.
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
+    ctx.ic_globals.push(cache_name.clone());
+    let slot = format!("@{cache_name}");
+    emit_array_subclass_length_body(
+        ctx,
+        recv_box,
+        recv_bits,
+        recv_handle,
+        &slot,
+        outer_merge_label,
+    )
+}
+
+/// A record's compact hot guard proves only an ordinary array. Every other
+/// receiver, including typed arrays, takes the one shared cold body.
+fn emit_record_length_cold(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
     outer_merge_label: &str,
 ) -> (String, String) {
     let site_id = ctx.ic_site_counter;
@@ -709,7 +734,7 @@ pub(super) fn emit_record_length(
     let fp = ctx.block().label.clone();
     ctx.block().br(&ml);
     ctx.current_block = slow;
-    let (cold, sp) = emit_array_subclass_length_ic(ctx, recv_box, recv_bits, recv_handle, &ml);
+    let (cold, sp) = emit_record_length_cold(ctx, recv_box, &ml);
     ctx.current_block = merge;
     ctx.block().phi(DOUBLE, &[(&length, &fp), (&cold, &sp)])
 }

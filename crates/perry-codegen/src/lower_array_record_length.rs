@@ -24,7 +24,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, source: &Expr) -> Result<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn record_length_uses_the_shared_guarded_property_lowering() {
+    fn record_length_outside_a_stack_record_is_an_ordinary_length_site() {
         crate::temp_root_coverage::under_both_lowerings(|_mode| {
             let mut m = perry_hir::Module::new("record_length");
             m.functions.push(perry_hir::Function {
@@ -75,26 +75,20 @@ mod tests {
             )
             .unwrap();
             assert!(ir.contains("plen."));
-            assert!(ir.lines().any(|line| line
-                .starts_with("define internal double @perry_length_cold_")
-                && line.contains("noinline")));
-            assert_eq!(
-                ir.lines()
-                    .filter(|line| line.starts_with("define internal double @perry_length_cold_"))
-                    .count(),
-                1,
-                "all sites must share one real cold body"
+            // Outside a stack record the binding is an ordinary length site:
+            // its typed tier and cold IC tier stay inline, one IC per site.
+            assert!(
+                !ir.contains("@perry_length_cold_"),
+                "an ordinary site does not cross a call boundary: {ir}"
             );
             assert_eq!(
                 ir.lines()
-                    .filter(|line| line.contains("call double @perry_length_cold_"))
+                    .filter(
+                        |line| line.contains("call double @js_value_length_property_key_ic_f64(")
+                    )
                     .count(),
                 2,
-                "each site reaches the shared property fallback"
-            );
-            assert!(
-                ir.contains("call double @js_value_length_property_key_ic_f64("),
-                "ordinary override and getter semantics remain in the shared body"
+                "each site keeps ordinary override and getter semantics"
             );
             assert!(ir.contains("uitofp i32"));
             assert!(!ir.contains("call double @js_object_get_field_ic"));

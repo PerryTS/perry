@@ -430,7 +430,11 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
             "a packed guard changes indexed-loop register allocation"
         );
         assert!(ll.contains("icmp ugt i64") && ll.contains("1048575"));
-        assert!(ll.contains("call double @perry_length_cold_"));
+        assert!(
+            !ll.contains("call double @perry_length_cold_")
+                && ll.contains("call double @js_value_length_property_key_ic_f64("),
+            "an ordinary site keeps its proven typed tier and cold tier inline: {ll}"
+        );
         #[cfg(feature = "llvm-inprocess")]
         crate::testing::verify_ir(&ll, "ordinary_length_hot").unwrap();
     });
@@ -599,7 +603,10 @@ fn stack_record_ir(fused: bool) -> String {
                 Expr::Bool(false),
             ],
         )),
+        // The plan's exit release: payload, captured next and output.
+        Stmt::Expr(Expr::LocalSet(6, Box::new(Expr::Undefined))),
         Stmt::Expr(Expr::LocalSet(7, Box::new(Expr::Undefined))),
+        Stmt::Expr(Expr::LocalSet(8, Box::new(Expr::Undefined))),
         Stmt::Return(Some(Expr::LocalGet(5))),
     ]);
     ll
@@ -676,6 +683,20 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         ll.contains("record.read.cold") && ll.contains("i32 5"),
         "the residual array read shares the record dispatcher"
     );
+    assert_eq!(
+        ll.lines()
+            .filter(
+                |l| l.starts_with("define internal double @perry_length_cold_")
+                    && l.contains("noinline")
+            )
+            .count(),
+        1,
+        "record length sites share one real cold body"
+    );
+    assert!(
+        ll.contains("call double @perry_length_cold_"),
+        "a record length site reaches the shared cold body"
+    );
     assert!(
         !ll.contains("arrlike.u8.brand"),
         "record reads must not carry the generic array-like dispatch"
@@ -720,4 +741,38 @@ fn array_stack_record_entry_publishes_its_sole_source_home() {
             "entry must publish into the whole record range, without a scratch source or output home");
     }
     assert!(consumers > 0);
+}
+
+#[test]
+fn array_stack_record_exit_releases_its_payload_home() {
+    // The record range is a root at every safepoint of the function. A
+    // proven array completes without the dispatcher, so only the exit
+    // release ends the loop's custody of its source.
+    let absent = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    for fused in [false, true] {
+        let ll = stack_record_ir(fused);
+        let mut consumers = 0;
+        for function in ll.split("\ndefine ").filter(|f| {
+            f.starts_with("internal double @perry_fn")
+                && f.lines().next().unwrap().contains("__read$")
+        }) {
+            consumers += 1;
+            let field_zero: Vec<_> = function
+                .lines()
+                .filter(|l| l.contains("getelementptr double, ptr ") && l.ends_with("i64 0"))
+                .map(|l| l.trim().split(" = ").next().unwrap().to_string())
+                .collect();
+            let finish = function.find("i32 2)").expect("the finish dispatch");
+            let after = &function[finish..];
+            assert!(
+                after.lines().any(|l| {
+                    let l = l.trim();
+                    l.starts_with(&format!("store volatile double {absent}, ptr "))
+                        && field_zero.iter().any(|f| l.ends_with(&format!("ptr {f}")))
+                }),
+                "exit must clear the payload home (fused={fused}): {function}"
+            );
+        }
+        assert!(consumers > 0);
+    }
 }

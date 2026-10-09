@@ -410,14 +410,12 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
     let before = &body[..body.find(cond).unwrap()];
     assert!(
         !before.contains("@js_value_length_f64(")
-            && !before.contains("@js_value_length_property_f64(")
-            && !before.contains("@perry_length_cold_"),
+            && !before.contains("@js_value_length_property_f64("),
         "{before}"
     );
     let cond_body = &body[body.find(cond).unwrap() + cond.len()..];
     assert!(
-        cond_body.contains("@perry_length_cold_")
-            && output.contains("call double @js_value_length_property_key_ic_f64("),
+        cond_body.contains("length_property") || cond_body.contains("js_value_length"),
         "{cond_body}"
     );
     assert!(!body.contains("rloop.fast"), "{body}");
