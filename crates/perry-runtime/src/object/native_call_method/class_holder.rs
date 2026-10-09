@@ -283,9 +283,7 @@ pub(crate) unsafe fn class_instance_prototype(obj: *const ObjectHeader) -> *cons
         return word_object(word);
     }
     match shape_named_class(obj) {
-        Some(class_id) => word_object(crate::object::shapes::identity_prototype_word(
-            crate::object::shapes::class_identity_proto_id(class_id),
-        )),
+        Some(class_id) => word_object(crate::object::class_holder_word_selected(class_id)),
         None => std::ptr::null(),
     }
 }
@@ -301,21 +299,6 @@ pub(crate) unsafe fn class_instance_prototype(obj: *const ObjectHeader) -> *cons
 /// `obj` is a live object that passed [`class_receiver_guard`].
 #[inline]
 unsafe fn guarded_class_instance_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
-    let own = word_object(crate::object::shapes::identity_prototype_word(
-        crate::object::shapes::class_identity_proto_id((*obj).class_id),
-    ));
-    if !own.is_null() {
-        return own;
-    }
-    // Only the identical raw identity repeats the lookup above. A shape
-    // naming the selected origin instead may project a second edge of a chain.
-    let recorded = crate::object::shapes::object_prototype_word(obj);
-    if recorded != 0 {
-        return word_object(recorded);
-    }
-    if shape_named_class(obj) == Some((*obj).class_id) {
-        return own;
-    }
     class_instance_prototype(obj)
 }
 
@@ -346,14 +329,13 @@ pub(crate) unsafe fn class_instance_prototype_built(
     let Some(class_id) = shape_named_class(obj) else {
         return std::ptr::null();
     };
-    let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
-    let word = crate::object::class_holder_word_selected(selected);
+    let word = crate::object::class_holder_word_selected(class_id);
     let existing = word_object(word);
     if !existing.is_null() {
         return existing;
     }
     word_object(
-        crate::object::class_registry::class_decl_prototype_value_selected(selected).to_bits(),
+        crate::object::class_registry::class_decl_prototype_value_selected(class_id).to_bits(),
     )
 }
 

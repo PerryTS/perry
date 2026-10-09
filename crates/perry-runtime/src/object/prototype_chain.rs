@@ -826,11 +826,11 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         if pid == crate::object::shapes::PROTO_ID_NULL {
             return true;
         }
-        let implied = crate::object::shapes::class_proto_id((*obj).class_id);
-        if implied == crate::object::shapes::PROTO_ID_DEFAULT {
-            return false;
-        }
-        pid != implied && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
+        // CLASS is already the selected origin, DEFAULT/serial describe
+        // ordinary chains. A MIXED identity carries a declared class plus
+        // its evaluation/override link. No registry re-derives these facts.
+        pid >= crate::object::shapes::PROTO_ID_MIXED
+            && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
     }
 }
 
@@ -1538,7 +1538,7 @@ mod readpath_null_tests {
             "the live null edge must be authoritative even for a synthetic class");
         let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
         unsafe {
-            object::js_object_set_field_by_name(prototype, key, crate::JSValue::number(42.0));
+            object::js_object_set_field_by_name(prototype, key, 42.0);
             assert!(object::js_object_get_field_by_name(instance, key).is_undefined());
         }
     }
