@@ -651,3 +651,41 @@ fn descriptor_snapshot_later_application_failure_preserves_earlier_definitions()
         );
     }
 }
+
+#[test]
+fn descriptor_snapshot_operand_normalization_requires_owned_object_admission() {
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let receiver = object(&scope);
+        let raw =
+            f64::from_bits(crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as u64);
+        assert_eq!(
+            normalize_descriptor_operand(raw).to_bits(),
+            receiver.get_nanbox_u64()
+        );
+        // Unrelated memory is not a producer-authorized raw managed operand.
+        let unrelated = [0u64; 8];
+        let unowned = f64::from_bits(unrelated.as_ptr() as u64);
+        assert_eq!(
+            normalize_descriptor_operand(unowned).to_bits(),
+            unowned.to_bits()
+        );
+        assert_eq!(normalize_descriptor_operand(7.0), 7.0);
+        let string = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"primitive".as_ptr(),
+            9,
+        ));
+        let raw_string = f64::from_bits(string.get_raw_const_ptr::<crate::StringHeader>() as u64);
+        assert_eq!(
+            normalize_descriptor_operand(raw_string).to_bits(),
+            raw_string.to_bits()
+        );
+        assert!(!definition_target_is_object(raw_string));
+        let symbol = scope.root_nanbox_f64(crate::symbol::js_symbol_new_empty());
+        assert_eq!(
+            normalize_descriptor_operand(symbol.get_nanbox_f64()).to_bits(),
+            symbol.get_nanbox_u64()
+        );
+        assert!(!definition_target_is_object(symbol.get_nanbox_f64()));
+    }
+}

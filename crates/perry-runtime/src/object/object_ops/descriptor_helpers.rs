@@ -216,12 +216,35 @@ impl DescView<'_> {
     }
 }
 
-/// Descriptor handles use NaN-boxed words. Module-level raw object operands
-/// are normalized without allocation after their heap-word root is refreshed.
+/// Public descriptor entry points also admit legacy raw object operands.
+/// Normalize those allocation-free BEFORE rooting or calling collecting code.
+/// This is an ABI admission step, never a precise-root address decoder. Saved
+/// descriptor fields are JSValues at rest and must not use this conversion: a
+/// Number whose bits equal a heap address must remain a Number.
 pub(crate) unsafe fn normalize_descriptor_operand(value: f64) -> f64 {
-    if value.to_bits() >> 48 == 0 && value_is_object_like(value) {
-        crate::value::js_nanbox_pointer(value.to_bits() as i64)
+    let bits = value.to_bits();
+    // Already boxed operands (including class refs/handles) keep their exact
+    // producer encoding. No saved field value is sent through this ABI helper.
+    if bits >> 48 >= 0x7FF8 {
+        return value;
+    }
+    // This existing receiver decoder explicitly admits allocator-owned typed
+    // arrays in raw-bit AND numeric-address form. Use its positive family proof,
+    // never the magnitude of the f64 word, before publishing a JSValue root.
+    if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
+        return crate::value::js_nanbox_pointer(crate::value::resolve_forwarding(addr) as i64);
+    }
+    if bits >> 48 != 0
+        || crate::value::addr_class::try_read_tracked_gc_header(bits as usize).is_none()
+    {
+        return value;
+    }
+    let current = crate::value::resolve_forwarding(bits as usize);
+    let candidate = crate::value::js_nanbox_pointer(current as i64);
+    if value_is_object_like(candidate) {
+        candidate
     } else {
+        // Primitive cells must still fail descriptor/receiver object admission.
         value
     }
 }
