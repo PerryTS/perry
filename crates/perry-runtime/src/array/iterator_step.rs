@@ -342,6 +342,16 @@ unsafe fn array_record_prototypes_proven_at(
     array_record_prototypes_miss(site, proto_addr, next_owner, pair)
 }
 
+// Test instrumentation only: a warm refusal must bypass the full body proof.
+#[cfg(test)]
+thread_local! {
+    static ARRAY_RECORD_FULL_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn array_record_full_proof_calls() -> usize {
+    ARRAY_RECORD_FULL_PROOFS.with(std::cell::Cell::get)
+}
+
 // Key scans and ConstFn body checks live in one cold callee; a hit only
 // reads the two owners' ShapeIds and the site's last verdict.
 #[cold]
@@ -360,6 +370,8 @@ unsafe fn array_record_prototypes_miss(
         return false;
     }
     let symbol = crate::symbol::well_known_symbol("iterator") as usize;
+    #[cfg(test)]
+    ARRAY_RECORD_FULL_PROOFS.with(|calls| calls.set(calls.get() + 1));
     let proven = array_record_prototypes_need_iterator(proto_addr, next_owner, symbol) == 0;
     if !site.is_null()
         && complete
@@ -466,6 +478,7 @@ pub(crate) unsafe fn js_array_record_iterator_at(value: f64, index: f64) -> f64 
 
 /// The omitted array record uses exactly the shared IteratorClose algorithm.
 /// Its absent-return shape proof avoids materializing an unobservable receiver.
+#[inline(never)]
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_close(
     value: f64,

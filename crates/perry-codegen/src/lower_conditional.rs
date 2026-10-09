@@ -318,6 +318,18 @@ pub(crate) fn lower_conditional(
     then_expr: &Expr,
     else_expr: &Expr,
 ) -> Result<String> {
+    if let Some(args) = array_record::finish_args(condition, then_expr, else_expr) {
+        return lower_expr(
+            ctx,
+            &Expr::NativeMethodCall {
+                module: "__perry_runtime".into(),
+                class_name: None,
+                object: None,
+                method: "arrayRecordFinish".into(),
+                args,
+            },
+        );
+    }
     let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
     let saved_guarded_proof = branch_proofs
         .as_ref()
