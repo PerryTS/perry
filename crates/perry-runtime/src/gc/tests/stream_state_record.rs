@@ -6,7 +6,7 @@
 //! meta record's and the cell's GC arms skip the record edge) and
 //! `record_barrier` (a record store skips its write barrier).
 use crate::node_stream::native_hooks::tests::{new_rot13, FamilyReset, Rot13Opts};
-use crate::node_stream::{test_record_slot_bits, test_write_inert_slot, test_read_inert_slot};
+use crate::node_stream::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
 use crate::value::{JSValue, TAG_TRUE, TAG_UNDEFINED};
 
 fn key(name: &str) -> *mut crate::string::StringHeader {
@@ -39,7 +39,11 @@ fn field(obj: f64, name: &str) -> f64 {
 }
 
 fn assert_chunk(got: f64, n: u32, what: &str) {
-    assert_eq!(field(got, "tag"), f64::from(n), "{what}: chunk {n} intact after the move");
+    assert_eq!(
+        field(got, "tag"),
+        f64::from(n),
+        "{what}: chunk {n} intact after the move"
+    );
     let mut bytes = Vec::new();
     crate::node_stream::test_append_chunk_bytes(field(got, "text"), &mut bytes);
     assert_eq!(
@@ -110,7 +114,11 @@ fn stream_record_survives_a_moving_collection() {
         "test premise: the record's values moved and its slots were rewritten"
     );
     for (i, s) in [&plain, &rot].into_iter().enumerate() {
-        assert_chunk(test_read_inert_slot(s.get_nanbox_f64()), 1000 + i as u32, "young record");
+        assert_chunk(
+            test_read_inert_slot(s.get_nanbox_f64()),
+            1000 + i as u32,
+            "young record",
+        );
     }
     for n in 0..N {
         let got = crate::node_stream::js_node_stream_method_read(
@@ -133,7 +141,11 @@ fn stream_record_survives_a_moving_collection() {
     collect_and_churn();
     collect_and_churn();
     for (i, s) in [&plain, &rot].into_iter().enumerate() {
-        assert_chunk(test_read_inert_slot(s.get_nanbox_f64()), 2000 + i as u32, "old record");
+        assert_chunk(
+            test_read_inert_slot(s.get_nanbox_f64()),
+            2000 + i as u32,
+            "old record",
+        );
     }
     for n in 0..N {
         let got = crate::node_stream::js_node_stream_method_read(
@@ -153,7 +165,9 @@ fn stream_record_survives_a_moving_collection() {
 /// is dropped).
 #[test]
 fn a_stream_record_and_a_native_this_alias_share_one_word() {
-    use crate::object::native_this_alias::{alias_handle_for_object, register_this_to_handle_alias};
+    use crate::object::native_this_alias::{
+        alias_handle_for_object, register_this_to_handle_alias,
+    };
     const HANDLE: i64 = 0xe1727;
     let _no_stack = super::support::ConservativeScanDisabledGuard::new();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -192,8 +206,12 @@ fn a_stream_record_and_a_native_this_alias_share_one_word() {
                 "{what}: the stream state survives"
             );
         }
-        assert!(crate::node_stream::is_classic_stream_instance_value(a.get_nanbox_f64()));
-        assert!(crate::node_stream::is_classic_stream_instance_value(b.get_nanbox_f64()));
+        assert!(crate::node_stream::is_classic_stream_instance_value(
+            a.get_nanbox_f64()
+        ));
+        assert!(crate::node_stream::is_classic_stream_instance_value(
+            b.get_nanbox_f64()
+        ));
         assert_chunk(test_read_inert_slot(c.get_nanbox_f64()), 7, what);
     };
     check("fresh");

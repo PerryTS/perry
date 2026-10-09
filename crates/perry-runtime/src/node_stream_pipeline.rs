@@ -420,10 +420,9 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         _ => {}
     }
     if !readable_chunks_nonempty(value.get_nanbox_f64()) {
-        if let Some(source_iterator) = get_hidden_value(
-            value.get_nanbox_f64(),
-            READABLE_SOURCE_ITERATOR_KEY,
-        ) {
+        if let Some(source_iterator) =
+            get_hidden_value(value.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY)
+        {
             let source_iterator = scope.root_nanbox_f64(source_iterator);
             if let Some(chunks) =
                 collect_pipeline_iterator_chunks(source_iterator.get_nanbox_f64())?
@@ -1336,10 +1335,9 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                 Slot::ComposePriming,
                 f64::from_bits(TAG_FALSE),
             );
-            if let Some(err) = get_hidden_value(
-                composite.get_nanbox_f64(),
-                Slot::ComposePendingError,
-            ) {
+            if let Some(err) =
+                get_hidden_value(composite.get_nanbox_f64(), Slot::ComposePendingError)
+            {
                 let err = scope.root_nanbox_f64(err);
                 set_hidden_value(
                     composite.get_nanbox_f64(),

@@ -633,9 +633,7 @@ pub enum ErrUserProp {
 }
 
 mod user_props;
-pub use user_props::{
-    error_user_prop, error_user_props, set_error_user_prop,
-};
+pub use user_props::{error_user_prop, error_user_props, set_error_user_prop};
 
 pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";

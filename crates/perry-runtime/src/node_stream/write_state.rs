@@ -491,8 +491,8 @@ pub(super) fn readable_maybe_read_more(stream: f64) {
     if rlen >= hwm {
         return;
     }
-    if let Some(held) = get_hidden_value(stream, TRANSFORM_HELD_CALLBACK_KEY)
-        .filter(|v| is_callable_value(*v))
+    if let Some(held) =
+        get_hidden_value(stream, TRANSFORM_HELD_CALLBACK_KEY).filter(|v| is_callable_value(*v))
     {
         set_internal_value(
             stream,

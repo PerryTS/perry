@@ -6,10 +6,8 @@ use super::*;
 pub(super) fn pull(stream: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
-    let Some(source) = get_hidden_value(
-        stream.get_nanbox_f64(),
-        READABLE_SOURCE_ITERATOR_KEY,
-    ) else {
+    let Some(source) = get_hidden_value(stream.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY)
+    else {
         return false;
     };
     let source = scope.root_nanbox_f64(source);
