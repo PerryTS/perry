@@ -26,10 +26,14 @@ fn inline_runtime_bursts_preserve_exact_allocation_accounting() {
             let raw = p.sub(GC_HEADER_SIZE);
             assert_eq!(raw, last_end, "generated/runtime state must not overlap");
             assert_eq!(p as usize & 7, 0);
+            let header = &*crate::gc::header_from_trusted_user_ptr(p);
+            assert_eq!(header.obj_type, GC_TYPE_STRING);
+            assert_eq!(header._reserved, 0);
             assert_eq!(
-                (*crate::gc::header_from_trusted_user_ptr(p)).size as usize,
-                total
+                header.gc_flags,
+                crate::gc::GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags()
             );
+            assert_eq!(header.size as usize, total);
             assert_eq!(
                 classify_heap_generation(p as usize),
                 HeapGeneration::Nursery

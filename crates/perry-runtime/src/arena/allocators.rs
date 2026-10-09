@@ -460,12 +460,16 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
 unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
     let header = raw as *mut GcHeader;
-    header.write(GcHeader {
+    // GcHeader is exactly eight initialized bytes with no padding. Write its
+    // native image as one aligned word, as generated class births do; an
+    // aggregate write otherwise lowers to four separate stores on x86-64.
+    let image = std::mem::transmute::<GcHeader, u64>(GcHeader {
         obj_type,
         gc_flags: GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags(),
         _reserved: 0,
         size: total as u32,
     });
+    raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);
     raw.add(GC_HEADER_SIZE)

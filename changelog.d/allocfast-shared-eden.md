@@ -1,4 +1,5 @@
-Unify small runtime allocations with the existing generated Eden bump state.
+Unify small runtime allocations with the existing generated Eden bump state
+and write the complete young GC header with one aligned native word store.
 Keep refills, collections, free-list reuse and large births out of line, and
 flush collector bumps before leaving the existing allocation-accounting guard.
 The Eden thread-exit walk also materializes its pending bump before finalizing
