@@ -1,6 +1,6 @@
 //! Shared generated/runtime Eden bumps must feed the pacer exactly once.
 use super::*;
-use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_STRING};
+use crate::gc::{GC_HEADER_SIZE, GC_TYPE_STRING};
 
 #[test]
 fn inline_runtime_bursts_preserve_exact_allocation_accounting() {
@@ -26,7 +26,10 @@ fn inline_runtime_bursts_preserve_exact_allocation_accounting() {
             let raw = p.sub(GC_HEADER_SIZE);
             assert_eq!(raw, last_end, "generated/runtime state must not overlap");
             assert_eq!(p as usize & 7, 0);
-            assert_eq!((*(raw as *const GcHeader)).size as usize, total);
+            assert_eq!(
+                (*crate::gc::header_from_trusted_user_ptr(p)).size as usize,
+                total
+            );
             assert_eq!(
                 classify_heap_generation(p as usize),
                 HeapGeneration::Nursery
