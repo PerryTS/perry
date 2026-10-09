@@ -486,6 +486,12 @@ pub fn tls_shared_signature_algorithms() -> f64 {
 }
 
 /// Publish TLS options on the actual Socket before connect returns.
+///
+/// # Safety
+/// Run on the Socket's owning runtime thread. `handle` must name a live,
+/// rooted Socket and `options` must be a valid JS value. A non-null
+/// `servername_ptr` must remain readable for `servername_len` bytes until
+/// this call returns.
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_client_record_start(
     handle: i64,
@@ -502,7 +508,7 @@ pub unsafe extern "C" fn js_tls_client_record_start(
     ) else {
         return;
     };
-    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap());
     let servername = if servername_ptr.is_null() {
         None
     } else {
@@ -568,7 +574,7 @@ pub unsafe extern "C" fn js_tls_client_record_connected(
     ) else {
         return;
     };
-    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap());
     for (key, ptr, len) in [
         (
             "authorizationError",
@@ -617,7 +623,7 @@ pub extern "C" fn js_tls_client_record_closed(handle: i64) {
         return;
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap());
     unsafe {
         set_rooted_object_field(
             &state,
