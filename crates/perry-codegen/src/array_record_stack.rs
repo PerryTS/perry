@@ -193,10 +193,15 @@ pub(crate) fn write_local(ctx: &mut FnCtx<'_>, id: u32, value: &str, expr: &Expr
     let Some(field) = managed_field(&r, id) else {
         return false;
     };
-    // Completion/exhaustion releases the range in the shared dispatcher.
-    // The generated alias release must not write next again on every proven
-    // array entry, where no protocol word was ever acquired.
-    if !matches!(expr, Expr::Undefined) {
+    // The payload home is rooted at every safepoint of the function, not only
+    // while the loop runs, so the plan's exit release is what ends the
+    // traversal's custody of the source on every completion: exhaustion,
+    // break/return and throw. The protocol dispatcher has already cleared it
+    // on its own completions; a proven array completes without the
+    // dispatcher. The source alias releases inside payload acquisition,
+    // where the same field already holds the payload, and the next word is
+    // only ever written and released by the dispatcher.
+    if !matches!(expr, Expr::Undefined) || (id == r.payload && id != r.source) {
         ctx.block().store_volatile(DOUBLE, value, &r.fields[field]);
     }
     true
