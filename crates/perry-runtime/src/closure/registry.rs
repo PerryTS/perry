@@ -520,29 +520,6 @@ pub static BOUND_METHOD_INFO: JsFunctionInfo =
 pub static BOUND_NATIVE_CONSTRUCTOR_INFO: JsFunctionInfo =
     unsafe { JsFunctionInfo::from_code(BOUND_METHOD_FUNC_PTR, 2) };
 
-/// A constructor family's immutable capture fact, independent of all JS
-/// names and prototype properties. Export resolution installs this layout.
-pub(crate) fn native_constructor_class_id(value: f64) -> Option<u32> {
-    let value = crate::value::JSValue::from_bits(value.to_bits());
-    if !value.is_pointer() {
-        return None;
-    }
-    let address = value.as_pointer::<u8>() as usize;
-    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(address) }?;
-    if unsafe { header.as_ref().obj_type } != crate::gc::GC_TYPE_CLOSURE {
-        return None;
-    }
-    unsafe {
-        let closure = address as *const ClosureHeader;
-        if !std::ptr::eq((*closure).info, &BOUND_NATIVE_CONSTRUCTOR_INFO)
-            || real_capture_count((*closure).capture_count) != 4
-        {
-            return None;
-        }
-        Some(js_closure_get_capture_f64(closure, 3) as u32)
-    }
-}
-
 /// The info every `Function.prototype.bind` result points to (its "code" is
 /// the [`BOUND_FUNCTION_FUNC_PTR`] sentinel).
 // SAFETY: the dispatchers route this sentinel by value; it is never called.

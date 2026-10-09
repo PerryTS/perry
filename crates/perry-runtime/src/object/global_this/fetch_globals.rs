@@ -662,51 +662,43 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             b"Super constructor null is not a constructor",
         );
     }
-    // Resolve native net heritage from the immutable constructor class fact.
-    // Alias/import syntax and mutable constructor properties cannot choose it.
-    let native_class = crate::closure::native_constructor_class_id(parent_val).or_else(|| {
-        let obj = subclass_this_object_ptr(this_box)?;
-        crate::closure::native_constructor_class_id(
-            crate::object::class_registry::js_get_dynamic_parent_value(
-                crate::object::js_object_get_class_id(obj),
-            ),
-        )
-    });
-    if let Some(class) = native_class {
-        let options = if args_len > 0 && !args_ptr.is_null() {
-            *args_ptr
-        } else {
-            undef
-        };
-        let callback = if args_len > 1 && !args_ptr.is_null() {
-            *args_ptr.add(1)
-        } else {
-            undef
-        };
-        super::super::native_module_dispatch::js_net_subclass_init(
-            this_box,
-            options,
-            callback,
-            u32::from(class == crate::native_class_ids::NET_SERVER),
-        );
-        return undef;
-    }
-    // Resolve the parent to a bound native-module export VALUE, independent
-    // of how the heritage expression reached it: a bare import, a local
-    // alias, a namespace member, and a CJS destructured `require()` all
-    // produce the identical bound-closure representation (see
-    // `bound_native_callable_module_and_method`), even though only the bare
-    // import shape is recognized statically at HIR-lowering time.
-    let bound_native_parent = super::super::native_module::bound_native_callable_module_and_method(
-        parent_val,
-    )
-    .or_else(|| {
-        let obj = subclass_this_object_ptr(this_box)?;
-        let cid = crate::object::js_object_get_class_id(obj);
-        super::super::native_module::bound_native_callable_module_and_method(
-            crate::object::class_registry::js_get_dynamic_parent_value(cid),
-        )
-    });
+    // Resolve each candidate once. Ordinary parents must not pay a second
+    // closure/header probe or repeat the dynamic-parent registry lookup just
+    // because native net constructors now carry an immutable class fact.
+    let native_parent =
+        super::super::native_module::bound_native_parent(parent_val).or_else(|| {
+            let obj = subclass_this_object_ptr(this_box)?;
+            super::super::native_module::bound_native_parent(
+                crate::object::class_registry::js_get_dynamic_parent_value(
+                    crate::object::js_object_get_class_id(obj),
+                ),
+            )
+        });
+    let bound_native_parent = match native_parent {
+        Some(super::super::native_module::BoundNativeParent::NativeClass(class)) => {
+            let options = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let callback = if args_len > 1 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            super::super::native_module_dispatch::js_net_subclass_init(
+                this_box,
+                options,
+                callback,
+                u32::from(class == crate::native_class_ids::NET_SERVER),
+            );
+            return undef;
+        }
+        Some(super::super::native_module::BoundNativeParent::Export(module, method)) => {
+            Some((module, method))
+        }
+        None => None,
+    };
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {
