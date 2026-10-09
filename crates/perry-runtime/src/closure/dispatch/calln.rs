@@ -405,10 +405,11 @@ fn dispatch_call_wide(closure: *const ClosureHeader, this: JsThis, args: &[f64])
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, this, args, fixed_arity, synth)
         },
-        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, args.len() as u32) => unsafe {
+        // The body declares its ABI width. Surplus arguments are ignored;
+        // they must not widen a short body past the dynamic-call width cap.
+        DispatchKind::Arity(declared) => unsafe {
             dispatch_with_arity(closure, func_ptr, this, args, declared)
         },
-        _ => unsafe { super::super::dispatch_wide_abi(closure, func_ptr, this, args, args.len()) },
     }
 }
 
