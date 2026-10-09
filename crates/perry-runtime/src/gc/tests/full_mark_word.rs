@@ -35,6 +35,83 @@ fn valid_set(classifier: bool) -> ValidPointerSet {
     }
 }
 
+#[cfg(perry_gc_instruments)]
+#[test]
+fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement() {
+    // The verifier caches its environment switch process-wide. Use a fresh
+    // process when the ordinary suite runs with that switch off.
+    if !env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER") {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env("PERRY_GC_VERIFY_CLASSIFIER", "1")
+            .args([
+                "--exact",
+                "gc::tests::full_mark_word::active_classifier_differential_accepts_fold_and_rejects_census_disagreement",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .output()
+            .expect("launch classifier differential control");
+        assert!(
+            output.status.success(),
+            "classifier control failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "exact child selector must execute the control",
+        );
+        return;
+    }
+
+    isolated(|| unsafe {
+        // Fixture reset wipes metadata and suppresses verification. These
+        // objects are allocated afterwards and have real, fresh metadata.
+        let child = young_leaf();
+        let (parent, _) = old_parent(string_bits(child));
+        let child_header = header_from_user_ptr(child as *const u8);
+        (*child_header).gc_flags |= GC_FLAG_MARKED;
+        assert!(trace::classifier_valid_object_start(child));
+        assert!(trace::classifier_valid_object_start(
+            parent as usize + GC_HEADER_SIZE
+        ));
+
+        struct RestoreSuppression(bool);
+        impl Drop for RestoreSuppression {
+            fn drop(&mut self) {
+                CLASSIFIER_VERIFY_SUPPRESSED.with(|flag| flag.set(self.0));
+            }
+        }
+        let _restore =
+            RestoreSuppression(CLASSIFIER_VERIFY_SUPPRESSED.with(|flag| flag.replace(false)));
+        assert!(trace::classifier_verify_enabled());
+        let valid = build_valid_pointer_set();
+        assert!(valid.built_by_census);
+        assert!(valid.contains(&child));
+        assert_coverage(&fold(parent, &valid), false);
+
+        // Keep exact census membership, but make its header unacceptable to
+        // both classifier header gates. This independent negative must reach
+        // the unchanged differential assertion, rather than a test oracle.
+        assert_eq!((*child_header).gc_flags & GC_FLAG_FORWARDED, 0);
+        let size = (*child_header).size;
+        (*child_header).size = 0;
+        let classifier_rejected = !trace::classifier_valid_object_start(child);
+        let red = std::panic::catch_unwind(|| valid.contains(&child));
+        (*child_header).size = size;
+        assert!(classifier_rejected);
+        let error = red.expect_err("active differential gate must reject census disagreement");
+        let message = error
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| error.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(message.contains("classifier rejected censused object"));
+        assert!(trace::classifier_verify_enabled());
+        assert!(valid.contains(&child));
+    });
+}
+
 unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     let (parent, fields) = alloc_old_test_object(1);
     *fields = bits;
