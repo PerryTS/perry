@@ -110,7 +110,7 @@ fn s7b_selection_lazy_chain_preserves_inner_materializer_projection() {
 }
 
 #[test]
-fn s7b_selection_guarded_fallback_requires_identical_raw_cid() {
+fn readpath_selection_unbuilt_shape_word_defers_only_to_cold_materialization() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let (a, b, c) = (0x7120, 0x7121, 0x7122);
     for cid in [a, b, c] {
@@ -127,7 +127,9 @@ fn s7b_selection_guarded_fallback_requires_identical_raw_cid() {
         assert!(!crate::JSValue::from_bits(raw(b)).is_pointer());
         assert!(guarded_class_instance_prototype(before).is_null());
         assert!(guarded_class_instance_prototype(after).is_null());
-        assert!(class_instance_prototype_built(before).is_null());
+        // Cold construction retains the public materializer's inner
+        // projection. Hot reads above never redirect an unbuilt shape word.
+        assert_eq!(class_instance_prototype_built(before), cp);
     }
 }
 
