@@ -59,28 +59,30 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
 /// null info).
 #[inline(always)]
 pub fn get_valid_info(closure: *const ClosureHeader) -> *const crate::closure::JsFunctionInfo {
+    // One unsigned compare: above the small-handle band and below the 48-bit
+    // pointer payload. #5976: the band is rejected BEFORE the header kind
+    // probe. Revocable-proxy ids, Web-Fetch/zlib/net handles and the generic
+    // stdlib registry ids are all NaN-boxed `POINTER_TAG | <small id>`
+    // values, not heap pointers — a real closure is always a GC allocation
+    // above the band (`value::addr_class`), which also covers null and the
+    // unmapped low pages.
+    const FLOOR: u64 = crate::value::addr_class::HANDLE_BAND_MAX as u64;
+    const _: () = assert!(FLOOR >= 0x1000);
     let addr = closure as u64;
-    if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
-        return std::ptr::null();
-    }
-    // #5976: reject the small-handle band BEFORE the header kind probe.
-    // Revocable-proxy ids, Web-Fetch/zlib/net handles and the generic stdlib
-    // registry ids are all NaN-boxed `POINTER_TAG | <small id>` values, not
-    // heap pointers — a real closure is always a GC allocation above the band
-    // (`value::addr_class`). The 0x1000 floor above let every one of them
-    // through, so this probe dereferenced unmapped low memory.
-    if crate::value::addr_class::is_handle_band(addr as usize) {
+    if addr.wrapping_sub(FLOOR) >= 0x0001_0000_0000_0000 - FLOOR {
         return std::ptr::null();
     }
     // The kind is the GC header's type byte (no payload magic): a live,
-    // un-evacuated closure cell. Volatile + fence keep the info load below
-    // from being hoisted above this check (the SIGBUS history above).
+    // un-evacuated closure cell. The type and flag bytes are adjacent and read
+    // as one halfword. Volatile + fence keep the info load below from being
+    // hoisted above this check (the SIGBUS history above).
     let header = (addr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let (obj_type, gc_flags) = unsafe {
-        (
-            std::ptr::read_volatile(&(*header).obj_type),
-            std::ptr::read_volatile(&(*header).gc_flags),
-        )
+    const _: () = assert!(
+        std::mem::offset_of!(crate::gc::GcHeader, gc_flags)
+            == std::mem::offset_of!(crate::gc::GcHeader, obj_type) + 1
+    );
+    let [obj_type, gc_flags] = unsafe {
+        std::ptr::read_volatile(std::ptr::addr_of!((*header).obj_type) as *const [u8; 2])
     };
     if obj_type != crate::gc::GC_TYPE_CLOSURE || gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return std::ptr::null();

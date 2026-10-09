@@ -171,6 +171,27 @@ macro_rules! js_body_fn {
     };
 }
 
+/// [`js_body_fn!`] as an `extern "C-unwind"` callable, for an entry that is
+/// itself `extern "C-unwind"` in unwinding (test) builds and hands its call
+/// to the body with `become` (the two signatures must be identical).
+///
+/// # Safety
+/// As [`js_body_fn!`].
+#[cfg(not(panic = "abort"))]
+macro_rules! js_body_fn_unwind {
+    (@f64 $x:tt) => { f64 };
+    ($code:expr; $($x:tt),* $(,)?) => {
+        ::std::mem::transmute::<
+            *const u8,
+            unsafe extern "C-unwind" fn(
+                *const $crate::closure::ClosureHeader,
+                $crate::closure::body_call::JsThis
+                $(, $crate::closure::body_call::js_body_fn_unwind!(@f64 $x))*
+            ) -> f64,
+        >($code)
+    };
+}
+
 /// Call a JS body: `js_body_call!(code, callee, this, a0, a1, ...)`, where
 /// `this` is a [`JsThis`].
 ///
@@ -247,6 +268,8 @@ macro_rules! js_bare_body_fn {
     };
 }
 
+#[cfg(not(panic = "abort"))]
+pub(crate) use js_body_fn_unwind;
 pub(crate) use {
     js_bare_body_fn, js_body_call, js_body_call_unwind, js_body_fn, js_body_fn_ty,
     js_method_body_call, js_method_body_fn,

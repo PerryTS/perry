@@ -49,6 +49,18 @@ pub fn resolve_strategy(info: &JsFunctionInfo) -> DispatchStrategy {
     DispatchStrategy { kind }
 }
 
+/// Whether a call passing `argc` arguments reaches `info`'s body with nothing
+/// in between: the body is plain (`JsFunctionInfo::plain_params`) and the
+/// call passes at least as many arguments as it declares (over-application is
+/// safe on native ABIs; wasm needs the exact count, `arity_needs_dispatch`).
+/// One compare on the body's own record: a bound value, a rest or
+/// `arguments` body and every runtime-native info are `NOT_PLAIN`, which no
+/// count reaches.
+#[inline(always)]
+pub(crate) fn plain_admits(info: &JsFunctionInfo, argc: u32) -> bool {
+    !super::dispatch::arity_needs_dispatch(u32::from(info.plain_params()), argc)
+}
+
 /// `info`'s rest kind and its fixed parameter count, if it has one.
 #[inline(always)]
 pub fn info_rest(info: &JsFunctionInfo) -> Option<(u32, RestDispatchKind)> {
