@@ -330,15 +330,46 @@ pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
             continue;
         }
         let base = r.base + first * ALIGN;
-        let data = libc::mmap(
-            base as *mut _,
-            mapped,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        );
+        #[cfg(test)]
+        let forced = FORCE_COMMIT_FAILURE.with(|f| f.replace(false));
+        #[cfg(not(test))]
+        let forced = false;
+        let data = if forced {
+            // Model a kernel that unmaps the old range before the commit
+            // check fails: the reservation is left with a hole.
+            libc::munmap(base as *mut _, mapped);
+            libc::MAP_FAILED
+        } else {
+            libc::mmap(
+                base as *mut _,
+                mapped,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
         if data == libc::MAP_FAILED {
+            // Before Linux 6.12, a failed MAP_FIXED may already have unmapped
+            // the reserved range. Put the uncommitted reservation back, or a
+            // foreign mapping could land in the hole and a later map() would
+            // replace it.
+            #[cfg(test)]
+            if sabotaged("restore") {
+                return std::ptr::null_mut();
+            }
+            let restored = libc::mmap(
+                base as *mut _,
+                mapped,
+                libc::PROT_NONE,
+                libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                -1,
+                0,
+            );
+            assert_eq!(
+                restored, base as *mut _,
+                "region reservation restore failed"
+            );
             return std::ptr::null_mut();
         }
         let incarnation = serial();
@@ -463,6 +494,10 @@ pub(crate) fn note_payload_cell(addr: usize) {
 #[cfg(test)]
 fn sabotaged(mode: &str) -> bool {
     std::env::var("PERRY_R2_SABOTAGE").is_ok_and(|value| value == mode)
+}
+#[cfg(test)]
+thread_local! {
+    static FORCE_COMMIT_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 #[cfg(test)]
 mod tests;
