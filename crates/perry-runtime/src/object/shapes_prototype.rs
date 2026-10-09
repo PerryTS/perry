@@ -280,10 +280,9 @@ pub(crate) fn shape_prototype_word(id: u32) -> u64 {
 }
 
 /// Make identity `proto_id` name `bits`, before any shape names it (the
-/// prototype funnel). An identity names one object for its whole life, so
-/// the write only ever fills an empty word or repeats the same bits — or
-/// replaces bits whose object died (the prune clears those). CLASS identities
-/// additionally publish an unbuilt holder and replace a constructor's holder;
+/// prototype funnel). Serial identities name one object for their lifetime.
+/// CLASS identities also publish an unbuilt holder or replace a constructor's
+/// holder, while prune clears words whose objects died;
 /// sites compare their live identity word before trusting a recorded chain.
 pub(crate) fn write_identity_word(proto_id: u64, bits: u64) {
     let Some((band, index)) = word_key(proto_id) else {
