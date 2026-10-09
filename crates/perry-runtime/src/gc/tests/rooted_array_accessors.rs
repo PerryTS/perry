@@ -28,26 +28,77 @@ extern "C" fn array_capture_setter(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// Fill the current nursery block using ordinary test allocations, leaving
-/// exactly the selected number of clone allocations. No collector/allocator
-/// hook or production code is changed. Trigger arming happens AFTER padding.
+/// The allocation counter is gated by the runtime's cached profiling flag.
+/// Enable the existing instrumentation for this single-threaded witness and
+/// restore its prior state even when an assertion unwinds.
+struct ClosureCountGuard(bool);
+
+impl ClosureCountGuard {
+    fn new() -> Self {
+        Self(crate::promise::MT_PROFILE_ENABLED.swap(true, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+impl Drop for ClosureCountGuard {
+    fn drop(&mut self) {
+        crate::promise::MT_PROFILE_ENABLED.store(self.0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Fill the current nursery block with initialized, dead GC arrays, leaving
+/// exactly the selected number of clone allocations. Naked arena bytes are
+/// not padding: every walker must see a valid object header and payload.
+/// Trigger arming happens AFTER padding, and no padding allocation collects.
 unsafe fn leave_rebind_space(clones: usize) -> usize {
     let bytes = (GC_HEADER_SIZE + crate::closure::closure_payload_size(2) + 7) & !7;
-    crate::arena::arena_alloc(8, 8); // Sync the supported inline/bump state.
+    let cycles = copying_minor_cycles();
+    crate::array::js_array_alloc(0); // Ordinary birth synchronizes inline/bump state.
     let remaining = {
         let arena = &*crate::arena::hot_arena();
         let block = &arena.blocks[arena.current];
         block.size - block.offset
     };
     assert!(remaining >= clones * bytes);
-    let padding = remaining - clones * bytes;
-    if padding != 0 {
-        crate::arena::arena_alloc(padding, 8);
+    let mut padding = remaining - clones * bytes;
+    let minimum = GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>();
+    while padding != 0 {
+        assert!(padding >= minimum, "padding must fit a complete GC array");
+        let mut total = padding.min(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES);
+        if padding - total != 0 && padding - total < minimum {
+            total -= minimum;
+        }
+        let payload = total - GC_HEADER_SIZE;
+        let raw = crate::arena::arena_alloc_gc_no_collect(payload, 8, GC_TYPE_ARRAY);
+        assert!(!raw.is_null(), "padding must use the current nursery block");
+        let arr = raw as *mut crate::array::ArrayHeader;
+        let capacity = (payload - std::mem::size_of::<crate::array::ArrayHeader>()) / 8;
+        (*arr).length = 0;
+        (*arr).capacity = capacity as u32;
+        let slots = arr.add(1) as *mut u64;
+        for index in 0..capacity {
+            slots.add(index).write(crate::value::TAG_HOLE);
+        }
+        crate::gc::layout_init_pointer_free(raw);
+        padding -= total;
     }
+    assert_eq!(
+        copying_minor_cycles(),
+        cycles,
+        "padding is outside the clone window"
+    );
     let arena = &*crate::arena::hot_arena();
     let block = &arena.blocks[arena.current];
     assert_eq!(block.size - block.offset, clones * bytes);
     block.data.add(block.offset + GC_HEADER_SIZE) as usize
+}
+
+unsafe fn assert_rebind_source(handle: &crate::gc::RuntimeHandle<'_>) {
+    let header = addr_of(handle.get_nanbox_f64()) as *const crate::closure::ClosureHeader;
+    assert_eq!(
+        (*header).capture_count,
+        crate::closure::CAPTURES_THIS_FLAG | 2
+    );
+    assert!(crate::closure::closure_reads_this_from_capture(header));
 }
 
 unsafe fn accessor_bag<'a>(
@@ -122,6 +173,7 @@ unsafe fn check_array_pair(
 #[test]
 fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _counts = ClosureCountGuard::new();
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -182,6 +234,8 @@ fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
             let before_receiver = addr_of(receiver.get_nanbox_f64());
             let before_get = addr_of(get.get_nanbox_f64());
             let before_set = addr_of(set.get_nanbox_f64());
+            assert_rebind_source(&get);
+            assert_rebind_source(&set);
             let expected_first_get = leave_rebind_space(usize::from(setter_window));
             let cycles = copying_minor_cycles();
             let moved = moved_objects_total();
@@ -241,6 +295,7 @@ fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
 #[test]
 fn descriptor_snapshot_named_array_retained_accessor_halves_survive_rebind_copying() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _counts = ClosureCountGuard::new();
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -312,6 +367,8 @@ fn descriptor_snapshot_named_array_retained_accessor_halves_survive_rebind_copyi
             );
             let view = crate::object::object_ops::decode_property_descriptor(&scope, &bag);
             let before_receiver = addr_of(receiver.get_nanbox_f64());
+            assert_rebind_source(&get);
+            assert_rebind_source(&set);
             leave_rebind_space(0);
             let cycles = copying_minor_cycles();
             let moved = moved_objects_total();

@@ -56,6 +56,20 @@ fn register_handle_scanner() {
     );
 }
 
+fn register_descriptor_cache_scanners() {
+    // CopyingNurseryTestGuard clears production scanner registration and
+    // suppresses lazy gc_init. These fixtures build ordinary shapes and fresh
+    // reflection records; their shared keys caches and authoritative shape
+    // descriptors must mark/rewrite their raw array edges, just as in gc_init.
+    // A handle keeps the receiver live but cannot refresh a cache's key pointer.
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+}
+
 fn string_value(text: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     f64::from_bits(string_bits(ptr as usize))
@@ -665,6 +679,7 @@ fn descriptor_snapshot_public_raw_and_tagged_operands_move_during_key_conversion
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
+    register_descriptor_cache_scanners();
     unsafe {
         for reflect in [false, true] {
             for raw_receiver in [false, true] {
@@ -740,6 +755,7 @@ fn descriptor_snapshot_collection_raw_and_tagged_operands_move_during_decode() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
+    register_descriptor_cache_scanners();
     unsafe {
         for raw_target in [false, true] {
             for raw_properties in [false, true] {
@@ -758,6 +774,9 @@ fn descriptor_snapshot_collection_raw_and_tagged_operands_move_during_decode() {
                 let target_before = addr_of(target.get_nanbox_f64());
                 let properties_before = addr_of(properties.get_nanbox_f64());
                 GETTER_COPIED_OBJECTS.with(|count| count.set(0));
+                eprintln!(
+                    "collection decode: raw_target={raw_target}, raw_properties={raw_properties}"
+                );
                 let result = crate::object::js_object_define_properties(
                     admitted_object_operand(&target, raw_target),
                     admitted_object_operand(&properties, raw_properties),
@@ -780,6 +799,7 @@ fn descriptor_snapshot_typed_array_legacy_receivers_keep_bags_through_moving_key
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
+    register_descriptor_cache_scanners();
     unsafe {
         for representation in 0..3 {
             let scope = RuntimeHandleScope::new();
