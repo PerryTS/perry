@@ -111,8 +111,6 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 /// TAG_UNDEFINED if the property doesn't exist.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -523,22 +521,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     } else {
                         class_prototype_method_value_for_name(class_id, &method_name)
                     };
-                    let packed = b"value\0writable\0enumerable\0configurable";
-                    let desc = js_object_alloc_with_shape(
-                        0x0D_E5_C2,
-                        4,
-                        packed.as_ptr(),
-                        packed.len() as u32,
-                    );
-                    let header_size = std::mem::size_of::<ObjectHeader>();
-                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-                    *fields = value;
-                    *fields.add(1) = f64::from_bits(TAG_TRUE);
-                    *fields.add(2) = f64::from_bits(TAG_FALSE);
-                    *fields.add(3) = f64::from_bits(TAG_TRUE);
-                    super::rebuild_object_field_layout(desc, 4);
-                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+                    return build_data_descriptor(value, true, false, true);
                 }
                 // Own data properties, including `prototype`, live in the
                 // class function object's property bag. Read their actual
@@ -705,24 +688,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     let Some((value, writable, enumerable, configurable)) = resolved else {
                         return f64::from_bits(crate::value::TAG_UNDEFINED);
                     };
-                    let value_handle = scope.root_nanbox_f64(value);
-                    let packed = b"value\0writable\0enumerable\0configurable";
-                    let desc = js_object_alloc_with_shape(
-                        0x0D_E5_C0,
-                        4,
-                        packed.as_ptr(),
-                        packed.len() as u32,
-                    );
-                    let header_size = std::mem::size_of::<ObjectHeader>();
-                    let fields = (desc as *mut u8).add(header_size) as *mut f64;
-                    // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-                    *fields = value_handle.get_nanbox_f64();
-                    *fields.add(1) = f64::from_bits(if writable { TAG_TRUE } else { TAG_FALSE });
-                    *fields.add(2) = f64::from_bits(if enumerable { TAG_TRUE } else { TAG_FALSE });
-                    *fields.add(3) =
-                        f64::from_bits(if configurable { TAG_TRUE } else { TAG_FALSE });
-                    super::rebuild_object_field_layout(desc, 4);
-                    return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+                    return build_data_descriptor(value, writable, enumerable, configurable);
                 }
             }
         }
@@ -914,54 +880,33 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             .as_ref()
             .and_then(|k| get_property_attrs(obj as usize, k))
             .unwrap_or(PropertyAttrs::new(true, true, true));
-        let bool_to_f64 = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
-
-        // Accessor descriptor path.
+        // The shared builders root saved fields before descriptor allocation.
         if let Some(acc) = key_rust
             .as_ref()
             .and_then(|k| get_accessor_descriptor(obj as usize, k))
         {
-            let packed = b"get\0set\0enumerable\0configurable";
-            let desc =
-                js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
-            let header_size = std::mem::size_of::<ObjectHeader>();
-            let fields = (desc as *mut u8).add(header_size) as *mut f64;
-            // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-            *fields = if acc.get != 0 {
-                f64::from_bits(acc.get)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            *fields.add(1) = if acc.set != 0 {
-                f64::from_bits(acc.set)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            // GC_STORE_AUDIT(INIT): descriptor boolean fields are pointer-free and layout is rebuilt below.
-            *fields.add(2) = bool_to_f64(attrs.enumerable());
-            *fields.add(3) = bool_to_f64(attrs.configurable());
-            super::rebuild_object_field_layout(desc, 4);
-            return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
+            return build_accessor_descriptor(
+                f64::from_bits(if acc.get != 0 {
+                    acc.get
+                } else {
+                    crate::value::TAG_UNDEFINED
+                }),
+                f64::from_bits(if acc.set != 0 {
+                    acc.set
+                } else {
+                    crate::value::TAG_UNDEFINED
+                }),
+                attrs.enumerable(),
+                attrs.configurable(),
+            );
         }
-
-        // Data descriptor path.
         let value = js_object_get_field_by_name(obj, key_str);
-        let packed = b"value\0writable\0enumerable\0configurable";
-        let desc = js_object_alloc_with_shape(
-            0x0D_E5_C0, // unique shape_id for property descriptors
-            4,
-            packed.as_ptr(),
-            packed.len() as u32,
-        );
-        let header_size = std::mem::size_of::<ObjectHeader>();
-        let fields = (desc as *mut u8).add(header_size) as *mut f64;
-        // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-        *fields = f64::from_bits(value.bits()); // value
-        *fields.add(1) = bool_to_f64(attrs.writable()); // writable
-        *fields.add(2) = bool_to_f64(attrs.enumerable()); // enumerable
-        *fields.add(3) = bool_to_f64(attrs.configurable()); // configurable
-        super::rebuild_object_field_layout(desc, 4);
-        f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000)
+        build_data_descriptor(
+            f64::from_bits(value.bits()),
+            attrs.writable(),
+            attrs.enumerable(),
+            attrs.configurable(),
+        )
     }
 }
 

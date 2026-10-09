@@ -306,7 +306,11 @@ pub(crate) unsafe fn reflect_define_property_decoded(
                     crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
                 )
             });
-    if array {
+    let length_key = crate::string::with_string_value_bytes(key_handle.get_nanbox_f64(), |bytes| {
+        bytes == b"length"
+    })
+    .unwrap_or(false);
+    if array && length_key {
         return super::object_ops::apply_property_descriptor(
             scope,
             value,

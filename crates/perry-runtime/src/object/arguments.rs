@@ -13,6 +13,7 @@
 //! dead-owner prune on every collection. On the record it moves with its owner
 //! and dies with it, and needs none of the three.
 
+use super::descriptors::{build_accessor_descriptor, build_data_descriptor};
 use super::*;
 
 // The encodings of `ObjectMeta::arguments`. The word is NaN-boxed so the meta
@@ -230,14 +231,6 @@ fn key_name(key: *const crate::StringHeader) -> Option<String> {
 
 fn intern_key(name: &str) -> *const crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-}
-
-fn bool_value(value: bool) -> f64 {
-    f64::from_bits(if value {
-        crate::value::TAG_TRUE
-    } else {
-        crate::value::TAG_FALSE
-    })
 }
 
 extern "C" fn arguments_throw_type_error(
@@ -1163,40 +1156,4 @@ unsafe fn write_ordinary_own_value(
             return;
         }
     }
-}
-
-unsafe fn build_data_descriptor(
-    value: f64,
-    writable: bool,
-    enumerable: bool,
-    configurable: bool,
-) -> f64 {
-    let packed = b"value\0writable\0enumerable\0configurable";
-    let desc = js_object_alloc_with_shape(0x0D_A6_50, 4, packed.as_ptr(), packed.len() as u32);
-    let fields = (desc as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
-    // GC_STORE_AUDIT(BARRIERED): fresh descriptor fields are replayed by the rebuild below.
-    *fields = value;
-    *fields.add(1) = bool_value(writable);
-    *fields.add(2) = bool_value(enumerable);
-    *fields.add(3) = bool_value(configurable);
-    super::rebuild_object_field_layout(desc, 4);
-    crate::value::js_nanbox_pointer(desc as i64)
-}
-
-unsafe fn build_accessor_descriptor(
-    get: f64,
-    set: f64,
-    enumerable: bool,
-    configurable: bool,
-) -> f64 {
-    let packed = b"get\0set\0enumerable\0configurable";
-    let desc = js_object_alloc_with_shape(0x0D_A6_51, 4, packed.as_ptr(), packed.len() as u32);
-    let fields = (desc as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
-    // GC_STORE_AUDIT(BARRIERED): fresh descriptor fields are replayed by the rebuild below.
-    *fields = get;
-    *fields.add(1) = set;
-    *fields.add(2) = bool_value(enumerable);
-    *fields.add(3) = bool_value(configurable);
-    super::rebuild_object_field_layout(desc, 4);
-    crate::value::js_nanbox_pointer(desc as i64)
 }
