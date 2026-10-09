@@ -599,6 +599,20 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     true
 }
 
+/// A native handle receiver (fetch `Headers`/`Request`/`Response`/`Blob`, zlib
+/// stream, crypto hash, …): a pointer-tagged registry id that is not a Proxy.
+/// It is an ordinary object in Node. Its own properties live in the
+/// `handle_expando` table, which has no extensibility bit: every
+/// `[[DefineOwnProperty]]` on it admits a new key, and
+/// `Object.preventExtensions` cannot record anything for it. So it is always
+/// extensible, and therefore neither sealed nor frozen. Callers test for a
+/// Proxy first (proxies share the band).
+fn is_native_handle_object(obj_value: f64) -> bool {
+    let value = crate::JSValue::from_bits(obj_value.to_bits());
+    value.is_pointer()
+        && crate::value::addr_class::is_small_handle(value.as_pointer::<u8>() as usize)
+}
+
 /// Object.isFrozen(obj) — returns NaN-boxed boolean.
 #[no_mangle]
 pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
@@ -615,6 +629,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         } else {
             f64::from_bits(TAG_FALSE)
         };
+    }
+    if is_native_handle_object(obj_value) {
+        return f64::from_bits(TAG_FALSE);
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -651,6 +668,9 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    if is_native_handle_object(obj_value) {
+        return f64::from_bits(TAG_FALSE);
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) <= 0x10000 {
@@ -685,6 +705,9 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         } else {
             f64::from_bits(TAG_FALSE)
         };
+    }
+    if is_native_handle_object(obj_value) {
+        return f64::from_bits(TAG_TRUE);
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);

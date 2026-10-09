@@ -273,10 +273,6 @@ fn typed_array_has_ordinary_own_prop(owner: usize, key: &str) -> bool {
     typed_array_own_prop_snapshot(owner, key).is_some()
 }
 
-fn throw_typed_array_define_error(message: String) -> ! {
-    throw_type_error(message.as_bytes())
-}
-
 pub(crate) fn typed_array_mark_no_extend(owner: usize) {
     unsafe {
         (*crate::buffer::store::header(owner))._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
@@ -287,22 +283,15 @@ pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
     unsafe { (*crate::buffer::store::header(owner))._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 }
 }
 
-#[cold]
-fn throw_type_error(message: &[u8]) -> ! {
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
 pub(crate) unsafe fn typed_array_define_own_property(
     obj_value: f64,
     ta: *mut TypedArrayHeader,
     key: *const crate::string::StringHeader,
     key_name: &str,
     descriptor: &crate::object::object_ops::DescView<'_>,
-) -> f64 {
+) -> bool {
     if ta.is_null() {
-        return obj_value;
+        return true;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     // typed_array_addr_from_value admits tagged and legacy raw receivers.
@@ -324,30 +313,23 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 || enumerable.is_some_and(|value| !value)
                 || configurable.is_some_and(|value| !value)
             {
-                throw_typed_array_define_error(format!("Cannot redefine property: {key_name}"));
+                return false;
             }
             if descriptor.has_named(b"value") {
                 let value = descriptor.read_named(b"value");
                 typed_array_owner_set(owner, index, f64::from_bits(value.bits()));
             }
-            f64::from_bits(receiver.get_nanbox_u64())
+            true
         }
-        TypedArrayStringKeyKind::IntegerIndex => {
-            throw_type_error(b"Invalid typed array index");
-        }
+        TypedArrayStringKeyKind::IntegerIndex => false,
         TypedArrayStringKeyKind::Ordinary => {
-            // OrdinaryDefineOwnProperty step 2: a brand-new key on a
-            // non-extensible typed array is rejected (`Object.defineProperty`
-            // throws; the `Reflect` path pre-checks extensibility itself and
-            // returns false before reaching here).
-            if !typed_array_has_ordinary_own_prop(owner, key_name)
-                && typed_array_owner_no_extend(owner)
-            {
-                throw_typed_array_define_error(format!(
-                    "Cannot define property {key_name}, object is not extensible"
-                ));
-            }
+            // OrdinaryDefineOwnProperty: a brand-new key on a non-extensible
+            // typed array is rejected; Object throws the verdict, Reflect
+            // returns it.
             let existing = typed_array_has_ordinary_own_prop(owner, key_name);
+            if !existing && typed_array_owner_no_extend(owner) {
+                return false;
+            }
             let current_attrs = existing
                 .then(|| crate::object::get_property_attrs(owner, key_name))
                 .flatten()
@@ -355,23 +337,28 @@ pub(crate) unsafe fn typed_array_define_own_property(
                     existing, existing, existing,
                 ));
             let current_accessor = crate::object::get_accessor_descriptor(owner, key_name);
-            if existing
-                && !current_attrs.configurable()
-                && !current_attrs.writable()
-                && current_accessor.is_none()
-            {
-                // Engine keys use the same immutable data descriptors as any
-                // other shaped property. A permitted redefinition is a no-op;
-                // never let it replace the view's traced owner or pin count.
-                crate::object::object_ops::validate_nonconfigurable_redefine(
-                    key_name,
-                    current_attrs,
-                    None,
+            if existing && !current_attrs.configurable() {
+                let current_value = if current_accessor.is_none() {
                     crate::buffer::buffer_get_own_prop(owner, key_name)
-                        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                if !crate::object::object_ops::nonconfigurable_redefine_allowed(
+                    current_attrs,
+                    current_accessor,
+                    current_value,
                     descriptor,
-                );
-                return obj_value;
+                ) {
+                    return false;
+                }
+                // Engine keys use the same immutable data descriptors as any
+                // other shaped property. A permitted redefinition of an
+                // immutable data property is a no-op; never let it replace the
+                // view's traced owner or pin count.
+                if !current_attrs.writable() && current_accessor.is_none() {
+                    return true;
+                }
             }
             let has_get = descriptor.has_named(b"get");
             let has_set = descriptor.has_named(b"set");
@@ -451,7 +438,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 crate::object::PropertyAttrs::new(writable, enumerable, configurable),
             );
             let _ = key;
-            f64::from_bits(receiver.get_nanbox_u64())
+            true
         }
     }
 }

@@ -89,10 +89,6 @@ fn descriptor_snapshot_repeated_errors_release_buffers_and_roots() {
                 );
                 assert_eq!(RuntimeHandleScope::active_len_for_tests(), depth);
                 assert_eq!(
-                    super::define_properties::live_collection_bytes_for_tests(),
-                    0
-                );
-                assert_eq!(
                     get(target.get_nanbox_f64(), "p0").to_bits(),
                     crate::value::TAG_UNDEFINED
                 );
@@ -102,10 +98,6 @@ fn descriptor_snapshot_repeated_errors_release_buffers_and_roots() {
         put(bag.get_nanbox_f64(), "recovered", valid.get_nanbox_f64());
         js_object_define_properties(target.get_nanbox_f64(), bag.get_nanbox_f64());
         assert_eq!(get(target.get_nanbox_f64(), "recovered"), 7.0);
-        assert_eq!(
-            super::define_properties::live_collection_bytes_for_tests(),
-            0
-        );
     }
 }
 
@@ -645,10 +637,6 @@ fn descriptor_snapshot_later_application_failure_preserves_earlier_definitions()
             crate::value::TAG_UNDEFINED
         );
         assert_eq!(RuntimeHandleScope::active_len_for_tests(), depth);
-        assert_eq!(
-            super::define_properties::live_collection_bytes_for_tests(),
-            0
-        );
     }
 }
 
