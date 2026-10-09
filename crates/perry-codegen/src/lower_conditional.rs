@@ -194,6 +194,9 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && args.len() == 5
                 && matches!((left.as_ref(), &args[2]), (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
             {
+                if let Some(ready) = crate::array_record_stack::next_test(ctx, args)? {
+                    return Ok(ready);
+                }
                 lower_expr(ctx, &args[4])?;
                 let predicate = Expr::Conditional {
                     condition: Box::new(args[0].clone()),

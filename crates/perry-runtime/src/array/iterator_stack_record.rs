@@ -59,7 +59,7 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
             write!(payload, iter.get_nanbox_f64());
             write!(next, next);
         }
-        1 => {
+        1 | 6 if op == 1 || protocol != 0.0 => {
             let done = super::iterator_step::js_iterator_step(
                 payload.get_nanbox_f64(),
                 auxiliary.get_nanbox_f64(),
@@ -90,12 +90,32 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
                 flags,
             );
         }
+        6 => {
+            let raw = crate::value::js_nanbox_get_pointer(payload.get_nanbox_f64())
+                as *const super::ArrayHeader;
+            let len = super::js_array_length(raw);
+            if index >= len as f64 {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            let raw = crate::value::js_nanbox_get_pointer(payload.get_nanbox_f64())
+                as *const super::ArrayHeader;
+            let value = super::js_array_get_f64(raw, index as u32);
+            let current = super::clean_arr_ptr(crate::value::js_nanbox_get_pointer(
+                payload.get_nanbox_f64(),
+            ) as *const super::ArrayHeader);
+            write!(payload, crate::value::js_nanbox_pointer(current as i64));
+            write!(value, value);
+            return f64::from_bits(crate::value::TAG_FALSE);
+        }
         5 => {
-            return super::js_array_get_f64(
+            let value = super::js_array_get_f64(
                 crate::value::js_nanbox_get_pointer(payload.get_nanbox_f64())
                     as *const super::ArrayHeader,
                 index as u32,
             );
+            // The counted loop continues from its sole mutable payload home.
+            write!(payload, payload.get_nanbox_f64());
+            return value;
         }
         3 => {
             super::iterator_record_cleanup::js_array_record_abrupt(
@@ -195,7 +215,7 @@ mod tests {
         );
     }
     #[test]
-    fn stack_record_read_uses_the_existing_getter_and_releases_custody() {
+    fn stack_record_read_uses_the_existing_getter_and_retains_payload() {
         let _stable = crate::gc::GcSuppressScope::new();
         unsafe {
             let array = super::super::js_array_alloc(2);
@@ -210,8 +230,44 @@ mod tests {
                 protocol: 0.0,
             };
             assert_eq!(js_array_record_stack_dispatch(&mut record, 5), 17.0);
-            assert_eq!(record.payload.to_bits(), TAG_UNDEFINED);
+            assert_eq!(
+                record.payload.to_bits(),
+                crate::value::js_nanbox_pointer(array as i64).to_bits()
+            );
             assert_eq!(record.next.to_bits(), TAG_UNDEFINED);
+            assert_eq!(record.value.to_bits(), TAG_UNDEFINED);
+        }
+    }
+    #[test]
+    fn stack_record_next_uses_live_array_bounds_and_one_value() {
+        let _stable = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let array = super::super::js_array_alloc(2);
+            let array = super::super::js_array_push_f64(array, 11.0);
+            let array = super::super::js_array_push_f64(array, 17.0);
+            let mut record = ArrayStackRecord {
+                payload: crate::value::js_nanbox_pointer(array as i64),
+                next: f64::from_bits(TAG_UNDEFINED),
+                value: f64::from_bits(TAG_UNDEFINED),
+                index: 1.0,
+                state: 2.0,
+                protocol: 0.0,
+            };
+            assert_eq!(
+                js_array_record_stack_dispatch(&mut record, 6).to_bits(),
+                crate::value::TAG_FALSE
+            );
+            assert_eq!(record.value, 17.0);
+            assert_eq!(
+                record.payload.to_bits(),
+                crate::value::js_nanbox_pointer(array as i64).to_bits()
+            );
+            record.index = 2.0;
+            assert_eq!(
+                js_array_record_stack_dispatch(&mut record, 6).to_bits(),
+                crate::value::TAG_TRUE
+            );
+            assert_eq!(record.payload.to_bits(), TAG_UNDEFINED);
             assert_eq!(record.value.to_bits(), TAG_UNDEFINED);
         }
     }

@@ -436,8 +436,7 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
     });
 }
 
-#[test]
-fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
+fn stack_record_ir(fused: bool) -> String {
     let mode = || Expr::Compare {
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(4)),
@@ -492,7 +491,15 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         local(8, Type::Any, Expr::Undefined),
         local(9, Type::Number, Expr::Number(2.0)),
         Stmt::For {
-            init: None,
+            init: if fused {
+                Some(Box::new(local(
+                    5,
+                    Type::Number,
+                    runtime("arrayRecordIndex", vec![Expr::Integer(0)]),
+                )))
+            } else {
+                None
+            },
             condition: Some(Expr::Compare {
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
@@ -515,10 +522,24 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
                     ],
                 )),
             }),
-            update: Some(Expr::Update {
-                id: 5,
-                op: perry_hir::UpdateOp::Increment,
-                prefix: false,
+            update: Some(if fused {
+                runtime(
+                    "arrayRecordForUpdate",
+                    vec![
+                        mode(),
+                        Expr::Update {
+                            id: 5,
+                            op: perry_hir::UpdateOp::Increment,
+                            prefix: false,
+                        },
+                    ],
+                )
+            } else {
+                Expr::Update {
+                    id: 5,
+                    op: perry_hir::UpdateOp::Increment,
+                    prefix: false,
+                }
             }),
             body: vec![
                 Stmt::Expr(Expr::LocalSet(
@@ -539,6 +560,23 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
                     )),
                 )),
                 Stmt::Expr(Expr::LocalSet(9, Box::new(Expr::Number(1.0)))),
+                Stmt::Let {
+                    id: 10,
+                    name: "element".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::LocalGet(8)),
+                },
+                Stmt::Expr(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(10)),
+                        property: "record_body_member".into(),
+                        byte_offset: 0,
+                    }),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
             ],
         },
         Stmt::Expr(runtime(
@@ -556,6 +594,48 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         Stmt::Expr(Expr::LocalSet(7, Box::new(Expr::Undefined))),
         Stmt::Return(Some(Expr::LocalGet(5))),
     ]);
+    ll
+}
+
+#[test]
+fn array_stack_record_fuses_only_the_generated_next_value() {
+    let ll = stack_record_ir(true);
+    assert!(ll.contains("record.next.cold") && ll.contains("i32 6"));
+    assert!(
+        !ll.lines()
+            .any(|l| l.contains("call") && l.contains("@js_region_loop_prime(")),
+        "the traversal keeps one user body without a learned body guard"
+    );
+    assert!(
+        !ll.contains("record.read.cold"),
+        "length and Get share a cold boundary"
+    );
+    assert!(
+        !ll.contains("call double @perry_length_cold_"),
+        "one live bounds check"
+    );
+    let calls = ll
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@js_array_record_stack_dispatch"))
+        .count();
+    let consumers = ll
+        .split("\ndefine ")
+        .filter(|f| {
+            f.starts_with("internal double @perry_fn")
+                && f.lines().next().unwrap().contains("__read$")
+        })
+        .count();
+    assert_eq!(
+        calls,
+        consumers * 3,
+        "capture, next and finish share the record ABI"
+    );
+    crate::testing::verify_ir(&ll, "fused_array_stack_record").unwrap();
+}
+
+#[test]
+fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
+    let ll = stack_record_ir(false);
     for field in ll
         .lines()
         .filter(|l| l.contains("getelementptr double, ptr ") && l.ends_with("i64 1"))
@@ -609,4 +689,27 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         "a safepoint cannot cache a record field across a collection"
     );
     crate::testing::verify_ir(&ll, "array_stack_record").unwrap();
+}
+
+#[test]
+fn array_stack_record_entry_publishes_its_sole_source_home() {
+    let ll = stack_record_ir(true);
+    let mut consumers = 0;
+    for function in ll.split("\ndefine ").filter(|f| {
+        f.starts_with("internal double @perry_fn") && f.lines().next().unwrap().contains("__read$")
+    }) {
+        consumers += 1;
+        let field_zero: Vec<_> = function
+            .lines()
+            .filter(|l| l.contains("getelementptr double, ptr ") && l.ends_with("i64 0"))
+            .map(|l| l.trim().split(" = ").next().unwrap())
+            .collect();
+        let entry = function
+            .lines()
+            .find(|l| l.contains("call i32 @js_array_record_enter("))
+            .unwrap();
+        assert!(field_zero.iter().any(|field| entry.contains(&format!(", ptr {field}, ptr @"))),
+            "entry must publish into the whole record range, without a scratch source or output home");
+    }
+    assert!(consumers > 0);
 }

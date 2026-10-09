@@ -141,17 +141,36 @@ fn sets_state(stmt: &Stmt, state: u32) -> bool {
 
 /// Recognize only the complete compiler-generated handler. User catch/finally
 /// code continues through ordinary try lowering.
+fn exit_flag(expr: &Expr) -> Option<u32> {
+    match expr {
+        Expr::LocalGet(id) => Some(*id),
+        Expr::Compare {
+            op: CompareOp::Eq,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Bool(true)) => {
+            if let Expr::LocalGet(id) = left.as_ref() {
+                Some(*id)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn abrupt_args(catch: &perry_hir::CatchClause, finally: &[Stmt]) -> Option<Vec<Expr>> {
     let (error, name) = catch.param.as_ref()?;
     // finally_inline wraps both arms with one compiler-owned exit flag.
     // Unwrap only the exact paired guard, and carry an already-exited
     // completion as state 2 so its original exception bypasses close.
     if let [Stmt::If {
-        condition: Expr::LocalGet(flag),
+        condition: flag_test,
         then_branch,
         else_branch: Some(body),
     }] = catch.body.as_slice()
     {
+        let flag = exit_flag(flag_test)?;
         if !matches!(then_branch.as_slice(), [Stmt::Throw(Expr::LocalGet(id))] if id == error) {
             return None;
         }
@@ -167,13 +186,13 @@ pub(crate) fn abrupt_args(catch: &perry_hir::CatchClause, finally: &[Stmt]) -> O
         else {
             return None;
         };
-        if !matches!(operand.as_ref(), Expr::LocalGet(id) if id == flag) {
+        if exit_flag(operand) != Some(flag) || !same(operand, flag_test) {
             return None;
         }
         let [Stmt::Expr(Expr::LocalSet(id, value)), cleanup @ ..] = once.as_slice() else {
             return None;
         };
-        if id != flag || !matches!(value.as_ref(), Expr::Bool(true)) {
+        if *id != flag || !matches!(value.as_ref(), Expr::Bool(true)) {
             return None;
         }
         let plain = perry_hir::CatchClause {
@@ -182,7 +201,7 @@ pub(crate) fn abrupt_args(catch: &perry_hir::CatchClause, finally: &[Stmt]) -> O
         };
         let mut args = abrupt_args(&plain, cleanup)?;
         args[4] = Expr::Conditional {
-            condition: Box::new(Expr::LocalGet(*flag)),
+            condition: Box::new(flag_test.clone()),
             then_expr: Box::new(Expr::Number(2.0)),
             else_expr: Box::new(args[4].clone()),
         };

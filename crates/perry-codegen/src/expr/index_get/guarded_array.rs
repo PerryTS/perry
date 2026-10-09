@@ -1264,3 +1264,78 @@ pub(crate) fn lower_record_index(
         .block()
         .phi(DOUBLE, &[(&value, &fp), (&value_cold, &cp)]))
 }
+
+/// One guard for the record's live length and value. The cold operation owns
+/// both ArrayIterator Get and the captured protocol's IteratorStepValue.
+pub(crate) fn lower_record_next(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    protocol: &str,
+    record: &str,
+    index_slot: &str,
+    value_slot: &str,
+) -> Result<(String, String)> {
+    let guard = ctx.new_block("record.next.guard");
+    let bounds = ctx.new_block("record.next.bounds");
+    let load = ctx.new_block("record.next.load");
+    let exhausted = ctx.new_block("record.next.exhausted");
+    let cold = ctx.new_block("record.next.cold");
+    let merge = ctx.new_block("record.next.merge");
+    let gl = ctx.block_label(guard);
+    let bl = ctx.block_label(bounds);
+    let ll = ctx.block_label(load);
+    let el = ctx.block_label(exhausted);
+    let cl = ctx.block_label(cold);
+    let ml = ctx.block_label(merge);
+    ctx.block().cond_br(protocol, &cl, &gl);
+    ctx.current_block = guard;
+    let bits = ctx.block().bitcast_double_to_i64(array);
+    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let invalidated = ctx
+        .block()
+        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let clear = ctx.block().icmp_eq(I8, &invalidated, "0");
+    let safe = ctx.block().and(I1, &safe, &clear);
+    ctx.block().cond_br(&safe, &bl, &cl);
+    ctx.current_block = bounds;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let ptr = ctx.block().inttoptr(I64, &handle);
+    let len = ctx.block().load(I32, &ptr);
+    let ready = ctx.block().icmp_ult(I32, &i, &len);
+    ctx.block().cond_br(&ready, &ll, &el);
+    ctx.current_block = load;
+    let fast_value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    let fp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = exhausted;
+    let absent = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let ep = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = cold;
+    ctx.block().store(DOUBLE, index, index_slot);
+    let done = ctx.block().call(
+        DOUBLE,
+        "js_array_record_stack_dispatch",
+        &[(crate::types::PTR, record), (I32, "6")],
+    );
+    let bits = ctx.block().bitcast_double_to_i64(&done);
+    let cold_ready = ctx
+        .block()
+        .icmp_eq(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+    let cold_value = ctx.block().load_volatile(DOUBLE, value_slot);
+    ctx.block().store_volatile(DOUBLE, &absent, value_slot);
+    let cp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = merge;
+    let value = ctx.block().phi(
+        DOUBLE,
+        &[(&fast_value, &fp), (&absent, &ep), (&cold_value, &cp)],
+    );
+    let ready = ctx
+        .block()
+        .phi(I1, &[("true", &fp), ("false", &ep), (&cold_ready, &cp)]);
+    Ok((value, ready))
+}
