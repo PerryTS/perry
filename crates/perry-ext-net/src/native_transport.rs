@@ -29,6 +29,17 @@ impl RootedSocket {
             _scope: scope,
         }
     }
+    /// Carry the caller's expected generation without sampling a new one.
+    /// Rooting is custody only: each effect must still project and check it.
+    pub fn with_snapshot(value: f64, incarnation: tl::HandleSnapshot) -> Self {
+        let scope = TransientRootScope::enter();
+        let root = scope.root_nanbox(value);
+        Self {
+            root,
+            incarnation: Some(incarnation),
+            _scope: scope,
+        }
+    }
     pub fn value(&self) -> f64 {
         self.root.get()
     }
@@ -131,6 +142,22 @@ impl RootedSocket {
         let result = f(&mut io);
         p::account_socket_proven(io.payload, io.link);
         Some(result)
+    }
+    /// Submit with one proof when the physical transport cannot drive TLS JS.
+    /// Drop the native view and recheck the expected generation on fallback.
+    pub fn write(&self, bytes: &[u8], user: u64) -> Option<Result<usize, tl::NetError>> {
+        // SAFETY: the closure submits only callback-free native I/O; it retains
+        // no payload/state, and TLS driver work occurs after the view ends.
+        let native = unsafe {
+            self.with_native_io(|io| io.can_write_without_js().then(|| io.write(bytes, user)))
+        }?;
+        if let Some(result) = native {
+            Some(result)
+        } else if self.is_current() {
+            Some(write(self.value(), bytes, user))
+        } else {
+            None
+        }
     }
     /// # Safety
     /// End the projected borrow before JS, close or reopen.

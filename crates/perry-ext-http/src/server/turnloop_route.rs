@@ -34,26 +34,20 @@ impl ResponseConnection {
     pub(crate) fn root(self) -> RootedConnection {
         match self {
             Self::Socket { owner, incarnation } => RootedConnection::Socket {
-                owner: RootedSocket::new(owner),
-                incarnation,
+                owner: RootedSocket::with_snapshot(owner, incarnation),
             },
             Self::H2Session(session) => RootedConnection::H2Session(session),
         }
     }
 }
 pub(crate) enum RootedConnection {
-    Socket {
-        owner: RootedSocket,
-        incarnation: perry_ffi::turnloop_net::HandleSnapshot,
-    },
+    Socket { owner: RootedSocket },
     H2Session(i64),
 }
 impl RootedConnection {
     fn socket(&self) -> Option<&RootedSocket> {
         match self {
-            Self::Socket { owner, incarnation } if net::matches(owner.value(), incarnation) => {
-                Some(owner)
-            }
+            Self::Socket { owner } if owner.is_current() => Some(owner),
             _ => None,
         }
     }

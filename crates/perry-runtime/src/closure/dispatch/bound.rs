@@ -54,6 +54,37 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
         .map(|(func_ptr, ..)| func_ptr)
 }
 
+/// The immutable constructor-info branch is uncommon in method dispatch.
+/// Preserve its receiver/header/class checks outside the common inline body.
+#[cold]
+#[inline(never)]
+unsafe fn init_bound_native_receiver(
+    closure: *const ClosureHeader,
+    namespace_obj: f64,
+    this: crate::closure::JsThis,
+    args: &[f64],
+) -> Option<f64> {
+    let receiver = this.as_f64();
+    let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_object.is_pointer() && receiver.to_bits() != namespace_obj.to_bits() {
+        let address = receiver_object.as_pointer::<u8>() as usize;
+        if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
+            && crate::object::js_object_get_class_id(address as *const crate::object::ObjectHeader)
+                != crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            let class = js_closure_get_capture_f64(closure, 3) as u32;
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            return Some(crate::object::js_net_subclass_init(
+                receiver,
+                args.first().copied().unwrap_or(undefined),
+                args.get(1).copied().unwrap_or(undefined),
+                u32::from(class == crate::native_class_ids::NET_SERVER),
+            ));
+        }
+    }
+    None
+}
+
 /// Dispatch a bound method call with the given arguments.
 /// Extracts the namespace object and method name from the closure captures,
 /// then calls js_native_call_method with the packed arguments.
@@ -75,24 +106,8 @@ pub unsafe fn dispatch_bound_method(
         &crate::closure::BOUND_NATIVE_CONSTRUCTOR_INFO,
     );
     if native_constructor {
-        let receiver = this.as_f64();
-        let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
-        if receiver_object.is_pointer() && receiver.to_bits() != namespace_obj.to_bits() {
-            let address = receiver_object.as_pointer::<u8>() as usize;
-            if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
-                && crate::object::js_object_get_class_id(
-                    address as *const crate::object::ObjectHeader,
-                ) != crate::object::NATIVE_MODULE_CLASS_ID
-            {
-                let class = js_closure_get_capture_f64(closure, 3) as u32;
-                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-                return crate::object::js_net_subclass_init(
-                    receiver,
-                    args.first().copied().unwrap_or(undefined),
-                    args.get(1).copied().unwrap_or(undefined),
-                    u32::from(class == crate::native_class_ids::NET_SERVER),
-                );
-            }
+        if let Some(result) = init_bound_native_receiver(closure, namespace_obj, this, args) {
+            return result;
         }
     }
     // The constructor capture is a class id, not a private method brand.
