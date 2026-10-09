@@ -190,7 +190,6 @@ pub(super) struct CollectorStepGuard(bool);
 
 impl CollectorStepGuard {
     pub(super) fn enter() -> Self {
-        crate::arena::sync_inline_arena_state();
         sample_arena();
         Self(COLLECTOR_STEP.with(|active| active.replace(true)))
     }
@@ -198,10 +197,7 @@ impl CollectorStepGuard {
 
 impl Drop for CollectorStepGuard {
     fn drop(&mut self) {
-        // Runtime helpers now share generated Eden bumps. Flush while the
-        // collector guard is still active so these bytes cannot become
-        // mutator debt at the next checkpoint.
-        crate::arena::sync_inline_arena_state();
+        // Sample while the guard is active: collector bumps are not debt.
         sample_arena();
         COLLECTOR_STEP.with(|active| active.set(self.0));
     }
@@ -209,17 +205,19 @@ impl Drop for CollectorStepGuard {
 
 #[cfg(test)]
 pub(super) fn test_debt() -> (usize, usize) {
-    crate::arena::sync_inline_arena_state();
     sample_arena();
     ACCOUNT.with(|account| (account.0.get().allocated, account.0.get().large))
 }
 
 pub(super) fn checkpoint() {
-    crate::arena::sync_inline_arena_state();
     sample_arena();
 }
 
 fn sample_arena() {
+    // Runtime helpers and generated code share the Eden offset. Every debt
+    // sample must first materialize that offset, including policy questions
+    // between checkpoints and the sample before a collector guard drops.
+    crate::arena::sync_inline_arena_state();
     let (bytes, large) = crate::arena::allocation_totals();
     let (new_bytes, new_large) = ACCOUNT.with(|account| {
         let mut debt = account.0.get();

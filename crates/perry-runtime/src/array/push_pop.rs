@@ -138,11 +138,18 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
+        if flags
+            & (crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND
+                | crate::gc::OBJ_FLAG_FROZEN)
+            != 0
+        {
+            return arr;
+        }
+    } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
@@ -191,18 +198,25 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
                 crate::arena::classify_heap_generation(arr as usize),
                 crate::arena::HeapGeneration::Nursery
             );
-        let new_ptr = if source_requires_old_target {
-            crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+        let young = if source_requires_old_target {
+            ptr::null_mut()
         } else {
-            let young =
-                crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY);
-            if young.is_null() {
-                crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
-            } else {
-                young
-            }
-        } as *mut ArrayHeader;
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+        };
+        let (new_ptr, arr) = if !young.is_null() {
+            // No collection, so the source address remains valid without a
+            // transient root. Only the old/refill branch needs a handle.
+            (young as *mut ArrayHeader, arr)
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_raw_mut_ptr(arr);
+            let target = crate::arena::arena_alloc_gc_old_born_tenured(
+                new_size,
+                8,
+                crate::gc::GC_TYPE_ARRAY,
+            ) as *mut ArrayHeader;
+            (target, source.get_raw_mut_ptr::<ArrayHeader>())
+        };
         let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
         (*new_ptr).capacity = new_capacity;
@@ -256,13 +270,14 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // store's dirty-page coverage can be TRANSLATED to the new address
         // instead of re-derived from 3 M slot values. Falls back to the full
         // value-derived replay whenever the translation declines.
-        if shifted
-            || !crate::gc::relocate_copied_old_object_dirty_pages(
-                new_ptr as usize,
-                arr as usize,
-                new_ptr as usize,
-                old_size,
-            )
+        if young.is_null()
+            && (shifted
+                || !crate::gc::relocate_copied_old_object_dirty_pages(
+                    new_ptr as usize,
+                    arr as usize,
+                    new_ptr as usize,
+                    old_size,
+                ))
         {
             replay_array_growth_write_barriers(new_ptr);
         }
@@ -282,8 +297,10 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // handles, synthetic pointers, and unrelated allocations are rejected
         // before a header dereference.
         let installed =
-            install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
-                crate::value::addr_class::try_read_tracked_gc_header(addr)
+            install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |_| {
+                // clean_arr_ptr_mut resolved this live source, and any
+                // collecting allocation refreshed it through its handle.
+                std::ptr::NonNull::new(old_header)
             });
         assert!(
             installed,
