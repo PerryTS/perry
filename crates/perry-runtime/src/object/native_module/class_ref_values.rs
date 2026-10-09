@@ -81,9 +81,6 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         }
     }
     let word = crate::object::class_holder_word(class_id);
-    if word == 0 {
-        return false;
-    }
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
         let proto =
@@ -105,9 +102,6 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
 pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
     let word = crate::object::class_holder_word(class_id);
-    if word == 0 {
-        return false;
-    }
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
         let proto =
