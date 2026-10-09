@@ -1,9 +1,15 @@
 use super::*;
 
+#[path = "trace/field_word.rs"]
+mod field_word;
+pub(in crate::gc) use field_word::FieldWord;
+
 #[path = "trace/mark_slots.rs"]
 mod mark_slots;
 #[cfg(test)]
-pub(crate) use mark_slots::{mark_hoist_sabotage, remembered_mark_sabotage};
+pub(crate) use mark_slots::{
+    full_mark_decode_sabotage, mark_hoist_sabotage, remembered_mark_sabotage,
+};
 pub(super) use mark_slots::{trace_heap_rewrite_slots, trace_heap_rewrite_slots_remembering};
 
 #[path = "trace/block_skip.rs"]
@@ -1343,25 +1349,21 @@ pub(super) unsafe fn mark_field_into_worklist(
     if proxy_trace_active && super::full_trace::observe_handle(val_bits, valid_ptrs) {
         return false;
     }
-    let tag = val_bits & TAG_MASK;
-    let ptr_val: usize = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let p = (val_bits & POINTER_MASK) as usize;
-        if p == 0 {
-            return false;
-        }
-        p
-    } else {
-        // Possible raw-I64 pointer. Reject anything with NaN-tag bits
-        // (already handled above) or anything outside the 48-bit
-        // user-address range. f64 numbers have the exponent bits set,
-        // which puts them well above 0x0000_FFFF_FFFF_FFFF — they're
-        // rejected here.
-        if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&val_bits) {
-            return false;
-        }
-        val_bits as usize
+    let Some(word) = FieldWord::decode(val_bits) else {
+        return false;
     };
+    mark_decoded_field_into_worklist(word.addr(), valid_ptrs, worklist, proxy_trace_active)
+}
 
+/// `ptr_val` proves only word shape. Membership remains the gate for every
+/// header access, independently of the remembered-set coverage predicate.
+#[inline(always)]
+pub(super) unsafe fn mark_decoded_field_into_worklist(
+    ptr_val: usize,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+    proxy_trace_active: bool,
+) -> bool {
     // Range gate + exact lookup. No enclosing_object fallback:
     // trace-phase field words always store user pointers at object
     // starts, not interior pointers (those only arise in conservative

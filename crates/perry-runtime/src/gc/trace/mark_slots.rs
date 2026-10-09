@@ -68,7 +68,41 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                 record_layout_child_slot_read(kind);
                 record_trace_slot_read();
             }
+            if REMEMBER && !proxy_trace_active {
+                // Without an observer no callback can change the source word.
+                // Decode once, but never equate successful marking with the
+                // barrier's broader coverage question (including raw garbage).
+                if let Some(word) = FieldWord::decode(slot.read()) {
+                    let _marked =
+                        mark_decoded_field_into_worklist(word.addr(), valid_ptrs, worklist, false);
+                    #[cfg(test)]
+                    if !_marked && full_mark_decode_sabotage::requiring_new_mark() {
+                        return;
+                    }
+                    remember_decoded_full_mark_slot(
+                        sticky.as_deref_mut().unwrap(),
+                        header,
+                        slot,
+                        word,
+                    );
+                }
+                return;
+            }
+            // Foreign proxy/Fetch/pool observers retain the original ordering,
+            // post-mark reread and barrier decode; no purity is assumed.
+            #[cfg(test)]
+            let observer_snapshot = if REMEMBER && full_mark_decode_sabotage::stale_observer_word()
+            {
+                FieldWord::decode(slot.read())
+            } else {
+                None
+            };
             mark_field_into_worklist(slot.read(), valid_ptrs, worklist, proxy_trace_active);
+            #[cfg(test)]
+            if let Some(word) = observer_snapshot {
+                remember_decoded_full_mark_slot(sticky.as_deref_mut().unwrap(), header, slot, word);
+                return;
+            }
             if REMEMBER {
                 #[cfg(test)]
                 {
@@ -166,6 +200,52 @@ pub(crate) mod remembered_mark_sabotage {
     impl Drop for Guard {
         fn drop(&mut self) {
             DROP_NEXT.with(|s| s.set(self.0));
+        }
+    }
+}
+
+/// Independent negatives for the shared-word full-mark consumer. Test only.
+#[cfg(test)]
+pub(crate) mod full_mark_decode_sabotage {
+    use std::cell::Cell;
+    thread_local! {
+        static REQUIRE_NEW_MARK: Cell<bool> = const { Cell::new(false) };
+        static GENERATION_ONLY_CUSTODY: Cell<bool> = const { Cell::new(false) };
+        static STALE_OBSERVER_WORD: Cell<bool> = const { Cell::new(false) };
+    }
+    pub(crate) fn requiring_new_mark() -> bool {
+        REQUIRE_NEW_MARK.with(Cell::get)
+    }
+    pub(crate) fn generation_only_custody() -> bool {
+        GENERATION_ONLY_CUSTODY.with(Cell::get)
+    }
+    pub(crate) fn stale_observer_word() -> bool {
+        STALE_OBSERVER_WORD.with(Cell::get)
+    }
+    pub(crate) struct ObserverGuard(bool);
+    impl ObserverGuard {
+        pub(crate) fn arm() -> Self {
+            Self(STALE_OBSERVER_WORD.with(|s| s.replace(true)))
+        }
+    }
+    impl Drop for ObserverGuard {
+        fn drop(&mut self) {
+            STALE_OBSERVER_WORD.with(|s| s.set(self.0));
+        }
+    }
+    pub(crate) struct Guard(bool, bool);
+    impl Guard {
+        pub(crate) fn new(require_new_mark: bool, generation_only: bool) -> Self {
+            Self(
+                REQUIRE_NEW_MARK.with(|s| s.replace(require_new_mark)),
+                GENERATION_ONLY_CUSTODY.with(|s| s.replace(generation_only)),
+            )
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            REQUIRE_NEW_MARK.with(|s| s.set(self.0));
+            GENERATION_ONLY_CUSTODY.with(|s| s.set(self.1));
         }
     }
 }
