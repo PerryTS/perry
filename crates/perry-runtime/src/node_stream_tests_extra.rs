@@ -824,7 +824,7 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
     let readable_obj = raw_ptr_from_value(readable) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(readable_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_FALSE
+        TAG_UNDEFINED
     );
     assert_eq!(
         js_node_stream_method_readable_object_mode(raw_ptr_from_value(readable) as i64).to_bits(),
@@ -849,7 +849,7 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
     assert_eq!(
         js_object_get_field_by_name_f64(object_readable_obj, hidden_key(b"readableObjectMode"))
             .to_bits(),
-        TAG_TRUE
+        TAG_UNDEFINED
     );
     assert_eq!(
         js_node_stream_method_readable_object_mode(raw_ptr_from_value(object_readable) as i64)
