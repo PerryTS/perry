@@ -151,8 +151,11 @@ ACCESSOR_RETURN = re.compile(
 )
 
 # Floors: "the extraction still works" assertions, not budgets.
-MIN_REGISTRIES = 250
-MIN_REMOVING = 170
+# Phase A deletes 24 net/HTTP/TLS maps without adding any (main 249 -> 225).
+# Keep the parser liveness floor below that new, audited population.
+MIN_REGISTRIES = 220
+# Phase A removes 21 maps previously counted as shrinking (167 -> 146).
+MIN_REMOVING = 140
 
 MIN_WHY = 20
 

@@ -18,9 +18,15 @@ impl Drop for CodecProbe {
         CODEC_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
-static CODEC_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<CodecProbe>(None);
+static CODEC_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<CodecProbe>(None);
 static CODEC: perry_ffi::native_payload::PayloadFamily =
-    perry_ffi::native_payload::PayloadFamily::new::<CodecProbe>(perry_ffi::native_class_ids::HTTP_PARSER, "HTTPParser", false, &CODEC_VTABLE)
+    perry_ffi::native_payload::PayloadFamily::new::<CodecProbe>(
+        perry_ffi::native_class_ids::HTTP_PARSER,
+        "HTTPParser",
+        false,
+        &CODEC_VTABLE,
+    )
     .with_constructor_length(0);
 
 unsafe fn close_codec(owner: f64) {
@@ -38,11 +44,15 @@ fn explicit_socket_close_releases_its_separate_codec_immediately_and_once() {
         CODEC_DROPS.store(0, std::sync::atomic::Ordering::SeqCst);
         let scope = TransientRootScope::enter();
         let owner = scope.root_nanbox(socket::new_socket(io::ROUTE, p::undefined()));
-        let parser = scope.root_nanbox(unsafe { perry_ffi::native_payload::alloc_in(&CODEC, "",
-            CodecProbe(vec![1; 16 * 1024]),
-            16 * 1024 + std::mem::size_of::<CodecProbe>(),
-            &[],
-        ) });
+        let parser = scope.root_nanbox(unsafe {
+            perry_ffi::native_payload::alloc_in(
+                &CODEC,
+                "",
+                CodecProbe(vec![1; 16 * 1024]),
+                16 * 1024 + std::mem::size_of::<CodecProbe>(),
+                &[],
+            )
+        });
         unsafe {
             assert_eq!(
                 perry_ffi::native_payload::payload_mut::<CodecProbe>(parser.get(), &CODEC)

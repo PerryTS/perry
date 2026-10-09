@@ -17,13 +17,20 @@ pub(crate) fn throw_miss<T>(miss: PayloadMiss) -> T {
     extern "C-unwind" {
         fn js_throw(value: f64) -> !;
     }
-    let message = perry_ffi::alloc_string(match miss {
-        PayloadMiss::Foreign => "Illegal receiver",
-        PayloadMiss::Closed => "Native payload is closed",
-    });
+    let scope = TransientRootScope::enter();
+    let message = scope.root_addr(
+        perry_ffi::alloc_string(match miss {
+            PayloadMiss::Foreign => "Illegal receiver",
+            PayloadMiss::Closed => "Native payload is closed",
+        })
+        .as_raw() as i64,
+    );
     unsafe {
         js_throw(f64::from_bits(
-            JsValue::from_object_ptr(js_typeerror_new(message.as_raw())).bits(),
+            JsValue::from_object_ptr(js_typeerror_new(
+                message.get() as *mut perry_ffi::StringHeader
+            ))
+            .bits(),
         ))
     }
 }

@@ -11,10 +11,15 @@ use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope};
 use turnloop_http::http2::Role;
 
 const LINK_SUBSYSTEM: u8 = 15;
-static FAMILY_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<H2Conn>(None);
-static FAMILY: PayloadFamily =
-    PayloadFamily::new::<H2Conn>(perry_ffi::native_class_ids::HTTP2_CODEC, "HTTP2Codec", false, &FAMILY_VTABLE)
-    .with_constructor_length(0);
+static FAMILY_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<H2Conn>(None);
+static FAMILY: PayloadFamily = PayloadFamily::new::<H2Conn>(
+    perry_ffi::native_class_ids::HTTP2_CODEC,
+    "HTTP2Codec",
+    false,
+    &FAMILY_VTABLE,
+)
+.with_constructor_length(0);
 
 fn with_codec<R>(socket: &RootedSocket, f: impl FnOnce(&mut H2Conn) -> R) -> Option<R> {
     if !socket.is_current() {
@@ -106,48 +111,52 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, owner
         conn::advertised_settings(&settings),
     );
     let scope = TransientRootScope::enter();
-    let codec = scope.root_nanbox(unsafe { np::alloc_in(&FAMILY, "",
-        H2Conn {
-            id: 0,
-            wire: Vec::new(),
-            deadline: None,
-            role: Role::Server,
-            server_handle,
-            session_handle: session,
-            core: None,
-            input: Vec::with_capacity(16 * 1024),
-            streams: Vec::new(),
-            secure,
-            handshaking: secure,
-            connecting: false,
-            client_tls: None,
-            tls_session: None,
-            alpn: None,
-            peer_address: peer
-                .as_ref()
-                .map(|peer| peer.address.clone())
-                .unwrap_or_default(),
-            peer_port: peer.as_ref().map(|peer| peer.port).unwrap_or(0),
-            buffered: 0,
-            max_session_memory: 10 * 1024 * 1024,
-            timer: Timer::None,
-            draining: false,
-            closing: false,
-            read_eof: false,
-            destroyed: false,
-            queued_opens: Vec::new(),
-            allow_http1,
-            settings,
-            preface_done: false,
-            core_settings_acked: false,
-            owed_settings_acks: 0,
-            goaway_opaque: Vec::new(),
-            peer_settings: None,
-            pending_controls: Vec::new(),
-        },
-        std::mem::size_of::<H2Conn>() + 16 * 1024,
-        &[],
-    ) });
+    let codec = scope.root_nanbox(unsafe {
+        np::alloc_in(
+            &FAMILY,
+            "",
+            H2Conn {
+                id: 0,
+                wire: Vec::new(),
+                deadline: None,
+                role: Role::Server,
+                server_handle,
+                session_handle: session,
+                core: None,
+                input: Vec::with_capacity(16 * 1024),
+                streams: Vec::new(),
+                secure,
+                handshaking: secure,
+                connecting: false,
+                client_tls: None,
+                tls_session: None,
+                alpn: None,
+                peer_address: peer
+                    .as_ref()
+                    .map(|peer| peer.address.clone())
+                    .unwrap_or_default(),
+                peer_port: peer.as_ref().map(|peer| peer.port).unwrap_or(0),
+                buffered: 0,
+                max_session_memory: 10 * 1024 * 1024,
+                timer: Timer::None,
+                draining: false,
+                closing: false,
+                read_eof: false,
+                destroyed: false,
+                queued_opens: Vec::new(),
+                allow_http1,
+                settings,
+                preface_done: false,
+                core_settings_acked: false,
+                owed_settings_acks: 0,
+                goaway_opaque: Vec::new(),
+                peer_settings: None,
+                pending_controls: Vec::new(),
+            },
+            std::mem::size_of::<H2Conn>() + 16 * 1024,
+            &[],
+        )
+    });
     net::set_codec(socket.value(), "h2", codec.get(), release);
     if net::set_route(socket.value(), LINK_SUBSYSTEM).is_err() {
         net::destroy(socket.value());

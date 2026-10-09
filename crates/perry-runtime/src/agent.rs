@@ -218,8 +218,10 @@ mod tests {
     #[test]
     fn ffi_retire_hooks_share_the_existing_once_per_agent_cleanup_list() {
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-        static SEEN: AtomicU64 = AtomicU64::new(0);
-        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        per_test_global! {
+            static SEEN: AtomicU64 = AtomicU64::new(0);
+            static CALLS: AtomicUsize = AtomicUsize::new(0);
+        }
         extern "C" fn hook(agent: AgentId) {
             assert_eq!(current_agent(), agent);
             SEEN.store(agent, Ordering::SeqCst);
@@ -227,16 +229,14 @@ mod tests {
         }
         js_perry_agent_register_retire_hook(hook);
         js_perry_agent_register_retire_hook(hook);
-        let before = CALLS.load(Ordering::SeqCst);
-        let agent = std::thread::spawn(|| {
+        std::thread::spawn(|| {
             let agent = enter_worker_agent();
             retire_agent(agent);
-            agent
+            assert_eq!(SEEN.load(Ordering::SeqCst), agent);
+            assert_eq!(CALLS.load(Ordering::SeqCst), 1);
         })
         .join()
         .unwrap();
-        assert_eq!(SEEN.load(Ordering::SeqCst), agent);
-        assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
     }
 
     /// A plain thread that never claims a worker agent — the main thread, or a

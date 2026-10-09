@@ -112,10 +112,15 @@ pub(crate) struct Conn {
     websocket: bool,
 }
 
-static PARSER_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<Conn>(None);
-static PARSER: PayloadFamily =
-    PayloadFamily::new::<Conn>(perry_ffi::native_class_ids::HTTP_PARSER, "HTTPParser", false, &PARSER_VTABLE)
-    .with_constructor_length(0);
+static PARSER_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<Conn>(None);
+static PARSER: PayloadFamily = PayloadFamily::new::<Conn>(
+    perry_ffi::native_class_ids::HTTP_PARSER,
+    "HTTPParser",
+    false,
+    &PARSER_VTABLE,
+)
+.with_constructor_length(0);
 
 /// Explicit cleanup runs outside SocketFields::Drop. The ordinary `parser`
 /// edge remains valid and CLOSED, including for a late socket close listener.
@@ -332,31 +337,35 @@ fn initialize_connection(owner: f64, server_handle: i64, announce: bool) {
     .unwrap_or((0, 5_000.0));
     let secure = net::tls_installed(socket.value());
     let scope = TransientRootScope::enter();
-    let parser = scope.root_nanbox(unsafe { np::alloc_in(&PARSER, "",
-        Conn {
-            server_handle,
-            peer_address,
-            peer_port,
-            decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
-            input: Vec::with_capacity(8 * 1024),
-            building: None,
-            active: None,
-            seq: 0,
-            requests: 0,
-            idle_close_ms,
-            keep_alive_timeout_ms,
-            paused: false,
-            read_eof: false,
-            closing: false,
-            write_shut: false,
-            destroyed: false,
-            secure,
-            handshaking: secure,
-            websocket: false,
-        },
-        std::mem::size_of::<Conn>() + 8 * 1024,
-        &[],
-    ) });
+    let parser = scope.root_nanbox(unsafe {
+        np::alloc_in(
+            &PARSER,
+            "",
+            Conn {
+                server_handle,
+                peer_address,
+                peer_port,
+                decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
+                input: Vec::with_capacity(8 * 1024),
+                building: None,
+                active: None,
+                seq: 0,
+                requests: 0,
+                idle_close_ms,
+                keep_alive_timeout_ms,
+                paused: false,
+                read_eof: false,
+                closing: false,
+                write_shut: false,
+                destroyed: false,
+                secure,
+                handshaking: secure,
+                websocket: false,
+            },
+            std::mem::size_of::<Conn>() + 8 * 1024,
+            &[],
+        )
+    });
     unsafe {
         net::set_codec(socket.value(), "parser", parser.get(), close_parser);
     }

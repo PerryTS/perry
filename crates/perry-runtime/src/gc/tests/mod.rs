@@ -71,7 +71,6 @@ mod native_payload;
 mod native_payload_buffer;
 mod native_payload_callbacks;
 mod native_payload_streams;
-mod stream_state_record;
 mod native_this_alias;
 #[cfg(not(target_arch = "wasm32"))]
 mod net_transport;
@@ -104,6 +103,7 @@ mod smoke;
 mod start_bitmap;
 mod static_seed_keys;
 mod step_bounds;
+mod stream_state_record;
 mod string_char_array_roots;
 pub(super) mod support;
 mod survival_diag;

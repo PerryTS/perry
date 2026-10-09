@@ -2905,15 +2905,6 @@
   {
    "file": "crates/perry-runtime/src/tls.rs",
    "names": [
-    "TLS_CLIENT_METADATA"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "tls.connect records keep the raw checkServerIdentity closure address and are never removed on close; records whose closure is freed are dropped at thread exit.",
-   "hook": "release_tls_client_metadata_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
     "TLS_CONNECT_PROVIDER"
    ],
    "verdict": "no_heap_address",
@@ -3876,6 +3867,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Monotonic scalar ClassDefinitionEvaluation identity, initialized to 1. Its only update is checked integer increment via AtomicU64::try_update, rejecting u64::MAX (the template namespace); zero is reserved for intrinsic private names. The returned integer is copied to class metadata native_state and used to qualify private storage keys. No pointer is stored in this atomic, and it is never dereferenced. Checked exhaustion replaces fetch_add, so the mechanical counter-only recognizer no longer admits it."
+  },
+  {
+   "file": "crates/perry-runtime/src/agent.rs",
+   "names": [
+    "SEEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Test-only observed AgentId from the retire hook; AgentId is a monotonic numeric agent identity, never a heap address. per_test_global isolates the assertion on the retiring worker thread."
   }
  ]
 }

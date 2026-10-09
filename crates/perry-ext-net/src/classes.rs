@@ -9,14 +9,22 @@ mod prototype;
 
 const BLOCK_LIST_ID: u32 = perry_ffi::native_class_ids::NET_BLOCK_LIST;
 const SOCKET_ADDRESS_ID: u32 = perry_ffi::native_class_ids::NET_SOCKET_ADDRESS;
-static BLOCK_LIST_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<BlockListState>(None);
-static BLOCK_LIST: PayloadFamily = PayloadFamily::new::<BlockListState>(BLOCK_LIST_ID, "BlockList", false, &BLOCK_LIST_VTABLE)
-    .with_constructor_length(0)
-    .with_installer(prototype::install_block_list);
-static SOCKET_ADDRESS_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<SocketAddressState>(None);
-static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(SOCKET_ADDRESS_ID, "SocketAddress", false, &SOCKET_ADDRESS_VTABLE)
-    .with_constructor_length(0)
-    .with_installer(prototype::install_socket_address);
+static BLOCK_LIST_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<BlockListState>(None);
+static BLOCK_LIST: PayloadFamily =
+    PayloadFamily::new::<BlockListState>(BLOCK_LIST_ID, "BlockList", false, &BLOCK_LIST_VTABLE)
+        .with_constructor_length(0)
+        .with_installer(prototype::install_block_list);
+static SOCKET_ADDRESS_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<SocketAddressState>(None);
+static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(
+    SOCKET_ADDRESS_ID,
+    "SocketAddress",
+    false,
+    &SOCKET_ADDRESS_VTABLE,
+)
+.with_constructor_length(0)
+.with_installer(prototype::install_socket_address);
 
 use crate::{get_object_number_field, get_object_string_field, string_from_header_i64};
 
@@ -249,11 +257,15 @@ fn string_from_js_value(value: JsValue) -> Option<String> {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
-    handle_from_value(unsafe { np::alloc_in(&BLOCK_LIST, "net",
-        BlockListState { rules: Vec::new() },
-        0,
-        &[],
-    ) })
+    handle_from_value(unsafe {
+        np::alloc_in(
+            &BLOCK_LIST,
+            "net",
+            BlockListState { rules: Vec::new() },
+            0,
+            &[],
+        )
+    })
     .unwrap_or(0)
 }
 
@@ -379,15 +391,19 @@ pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) ->
 }
 
 fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
-    unsafe { np::alloc_in(&SOCKET_ADDRESS, "net",
-        SocketAddressState {
-            address,
-            port,
-            flowlabel,
-        },
-        0,
-        &[],
-    ) }
+    unsafe {
+        np::alloc_in(
+            &SOCKET_ADDRESS,
+            "net",
+            SocketAddressState {
+                address,
+                port,
+                flowlabel,
+            },
+            0,
+            &[],
+        )
+    }
 }
 
 #[no_mangle]

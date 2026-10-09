@@ -6,8 +6,7 @@ use super::*;
 use std::collections::HashMap;
 
 use perry_ffi::{
-    get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of,
-    register_handle, JsValue,
+    get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of, register_handle, JsValue,
 };
 
 use crate::server::ensure_gc_scanner_registered;

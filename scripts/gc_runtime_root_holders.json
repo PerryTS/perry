@@ -47,12 +47,6 @@
     },
     {
       "file": "crates/perry-ext-http/src/server/server.rs",
-      "name": "PENDING_CONNECTION_EVENTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Vec of (server_handle, socket_handle) registry-id pairs drained by js_node_http_server_process_pending to fire 'connection' listeners; socket_handle is a connection-socket IncomingMessage handle (alloc_connection_socket). Both are perry-ffi registry ids, not NaN-boxed values \u2014 the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots, and the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage>."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "TURNLOOP_UPGRADES",
       "verdict": "not_a_gc_pointer",
       "why": "turnloop P5. `HttpPendingUpgrade` carries only handle ids (i64) and an owned `Vec<u8>` of the bytes that followed the request head \u2014 no NaN-boxed value and no heap pointer. Carrying ids rather than closure addresses is deliberate: #8082 showed that a snapshot parked in a queue goes stale across a moving collection, so the dispatcher re-reads the listeners from the server handle, whose side tables scan_http_server_roots does rewrite."
@@ -62,61 +56,6 @@
       "name": "IN_FLIGHT",
       "verdict": "not_a_gc_pointer",
       "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
-      "name": "CLOSED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Vec<i64> of connection-socket handle ids (alloc_connection_socket) whose TCP connection fully closed, queued by note_closed_socket/on_closed and drained by the pump \u2014 same shape and same file as the pre-existing ABORTED/aborted() request-handle queue this crate already uses for 'aborted'. A registry id, not a NaN-boxed value: the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage> in server/mod.rs's scan_http_server_roots."
-    },
-    {
-      "file": "crates/perry-ext-net/src/bun_tcp.rs",
-      "name": "NEXT_TOKEN",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic AtomicU64 that mints write-token ids for TOKENS. A counter: incremented and used as a map key, never dereferenced and never derived from an address."
-    },
-    {
-      "file": "crates/perry-ext-net/src/bun_tcp.rs",
-      "name": "TOKENS",
-      "verdict": "not_a_gc_pointer",
-      "why": "write_tokens(): HashMap<u64 write-token, i64 socket HANDLE>. Each i64 is the same handle-band id ABORTS holds \u2014 the key used to look the socket up in crate::statics::sockets(), never a heap address. Entries are removed on write completion (bun_tcp.rs) and retained-out when a handle closes, so no id outlives its facade."
-    },
-    {
-      "file": "crates/perry-ext-net/src/server_state.rs",
-      "name": "STATE",
-      "verdict": "not_a_gc_pointer",
-      "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
-    },
-    {
-      "file": "crates/perry-ext-net/src/socket_events.rs",
-      "name": "SCRATCH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
-    },
-    {
-      "file": "crates/perry-ext-net/src/tls.rs",
-      "name": "ABORTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
-    },
-    {
-      "file": "crates/perry-ext-net/src/turnloop_io.rs",
-      "name": "AUX",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashMap<i64 socket HANDLE, Aux> holding the per-socket state the turnloop transport needs and SocketState has no field for: whether the peer's FIN arrived before the 'connection' callback, whether the post-EOF shutdown should be followed by a close, and whether an 'error' and a 'close' have been emitted -- plus the server_state::begin_local_connect reservation, a server HANDLE and a bool; and, since P5, whether the write side was already ended, whether the readable EOF was already delivered, and a pending `tls.connect` request (a servername String, a bool and a TlsClientConfigData of owned PEM/DER byte vectors). Rule S fires on those i64s; every one is a handle-band id used to look a record up in crate::statics::sockets() or servers(), never a heap address and never dereferenced. No JS value reaches this map: read bytes are copied into a Bytes before the sink returns and write bytes were already owned Vecs. forget_aux removes the entry on the terminal close."
-    },
-    {
-      "file": "crates/perry-ext-net/src/turnloop_io.rs",
-      "name": "DEADLINES",
-      "verdict": "not_a_gc_pointer",
-      "why": "deadlines(): HashMap<i64 deadline id, Deadline>. The key is a handle-band id reserved for one turnloop timer and freed when it fires; each Deadline variant carries only i64 server/socket HANDLES (a deferred loopback ServerConnection, or an already-aborted tls.connect). Rule S fires on those i64s; every one is the key used to look a record up in crate::statics::sockets() or servers() and the payload of a PendingNetEvent, never a heap address and never dereferenced. No JS value reaches this map. It replaced two tokio sleeps (server_state::schedule_server_connection, tls::schedule_tls_abort); on_timer removes the entry when the deadline fires."
-    },
-    {
-      "file": "crates/perry-ext-net/src/turnloop_tls_io.rs",
-      "name": "LAYERS",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's native-async completion registry (promise::native_async::scan_native_async_completion_roots_mut), armed by perry_ffi_native_async_new before the token is stored",
-      "why": "turnloop P5. A `Layer` is owned `Vec<u8>` buffers plus ONE JS-visible thing: the `JsNativeAsyncCompletion` token for a pending `socket.upgradeToTLS()` promise. That is deliberately a native-async token and not a bare `*mut Promise` cached here \u2014 the runtime creates such a promise cross-thread-pinned and root-scans it until settlement (#9552), so the pointer in this table is one the collector already knows about. Settling or dropping the layer releases it."
     },
     {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
@@ -129,12 +68,6 @@
       "name": "WARNED",
       "verdict": "not_a_gc_pointer",
       "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
-    },
-    {
-      "file": "crates/perry-ext-ws/src/lib.rs",
-      "name": "WS_CONNECTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-connection PROTOCOL state, keyed by the crate's own ws id. A `WsConnection` is `transport: WsTransport`, `messages: Vec<WsPayload>` and three bools. Rule S fires on `WsTransport::Turnloop(i64)`; that i64 is the HOST's connection id, not an address \u2014 it is minted by the turnloop client adoption path (`attach_turnloop_client`) and its only use is as the first argument of `replay_command(conn_id, ..)`, which looks the connection up in the host registry. It is never cast to a pointer and never dereferenced. The other variant, `Connecting(Vec<WsCommand>)`, holds `Send(WsOutgoing)` / `Close(Option<u16>, String)` / `Terminate`, and `WsOutgoing` is `Text(String)` / `Binary|Ping|Pong(Vec<u8>)` \u2014 Rust-owned bytes throughout, as is `WsPayload`. No NaN-boxed value and no heap pointer enters this map. The JS callbacks for these connections live in `WS_CLIENT_LISTENERS` (`HashMap<String, Vec<i64>>` of closure pointers), which is exactly what the registered `scan_ws_roots` visits \u2014 the split is deliberate. Newly uncovered because turnloop replaced the transport variant that held a tokio task's command channel with this bare id, which is what made rule S look at it."
     },
     {
       "file": "crates/perry-runtime/src/alloc_census.rs",
@@ -982,12 +915,6 @@
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
-      "name": "IN_SERVER_RESPONSE_FORWARD",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-thread Cell<bool> re-entrancy latch for the ServerResponse.prototype method thunk (#10454). Only false/true are stored; the receiver lives in the caller's frame and its aliased handle id in its own ObjectMeta.native_state word."
     },
     {
       "file": "crates/perry-runtime/src/object/null_stub.rs",
@@ -2925,16 +2852,10 @@
       "why": "Numeric diagnostic count of block-persistence forced marks. It holds no pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
     },
     {
-      "file": "crates/perry-runtime/src/json_tape_store.rs",
-      "name": "TAPE_REGISTRY",
+      "file": "crates/perry-ext-http/src/client_turnloop/mod.rs",
+      "name": "DEFERRED_FIRED",
       "verdict": "not_a_gc_pointer",
-      "why": "Shutdown inventory from a nonmoving old LazyArrayHeader address to a uniquely owned, immutable native TapeEntry allocation. TapeEntry is pointer-free offset/kind/link data; keys deliberately do not keep headers alive. LazyArrayTape finalization, materialization and thread teardown release the native allocation. No GC edge needs tracing; B4 scanner deletions exposed incidental prior call-graph coverage."
-    },
-    {
-      "file": "crates/perry-runtime/src/json_tape_store.rs",
-      "name": "TAPE_REGISTRY_NONEMPTY",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean indicating whether a native JSON tape side allocation inventory has entries. It holds no heap pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
+      "why": "Monotonic number of fired deferred HTTP client callbacks. fetch_add(1) in the drain and load in deferred_fired; never stores an address or JS value."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

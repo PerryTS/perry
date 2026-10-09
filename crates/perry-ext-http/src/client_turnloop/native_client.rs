@@ -15,10 +15,15 @@ use super::protocol::{self, Conn, Effect};
 use super::{Outbound, PoolKey, SUBSYSTEM};
 use crate::{push_event, ClientRequestHandle, PendingHttpEvent};
 
-static PARSER_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<Conn>(None);
-static PARSER: PayloadFamily =
-    PayloadFamily::new::<Conn>(perry_ffi::native_class_ids::HTTP_CLIENT_PARSER, "HTTPClientParser", false, &PARSER_VTABLE)
-    .with_constructor_length(0);
+static PARSER_VTABLE: perry_ffi::native_stream::PayloadVTable =
+    perry_ffi::native_stream::payload_vtable::<Conn>(None);
+static PARSER: PayloadFamily = PayloadFamily::new::<Conn>(
+    perry_ffi::native_class_ids::HTTP_CLIENT_PARSER,
+    "HTTPClientParser",
+    false,
+    &PARSER_VTABLE,
+)
+.with_constructor_length(0);
 const PARSER_EDGE: &str = "httpClientParser";
 
 pub(super) fn available() -> bool {
@@ -137,7 +142,8 @@ pub(super) fn start_on_socket(
     let (host, port) = conn.peer();
     let (host, port) = (host.to_owned(), port);
     let scope = TransientRootScope::enter();
-    let parser = scope.root_nanbox(unsafe { np::alloc_in(&PARSER, "", conn, std::mem::size_of::<Conn>(), &[]) });
+    let parser = scope
+        .root_nanbox(unsafe { np::alloc_in(&PARSER, "", conn, std::mem::size_of::<Conn>(), &[]) });
     if np::lifecycle(parser.get(), &PARSER) != Ok(np::Lifecycle::Open) {
         retire_request(request);
         return Err("HTTP client parser allocation refused".into());
@@ -323,7 +329,8 @@ fn run(socket: &RootedSocket, effects: Vec<Effect>) {
                 dispose_parser(socket);
                 detach_http_errors(socket);
                 #[cfg(test)]
-                let head = if std::env::var("PERRY_NET_A_CLIENT_SABOTAGE").as_deref() == Ok("head") {
+                let head = if std::env::var("PERRY_NET_A_CLIENT_SABOTAGE").as_deref() == Ok("head")
+                {
                     Vec::new()
                 } else {
                     head

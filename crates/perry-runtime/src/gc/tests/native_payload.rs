@@ -11,7 +11,9 @@ use super::support::*;
 use crate::native_payload::{self, NativePayloadFamily, PayloadMiss};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static DROPS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+}
 
 struct Probe {
     value: u64,
