@@ -217,7 +217,14 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_property(
         "state" => get_handle::<Http2SessionHandle>(handle)
             .map(session_state_value)
             .unwrap_or_else(empty_object_value),
-        "socket" => empty_object_value(),
+        "socket" => {
+            let socket = super::socket_of_session(handle);
+            if perry_ext_net::native_transport::socket_link(socket).is_ok() {
+                socket
+            } else {
+                empty_object_value()
+            }
+        }
         _ => undef,
     }
 }

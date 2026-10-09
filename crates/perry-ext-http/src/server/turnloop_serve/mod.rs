@@ -42,8 +42,9 @@
 //! `perry-ext-http`'s existing `scan_http_server_roots`, which is also why a
 //! request is carried as ids rather than as `f64` closures (#8082).
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use perry_ext_net::native_transport as net;
+use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope};
+use std::sync::OnceLock;
 
 use perry_ffi::turnloop_net as tl;
 
@@ -57,9 +58,8 @@ mod tests;
 use perry_ffi::agent_post::{self, AgentJob};
 
 pub(crate) use conn::{
-    adopt_alpn_http1, begin_stream, connections_of, destroy_connection, destroy_socket,
-    finish_body, is_busy, note_aborted_handle, note_closed_socket, send_body, send_interim,
-    send_response, take_aborted, take_closed_sockets, take_pending,
+    adopt_alpn_http1, begin_stream, destroy_connection, finish_body, is_busy, note_aborted_handle,
+    send_body, send_interim, send_response, take_aborted, take_pending, with_connections,
 };
 
 /// This crate's slot in the runtime's completion-sink registry.
@@ -103,12 +103,14 @@ pub(crate) fn enabled() -> bool {
         // Registration is refused if the runtime's completion layout does not
         // match this crate's, which leaves `available` false rather than
         // submitting work nothing can deliver.
-        tl::register_sink(SUBSYSTEM, conn::sink, alloc_id);
+        assert!(
+            tl::register_link_sink(SUBSYSTEM, conn::sink),
+            "HTTP link sink registration refused"
+        );
         // An attached `WebSocketServer` runs on this connection, so give
         // perry-ext-ws the writer it needs to reach it (see `conn::on_websocket`).
-        conn::register_ws_transport();
     });
-    tl::available(SUBSYSTEM)
+    net::enabled() && tl::available(SUBSYSTEM)
 }
 
 /// Node's `err.code` for a listen this agent has no loop to run on.
@@ -229,55 +231,35 @@ pub(crate) fn adopt_connection(server_handle: i64, socket: tl::AdoptedSocket) {
         if !enabled() {
             return;
         }
-        let id = next_id();
-        if id == perry_ffi::INVALID_HANDLE {
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(net::new_socket(
+            SUBSYSTEM,
+            f64::from_bits(JsValue::UNDEFINED.bits()),
+        ));
+        let link = net::socket_link(owner.get()).expect("new Socket cell");
+        let installed = unsafe {
+            tl::link_adopt_stream(
+                &mut *net::core(owner.get()).expect("new Socket core"),
+                link,
+                socket,
+            )
+        };
+        if installed.is_err() {
+            net::destroy(owner.get());
             return;
         }
-        if tl::adopt_stream(id, SUBSYSTEM, socket).is_err() {
-            // `adopt_stream` consumed and closed the descriptor; the id it
-            // was offered never became a handle, so give it back.
-            perry_ffi::free_handle_id(id);
-            return;
-        }
-        let idle_close_ms = crate::server::server::with_base_server(
-            server_handle,
-            crate::server::server::idle_close_ms,
-        )
-        .unwrap_or(0);
-        conn::start_connection(id, server_handle, None, idle_close_ms);
+        net::adopted(owner.get());
+        conn::start_connection(owner.get(), server_handle);
+        net::flow(owner.get());
     }));
 }
 
-/// Allocate the id for a connection turnloop just accepted.
-extern "C" fn alloc_id() -> i64 {
-    let id = next_id();
-    if id == perry_ffi::INVALID_HANDLE {
-        0
-    } else {
-        id
-    }
-}
-
-/// A bound turnloop listener and the JS server it belongs to.
-pub(crate) struct Listener {
-    pub(crate) server_handle: i64,
-    /// `Some` for `https.createServer` / `http2.createSecureServer`: every
-    /// accepted connection starts a TLS handshake before any HTTP byte.
-    pub(crate) tls: Option<std::sync::Arc<rustls::ServerConfig>>,
-    /// `server.keepAliveTimeout` + `server.keepAliveTimeoutBuffer`, in ms, as
-    /// the *idle close* deadline. Zero means "never time out" — Node's
-    /// documented meaning for `keepAliveTimeout = 0`, measured on 26.5.1.
-    pub(crate) idle_close_ms: u64,
-}
-
-fn listeners() -> &'static Mutex<HashMap<i64, Listener>> {
-    static LISTENERS: OnceLock<Mutex<HashMap<i64, Listener>>> = OnceLock::new();
-    LISTENERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn with_listener<R>(id: i64, f: impl FnOnce(&Listener) -> R) -> Option<R> {
-    let map = listeners().lock().unwrap_or_else(|e| e.into_inner());
-    map.get(&id).map(f)
+/// The listener's connection handler captures the logical application server,
+/// not a transport identity. Accepted sockets already own their link cell.
+unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, socket: f64) -> f64 {
+    let server_handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
+    conn::start_connection(socket, server_handle);
+    f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
 /// Bind and start accepting. Returns the listener id and the bound port.
@@ -294,73 +276,57 @@ pub(crate) fn listen(
     reuse_port: bool,
     no_delay: bool,
     idle_close_ms: u64,
-) -> Result<(i64, u16, String), tl::NetError> {
-    let id = next_id();
-    if id == perry_ffi::INVALID_HANDLE {
-        return Err(tl::error_from_os(None, "listen"));
-    }
-    // `reuse_port` is now an argument, and it is FALSE for every ordinary
-    // server. It used to be hard-wired false for a reason that has since
-    // changed, and before that it accidentally received `no_delay` — which
-    // defaults to true (`http.createServer`'s Node default), so every turnloop
-    // HTTP and HTTPS listener bound with `SO_REUSEPORT` and a second `listen()`
-    // on the same port quietly succeeded where Node answers EADDRINUSE. That
-    // must not come back: a plain server passes `false` and an `EADDRINUSE`
-    // stays an `EADDRINUSE`.
-    //
-    // What changed is the cluster worker. It is the one caller that *wants*
-    // `SO_REUSEPORT`, and the hard-wired `false` is why it had to decline the
-    // turnloop path and bind a `std::net::TcpListener` by hand
-    // (`cluster_bind::bind_listener`, `socket.set_reuse_port(true)`). turnloop
-    // 0.1.0-alpha.6 split its own `bool` into `ReusePort::{No, Share,
-    // Distribute}`, and `perry-runtime`'s `listen_opts` maps this `true` to
-    // `Share` — which is exactly what `bind_listener` does by hand, on every
-    // platform Perry ships. NOT `Distribute`: that is the kernel-balanced
-    // variant, it is `Unsupported` on macOS and the non-FreeBSD BSDs, and
-    // Perry's cluster has never had it.
-    //
-    // `no_delay` reaches the option it names. Node's `http.createServer`
-    // defaults it to true and applies it to every accepted connection; the
-    // hyper path did that by hand and the turnloop path did not do it at all,
-    // because this argument was landing in `reuse_port` instead.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, reuse_port, no_delay)?;
-    tl::accept_start(id)?;
-    let bound = tl::local_address(id);
-    let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);
-    let bound_host = bound
-        .as_ref()
-        .map(|e| e.address.clone())
-        .unwrap_or_else(|| host.to_string());
-    listeners()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(
-            id,
-            Listener {
-                server_handle,
-                tls,
-                idle_close_ms,
-            },
-        );
-    Ok((id, bound_port, bound_host))
+) -> Result<(f64, u16, String), tl::NetError> {
+    let scope = TransientRootScope::enter();
+    let existing =
+        crate::server::server::with_base_server(server_handle, |server| server.transport_listener)
+            .ok_or_else(|| tl::error_from_os(None, "listen"))?;
+    let listener = scope.root_nanbox(if net::server_link(existing).is_ok() {
+        existing
+    } else {
+        let callback = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(accepted, 1; with_flags(perry_ffi::FN_BUILTIN)),
+            1,
+        ) as i64);
+        unsafe {
+            perry_ffi::set_closure_capture_f64(
+                callback.get() as *mut RawClosureHeader,
+                0,
+                server_handle as f64,
+            );
+        }
+        net::new_server(
+            f64::from_bits(JsValue::UNDEFINED.bits()),
+            f64::from_bits(JsValue::from_object_ptr(callback.get() as *mut u8).bits()),
+        )
+    });
+    // Publish the existing logical server's traced edge before init hooks.
+    crate::server::server::with_base_server_mut(server_handle, |server| {
+        server.transport_listener = listener.get();
+    })
+    .ok_or_else(|| tl::error_from_os(None, "listen"))?;
+    let state = scope.root_nanbox(net::server_state(listener.get()));
+    net::own_set(state.get(), "httpIdleCloseMs", idle_close_ms as f64);
+    let bound = net::listen_tcp(
+        listener.get(),
+        host,
+        port,
+        backlog,
+        reuse_port,
+        no_delay,
+        tls,
+    )?;
+    Ok((listener.get(), bound.port, bound.address))
 }
 
 /// `server.close()` — stop accepting. In-flight connections finish, which is
 /// Node's contract; `closeAllConnections` is what tears those down.
-pub(crate) fn close_listener(id: i64) {
-    listeners()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&id);
-    let _ = tl::close(id);
+pub(crate) fn close_listener(listener: f64) {
+    net::close_server(listener);
 }
 
-/// Whether any turnloop listener belongs to this JS server handle.
-pub(crate) fn listener_for_server(server_handle: i64) -> Option<i64> {
-    listeners()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find(|(_, l)| l.server_handle == server_handle)
-        .map(|(id, _)| *id)
+/// The application's existing traced ownership edge, never a lookup table.
+pub(crate) fn listener_for_server(server_handle: i64) -> Option<f64> {
+    crate::server::server::with_base_server(server_handle, |server| server.transport_listener)
+        .filter(|owner| net::server_link(*owner).is_ok())
 }

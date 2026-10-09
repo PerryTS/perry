@@ -103,18 +103,37 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 /// The handler runs on the thread that owns the connection, so `res.end()`
 /// encodes and submits the write itself.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
-    alloc_http1_server_response_for_turnloop(conn_id, seq, req_handle, 0)
+    alloc_response_for_connection(
+        crate::server::http2_server::socket_of_session(conn_id),
+        Some(crate::server::turnloop_route::ResponseConnection::H2Session(conn_id)),
+        seq,
+        req_handle,
+    )
 }
 
 pub(crate) fn alloc_http1_server_response_for_turnloop(
-    conn_id: i64,
+    socket: f64,
     seq: u64,
     req_handle: i64,
-    socket_handle: i64,
+) -> i64 {
+    let connection = perry_ext_net::native_transport::snapshot(socket).map(|incarnation| {
+        crate::server::turnloop_route::ResponseConnection::Socket {
+            owner: socket,
+            incarnation,
+        }
+    });
+    alloc_response_for_connection(socket, connection, seq, req_handle)
+}
+
+fn alloc_response_for_connection(
+    socket: f64,
+    connection: Option<crate::server::turnloop_route::ResponseConnection>,
+    seq: u64,
+    req_handle: i64,
 ) -> i64 {
     let mut response = ServerResponse::new().with_request_handle(req_handle);
-    response.socket_handle = socket_handle;
-    response.turnloop = Some((conn_id, seq));
+    response.socket_value = socket;
+    response.turnloop = connection.map(|connection| (connection, seq));
     register_handle(response)
 }
 
@@ -125,7 +144,7 @@ pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
         return false;
     };
     match sr.turnloop {
-        Some((conn, _)) => !perry_ffi::turnloop_net::is_live(conn),
+        Some((conn, _)) => !crate::server::turnloop_route::is_live(&conn.root()),
         None => false,
     }
 }
@@ -138,7 +157,11 @@ pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_continue(handle: i64) {
     if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
-        crate::server::turnloop_serve::send_interim(conn, seq, b"HTTP/1.1 100 Continue\r\n\r\n");
+        crate::server::turnloop_route::send_interim(
+            &conn.root(),
+            seq,
+            b"HTTP/1.1 100 Continue\r\n\r\n",
+        );
     }
 }
 
@@ -146,6 +169,10 @@ pub extern "C" fn js_node_http_res_write_continue(handle: i64) {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_processing(handle: i64) {
     if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
-        crate::server::turnloop_serve::send_interim(conn, seq, b"HTTP/1.1 102 Processing\r\n\r\n");
+        crate::server::turnloop_route::send_interim(
+            &conn.root(),
+            seq,
+            b"HTTP/1.1 102 Processing\r\n\r\n",
+        );
     }
 }

@@ -90,6 +90,7 @@ fn is_valid_link_header(value: &str) -> bool {
 /// Legacy transport/OutgoingMessage handle. Standalone ServerResponse objects
 /// own a ResponseState payload and keep their JS edges on the object.
 pub struct ServerResponse {
+    pub(crate) owner_agent: u64,
     pub state: ResponseState,
     pub listeners: HashMap<String, Vec<i64>>,
     pub once_listeners: HashMap<String, Vec<i64>>,
@@ -143,7 +144,8 @@ pub struct ResponseState {
     pub send_date: bool,
     pub strict_content_length: bool,
     pub req_handle: i64,
-    pub socket_handle: i64,
+    /// The public connection Socket is a traced edge, retained after close.
+    pub socket_value: f64,
     /// True for direct `new http.OutgoingMessage()` handles. They share the
     /// outgoing header/writable surface but are not a live ServerResponse.
     pub outgoing_message_only: bool,
@@ -173,7 +175,7 @@ pub struct ResponseState {
     /// keeps a late `res.end()` from writing onto the connection's *next*
     /// request after the first one was destroyed. `None` for a standalone
     /// `new http.ServerResponse(req)` and a bare `OutgoingMessage`.
-    pub turnloop: Option<(i64, u64)>,
+    pub(crate) turnloop: Option<(crate::server::turnloop_route::ResponseConnection, u64)>,
     /// P5: the head has gone out and further writes stream straight to the
     /// socket.
     pub turnloop_streaming: bool,
@@ -197,6 +199,7 @@ pub struct ResponseShape {
 impl ServerResponse {
     pub fn new() -> Self {
         Self {
+            owner_agent: perry_ffi::agent_post::current_agent(),
             state: ResponseState::new(),
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
@@ -233,7 +236,7 @@ impl ResponseState {
             send_date: true,
             strict_content_length: false,
             req_handle: 0,
-            socket_handle: 0,
+            socket_value: f64::from_bits(TAG_UNDEFINED),
             outgoing_message_only: false,
             buffered_body: Vec::new(),
             needs_drain: false,
@@ -1071,9 +1074,10 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
         return None;
     }
     let (conn, seq) = response_state(response_root.get()).and_then(|sr| sr.turnloop)?;
+    let conn = conn.root();
     // A backpressured HTTP/2 write has already accepted these bytes. Preserve
     // its answer instead of falling back to buffering a duplicate chunk.
-    let below_hwm = crate::server::turnloop_route::send_body(conn, seq, bytes)?;
+    let below_hwm = crate::server::turnloop_route::send_body(&conn, seq, bytes)?;
     if !below_hwm {
         response_state_mut(response_root.get())?.needs_drain = true;
     }
@@ -1265,6 +1269,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     // final chunk and the trailer block are encoded and submitted directly.
     if sr.turnloop_streaming {
         let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
+        let conn = conn.root();
         let chunk = final_chunk.clone();
         let trailers = sr.snapshot_trailers();
         sr.writable_ended = true;
@@ -1273,9 +1278,9 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         let finish_listeners = response_event_listeners(response_root.get(), "finish");
         let close_listeners = response_event_listeners(response_root.get(), "close");
         if let Some(c) = chunk {
-            let _ = crate::server::turnloop_route::send_body(conn, seq, &c);
+            let _ = crate::server::turnloop_route::send_body(&conn, seq, &c);
         }
-        crate::server::turnloop_route::finish_body(conn, seq, &trailers);
+        crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
         crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
         return Some((finish_listeners, close_listeners));
     }
@@ -1306,7 +1311,8 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     // connection (the connection's request was never delivered) has nowhere
     // to go, and is simply finished.
     if let Some((conn, seq)) = turnloop {
-        crate::server::turnloop_route::send_response(conn, seq, shape);
+        let conn = conn.root();
+        crate::server::turnloop_route::send_response(&conn, seq, shape);
     }
     if let Some(sr) = response_state_mut(response_root.get()) {
         sr.writable_finished = true;
@@ -1353,17 +1359,18 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
         body: Vec::new(),
         auto_content_length: false,
     };
+    let conn = conn.root();
     let first = std::mem::take(&mut sr.buffered_body);
     sr.headers_sent = true;
     sr.turnloop_streaming = true;
-    if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
+    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.turnloop_streaming = false;
         }
         return false;
     }
     if !first.is_empty() {
-        let _ = crate::server::turnloop_route::send_body(conn, seq, &first);
+        let _ = crate::server::turnloop_route::send_body(&conn, seq, &first);
     }
     true
 }
@@ -1383,7 +1390,7 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
     }
     let below = match sr.turnloop {
         Some((conn, seq)) if sr.turnloop_streaming => {
-            crate::server::turnloop_route::writable_below_watermark(conn, seq)
+            crate::server::turnloop_route::writable_below_watermark(&conn.root(), seq)
         }
         _ => false,
     };

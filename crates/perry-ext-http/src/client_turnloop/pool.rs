@@ -1,29 +1,8 @@
-//! Keep-alive: which idle connection a request may reuse, and when an idle one
-//! is let go.
+//! Pure keep-alive policy and compatibility keys for actual Agent Socket edges.
 //!
-//! This is the *physical* pool. `agent.rs` keeps the *observable* one —
-//! `agent.sockets` / `freeSockets` / `requests`, `req.reusedSocket`, the
-//! `maxSockets` FIFO — and it is unchanged: it always sat above the transport,
-//! and reqwest's hidden connection pool sat below it. This module is what
-//! replaces the latter, with the same knobs reqwest was configured from
-//! (`client_for_agent`: `keepAlive`, `maxFreeSockets`, `keepAliveMsecs`).
-//!
-//! # The ordering rule
-//!
-//! A connection is parked only from `conn.rs`'s `finish`, i.e. after the
-//! decoder has delivered `Event::End` for the response it was carrying, with
-//! nothing left over in its input buffer, and only when
-//! `http1::Decoder::reusable()` agrees (a complete message and a keep-alive
-//! response). Releasing earlier is the framing-misattribution hazard: the
-//! next request would read the tail of the previous response as its own.
-//!
-//! # Idle connections
-//!
-//! An idle connection is unreferenced (`tl::set_ref(false)`), so it never
-//! keeps the process alive — Node unrefs its free sockets too — and it is
-//! closed by an unreferenced idle timer (`keepAliveMsecs`, 1 s by default,
-//! which is what reqwest's `pool_idle_timeout` was set to), by the peer, or by
-//! any unsolicited byte arriving on it.
+//! There is no physical connection pool here. `agent.rs` owns active/free
+//! Socket objects. Framing parks one only after a complete reusable response;
+//! its unreferenced core deadline, peer EOF or unsolicited data releases it.
 
 use perry_ffi::Handle;
 

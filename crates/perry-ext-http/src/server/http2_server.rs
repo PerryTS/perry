@@ -71,7 +71,8 @@ pub(crate) use turnloop_glue::{
     queue_turnloop_client_body, queue_turnloop_client_response, queue_turnloop_goaway,
     queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_stream_error,
     queue_turnloop_stream_reset, register_turnloop_server_session, register_turnloop_stream_handle,
-    server_has_stream_listener, turnloop_conn_of_session, turnloop_target_of_stream,
+    server_has_stream_listener, socket_of_session, turnloop_conn_of_session,
+    turnloop_target_of_stream,
 };
 
 pub(crate) static H2_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<Http2PendingEvent>>> =
@@ -177,11 +178,13 @@ pub struct Http2SecureServer {
     pub settings: Http2SettingsState,
     /// Node's `allowHTTP1`: what an ALPN negotiation of `http/1.1` means.
     pub allow_http1: bool,
-    /// The turnloop listener id, or zero when this server is not listening.
-    pub turnloop_listener: i64,
 }
 
 pub struct Http2SessionHandle {
+    /// Server connections are ordinary Sockets, owned by the logical session.
+    pub socket_value: f64,
+    pub socket_incarnation: Option<perry_ffi::turnloop_net::HandleSnapshot>,
+    pub owner_agent: u64,
     pub server_handle: i64,
     /// Client-side local TCP port / server-side peer TCP port. A loopback
     /// client reserves and records its local port before connecting, so the
@@ -475,7 +478,6 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
         base: HttpServer::with_handler(handler),
         settings,
         allow_http1,
-        turnloop_listener: 0,
     })
 }
 
@@ -506,7 +508,6 @@ pub unsafe extern "C" fn js_node_http2_create_server(first_arg: f64, second_arg:
         base: HttpServer::with_handler(handler),
         settings,
         allow_http1,
-        turnloop_listener: 0,
     })
 }
 

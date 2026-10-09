@@ -1032,7 +1032,7 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             // The socket closes immediately and an in-flight request gets a
             // reset, which is what Node's `socket.destroy()` does.
             if let Some((conn, _)) = turnloop {
-                crate::server::turnloop_serve::destroy_connection(conn);
+                crate::server::turnloop_route::destroy(&conn.root());
             }
             handle_to_pointer_f64(response_root.get())
         }
@@ -1440,8 +1440,13 @@ fn response_socket_value(handle: i64) -> f64 {
         }
     }
     if let Some(sr) = super::response::response_state(handle) {
-        if sr.socket_handle != 0 {
-            return handle_to_pointer_f64(sr.socket_handle);
+        if let Some((crate::server::turnloop_route::ResponseConnection::Socket { owner, .. }, _)) =
+            sr.turnloop
+        {
+            return owner;
+        }
+        if !JsValue::from_bits(sr.socket_value.to_bits()).is_undefined() {
+            return sr.socket_value;
         }
     }
     let req_handle = unsafe { js_node_http_res_req_handle(handle) };
@@ -1455,16 +1460,18 @@ fn response_socket_value(handle: i64) -> f64 {
 #[cfg(test)]
 mod response_socket_tests {
     use super::*;
-    use crate::server::request::{
-        alloc_connection_socket, alloc_incoming_message, incoming_socket_assign,
-    };
+    use crate::server::request::{alloc_incoming_message, incoming_socket_assign};
     use perry_ffi::{drop_handle, register_handle};
     use std::collections::HashMap;
 
     #[test]
     fn response_socket_retains_initial_socket_after_request_reassignment() {
-        let socket_handle = alloc_connection_socket("127.0.0.1".into(), 1234);
-        let socket = handle_to_pointer_f64(socket_handle);
+        let scope = perry_ffi::TransientRootScope::enter();
+        let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
+            0,
+            f64::from_bits(TAG_UNDEFINED),
+        ));
+        let socket = socket.get();
         for _ in 0..2 {
             let request = alloc_incoming_message(IncomingMessage::new(
                 "GET".into(),
@@ -1477,10 +1484,7 @@ mod response_socket_tests {
             ));
             assert!(incoming_socket_assign(request, socket));
             let response = crate::server::response::alloc_http1_server_response_for_turnloop(
-                0,
-                0,
-                request,
-                socket_handle,
+                socket, 0, request,
             );
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
             assert!(incoming_socket_assign(request, 42.0));
@@ -1497,7 +1501,7 @@ mod response_socket_tests {
             socket.to_bits()
         );
         drop_handle(standalone);
-        drop_handle(socket_handle);
+        perry_ext_net::native_transport::destroy(socket);
     }
 
     #[test]

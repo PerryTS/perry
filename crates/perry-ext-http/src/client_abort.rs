@@ -98,7 +98,9 @@ pub(crate) unsafe fn handle_request_signal_abort(request_handle: Handle) {
         .map(|request| (request.agent_handle, request.socket_handle))
     {
         if agent_handle == 0 && socket != 0 {
-            perry_ext_net::js_ext_net_destroy_socket(socket);
+            if let Some(socket) = crate::current_request_socket(request_handle) {
+                perry_ext_net::native_transport::destroy(socket.value());
+            }
         }
     }
     finish_agent_request(request_handle, false);

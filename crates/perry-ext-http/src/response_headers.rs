@@ -51,7 +51,7 @@ fn is_single_value_header(name: &str) -> bool {
 /// pooled reqwest path normalizes names to lower case before Perry ever
 /// sees them (`http::HeaderName` only stores lower case), so this does not
 /// reproduce Node's original wire casing on that path — only the raw-socket
-/// paths (`plain_client`/`agent.createConnection`) could preserve it, and
+/// path (`agent.createConnection`) could preserve it, and
 /// today they lower-case on parse too. Tracked as a known gap, not silently
 /// papered over.
 pub(crate) fn build_raw_headers_array(raw: &[(String, String)]) -> f64 {

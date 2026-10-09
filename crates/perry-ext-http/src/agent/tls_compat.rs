@@ -4,20 +4,11 @@
 
 use super::*;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
-
-static HTTPS_GLOBAL_AGENT_HANDLE: OnceLock<Handle> = OnceLock::new();
 
 extern "C" {
     fn js_https_global_agent_override_value() -> f64;
     fn js_https_global_agent_sync_maps(sockets: f64, free_sockets: f64, requests: f64);
     fn js_https_global_agent_emit(event_ptr: *const u8, event_len: usize, arg0: f64, arg1: f64);
-}
-
-pub(super) fn sync_default_https_agent_if_initialized() {
-    if let Some(handle) = HTTPS_GLOBAL_AGENT_HANDLE.get().copied() {
-        sync_default_https_agent(handle);
-    }
 }
 
 pub(crate) fn tls_session_for_request(handle: Handle, key: &str, port: u16) -> (u64, bool) {
@@ -64,12 +55,23 @@ pub(crate) fn invalidate_tls_sessions_for_server_port(port: u16) {
     });
 }
 fn default_https_agent_handle() -> Handle {
-    *HTTPS_GLOBAL_AGENT_HANDLE.get_or_init(|| {
-        register_handle(AgentHandle {
-            protocol: Some("https:".to_string()),
-            keep_alive: true,
-            ..AgentHandle::default()
-        })
+    let owner = perry_ffi::agent_post::current_agent();
+    let mut ids = Vec::new();
+    perry_ffi::iter_handle_ids_of::<AgentHandle, _>(|id| ids.push(id));
+    for id in ids {
+        if get_handle::<AgentHandle>(id)
+            .is_some_and(|agent| agent.owner_agent == owner && agent.default_https)
+        {
+            return id;
+        }
+    }
+    // Reuse the existing logical Agent app registry. A process-global handle
+    // would make workers share Socket edges belonging to different JS heaps.
+    register_handle(AgentHandle {
+        default_https: true,
+        protocol: Some("https:".to_string()),
+        keep_alive: true,
+        ..AgentHandle::default()
     })
 }
 
@@ -95,7 +97,9 @@ pub(crate) unsafe fn resolve_https_agent_handle(explicit: Handle) -> Handle {
 }
 
 fn is_default_https_agent(handle: Handle) -> bool {
-    HTTPS_GLOBAL_AGENT_HANDLE.get().copied() == Some(handle)
+    get_handle::<AgentHandle>(handle).is_some_and(|agent| {
+        agent.default_https && agent.owner_agent == perry_ffi::agent_post::current_agent()
+    })
 }
 
 pub(super) fn sync_default_https_agent(handle: Handle) {
@@ -285,4 +289,33 @@ unsafe fn raw_pfx_identity(options: f64) -> Option<String> {
         );
     }
     Some(format!("{:016x}", hasher.finish()))
+}
+
+#[cfg(test)]
+#[test]
+fn default_https_agents_belong_to_their_worker_heap() {
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let worker = perry_runtime::agent::enter_worker_agent();
+                let handle = default_https_agent_handle();
+                assert_eq!(
+                    get_handle::<AgentHandle>(handle).unwrap().owner_agent,
+                    perry_ffi::agent_post::current_agent(),
+                    "a default HTTPS Agent must belong to its worker heap"
+                );
+                assert_eq!(default_https_agent_handle(), handle);
+                perry_runtime::agent::retire_agent(worker);
+                handle
+            })
+        })
+        .collect();
+    let handles: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert_ne!(
+        handles[0], handles[1],
+        "workers must not share their default HTTPS Agent"
+    );
 }

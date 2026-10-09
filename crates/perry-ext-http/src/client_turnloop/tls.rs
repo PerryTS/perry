@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use perry_tls_session::TlsSession;
 use rustls::pki_types::ServerName;
 
 use crate::tls_client::TlsOptions;
@@ -37,6 +36,7 @@ use crate::tls_client::TlsOptions;
 pub(crate) struct TlsPlan {
     pub(super) config: Arc<rustls::ClientConfig>,
     pub(super) server_name: ServerName<'static>,
+    pub(super) metadata: perry_ext_net::native_transport::ClientTlsMetadata,
 }
 
 fn configs() -> &'static Mutex<HashMap<u64, Arc<rustls::ClientConfig>>> {
@@ -103,33 +103,25 @@ pub(crate) fn plan(options: &TlsOptions, url_host: &str) -> Result<TlsPlan, Stri
         .unwrap_or(url_host);
     let server_name = ServerName::try_from(name.to_string())
         .map_err(|_| format!("ERR_TLS_CERT_ALTNAME_INVALID: invalid servername {name:?}"))?;
+    let environment = perry_ffi::node_tls_client_environment();
+    let ca = if !options.ca_pems.is_empty() {
+        Some(options.ca_pems.clone())
+    } else {
+        (!environment.ca_pems().is_empty()).then(|| environment.ca_pems().to_vec())
+    };
     Ok(TlsPlan {
         config,
         server_name,
+        metadata: perry_ext_net::native_transport::ClientTlsMetadata {
+            servername: options
+                .servername
+                .clone()
+                .unwrap_or_else(|| name.to_string()),
+            verify: !options.accept_invalid_certs(),
+            ca,
+            certificate_pem: options.client_certificate_pem()?,
+        },
     })
-}
-
-/// Open the client session for a plan. The ClientHello is produced by the
-/// first `pump`.
-pub(super) fn open(plan: &TlsPlan) -> Result<TlsSession, String> {
-    TlsSession::client(plan.config.clone(), plan.server_name.clone()).map_err(|e| e.to_string())
-}
-
-/// Node's message for a handshake failure's cause code. Node reports these as
-/// an `Error` carrying `.code` and OpenSSL's text; rustls has its own text, so
-/// the codes Node users test for get Node's words and anything else keeps
-/// rustls's.
-pub(super) fn node_failure_message(code: &str, rustls_message: &str) -> String {
-    match code {
-        "UNABLE_TO_VERIFY_LEAF_SIGNATURE" => "unable to verify the first certificate".to_string(),
-        "CERT_HAS_EXPIRED" => "certificate has expired".to_string(),
-        "CERT_NOT_YET_VALID" => "certificate is not yet valid".to_string(),
-        "CERT_REVOKED" => "certificate revoked".to_string(),
-        "ERR_TLS_CERT_ALTNAME_INVALID" => {
-            format!("Hostname/IP does not match certificate's altnames: {rustls_message}")
-        }
-        _ => rustls_message.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -180,17 +172,5 @@ mod tests {
         let plan = plan(&options, "localhost").expect("plan builds");
         assert!(!plan.config.enable_sni);
         assert_eq!(plan.server_name.to_str(), "localhost");
-    }
-
-    #[test]
-    fn node_codes_get_node_text() {
-        assert_eq!(
-            node_failure_message("UNABLE_TO_VERIFY_LEAF_SIGNATURE", "x"),
-            "unable to verify the first certificate"
-        );
-        assert_eq!(
-            node_failure_message("ERR_SSL_PROTOCOL_ERROR", "rustls text"),
-            "rustls text"
-        );
     }
 }

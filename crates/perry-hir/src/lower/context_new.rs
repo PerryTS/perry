@@ -84,7 +84,6 @@ impl LoweringContext {
             type_param_scopes: Vec::new(),
             type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
-            param_native_hints: HashMap::new(),
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             deferred_unknown_native_imports: HashMap::new(),

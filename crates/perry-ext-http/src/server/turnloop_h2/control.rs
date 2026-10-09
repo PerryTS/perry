@@ -42,6 +42,7 @@
 //! `session.settings(obj, cb)`'s callback and Node's `'localSettings'`: the
 //! core consumes an ack with `event: None`, so there is nothing else to fire on.
 
+use super::target::Target;
 use turnloop_http::http2::encode_frame;
 
 use crate::server::http2_session_settings::Http2SettingsState;
@@ -108,9 +109,10 @@ fn settings_payload(role_is_client: bool, settings: &Http2SettingsState) -> Vec<
 /// Returns the settings that went on the wire, or `None` when this session is
 /// not on turnloop (the caller then keeps the legacy path).
 pub(crate) fn send_settings(
-    conn_id: i64,
+    conn_id: impl Into<Target>,
     requested: &Http2SettingsState,
 ) -> Option<Http2SettingsState> {
+    let conn_id = conn_id.into();
     conn::with_owned(conn_id, |c| {
         let effective = clamp_to_core(requested, &c.settings);
         if !conn::transport_ready(c) {
@@ -187,7 +189,13 @@ pub(crate) fn drain_pending(c: &mut H2Conn) {
 /// no opaque data, so the frame is hand-encoded. The session is **not** marked
 /// draining: Node's `goaway()` sends a frame and leaves the session usable,
 /// unlike `close()`.
-pub(crate) fn send_goaway(conn_id: i64, code: u32, last_stream_id: u32, opaque: &[u8]) -> bool {
+pub(crate) fn send_goaway(
+    conn_id: impl Into<Target>,
+    code: u32,
+    last_stream_id: u32,
+    opaque: &[u8],
+) -> bool {
+    let conn_id = conn_id.into();
     conn::with_owned(conn_id, |c| {
         if !conn::transport_ready(c) {
             c.pending_controls.push(PendingControl::Goaway {
@@ -217,7 +225,8 @@ fn write_goaway(c: &mut H2Conn, code: u32, last_stream_id: u32, opaque: &[u8]) -
 
 /// `session.ping(payload, cb)` — a real PING frame. The callback fires from
 /// `Event::Ping { ack: true }`, not from here.
-pub(crate) fn send_ping(conn_id: i64, payload: [u8; 8]) -> bool {
+pub(crate) fn send_ping(conn_id: impl Into<Target>, payload: [u8; 8]) -> bool {
+    let conn_id = conn_id.into();
     conn::with_owned(conn_id, |c| {
         if !conn::transport_ready(c) {
             // Node's `ping()` answers true for a session that is still
@@ -238,12 +247,14 @@ pub(crate) fn send_ping(conn_id: i64, payload: [u8; 8]) -> bool {
 }
 
 /// `session.close([cb])` — Node's graceful GOAWAY, then close once drained.
-pub(crate) fn session_close(conn_id: i64) {
+pub(crate) fn session_close(conn_id: impl Into<Target>) {
+    let conn_id = conn_id.into();
     super::stream::session_close(conn_id);
 }
 
 /// `session.destroy()` — no GOAWAY, no drain.
-pub(crate) fn session_destroy(conn_id: i64) {
+pub(crate) fn session_destroy(conn_id: impl Into<Target>) {
+    let conn_id = conn_id.into();
     conn::destroy_connection(conn_id);
 }
 

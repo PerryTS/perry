@@ -1,15 +1,10 @@
 use super::*;
 
 #[derive(Default)]
-struct ClientRequestSurfaceState {
+pub(super) struct ClientRequestSurfaceState {
     aborted: bool,
     destroyed: bool,
-    socket: f64,
 }
-
-static CLIENT_REQUEST_SURFACE: std::sync::LazyLock<
-    Mutex<HashMap<Handle, ClientRequestSurfaceState>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 extern "C" {
     fn js_class_method_bind(
@@ -175,26 +170,15 @@ fn handle_value(handle: Handle) -> f64 {
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
-pub(crate) fn scan_roots(visitor: &mut GcRootVisitor<'_>) {
-    for (handle, state) in CLIENT_REQUEST_SURFACE.lock().unwrap().iter_mut() {
-        if get_handle_mut::<ClientRequestHandle>(*handle)
-            .is_none_or(|request| request.owner_agent != perry_ffi::agent_post::current_agent())
-        {
-            continue;
-        }
-        if state.socket != 0.0 {
-            visitor.visit_nanbox_f64_slot(&mut state.socket);
-        }
-    }
-}
-
 fn is_client_request_handle(handle: Handle) -> bool {
     get_handle_mut::<ClientRequestHandle>(handle).is_some()
 }
 
 fn with_state_mut<T>(handle: Handle, f: impl FnOnce(&mut ClientRequestSurfaceState) -> T) -> T {
-    let mut states = CLIENT_REQUEST_SURFACE.lock().unwrap();
-    f(states.entry(handle).or_default())
+    match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(request) => f(&mut request.surface),
+        None => f(&mut ClientRequestSurfaceState::default()),
+    }
 }
 
 /// Whether `req.destroy()` has been called on this request (#4905 —
@@ -314,23 +298,16 @@ fn socket_value(handle: Handle) -> f64 {
     {
         return handle_value(socket);
     }
-    with_state_mut(handle, |state| {
-        if state.socket == 0.0 {
-            state.socket = f64::from_bits(perry_ffi::alloc_object().bits());
-        }
-        state.socket
-    })
+    f64::from_bits(JsValue::NULL.bits())
 }
 
 fn state_bool(handle: Handle, property: &str) -> f64 {
     let ended = get_handle_mut::<ClientRequestHandle>(handle)
         .map(|req| req.ended)
         .unwrap_or(false);
-    let states = CLIENT_REQUEST_SURFACE.lock().unwrap();
-    let state = states.get(&handle);
     bool_value(match property {
-        "aborted" => state.map(|s| s.aborted).unwrap_or(false),
-        "destroyed" => state.map(|s| s.destroyed).unwrap_or(false),
+        "aborted" => with_state_mut(handle, |state| state.aborted),
+        "destroyed" => with_state_mut(handle, |state| state.destroyed),
         "finished" | "writableEnded" | "writableFinished" => ended,
         "reusedSocket" => get_handle_mut::<ClientRequestHandle>(handle)
             .map(|request| request.reused_socket)

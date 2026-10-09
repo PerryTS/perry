@@ -34,6 +34,7 @@ use crate::server::types::{
 /// and TS (handler accessing `req.method`, `req.headers`, etc.) read
 /// through this.
 pub struct IncomingMessage {
+    pub(crate) owner_agent: u64,
     pub method: String,
     /// Path + optional `?query`, matching Node's `req.url`.
     pub url: String,
@@ -109,6 +110,7 @@ impl IncomingMessage {
         remote_port: u16,
     ) -> Self {
         Self {
+            owner_agent: perry_ffi::agent_post::current_agent(),
             method,
             url,
             headers,
@@ -594,15 +596,15 @@ pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
 /// Destroy a request handle, or the transport behind an accepted socket.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    let socket = if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
+        im.socket_value
     } else {
         return;
-    }
-    if crate::server::turnloop_h2::conn::destroy_socket(handle)
-        || crate::server::turnloop_serve::destroy_socket(handle)
-    {
-        return;
+    };
+    let socket = perry_ext_net::native_transport::RootedSocket::new(socket);
+    if perry_ext_net::native_transport::socket_link(socket.value()).is_ok() {
+        perry_ext_net::native_transport::destroy(socket.value());
     }
     close_incoming_message(handle);
 }
@@ -863,33 +865,6 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
     }
 }
 
-/// Fire a one-arg event (`server.on('connection', socket)`).
-/// Call every listener with `this` bound to `this_val` (the emitting object:
-/// Node invokes server, socket and request callbacks that way, so
-/// `server.listen(0, function() { this.address().port })` resolves `this` to
-/// the server, #2132) and one argument.
-pub(crate) fn emit_one_arg_to_listeners(listeners: &[i64], this_val: f64, arg: f64) {
-    // #8082: the snapshot, the receiver AND the arg cross every callback —
-    // root all of them.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let rooted = scope.root_addrs(listeners);
-    let this_val = scope.root_nanbox(this_val);
-    let arg = scope.root_nanbox(arg);
-    for cb in &rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        unsafe {
-            let raw = addr as *const RawClosureHeader;
-            let closure = JsClosure::from_raw(raw);
-            if !closure.is_null() {
-                let _ = closure.call1(perry_ffi::JsThis::from_f64(this_val.get()), arg.get());
-            }
-        }
-    }
-}
-
 /// Mark the request as closed, abort `req.signal`, and fire `'close'` once.
 pub(crate) fn close_incoming_message(handle: i64) {
     let close_listeners;
@@ -916,32 +891,6 @@ pub(crate) fn close_incoming_message(handle: i64) {
 /// Allocate a fresh `IncomingMessage` and return its handle id.
 pub(crate) fn alloc_incoming_message(im: IncomingMessage) -> i64 {
     register_handle(im)
-}
-
-/// Build the JS-visible object exposed to `'connection'` listeners and, for
-/// every request on this connection, as `req.socket`/`req.connection`. One
-/// per accepted connection, shared by every request that connection carries.
-///
-/// Deliberately reuses `IncomingMessage` rather than a new type: it already
-/// has `remoteAddress`/`remotePort`, an `on`/`once`/`destroy` dispatch
-/// surface, and a `'close'` emit (`close_incoming_message`) — exactly the
-/// net.Socket-shaped surface Node exposes here, with no request-specific
-/// state ever populated on it (`method`/`url`/`headers` stay at their
-/// `IncomingMessage::new` defaults and are never Node-accurate for this
-/// object; nothing reads them, since real `net.Socket` has no such
-/// properties either).
-pub(crate) fn alloc_connection_socket(remote_address: String, remote_port: u16) -> i64 {
-    let mut socket = IncomingMessage::new(
-        String::new(),
-        String::new(),
-        HashMap::new(),
-        Vec::new(),
-        Vec::new(),
-        remote_address,
-        remote_port,
-    );
-    socket.complete = true;
-    register_handle(socket)
 }
 
 /// Record only that the response wrote at least one byte. The req/res facade

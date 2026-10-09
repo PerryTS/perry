@@ -35,7 +35,7 @@ pub(crate) fn numeric_value(value: f64) -> Option<f64> {
 
 /// Whether this session's frames reach a wire, and which connection carries
 /// them.
-fn turnloop_of(handle: i64) -> Option<i64> {
+fn turnloop_of(handle: i64) -> Option<crate::server::turnloop_h2::target::Target> {
     super::turnloop_conn_of_session(handle)
 }
 

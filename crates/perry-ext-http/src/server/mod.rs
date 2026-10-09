@@ -96,7 +96,9 @@ static GC_REGISTERED: Once = Once::new();
 /// closure registration and callback dispatch would sweep them —
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
+    gc_register_mutable_root_scanner_named("perry-ext-http-server", scan_http_server_roots);
     GC_REGISTERED.call_once(|| {
+        perry_ffi::agent_post::register_retire_hook(retire_transport_edges);
         // The pump below walks the server handles every tick (keepalive
         // probe + drain). Index them so that walk costs O(servers), not
         // O(every live handle): each keep-alive connection holds a
@@ -104,7 +106,6 @@ pub(crate) fn ensure_gc_scanner_registered() {
         perry_ffi::index_handle_type::<HttpServer>();
         perry_ffi::index_handle_type::<HttpsServer>();
         perry_ffi::index_handle_type::<Http2SecureServer>();
-        gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
         // Register the extension's pump and keepalive contributor with runtime;
         // stdlib intentionally does not name either HTTP symbol (#9696).
         perry_ffi::register_aux_event_pump(
@@ -136,6 +137,9 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     }
 
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
+        if server.owner_agent == perry_ffi::agent_post::current_agent() {
+            visitor.visit_nanbox_f64_slot(&mut server.transport_listener);
+        }
         visitor.visit_i64_slot(&mut server.handler);
         visitor.visit_i64_slot(&mut server.bun_error_handler);
         scan_listener_roots(&mut server.listeners, visitor);
@@ -151,6 +155,15 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     }
 
+    if let Ok(mut upgrades) = server::TURNLOOP_UPGRADES.lock() {
+        let agent = perry_ffi::agent_post::current_agent();
+        for upgrade in upgrades
+            .iter_mut()
+            .filter(|upgrade| upgrade.owner_agent == agent)
+        {
+            visitor.visit_nanbox_f64_slot(&mut upgrade.raw_socket_value);
+        }
+    }
     iter_handles_of_mut::<HttpServer, _>(|s| {
         scan_base_server_roots(s, visitor);
     });
@@ -169,11 +182,19 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         scan_listener_roots(&mut im.listeners, visitor);
         visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
         visitor.visit_nanbox_f64_slot(&mut im.signal);
-        visitor.visit_nanbox_f64_slot(&mut im.socket_value);
+        if im.owner_agent == perry_ffi::agent_post::current_agent() {
+            visitor.visit_nanbox_f64_slot(&mut im.socket_value);
+        }
     });
     // Transport and OutgoingMessage handles only. Standalone ServerResponse
     // objects are never registered here; GC traces their object-owned JS state.
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
+        if sr.owner_agent == perry_ffi::agent_post::current_agent() {
+            visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
+            if let Some((connection, _)) = &mut sr.turnloop {
+                connection.scan(visitor);
+            }
+        }
         scan_listener_roots(&mut sr.listeners, visitor);
         // #8163: `res.once(event, cb)` stores into a SECOND table that
         // `take_event_listeners` merges into every emit. It was never scanned,
@@ -189,6 +210,9 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     });
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
+        if session.owner_agent == perry_ffi::agent_post::current_agent() {
+            visitor.visit_nanbox_f64_slot(&mut session.socket_value);
+        }
         scan_listener_roots(&mut session.listeners, visitor);
         for cb in session.close_callbacks.iter_mut() {
             visitor.visit_i64_slot(cb);
@@ -206,6 +230,42 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     // `session.close/settings/ping(cb)` and the main-thread drain.
     http2_server::scan_h2_pending_event_roots(visitor);
     bun_server::scan_pending_roots(visitor);
+}
+
+/// Remove existing logical objects' Socket edges before a worker heap is unmapped.
+/// The loop is already retired: this hook touches no JS, payload or driver.
+extern "C" fn retire_transport_edges(agent: u64) {
+    let undefined = f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits());
+    let clear_server = |server: &mut HttpServer| {
+        if server.owner_agent == agent {
+            server.transport_listener = undefined;
+        }
+    };
+    iter_handles_of_mut::<HttpServer, _>(clear_server);
+    iter_handles_of_mut::<HttpsServer, _>(|server| clear_server(&mut server.base));
+    iter_handles_of_mut::<Http2SecureServer, _>(|server| {
+        clear_server(&mut server.base);
+    });
+    iter_handles_of_mut::<IncomingMessage, _>(|request| {
+        if request.owner_agent == agent {
+            request.socket_value = undefined;
+        }
+    });
+    iter_handles_of_mut::<ServerResponse, _>(|response| {
+        if response.owner_agent == agent {
+            response.turnloop = None;
+            response.socket_value = undefined;
+        }
+    });
+    iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
+        if session.owner_agent == agent {
+            session.socket_value = undefined;
+            session.socket_incarnation = None;
+        }
+    });
+    if let Ok(mut upgrades) = crate::server::server::TURNLOOP_UPGRADES.lock() {
+        upgrades.retain(|upgrade| upgrade.owner_agent != agent);
+    }
 }
 
 #[cfg(test)]
@@ -460,7 +520,6 @@ mod tests {
             base: http_server(h2_base_handler, listener_map("close", h2_listener)),
             settings: crate::server::http2_session_settings::Http2SettingsState::default(),
             allow_http1: false,
-            turnloop_listener: 0,
         });
 
         let incoming_listener = young_gc_root();

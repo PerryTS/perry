@@ -42,13 +42,15 @@ pub(crate) use deferred_events::{
 mod turnloop_listen;
 use turnloop_listen::try_listen_on_turnloop;
 pub(crate) use turnloop_listen::{
-    idle_close_ms, note_turnloop_request_aborted, queue_turnloop_connection_event,
-    queue_turnloop_upgrade, turnloop_connection_closed,
+    emit_connection, idle_close_ms, note_turnloop_request_aborted, queue_turnloop_upgrade,
+    turnloop_connection_closed,
 };
 
 /// Backing struct for an `http.Server` JS-side handle.
 pub struct HttpServer {
     pub async_id: u64,
+    /// Traced ordinary net.Server delegate; application ids remain logical.
+    pub transport_listener: f64,
     /// User's `(req, res) => ...` handler. Stored as raw `i64`; the
     /// GC root scanner pins it across malloc-triggered sweeps.
     pub handler: i64,
@@ -159,6 +161,7 @@ impl HttpServer {
     pub fn with_handler(handler: i64) -> Self {
         Self {
             async_id: 0,
+            transport_listener: f64::from_bits(TAG_UNDEFINED),
             handler,
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
@@ -241,22 +244,14 @@ pub struct HttpPendingUpgrade {
     /// WebSocket path (real handshakes with a `Sec-WebSocket-Key`): the
     /// perry-ext-ws connection id. 0 on the raw path.
     pub ws_id: i64,
-    /// #4973 raw path (keyless Upgrade requests): the perry-ext-net socket
-    /// id adopted from the connection. 0 on the WebSocket path.
-    pub raw_socket_id: i64,
+    /// Raw upgrade path: the connection's original ordinary Socket value.
+    /// Zero on the WebSocket path, which retains its own protocol id.
+    pub raw_socket_value: f64,
+    pub owner_agent: u64,
     /// #4973 raw path: unconsumed bytes that followed the request head —
     /// Node's `upgradeHead` argument.
     pub head: Vec<u8>,
 }
-
-/// `(server_handle, socket_handle)` pairs whose accept loop saw a new
-/// connection since the last pump tick. Drained by
-/// `js_node_http_server_process_pending` to fire `'connection'` listeners on
-/// the main thread (#4905). `socket_handle` is the connection's identity
-/// (`crate::server::request::alloc_connection_socket`): the `IncomingMessage`-shaped object Node passes as the
-/// listener's argument and that every request on the connection shares as
-/// `req.socket`.
-pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<(i64, i64)>> = Mutex::new(Vec::new());
 
 /// Read the `HttpServer` behind a JS server handle, whichever flavour it is.
 ///
@@ -300,11 +295,11 @@ pub(crate) static TURNLOOP_UPGRADES: Mutex<std::collections::VecDeque<HttpPendin
 /// `closeIdleConnections` semantics; `server.close()` also closes idle
 /// keep-alive sockets since Node 19).
 pub(crate) fn signal_connections_close(server_handle: i64, only_idle: bool) {
-    for id in crate::server::turnloop_serve::connections_of(server_handle) {
+    crate::server::turnloop_serve::with_connections(server_handle, |id| {
         if !only_idle || !crate::server::turnloop_serve::is_busy(id) {
             crate::server::turnloop_serve::destroy_connection(id);
         }
-    }
+    });
 }
 
 // ============================================================================
@@ -702,7 +697,7 @@ impl ListenPlan {
         }
         match try_listen_on_turnloop(self.server_handle, &self.host, self.port, self.resolved) {
             // The bind failed and `try_listen_on_turnloop` queued the error.
-            Some(0) => false,
+            Some(false) => false,
             Some(_) => true,
             // Only reachable if the loop vanished between the caller's check
             // and the bind: report it rather than leave the listen hanging.
@@ -1074,19 +1069,6 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
     active
 }
 
-/// Whether `server_handle` names an HTTP, HTTPS or HTTP/2 server the calling
-/// agent owns. A handle that names none of them reads as not owned.
-pub(crate) fn server_handle_owned_here(server_handle: i64) -> bool {
-    if let Some(s) = get_handle::<HttpServer>(server_handle) {
-        return s.owned_here();
-    }
-    if let Some(s) = get_handle::<crate::server::https_server::HttpsServer>(server_handle) {
-        return s.base.owned_here();
-    }
-    get_handle::<crate::server::http2_server::Http2SecureServer>(server_handle)
-        .is_some_and(|s| s.base.owned_here())
-}
-
 /// Drain pending requests + upgrades from every registered server,
 /// dispatching to the user handler / `'upgrade'` listener on the
 /// main thread. Called each tick by perry-stdlib's pump (gated on
@@ -1125,44 +1107,6 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.
     reap_in_flight_requests();
-
-    // #4905 — fire `'connection'` listeners for connections accepted since
-    // the last tick, before their requests are dispatched (Node fires
-    // `'connection'` ahead of `'request'`).
-    // Only the events of servers this agent owns (#11433); another agent's stay
-    // queued for its own pump.
-    let connection_events: Vec<(i64, i64)> = PENDING_CONNECTION_EVENTS
-        .lock()
-        .map(|mut q| {
-            let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut *q)
-                .into_iter()
-                .partition(|(server_handle, _)| server_handle_owned_here(*server_handle));
-            *q = theirs;
-            mine
-        })
-        .unwrap_or_default();
-    for (server_handle, socket_handle) in connection_events {
-        let listeners = with_base_server_mut(server_handle, |server| {
-            take_server_event_listeners(server, "connection")
-        })
-        .unwrap_or_default();
-        if listeners.is_empty() {
-            continue;
-        }
-        let this_val = handle_to_pointer_f64(server_handle);
-        let socket_val = handle_to_pointer_f64(socket_handle);
-        crate::server::request::emit_one_arg_to_listeners(&listeners, this_val, socket_val);
-        count += 1;
-    }
-
-    // Fire `'close'` on every connection
-    // socket whose TCP connection fully closed since the last tick — before
-    // this tick's server `'close'` callback below (`drain_deferred_close_for`),
-    // matching Node's ordering.
-    for socket_handle in crate::server::turnloop_serve::take_closed_sockets() {
-        crate::server::request::close_incoming_message(socket_handle);
-        count += 1;
-    }
 
     // P5: a connection that died before its response completed raises Node's
     // `'aborted'` on the request; the sink queued it because it may not run JS.
@@ -1245,20 +1189,6 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     }
     count += crate::server::http2_server::process_pending_h2_events();
 
-    // #5010 — drain perry-ext-net's own pending-event queue. A raw
-    // `'upgrade'` (#4973) hands the listener a real `net.Socket` adopted into
-    // perry-ext-net (`adopt_turnloop_upgrade`); when user code destroys it,
-    // the socket task queues a `Close` event in perry-ext-net's queue. For an
-    // http-only program perry-stdlib runs with its OWN bundled net (so its
-    // `external-net-pump` arm is OFF and never touches ext-net's queue), and
-    // the perry-ext-net aux pump proved unreliable across workspace link
-    // layouts. The http-server pump, by contrast, runs every tick
-    // (external-http-server-pump) and directly depends on perry-ext-net, so
-    // draining here — through the UNIQUE `js_ext_net_drain_pending` symbol
-    // (no stdlib twin) — reliably empties that queue so the destroyed upgrade
-    // socket stops pinning the event loop. Cheap (one mutex peek) when empty.
-    count += unsafe { perry_ext_net::js_ext_net_drain_pending() };
-
     count
 }
 
@@ -1269,30 +1199,24 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
 fn drain_upgrades(server_handle: i64) -> i32 {
     let mut count = 0;
     while let Some(up) = try_recv_upgrade(server_handle) {
-        // #6710 — the upgrade path bypasses `process_pending`, but its request
-        // handle and the adopted socket / WebSocket handles are recycled from
-        // the same freelist. Clear their per-handle JS side tables here, on the
-        // main thread, before any upgrade listener sees them (no-op for a zero
-        // handle).
+        let scope = perry_ffi::TransientRootScope::enter();
+        let socket = scope.root_nanbox(up.raw_socket_value);
+        // The logical request and WebSocket protocol handles still use the
+        // phase C freelist. Socket identity is its ordinary JS value above.
         unsafe {
             js_handle_clear_side_tables(up.request_handle);
-            js_handle_clear_side_tables(up.raw_socket_id);
             js_handle_clear_side_tables(up.ws_id);
         }
-        if up.raw_socket_id != 0 {
-            // #4973 raw path: make sure the adopted net.Socket's dispatch
-            // extensions + GC scanner are registered on the main thread before
-            // user code touches the socket.
-            perry_ext_net::ensure_adopted_socket_dispatch();
+        if perry_ext_net::native_transport::socket_link(socket.get()).is_ok() {
             if !crate::server::upgrade::fire_upgrade_listeners(
                 up.server_handle,
                 up.request_handle,
-                up.raw_socket_id,
+                socket.get(),
                 up.head,
             ) {
                 // Listeners may disappear between connection admission and
                 // delivery. Nobody owns this raw upgrade in that case.
-                perry_ext_net::js_ext_net_destroy_socket(up.raw_socket_id);
+                perry_ext_net::native_transport::destroy(socket.get());
                 perry_ffi::drop_handle(up.request_handle);
             }
         } else {
@@ -1304,7 +1228,7 @@ fn drain_upgrades(server_handle: i64) -> i32 {
             crate::server::upgrade::fire_upgrade_listeners(
                 up.server_handle,
                 up.request_handle,
-                up.ws_id,
+                handle_to_pointer_f64(up.ws_id),
                 Vec::new(),
             );
         }
@@ -1505,9 +1429,10 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             // P5 streaming: the head is on the wire; close the body framing.
             if sr.turnloop_streaming {
                 let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
+                let conn = conn.root();
                 let trailers = sr.snapshot_trailers();
                 sr.needs_drain = false;
-                crate::server::turnloop_serve::finish_body(conn, seq, &trailers);
+                crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
                 return;
             }
             let auto_content_length = sr.ensure_content_length();
@@ -1525,7 +1450,8 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 auto_content_length,
             };
             if let Some((conn, seq)) = sr.turnloop {
-                crate::server::turnloop_serve::send_response(conn, seq, shape);
+                let conn = conn.root();
+                crate::server::turnloop_route::send_response(&conn, seq, shape);
             }
         }
     }

@@ -330,20 +330,6 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
-    /// Cross-function native-instance hints: (fn_ident_span_lo, param_index) ->
-    /// (module_name, class_name). Populated by `pre_scan_cross_fn_native_params`
-    /// BEFORE any function body is lowered, so `lower_fn_decl` can tag an
-    /// otherwise-untyped parameter as a native instance when a known native
-    /// handle (e.g. the `("ws","Client")` upgrade `wsId`) is passed across the
-    /// call boundary into it. Without this, `wsId.send(...)` inside a helper
-    /// reached as `handleConnection(req, wsId)` lowers to a generic (silent
-    /// no-op) dispatch instead of `js_ws_send_client_i64`.
-    ///
-    /// Keyed by the function declaration's identifier span (its `lo` byte
-    /// offset) — a stable AST identity — rather than its name, so a hint seeded
-    /// for one declaration never leaks onto an unrelated same-named (shadowed or
-    /// redeclared) function.
-    pub(crate) param_native_hints: HashMap<(u32, usize), (String, String)>,
     /// True while lowering code governed by ECMAScript strict mode.
     pub(crate) current_strict: bool,
     /// #1483: type-only perry/ui widget import aliases — local_name ->
@@ -765,12 +751,11 @@ pub struct LoweringContext {
     /// index keeps the FIRST pushed index per name (`entry().or_insert`).
     pub(crate) func_return_native_instances_index: HashMap<String, usize>,
     /// Param names a pre-scan registered as native instances for the callback
-    /// it is ABOUT to lower (e.g. the `wsId` of `server.on('upgrade', (req,
-    /// wsId, head) => …)` tagged `("ws","Client")`). The callback's own param
+    /// it is ABOUT to lower (e.g. the `res` of a request handler tagged
+    /// `("http","ServerResponse")`). The callback's own param
     /// binding then calls `shadow_native_instance_if_present(param)` to tombstone
     /// stale leaked native tags — but here the tag is the FRESH, intended one,
-    /// so that shadow would wrongly erase it (the `wsId.send`/`.on` dead-channel
-    /// bug). One-shot per name: `shadow_native_instance_if_present` consumes the
+    /// so that shadow would wrongly erase it (the dead-channel bug). One-shot per name: `shadow_native_instance_if_present` consumes the
     /// entry and skips the tombstone exactly once.
     ///
     /// Each entry is anchored to the CALLBACK's param `scope_depth` (one below

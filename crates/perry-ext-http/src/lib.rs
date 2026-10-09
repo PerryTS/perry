@@ -52,7 +52,6 @@ mod tls_client;
 // parser those socket paths share.
 mod client_connect_override;
 mod client_upgrade;
-mod plain_client;
 
 // `Expect: 100-continue` (#5080): arms the head-first exchange and hands the
 // withheld body to it at `end()`.
@@ -65,7 +64,7 @@ mod continue_client;
 // `pub` rather than private for one reason: a transport that silently did
 // nothing would be indistinguishable from a working one at the JS surface —
 // the "gate runs but its subject never did" shape. The liveness counters and
-// `try_dispatch*` are reachable so `tests/turnloop_client_exchange.rs` can
+// Transport counters are reachable so `tests/turnloop_client_exchange.rs` can
 // assert the subject was live. No C-ABI symbol is added.
 pub mod client_turnloop;
 
@@ -106,10 +105,10 @@ use root_scanner::scan_http_roots;
 
 use bytes::Bytes;
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
-    json_stringify, notify_main_thread, register_agent_event_pump, register_handle,
-    with_handle_mut, ArrayHeader, GcRootVisitor, Handle, JsClosure, JsString, JsValue,
-    ObjectHeader, RawClosureHeader, StringHeader,
+    alloc_string, gc_register_mutable_root_scanner_named, get_handle, get_handle_mut,
+    iter_handles_of_mut, json_stringify, notify_main_thread, register_agent_event_pump,
+    register_handle, with_handle_mut, ArrayHeader, GcRootVisitor, Handle, JsClosure,
+    JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
@@ -133,14 +132,6 @@ pub(crate) enum PendingHttpEvent {
     Socket { request_handle: Handle },
     /// An `options.signal` listener fired for a ClientRequest.
     SignalAbort { request_handle: Handle },
-    /// Generation-guarded retirement of a public Agent socket facade that
-    /// remained idle long enough for an unsolicited-data/remote-close poll.
-    AgentIdleExpire {
-        agent_handle: Handle,
-        key: String,
-        socket: Handle,
-        generation: u64,
-    },
     Response {
         request_handle: Handle,
         status: u16,
@@ -236,36 +227,6 @@ static CLIENT_REQUESTS_INFLIGHT: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<(u64, Handle)>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
-/// RAII in-flight marker, held by an exchange from dispatch until it settles.
-/// Its owning agent is captured on the transport loop, independently of the
-/// request registry: removing a request cannot shorten the exchange lifetime.
-pub(crate) struct ClientInflightGuard {
-    owner_agent: u64,
-    request_handle: Handle,
-}
-impl ClientInflightGuard {
-    pub(crate) fn new(request_handle: Handle) -> Self {
-        let owner_agent = perry_ffi::agent_post::current_agent();
-        CLIENT_REQUESTS_INFLIGHT
-            .lock()
-            .unwrap()
-            .insert((owner_agent, request_handle));
-        ClientInflightGuard {
-            owner_agent,
-            request_handle,
-        }
-    }
-}
-impl Drop for ClientInflightGuard {
-    fn drop(&mut self) {
-        CLIENT_REQUESTS_INFLIGHT
-            .lock()
-            .unwrap()
-            .remove(&(self.owner_agent, self.request_handle));
-        notify_main_thread();
-    }
-}
-
 /// Registered with the runtime's extension keepalive gate (#5779 follow-up):
 /// returns nonzero while this agent has an HTTP client fetch outstanding.
 #[no_mangle]
@@ -284,7 +245,10 @@ pub extern "C" fn js_ext_http_client_inflight() -> i32 {
                 request.socket_handle
             })
             .unwrap_or(0);
-            socket == 0 || perry_ext_net::js_ext_net_socket_has_ref(socket) != 0
+            socket == 0
+                || perry_ext_net::native_transport::has_ref(f64::from_bits(
+                    JsValue::from_object_ptr(socket as *mut u8).bits(),
+                ))
         })
         .count()
         .min(i32::MAX as usize) as i32
@@ -336,8 +300,9 @@ extern "C" fn client_has_active() -> i32 {
 }
 
 pub(crate) fn ensure_gc_scanner_registered() {
+    gc_register_mutable_root_scanner_named("perry-ext-http-client", scan_http_roots);
     HTTP_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
+        perry_ffi::agent_post::register_retire_hook(root_scanner::retire_client_roots);
         // Register both halves directly with perry-runtime. The stdlib bridge
         // intentionally does not name extension symbols: a client contributes
         // only after this crate is linked and one of its entry points runs.
@@ -412,6 +377,7 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
 pub struct ClientRequestHandle {
     /// The JS heap that owns this request and every callback it registers.
     owner_agent: u64,
+    surface: client_request_surface::ClientRequestSurfaceState,
     async_id: u64,
     method: String,
     url: String,
@@ -462,9 +428,11 @@ pub struct ClientRequestHandle {
     agent_queued: bool,
     /// Whether this request consumed an idle Agent slot.
     reused_socket: bool,
-    /// Stable public net.Socket facade assigned by the Agent (or by the
-    /// implicit global pool for requests without an explicit Agent).
+    /// Actual ordinary Socket assigned by request/Agent ownership.
     socket_handle: Handle,
+    /// The existing driver capability for this exchange, copied before JS.
+    /// Delayed app cleanup must not operate on a later use of the same cell.
+    socket_snapshot: Option<perry_ffi::turnloop_net::HandleSnapshot>,
     abort_signal_bits: u64,
     abort_listener_bits: u64,
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
@@ -514,7 +482,7 @@ unsafe impl Send for ClientRequestHandle {}
 unsafe impl Sync for ClientRequestHandle {}
 
 pub struct IncomingMessageHandle {
-    owner_agent: u64,
+    pub owner_agent: u64,
     pub status_code: u16,
     pub status_message: String,
     /// Raw `(name, value)` header pairs in arrival order, multiplicity
@@ -669,17 +637,22 @@ fn make_request_handle(
     agent_key: String,
     request_create_connection: i64,
 ) -> Handle {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(callback);
+    let create_connection = scope.root_addr(request_create_connection);
+
     let async_id = unsafe {
         js_async_hooks_provider_init(b"HTTPCLIENTREQUEST".as_ptr(), b"HTTPCLIENTREQUEST".len())
     };
     let handle = register_handle(ClientRequestHandle {
+        surface: client_request_surface::ClientRequestSurfaceState::default(),
         owner_agent: perry_ffi::agent_post::current_agent(),
         async_id,
         method,
         url,
         headers,
         body: Vec::new(),
-        response_callback: callback,
+        response_callback: callback.get(),
         response_raw_wrapper: 0,
         listeners: HashMap::new(),
         timeout_ms,
@@ -692,11 +665,12 @@ fn make_request_handle(
         close_emitted: false,
         agent_handle,
         agent_key,
-        request_create_connection,
+        request_create_connection: create_connection.get(),
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
         socket_handle: 0,
+        socket_snapshot: None,
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: tls_client::TlsOptions::default(),
@@ -706,9 +680,13 @@ fn make_request_handle(
         continue_body_pending: false,
         agent_false: false,
     });
-    if callback != 0 {
-        let wrapper =
-            client_request_surface::create_client_once_wrapper(handle, "response", callback, true);
+    if callback.get() != 0 {
+        let wrapper = client_request_surface::create_client_once_wrapper(
+            handle,
+            "response",
+            callback.get(),
+            true,
+        );
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
             request.response_raw_wrapper = wrapper;
         });
@@ -793,7 +771,6 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
         | PendingHttpEvent::Flushed { request_handle }
         | PendingHttpEvent::Continue { request_handle }
         | PendingHttpEvent::DeferredArmContinue { request_handle } => *request_handle,
-        PendingHttpEvent::AgentIdleExpire { .. } => 0,
     }
 }
 
@@ -1030,7 +1007,11 @@ unsafe extern "C" fn http_create_socket_cb(
     } else {
         0
     };
-    if socket_id <= 0 {
+    if perry_ext_net::native_transport::socket_link(f64::from_bits(
+        JsValue::from_object_ptr(socket_id as *mut u8).bits(),
+    ))
+    .is_err()
+    {
         push_event(PendingHttpEvent::Error {
             request_handle,
             error_message: "agent.createSocket callback did not provide a socket".to_string(),
@@ -1052,9 +1033,6 @@ unsafe extern "C" fn http_create_socket_cb(
     if let Some((method, url, headers, body, timeout_ms)) = snap {
         // Attach raw mode on the main thread before the async task runs, to
         // close the same data race the `createConnection` path guards against.
-        if let Some(vt) = perry_ffi::raw_net() {
-            (vt.attach)(socket_id);
-        }
         client_connect_override::dispatch_request_over_socket(
             request_handle,
             method,
@@ -1073,12 +1051,15 @@ unsafe extern "C" fn http_create_socket_cb(
 // ------------------------------------------------------------------
 
 unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let arg = scope.root_nanbox(arg_f64);
+    let callback = scope.root_addr(callback);
     ensure_gc_scanner_registered();
     // Issue #769 — accept either a URL string or an options object. Mirrors
     // the dispatch in `get_common` so `http.request("http://…", cb)` works
     // the same as `http.request({ host, port, path }, cb)`.
-    let (method, url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
-        let raw = extract_string_value(arg_f64).unwrap_or_default();
+    let (method, url, headers, timeout, agent_handle) = if is_string_value(arg.get()) {
+        let raw = extract_string_value(arg.get()).unwrap_or_default();
         validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -1089,7 +1070,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         };
         ("GET".to_string(), url, HashMap::new(), None, 0)
     } else {
-        let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        let opts = parse_options_object(arg.get()).unwrap_or(serde_json::Value::Null);
         validate_client_options(&opts, default_protocol); // #4907
         let method = method_from_options(&opts);
         let url = url_from_options(&opts, default_protocol);
@@ -1098,7 +1079,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         // #2154: `options.agent` doesn't survive the JSON round-trip
         // (pointer-tagged values get dropped) — read the field straight
         // off the NaN-boxed object instead.
-        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        let agent_handle = agent::agent_handle_from_options(arg.get()).unwrap_or(0);
         (method, url, headers, timeout, agent_handle)
     };
     let agent_handle = if default_protocol == "https" {
@@ -1106,21 +1087,21 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     } else {
         agent_handle
     };
-    let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
-    let request_create_connection = agent::request_create_connection_from_options(arg_f64); // #10469
+    let agent_key = agent::request_key_from_options(agent_handle, arg.get(), &url);
+    let request_create_connection = agent::request_create_connection_from_options(arg.get()); // #10469
     let handle = make_request_handle(
         method,
         url,
         headers,
         timeout,
-        callback,
+        callback.get(),
         agent_handle,
         agent_key,
         request_create_connection,
     );
-    client_abort::attach_request_signal(handle, arg_f64);
-    note_agent_false(handle, arg_f64); // #11452
-    attach_tls_options(handle, arg_f64); // #4906
+    client_abort::attach_request_signal(handle, arg.get());
+    note_agent_false(handle, arg.get()); // #11452
+    attach_tls_options(handle, arg.get()); // #4906
     continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     handle
 }
@@ -1147,9 +1128,12 @@ pub unsafe extern "C" fn js_https_request(opts_f64: f64, callback_i64: i64) -> H
 }
 
 unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Handle {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let arg = scope.root_nanbox(arg_f64);
+    let callback = scope.root_addr(callback);
     ensure_gc_scanner_registered();
-    let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
-        let raw = extract_string_value(arg_f64).unwrap_or_default();
+    let (url, headers, timeout, agent_handle) = if is_string_value(arg.get()) {
+        let raw = extract_string_value(arg.get()).unwrap_or_default();
         validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
@@ -1160,12 +1144,12 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         };
         (url, HashMap::new(), None, 0)
     } else {
-        let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        let opts = parse_options_object(arg.get()).unwrap_or(serde_json::Value::Null);
         validate_client_options(&opts, default_protocol); // #4907
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
-        let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
+        let agent_handle = agent::agent_handle_from_options(arg.get()).unwrap_or(0);
         (url, headers, timeout, agent_handle)
     };
 
@@ -1174,22 +1158,22 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
     } else {
         agent_handle
     };
-    let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
-    let request_create_connection = agent::request_create_connection_from_options(arg_f64); // #10469
+    let agent_key = agent::request_key_from_options(agent_handle, arg.get(), &url);
+    let request_create_connection = agent::request_create_connection_from_options(arg.get()); // #10469
     let handle = make_request_handle(
         "GET".to_string(),
         url,
         headers,
         timeout,
-        callback,
+        callback.get(),
         agent_handle,
         agent_key,
         request_create_connection,
     );
-    client_abort::attach_request_signal(handle, arg_f64);
-    note_agent_false(handle, arg_f64); // #11452
-    attach_tls_options(handle, arg_f64); // #4906
-                                         // GET auto-`end()`s, kicking off the request.
+    client_abort::attach_request_signal(handle, arg.get());
+    note_agent_false(handle, arg.get()); // #11452
+    attach_tls_options(handle, arg.get()); // #4906
+                                           // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     handle
 }
@@ -1218,41 +1202,46 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
 // ------------------------------------------------------------------
 
 unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let args = scope.root_addr(args_array);
     ensure_gc_scanner_registered();
-    let parsed = parse_client_args(args_array);
+    let parsed = parse_client_args(args.get());
+    let url_arg = scope.root_nanbox(parsed.url);
+    let options = scope.root_nanbox(parsed.opts);
+    let callback = scope.root_addr(parsed.callback);
     // #4907 — validate before building the request handle. A string URL
     // argument is validated as a WHATWG URL; the options bag is validated for
     // method / path / headers / protocol / option types.
-    if is_string_value(parsed.url) {
-        let raw = extract_string_value(parsed.url).unwrap_or_default();
+    if is_string_value(url_arg.get()) {
+        let raw = extract_string_value(url_arg.get()).unwrap_or_default();
         validate_client_url_string(&raw);
     }
-    if let Some(opts) = parse_options_object(parsed.opts) {
+    if let Some(opts) = parse_options_object(options.get()) {
         validate_client_options(&opts, default_protocol);
     }
-    let method = method_for_overload(parsed.opts);
+    let method = method_for_overload(options.get());
     let (url, headers, timeout, agent_handle) =
-        merge_url_and_options(parsed.url, parsed.opts, default_protocol);
+        merge_url_and_options(url_arg.get(), options.get(), default_protocol);
     let agent_handle = if default_protocol == "https" {
         agent::resolve_https_agent_handle(agent_handle)
     } else {
         agent_handle
     };
-    let agent_key = agent::request_key_from_options(agent_handle, parsed.opts, &url);
-    let request_create_connection = agent::request_create_connection_from_options(parsed.opts); // #10469
+    let agent_key = agent::request_key_from_options(agent_handle, options.get(), &url);
+    let request_create_connection = agent::request_create_connection_from_options(options.get()); // #10469
     let handle = make_request_handle(
         method,
         url,
         headers,
         timeout,
-        parsed.callback,
+        callback.get(),
         agent_handle,
         agent_key,
         request_create_connection,
     );
-    client_abort::attach_request_signal(handle, parsed.opts);
-    attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
-    note_agent_false(handle, parsed.opts); // #11452
+    client_abort::attach_request_signal(handle, options.get());
+    attach_tls_options(handle, options.get()); // #4906 — TLS options ride on the options bag
+    note_agent_false(handle, options.get()); // #11452
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1556,9 +1545,6 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
             {
                 // Attach raw mode now (main thread) so no inbound byte can be
                 // dispatched as a JS 'data' event before the task takes over.
-                if let Some(vt) = perry_ffi::raw_net() {
-                    (vt.attach)(socket_id);
-                }
                 client_connect_override::dispatch_request_over_socket(
                     handle, method, url, headers, body, timeout_ms, socket_id,
                 );
@@ -1606,12 +1592,32 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
     });
 }
 
+/// Return a rooted receiver only while the request's original driver capability
+/// still belongs to it. Completed callbacks may have reopened the same object.
+pub(crate) fn current_request_socket(
+    request: Handle,
+) -> Option<perry_ext_net::native_transport::RootedSocket> {
+    let (owner, incarnation) = get_handle::<ClientRequestHandle>(request)
+        .map(|req| (req.socket_handle, req.socket_snapshot))?;
+    if owner == 0 {
+        return None;
+    }
+    let socket = perry_ext_net::native_transport::RootedSocket::new(f64::from_bits(
+        JsValue::from_object_ptr(owner as *mut u8).bits(),
+    ));
+    let current = incarnation.as_ref().map_or_else(
+        || perry_ext_net::native_transport::snapshot(socket.value()).is_none(),
+        |snapshot| perry_ext_net::native_transport::matches(socket.value(), snapshot),
+    );
+    current.then_some(socket)
+}
+
 /// Move a completed request out of its Agent's active pool and resume the
 /// oldest per-origin waiter, skipping requests that were aborted while queued.
 /// Successful responses may leave one observable idle slot when keepAlive is
 /// enabled; error/abort/destroy paths always release without retaining it.
 pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bool) {
-    let Some((agent_handle, key, was_active, socket)) =
+    let Some((agent_handle, key, was_active, socket, incarnation)) =
         with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
             let active = request.agent_active;
             request.agent_active = false;
@@ -1620,6 +1626,7 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
                 request.agent_key.clone(),
                 active,
                 request.socket_handle,
+                request.socket_snapshot,
             )
         })
     else {
@@ -1629,14 +1636,52 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
         return;
     }
 
-    let mut next = agent::release_request(agent_handle, &key, socket, keep_alive);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_addr(socket);
+    let owner = f64::from_bits(JsValue::from_object_ptr(socket.get() as *mut u8).bits());
+    let current = incarnation.as_ref().map_or_else(
+        || perry_ext_net::native_transport::snapshot(owner).is_none(),
+        |snapshot| perry_ext_net::native_transport::matches(owner, snapshot),
+    );
+    #[cfg(test)]
+    let current =
+        current || std::env::var("PERRY_NET_A_CLIENT_SABOTAGE").as_deref() == Ok("cleanup_handle");
+    let transport = if current {
+        socket.get()
+    } else {
+        if let Some(agent) = get_handle_mut::<agent::AgentHandle>(agent_handle) {
+            if let Some(owners) = agent.active_socket_handles.get_mut(&key) {
+                owners.retain(|candidate| *candidate != socket.get());
+            }
+        }
+        0 // Only the old logical admission is owed; preserve the new driver.
+    };
+    resume_agent_waiters(
+        agent_handle,
+        &key,
+        agent::release_request(agent_handle, &key, transport, keep_alive && current),
+    );
+}
+
+/// Both normal completion and upgrade release the same logical admission.
+/// An unended waiter owns its slot until end(); an aborted waiter is skipped.
+unsafe fn resume_agent_waiters(
+    agent_handle: Handle,
+    key: &str,
+    mut next: Option<(Handle, bool, Handle)>,
+) {
     while let Some((next_handle, reused, next_socket)) = next {
-        let next_snapshot = with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
+        let admitted = with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
+            if request.completed {
+                request.agent_queued = false;
+                return None;
+            }
             request.agent_active = true;
             request.agent_queued = false;
             request.reused_socket = reused;
             request.socket_handle = next_socket;
-            (request.ended && !request.completed).then(|| {
+            request.socket_snapshot = None;
+            Some(request.ended.then(|| {
                 (
                     request.method.clone(),
                     request.url.clone(),
@@ -1646,21 +1691,47 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
                     request.agent_handle,
                     request.tls.clone(),
                 )
-            })
+            }))
         })
         .flatten();
-        if let Some(snapshot) = next_snapshot {
+        if let Some(snapshot) = admitted {
             push_event(PendingHttpEvent::Socket {
                 request_handle: next_handle,
             });
-            dispatch_request_snapshot(next_handle, snapshot);
-            break;
+            if let Some(snapshot) = snapshot {
+                dispatch_request_snapshot(next_handle, snapshot);
+            }
+            return;
         }
-        with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
-            request.agent_active = false;
-        });
-        next = agent::release_request(agent_handle, &key, next_socket, false);
+        next = agent::release_request(agent_handle, key, next_socket, false);
     }
+}
+
+/// An upgraded Socket leaves the HTTP Agent, while the request and upgrade
+/// callback retain the actual ordinary Socket. It must never enter the idle
+/// HTTP pool or be destroyed when the ClientRequest completes.
+unsafe fn finish_upgraded_agent_request(request_handle: Handle) {
+    let Some((agent, key, socket)) = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .filter(|request| request.agent_active)
+        .map(|request| {
+            request.agent_active = false;
+            (
+                request.agent_handle,
+                request.agent_key.clone(),
+                request.socket_handle,
+            )
+        })
+    else {
+        return;
+    };
+    if let Some(agent) = get_handle_mut::<agent::AgentHandle>(agent) {
+        if let Some(sockets) = agent.active_socket_handles.get_mut(&key) {
+            sockets.retain(|candidate| *candidate != socket);
+        }
+    }
+    // The normal release path admits waiters with a fresh Socket. A null
+    // transport argument releases only the logical slot, preserving upgrade.
+    resume_agent_waiters(agent, &key, agent::release_request(agent, &key, 0, false));
 }
 
 /// Parse a request URL into the `(host, port, path)` an

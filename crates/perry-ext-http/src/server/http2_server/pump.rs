@@ -435,6 +435,9 @@ mod tests {
         connect_event_emitted: bool,
     ) -> Http2SessionHandle {
         Http2SessionHandle {
+            socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+            socket_incarnation: None,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             server_handle,
             connection_port,
             session_event_emitted: false,
