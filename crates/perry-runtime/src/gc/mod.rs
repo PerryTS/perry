@@ -111,6 +111,7 @@ pub(crate) use scan_fallback::*;
 // consumers for readability only — Rust module order is irrelevant.
 mod root_words;
 use root_words::*;
+pub(crate) use root_words::{mark_precise_root, PreciseRoot};
 mod layout;
 mod layout_slot_visit;
 use layout_slot_visit::*;

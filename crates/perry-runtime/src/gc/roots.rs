@@ -5,7 +5,7 @@ mod mutable_slot;
 #[cfg(all(not(test), perry_native_stack_maps))]
 mod native_savepoint;
 mod rooted_values;
-pub(super) use mutable_slot::{MutableRootSlot, MutableRootSlotKind};
+pub(super) use mutable_slot::{mark_mutable_slot, MutableRootSlot, MutableRootSlotKind};
 mod runtime_handles;
 mod scan_mode;
 mod scanner_shims;
@@ -126,8 +126,7 @@ pub(super) struct MutableRootScannerEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
-    HeapWordCell(usize),
-    HeapWord(u64),
+    NanboxCell(usize),
     RawPointer(usize),
     RawString(usize),
     RawBigInt(usize),
@@ -511,14 +510,17 @@ pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner_named(
     });
 }
 
-/// Register a global variable address as a GC root.
-/// Called by codegen in module init functions.
+/// Register a writable, process-lifetime JSValue slot as a GC root.
+/// Called by codegen in module init functions. The producer initializes the
+/// word before registration and preserves its JSValue encoding on every write;
+/// a bare address bit pattern is a number, not a pointer root. Native owners
+/// with raw GC pointer fields expose those through RuntimeRootVisitor instead.
 #[no_mangle]
 pub extern "C" fn js_gc_register_global_root(ptr: i64) {
     let root = ptr as *mut u64;
     if !root.is_null() {
         unsafe {
-            runtime_write_barrier_root_heap_word(*root);
+            runtime_write_barrier_root_nanbox(*root);
         }
     }
     GLOBAL_ROOTS.with(|roots| {
@@ -980,7 +982,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
         if let Some(stats) = self.root_source_stats {
             unsafe {
-                (*stats).record_scan(bits != 0, root_slot_pointer_candidate(bits));
+                (*stats).record_scan(bits != 0, decode_nanboxed_root_word(bits).is_some());
             }
         }
     }
@@ -1024,16 +1026,20 @@ impl<'a> RuntimeRootVisitor<'a> {
     pub(super) fn visit_nanbox_bits(&mut self, bits: u64) -> Option<u64> {
         match &mut self.mode {
             RuntimeRootVisitMode::Mark { valid_ptrs } => {
-                try_mark_value(bits, valid_ptrs);
+                mark_precise_root(PreciseRoot::JSValue(bits), valid_ptrs);
                 None
             }
             RuntimeRootVisitMode::CopyingCheck { checker } => {
-                checker.check_bits(bits);
+                if decode_nanboxed_root_word(bits).is_some() {
+                    checker.check_bits(bits);
+                }
                 None
             }
-            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
+            RuntimeRootVisitMode::CopyingMark { collector } => {
+                decode_nanboxed_root_word(bits).and_then(|_| collector.visit_value_bits(bits))
+            }
             RuntimeRootVisitMode::CopyingRewrite { collector } => {
-                collector.rewrite_value_bits(bits)
+                decode_nanboxed_root_word(bits).and_then(|_| collector.rewrite_value_bits(bits))
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
@@ -1052,49 +1058,13 @@ impl<'a> RuntimeRootVisitor<'a> {
     }
 
     #[inline]
-    pub(super) fn visit_heap_word_bits(&mut self, bits: u64) -> Option<u64> {
-        match &mut self.mode {
-            RuntimeRootVisitMode::Mark { valid_ptrs } => {
-                try_mark_value_or_raw(bits, valid_ptrs);
-                None
-            }
-            RuntimeRootVisitMode::CopyingCheck { checker } => {
-                checker.check_bits(bits);
-                None
-            }
-            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_value_bits(bits),
-            RuntimeRootVisitMode::CopyingRewrite { collector } => {
-                collector.rewrite_value_bits(bits)
-            }
-            RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_bits) = verifier.stale_value(bits) {
-                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
-                }
-                None
-            }
-            RuntimeRootVisitMode::Copy { mark } => {
-                let tag = bits & TAG_MASK;
-                if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-                    (*mark)(f64::from_bits(bits));
-                } else if tag < 0x7FF8_0000_0000_0000
-                    && (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits)
-                {
-                    (*mark)(f64::from_bits(POINTER_TAG | (bits & POINTER_MASK)));
-                }
-                None
-            }
-        }
-    }
-
-    #[inline]
     pub(super) fn visit_tagged_raw_addr(&mut self, addr: usize, copy_tag: u64) -> Option<usize> {
         if addr == 0 {
             return None;
         }
         match &mut self.mode {
             RuntimeRootVisitMode::Mark { valid_ptrs } => {
-                try_mark_raw_root_addr(addr, valid_ptrs);
+                mark_precise_root(PreciseRoot::GcPointer(addr), valid_ptrs);
                 None
             }
             RuntimeRootVisitMode::CopyingCheck { checker } => {
@@ -1187,22 +1157,6 @@ impl<'a> RuntimeRootVisitor<'a> {
         self.record_source_scan_bits(current);
         if let Some(new_bits) = self.visit_nanbox_bits(current) {
             slot.store(new_bits, atomic_store_ordering(store_ordering));
-            self.record_source_rewrite();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Visit a mutable heap word that may store either a NaN-boxed JSValue
-    /// pointer or a raw heap pointer.
-    ///
-    /// This matches heap-field rewrite semantics for runtime-owned caches
-    /// whose keys are bit copies of closure captures or object fields.
-    pub fn visit_heap_word_u64_slot(&mut self, slot: &mut u64) -> bool {
-        self.record_source_scan_bits(*slot);
-        if let Some(new_bits) = self.visit_heap_word_bits(*slot) {
-            *slot = new_bits;
             self.record_source_rewrite();
             true
         } else {
@@ -1593,7 +1547,7 @@ pub(super) fn mark_mutable_root_slots_step(
                 }
             }
             if bits != 0 {
-                mark_mutable_root_bits(bits, valid_ptrs);
+                mark_mutable_slot(slot, bits, valid_ptrs);
             }
             seen += 1;
             cursor.shadow_seen = seen;
@@ -1625,7 +1579,7 @@ pub(super) fn mark_mutable_root_slots_step(
             let bits = slot.read();
             record_mutable_slot_scan_source(slot, bits, valid_ptrs, &mut root_sources);
             if bits != 0 {
-                mark_mutable_root_bits(bits, valid_ptrs);
+                mark_mutable_slot(slot, bits, valid_ptrs);
             }
             seen += 1;
             cursor.global_seen = seen;
@@ -1645,15 +1599,6 @@ pub(super) fn shadow_slot_pointer_root(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     let addr = bits & POINTER_MASK;
     addr != 0 && (tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG)
-}
-
-#[inline]
-pub(super) fn root_slot_pointer_candidate(bits: u64) -> bool {
-    if shadow_slot_pointer_root(bits) {
-        return true;
-    }
-    let tag = bits & TAG_MASK;
-    tag < 0x7FF8_0000_0000_0000 && CopyingPointerSet::raw_pointer_candidate(bits)
 }
 
 #[inline]
@@ -1688,7 +1633,14 @@ pub(super) fn record_mutable_slot_scan_source(
     if let Some(sources) = root_sources {
         root_source_for_mutable_slot(sources, slot.kind).record_scan(
             bits != 0,
-            mutable_slot_points_to_valid_root(bits, valid_ptrs),
+            match slot.kind {
+                MutableRootSlotKind::ShadowStack => {
+                    mutable_slot_points_to_valid_root(bits, valid_ptrs)
+                }
+                MutableRootSlotKind::NativeStack | MutableRootSlotKind::GlobalRoot => {
+                    slot.pointer_word(bits).is_some()
+                }
+            },
         );
     }
 }
@@ -1705,8 +1657,8 @@ pub(super) fn record_mutable_slot_rewrite_source(
 
 /// Mark mutable roots (shadow-stack slots and registered globals).
 ///
-/// Both slot kinds go through `mark_mutable_root_bits`, which shares its
-/// decoder with the rewrite path (#6910) — see `gc::root_words`.
+/// Source encoding is shared with rewriting: generated slots hold JSValues,
+/// while legacy untyped shadow frames retain the mixed decoder.
 #[allow(dead_code)]
 pub(super) fn mark_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
@@ -1724,7 +1676,7 @@ pub(super) fn mark_mutable_root_slots(
         if bits == 0 {
             return;
         }
-        mark_mutable_root_bits(bits, valid_ptrs);
+        mark_mutable_slot(slot, bits, valid_ptrs);
     });
     record_native_stack_walk_source(native_stack_walk, &mut root_sources);
 }
@@ -1734,15 +1686,9 @@ pub(super) fn nanboxed_root_header(
     value_bits: u64,
     valid_ptrs: &ValidPointerSet,
 ) -> Option<*mut GcHeader> {
-    let tag = value_bits & TAG_MASK;
-    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
-        return None;
-    }
-    let ptr_val = (value_bits & POINTER_MASK) as usize;
-    if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
-        return None;
-    }
-    Some(unsafe { header_from_user_ptr(ptr_val as *const u8) })
+    let _ = valid_ptrs;
+    decode_nanboxed_root_word(value_bits)
+        .map(|word| unsafe { header_from_user_ptr(word.addr() as *const u8) })
 }
 
 #[inline]
@@ -1762,13 +1708,7 @@ pub(super) fn mark_copy_only_scanner_bits(
     let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
         return None;
     };
-    unsafe {
-        let flags = (*header).gc_flags;
-        if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
-            (*header).gc_flags = flags | GC_FLAG_MARKED;
-            push_mark_seed(header);
-        }
-    }
+    mark_precise_root(PreciseRoot::JSValue(bits), valid_ptrs);
     if pin_discoveries && pin_conservative_root_header(header) {
         return Some(unsafe { (*header).size as usize });
     }

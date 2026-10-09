@@ -248,22 +248,25 @@ fn native_stack_roots_survive_nested_frame_growth_and_real_evacuation() {
     let tagged_child = young_leaf();
     let bare_child = young_leaf();
     let before = shadow_stack_depth();
-    with_stack_roots([ptr_bits(tagged_child), bare_child as u64], |roots| {
+    with_stack_roots([tagged_child as *mut u8, bare_child as *mut u8], |roots| {
         // Grow the shadow buffer while the native cells remain bound.
         let old_capacity = SHADOW.with(|cell| unsafe { (*cell.get()).cap });
         let nested = js_shadow_frame_push(old_capacity as u32 + 1);
         assert!(SHADOW.with(|cell| unsafe { (*cell.get()).cap }) > old_capacity);
         let _ = gc_collect_minor();
         for (index, old) in [(0, tagged_child), (1, bare_child)] {
-            let moved = (roots.get(index) & POINTER_MASK) as usize;
-            assert_ne!(moved, old, "the test must actually evacuate each object");
-            assert!(
-                crate::arena::pointer_in_nursery(moved) || crate::arena::pointer_in_old_gen(moved)
-            );
+            roots.with_const_ptr(index, |ptr: *const u8| {
+                let moved = ptr as usize;
+                assert_ne!(moved, old, "the test must actually evacuate each object");
+                assert!(
+                    crate::arena::pointer_in_nursery(moved)
+                        || crate::arena::pointer_in_old_gen(moved)
+                );
+            });
         }
-        let current = roots.get(0);
+        let current = roots.with_const_ptr(0, |ptr: *const u8| ptr as usize);
         js_shadow_frame_pop(nested);
-        assert_eq!(roots.get(0), current);
+        roots.with_const_ptr(0, |ptr: *const u8| assert_eq!(ptr as usize, current));
     });
     assert_eq!(shadow_stack_depth(), before);
 }

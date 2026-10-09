@@ -589,3 +589,192 @@ fn module_clone_budget_selects_only_the_sixteen_cheapest_candidates() {
     assert!((1..=16).all(|func_id| selected.contains(&func_id)));
     assert!(!selected.contains(&17));
 }
+
+#[test]
+fn captured_scope_callee_resolution_uses_a_decoded_base() {
+    let mut outer = outer_function(false);
+    outer.params = vec![param(2, "input", callback_type())];
+    outer.body = vec![
+        Stmt::PreallocateBoxes(vec![COUNT, CALLBACK]),
+        Stmt::Let {
+            id: COUNT,
+            name: "count".into(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Integer(0)),
+        },
+        Stmt::Let {
+            id: CALLBACK,
+            name: "callback".into(),
+            ty: callback_type(),
+            mutable: true,
+            init: Some(Expr::LocalGet(2)),
+        },
+        Stmt::Expr(Expr::Closure {
+            func_id: CALLBACK_FUNC,
+            params: Vec::new(),
+            return_type: Type::Void,
+            body: vec![Stmt::While {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(COUNT)),
+                    right: Box::new(Expr::Integer(3)),
+                },
+                body: vec![
+                    Stmt::Expr(Expr::Call {
+                        callee: Box::new(Expr::LocalGet(CALLBACK)),
+                        args: Vec::new(),
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    Stmt::Expr(Expr::Update {
+                        id: COUNT,
+                        op: UpdateOp::Increment,
+                        prefix: false,
+                    }),
+                ],
+            }],
+            captures: vec![COUNT, CALLBACK],
+            mutable_captures: vec![COUNT, CALLBACK],
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        }),
+    ];
+    let mut module = Module::new("scoped_callee_root.ts");
+    module.functions = vec![outer];
+    let boxed = super::boxed_locals::collect_module_boxed_vars(&module);
+    let map = crate::scope_env::ScopeMap::build(&module, &boxed, &Default::default());
+    assert_eq!(map.slot(CALLBACK).expect("scoped callback").index, 1);
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".into(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("fixture compiles")).unwrap();
+    let body = function_body(&ir, "perry_closure_scoped_callee_root_ts__99");
+    let entry = body
+        .split("@js_closure_resolve_plain_direct_call")
+        .next()
+        .unwrap();
+    assert!(
+        body.contains("@js_closure_resolve_plain_direct_call"),
+        "{body}"
+    );
+    // The callback is scope slot 1. Its entry read must derive +8 from the
+    // decoded scope base, never from the tagged closure capture word.
+    // Follow the exact load that supplies the resolution, so decoding a
+    // different scope read earlier in the entry cannot satisfy this witness.
+    let lines = entry.lines().collect::<Vec<_>>();
+    let last_load = lines
+        .iter()
+        .rposition(|line| line.contains(" = load i64, ptr "))
+        .expect("entry callback value load");
+    let ptr = lines[last_load]
+        .split("ptr ")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap();
+    let ptr_def = lines
+        .iter()
+        .find(|line| line.trim().starts_with(&format!("{ptr} = inttoptr i64 ")))
+        .expect("callback slot pointer");
+    let addr = ptr_def
+        .split("inttoptr i64 ")
+        .nth(1)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap();
+    let addr_def = lines
+        .iter()
+        .find(|line| line.trim().starts_with(&format!("{addr} = add i64 ")))
+        .expect("nonzero callback slot offset");
+    let base = addr_def
+        .split("add i64 ")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap();
+    assert!(
+        lines.iter().any(|line| {
+            line.trim().starts_with(&format!("{base} = and i64 "))
+                && line.contains(crate::nanbox::POINTER_MASK_I64)
+        }),
+        "entry callback value is loaded from an encoded scope base:\n{entry}"
+    );
+}
+
+#[test]
+fn captured_array_and_with_writes_decode_the_box_container() {
+    let mut outer = outer_function(false);
+    outer.body = vec![
+        Stmt::Let {
+            id: COUNT,
+            name: "array".into(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: true,
+            init: Some(Expr::Array(Vec::new())),
+        },
+        Stmt::Expr(callback_with(
+            CALLBACK_FUNC,
+            Vec::new(),
+            vec![
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: COUNT,
+                    value: Box::new(Expr::Integer(1)),
+                    field_writeback: None,
+                }),
+                Stmt::Expr(Expr::ArrayUnshift {
+                    array_id: COUNT,
+                    value: Box::new(Expr::Integer(2)),
+                }),
+                Stmt::Expr(Expr::WithSet {
+                    object: Box::new(Expr::Object(Vec::new())),
+                    property: "array".into(),
+                    value: Box::new(Expr::Array(Vec::new())),
+                    fallback: perry_hir::WithSetFallback::Local(COUNT),
+                    strict: false,
+                }),
+            ],
+        )),
+    ];
+    let mut module = Module::new("captured_box_writes.ts");
+    module.functions = vec![outer];
+    let boxed = super::boxed_locals::collect_module_boxed_vars(&module);
+    assert!(boxed.contains(&COUNT));
+    assert!(crate::scope_env::ScopeMap::build(&module, &boxed, &Default::default()).is_empty());
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("fixture compiles")).unwrap();
+    let body = function_body(&ir, "perry_closure_captured_box_writes_ts__99");
+    let setters = body
+        .lines()
+        .filter_map(|line| {
+            line.split_once("@js_box_set_bits(i64 ")
+                .map(|(_, args)| args.split(',').next().unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        setters.len() >= 3,
+        "push, unshift and with fallback must write their box:\n{body}"
+    );
+    for cell in setters {
+        assert!(
+            body.lines().any(|line| {
+                line.trim().starts_with(&format!("{cell} = and i64 "))
+                    && line.contains(crate::nanbox::POINTER_MASK_I64)
+            }),
+            "box setter receives an encoded capture instead of its decoded container:\n{body}"
+        );
+    }
+}

@@ -47,13 +47,8 @@ pub(super) fn try_rewrite_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Opti
 }
 
 pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet) -> Option<u64> {
-    let tag = bits & TAG_MASK;
-    if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
-        return None;
-    }
-    let ptr_addr = (bits & POINTER_MASK) as usize;
-    let new_user = try_rewrite_raw_addr(ptr_addr, valid_ptrs)?;
-    Some(tag | (new_user as u64 & POINTER_MASK))
+    let word = decode_nanboxed_root_word(bits)?;
+    Some(word.encode(try_rewrite_raw_addr(word.addr(), valid_ptrs)?))
 }
 
 /// #8174: refuses a forwarding target that is not a heap object start, in
@@ -149,12 +144,8 @@ impl<'a> EvacuationVerifier<'a> {
     }
 
     pub(super) fn stale_nanboxed_value(self, bits: u64) -> Option<u64> {
-        let tag = bits & TAG_MASK;
-        if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
-            return None;
-        }
-        let addr = self.stale_raw_addr((bits & POINTER_MASK) as usize)?;
-        Some(tag | (addr as u64 & POINTER_MASK))
+        let word = decode_nanboxed_root_word(bits)?;
+        Some(word.encode(self.stale_raw_addr(word.addr())?))
     }
 }
 
@@ -1608,10 +1599,9 @@ pub(super) fn rewrite_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
 
 /// Walk every mutable root slot and rewrite forwarded pointers.
 ///
-/// `try_rewrite_value` accepts a heap reference in either form — NaN-boxed
-/// or bare — for BOTH slot kinds, and `mark_mutable_root_bits` accepts
-/// exactly the same set on the mark side (#6910). Do not narrow one without
-/// the other: a form this pass relocates but marking skips is swept live.
+/// The source owner selects the same decoder for marking and rewriting:
+/// global/native homes contain JSValues; untyped shadow homes may also contain
+/// bare pointers. Never relocate a numeric precise value as a pointer (#6910).
 pub(super) fn rewrite_mutable_root_slots(
     valid_ptrs: &ValidPointerSet,
     shadow_stats: Option<&mut ShadowRootTraceStats>,
@@ -1630,7 +1620,10 @@ pub(super) fn rewrite_mutable_root_slots_with_sources(
         if bits == 0 {
             return;
         }
-        if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+        if let Some(new_bits) = slot
+            .pointer_word(bits)
+            .and_then(|_| try_rewrite_value(bits, valid_ptrs))
+        {
             slot.write(new_bits);
             record_mutable_slot_rewrite_source(slot, &mut root_sources);
             if matches!(slot.kind, MutableRootSlotKind::ShadowStack) {
@@ -1678,7 +1671,10 @@ pub(super) fn verify_mutable_root_slots(verifier: EvacuationVerifier<'_>) {
         if bits == 0 {
             return;
         }
-        if let Some(new_bits) = verifier.stale_value(bits) {
+        if let Some(new_bits) = slot
+            .pointer_word(bits)
+            .and_then(|_| verifier.stale_value(bits))
+        {
             let surface = match slot.kind {
                 MutableRootSlotKind::ShadowStack => "shadow stack roots",
                 MutableRootSlotKind::NativeStack => "native stack-map roots",

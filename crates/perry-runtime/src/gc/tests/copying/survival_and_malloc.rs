@@ -639,7 +639,7 @@ fn test_copied_minor_malloc_scaling_falls_back_when_registry_unavailable() {
     unsafe {
         init_test_closure(live_malloc);
     }
-    let mut raw_root = live_malloc as u64;
+    let mut raw_root = ptr_bits(live_malloc as usize);
     js_gc_register_global_root(&mut raw_root as *mut u64 as i64);
     deactivate_malloc_registry_for_tests();
 
@@ -660,7 +660,7 @@ fn test_copied_minor_malloc_scaling_falls_back_when_registry_unavailable() {
         "copied-minor fallback must not rebuild the malloc registry"
     );
     assert!(malloc_user_ptr_tracked(live_malloc));
-    assert_eq!(raw_root as usize, live_malloc as usize);
+    assert_eq!(raw_root, ptr_bits(live_malloc as usize));
     assert!(
         !malloc_registry_active_for_tests(),
         "fallback mark-sweep should not activate the copied-minor malloc registry"

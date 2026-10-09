@@ -236,7 +236,10 @@ mod captured_closure_cache_tests {
         };
         for i in 0..CAPTURED_MISS_STREAK_DISABLE - 1 {
             let captured = js_closure_alloc(func, 0);
-            let captures = [captured as u64, (i as f64).to_bits()];
+            let captures = [
+                crate::value::POINTER_TAG | captured as u64,
+                (i as f64).to_bits(),
+            ];
             js_closure_alloc_with_captures_singleton(func, 2, captures.as_ptr());
         }
         SINGLETON_CAPTURED_CLOSURES.with(|s| {
@@ -576,7 +579,7 @@ fn closure_alloc_init_collecting(
     let count = real_capture_count(capture_count) as usize;
     let scope = crate::gc::RuntimeHandleScope::new();
     let values = unsafe { std::slice::from_raw_parts(captures_ptr, count) };
-    let rooted = scope.root_heap_word_u64_slice_iter(values);
+    let rooted = scope.root_nanbox_u64_slice_iter(values);
     let closure = js_closure_alloc(info, capture_count);
     // Read through the roots only after the allocation; consume them while
     // installing slots, without any intervening collecting operation.
@@ -764,7 +767,7 @@ pub extern "C" fn js_closure_alloc_singleton(
     SINGLETON_CLOSURES.with(|s| {
         s.borrow_mut().insert(info as usize, allocated);
     });
-    crate::gc::runtime_write_barrier_root_heap_word(allocated as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(allocated as *const u8);
     allocated
 }
 
@@ -798,7 +801,7 @@ pub fn scan_singleton_closure_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             for entry in cache.entries.iter_mut() {
                 visitor.visit_raw_mut_ptr_slot(&mut entry.closure);
                 for word in entry.captures.iter_mut() {
-                    visitor.visit_heap_word_u64_slot(word);
+                    visitor.visit_nanbox_u64_slot(word);
                 }
                 // A copying collection may have rewritten pointer-bearing
                 // capture words. Keep the non-semantic prefilter synchronized
@@ -940,13 +943,13 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         let capture_scope = crate::gc::RuntimeHandleScope::new();
         let capture_handles: Vec<_> = captures_slice
             .iter()
-            .map(|bits| capture_scope.root_heap_word_u64(*bits))
+            .map(|bits| capture_scope.root_nanbox_u64(*bits))
             .collect();
         let allocated = js_closure_alloc(info, capture_count);
         if n > 0 && !captures_ptr.is_null() {
             let rewritten_captures: Vec<u64> = capture_handles
                 .iter()
-                .map(|handle| handle.get_heap_word_u64())
+                .map(|handle| handle.get_nanbox_u64())
                 .collect();
             unsafe {
                 let dest = closure_capture_slots_mut(allocated);
@@ -983,12 +986,12 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     let capture_scope = crate::gc::RuntimeHandleScope::new();
     let capture_handles: Vec<_> = captures_slice
         .iter()
-        .map(|bits| capture_scope.root_heap_word_u64(*bits))
+        .map(|bits| capture_scope.root_nanbox_u64(*bits))
         .collect();
     let allocated = js_closure_alloc(info, capture_count);
     let rewritten_captures: Vec<u64> = capture_handles
         .iter()
-        .map(|handle| handle.get_heap_word_u64())
+        .map(|handle| handle.get_nanbox_u64())
         .collect();
     if n > 0 && !captures_ptr.is_null() {
         unsafe {
@@ -998,9 +1001,9 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
             rebuild_closure_layout_and_barriers(allocated, n);
         }
     }
-    crate::gc::runtime_write_barrier_root_heap_word(allocated as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(allocated as *const u8);
     for &bits in &rewritten_captures {
-        crate::gc::runtime_write_barrier_root_heap_word(bits);
+        crate::gc::runtime_write_barrier_root_nanbox(bits);
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
@@ -1092,7 +1095,11 @@ pub extern "C" fn js_closure_set_box_capture_ptr(
     index: u32,
     value: i64,
 ) {
-    js_closure_set_capture_bits(closure, index, value as u64);
+    js_closure_set_capture_bits(
+        closure,
+        index,
+        crate::value::POINTER_TAG | (value as u64 & crate::value::POINTER_MASK),
+    );
 }
 
 /// Get a captured value (as i64 pointer) by index

@@ -77,12 +77,8 @@ fn tdz_finally_allocates_on_normal_and_exception_paths() {
     );
     assert_eq!(slots[0], slots[1], "path copies share one stack slot");
     assert!(
-        ir.contains(&format!(
-            "store i64 {}, ptr {}",
-            crate::nanbox::TAG_UNDEFINED_I64,
-            slots[0]
-        )),
-        "slot must be entry-initialized"
+        ir.contains(&format!("store i64 0, ptr {}", slots[0])),
+        "the raw cell pointer home must be null at entry; TDZ belongs inside the cell"
     );
 }
 

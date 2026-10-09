@@ -51,12 +51,9 @@ pub(crate) fn store_param_slot(
 ) -> String {
     let boxed_param = boxed_vars.contains(&param.id) && param.arguments_object.is_none();
     let slot = blk.alloca(if boxed_param { I64 } else { DOUBLE });
-    if boxed_param {
-        let arg_bits = blk.bitcast_double_to_i64(arg_name);
-        blk.store(I64, &arg_bits, &slot);
-    } else {
-        blk.store(DOUBLE, arg_name, &slot);
-    }
+    // Incoming arguments are JSValues, including homes that will later
+    // hold a raw cell pointer. Access encoding follows each write/read.
+    blk.store(DOUBLE, arg_name, &slot);
     slot
 }
 
@@ -78,7 +75,8 @@ pub(crate) fn box_rooted_parameter_slots(
         if let Some(slot) = slots.get(&p.id) {
             // All incoming arguments are rooted before the first allocation.
             let blk = lf.block_mut(0).expect("parameter entry");
-            let bits = blk.load(I64, slot);
+            let value = blk.load(DOUBLE, slot);
+            let bits = blk.bitcast_double_to_i64(&value);
             let cell = blk.call(I64, "js_box_alloc_bits", &[(I64, &bits)]);
             blk.store(I64, &cell, slot);
             boxed.push(p.id);

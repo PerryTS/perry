@@ -50,7 +50,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let parent = scope.root_heap_word_u64(parent_bits);
+    let parent = scope.root_nanbox_u64(parent_bits);
     // The link's identity is the parent's stable serial: mark it as a
     // prototype first (what every link does to its target), before this
     // object exists. A parent with no serial gets a fresh identity per link,
@@ -158,7 +158,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
             crate::object::proto_validity::mark_object_as_prototype(p as usize)
         });
     }
-    let parent_bits = parent.get_heap_word_u64();
+    let parent_bits = parent.get_nanbox_u64();
     let ok = proto.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
         for (slot, value) in values.iter().enumerate() {
             crate::object::slot_store::store_object_field_slot(

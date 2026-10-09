@@ -204,7 +204,7 @@ pub(crate) fn declared_cell_roots(ctx: &FnCtx<'_>, stmt: &perry_hir::Stmt) -> Ve
 
 /// The birth rule (module docs): before a closure reads the words for its
 /// `captures`, give every cell binding among them whose frame root still
-/// holds the TAG_UNDEFINED entry sentinel its cell, published into the root.
+/// holds the null pointer entry sentinel its cell, published into the root.
 /// A binding reached through the running closure's own capture slot needs
 /// nothing: that slot was filled by the same rule when the running closure was
 /// born.
@@ -225,7 +225,7 @@ pub(crate) fn ensure_capture_cells(ctx: &mut FnCtx<'_>, captures: &[u32]) {
         let word = ctx.block().load(I64, &root);
         let missing = ctx
             .block()
-            .icmp_eq(I64, &word, crate::nanbox::TAG_UNDEFINED_I64);
+            .icmp_eq(I64, &word, "0");
         let mint_idx = ctx.new_block("capture_cell.mint");
         let ready_idx = ctx.new_block("capture_cell.ready");
         let mint_label = ctx.block_label(mint_idx);
@@ -317,7 +317,7 @@ impl BirthWords {
     pub(crate) fn read(&self, ctx: &mut FnCtx<'_>) -> Vec<String> {
         let mut words = self.words.clone();
         for (slot, held) in &self.minted {
-            words[*slot] = match held {
+            let raw = match held {
                 Minted::Raw(cell) => cell.clone(),
                 Minted::Rooted(handle) => self
                     .group
@@ -325,6 +325,7 @@ impl BirthWords {
                     .expect("a rooted mint has a group")
                     .reread_emitted(ctx, *handle),
             };
+            words[*slot] = ctx.block().or(I64, &raw, &crate::nanbox::POINTER_TAG.to_string());
         }
         words
     }

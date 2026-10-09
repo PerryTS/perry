@@ -878,7 +878,7 @@ unsafe fn resolve_proto_chain_field_inner(
                             let name = name.to_string();
                             let scope = crate::gc::RuntimeHandleScope::new();
                             let value = scope.root_nanbox_u64(value.bits());
-                            let receiver = scope.root_heap_word_u64(receiver.to_bits());
+                            let receiver = scope.root_nanbox_u64(receiver.to_bits());
                             if super::super::native_module::class_has_own_method(cid, &name)
                                 && value.get_nanbox_u64()
                                     == super::super::native_module::class_prototype_method_value_for_name(
@@ -886,7 +886,7 @@ unsafe fn resolve_proto_chain_field_inner(
                                     )
                                     .to_bits()
                             {
-                                let receiver = f64::from_bits(receiver.get_heap_word_u64());
+                                let receiver = f64::from_bits(receiver.get_nanbox_u64());
                                 if let Some(brand) =
                                     super::super::private_evaluation_brand_value(receiver)
                                 {

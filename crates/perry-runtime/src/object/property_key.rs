@@ -168,11 +168,11 @@ pub unsafe extern "C" fn js_object_set_property_key(
     // object slots store the untagged pointer) OR as an INT32 class-ref — the
     // heap-word slot kind covers all three, rewriting only the real pointers
     // and preserving each encoding.
-    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let value_handle = scope.root_nanbox_f64(value);
     let key_handle = to_property_key_rooted(&scope, key_value);
     set_property_key_resolved(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
         value_handle.get_nanbox_f64(),
     )
@@ -223,10 +223,10 @@ pub unsafe extern "C" fn js_object_get_property_key(obj_value: f64, key_value: f
         return get_property_key_resolved(obj_value, key_value);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let key_handle = to_property_key_rooted(&scope, key_value);
     get_property_key_resolved(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
     )
 }
@@ -285,11 +285,11 @@ pub unsafe extern "C" fn js_object_set_property_key_method(
         return set_property_key_method_resolved(obj_value, key_value, closure);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+    let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
     let closure_handle = scope.root_nanbox_f64(closure);
     let key_handle = to_property_key_rooted(&scope, key_value);
     set_property_key_method_resolved(
-        f64::from_bits(obj_handle.get_heap_word_u64()),
+        f64::from_bits(obj_handle.get_nanbox_u64()),
         key_handle.get_nanbox_f64(),
         closure_handle.get_nanbox_f64(),
     )
@@ -350,11 +350,11 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
     // ToPropertyKey can call user code and allocate. Resolve the home edge
     // afterward and keep the key and original receiver live through both.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
+    let receiver_handle = scope.root_nanbox_u64(receiver.to_bits());
     let key_handle = scope.root_nanbox_f64(js_to_property_key(key));
     let base = super::class_super_chain::class_super_base(
         home_class_id,
-        f64::from_bits(receiver_handle.get_heap_word_u64()),
+        f64::from_bits(receiver_handle.get_nanbox_u64()),
     );
     let base_value = crate::value::JSValue::from_bits(base.to_bits());
     if base_value.is_null() || base_value.is_undefined() {
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
     crate::proxy::js_reflect_get(
         base,
         key_handle.get_nanbox_f64(),
-        f64::from_bits(receiver_handle.get_heap_word_u64()),
+        f64::from_bits(receiver_handle.get_nanbox_u64()),
     )
 }
 
@@ -424,16 +424,16 @@ pub unsafe extern "C" fn js_object_super_call(
     // `clone_closure_rebind_this` allocates the bound copy. `receiver` — the
     // `this` the bound method runs with — was raw across both.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
+    let receiver_handle = scope.root_nanbox_u64(receiver.to_bits());
     let callee = js_object_super_get(home, key_value, receiver);
     if callee.to_bits() == crate::value::TAG_UNDEFINED {
         return callee;
     }
     let callee_handle = scope.root_nanbox_f64(callee);
-    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
+    let receiver = f64::from_bits(receiver_handle.get_nanbox_u64());
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
-    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
+    let receiver = f64::from_bits(receiver_handle.get_nanbox_u64());
     crate::closure::native_call_value_this(
         f64::from_bits(bound_handle.get_nanbox_u64()),
         crate::closure::JsThis::from_f64(receiver),

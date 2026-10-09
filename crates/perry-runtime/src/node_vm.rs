@@ -934,7 +934,7 @@ fn fresh_intrinsic_global() -> f64 {
         let value = object_value(intrinsics);
         VM_INTRINSIC_GLOBAL.with(|slot| {
             slot.set(value.to_bits());
-            crate::gc::runtime_write_barrier_root_heap_word(intrinsics as u64);
+            crate::gc::runtime_write_barrier_root_raw_ptr(intrinsics as *const u8);
             crate::gc::js_gc_register_global_root(slot.as_ptr() as i64);
         });
         value

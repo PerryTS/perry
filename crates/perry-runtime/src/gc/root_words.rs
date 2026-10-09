@@ -1,64 +1,11 @@
-//! The single decoder shared by the collector's *mark* and *rewrite* paths
-//! for words that may hold a heap reference (#6910).
+//! Root decoding is selected by the source owner, then shared by marking and
+//! relocation. Generated global/statepoint slots hold JSValue words at rest;
+//! runtime pointer fields supply a GcPointer. Only legacy shadow frames (including
+//! WASI) and ambiguous heap words retain the conservative mixed-word decoder.
+//! A numeric JSValue whose bits happen to equal a heap address is never a root.
 //!
-//! # The invariant
-//!
-//! **Anything the rewrite path will relocate, the mark path must mark.**
-//!
-//! A GC root slot or heap word can carry a heap reference in two forms:
-//!
-//! - **NaN-boxed** — `POINTER_TAG` / `STRING_TAG` / `BIGINT_TAG` in the top
-//!   16 bits, user address in the low 48. This is what all shipped codegen
-//!   stores in a shadow-stack slot ("tagged at rest").
-//! - **Bare** — the untagged user address written straight into the word.
-//!   Module-variable globals have always done this, runtime side tables that
-//!   hold `*mut T` do it, and the representation-selection RFC's unboxed
-//!   pointer reps (§5.6 `Ptr<Shape>`, `Str`, closure envs) are designed to.
-//!
-//! Before #6910 the two forms were decoded by four hand-copied predicates
-//! that did not agree:
-//!
-//! | surface | accepted |
-//! |---|---|
-//! | `try_mark_value` (fed by shadow-stack root marking) | NaN-boxed only |
-//! | `try_rewrite_value` (mutable-root + heap-slot rewrite) | NaN-boxed **and bare** |
-//! | `CopyingPointerSet::decode_bits` (copying minor) | NaN-boxed **and bare** |
-//! | `heap_word_candidate_addr` (incremental mark barrier) | NaN-boxed **and bare** |
-//!
-//! So a bare address in a shadow-stack slot was accepted by the rewrite,
-//! copying and barrier paths but **invisible to mark-sweep root marking**.
-//! If such a slot were the only reference to an object, the mark phase would
-//! skip it, the sweep would free it, and the slot would be left pointing at
-//! reclaimed memory — a use-after-free, not merely a missed rewrite (an
-//! unmarked object is never evacuated, so it never gets a forwarding address
-//! for the rewrite pass to follow).
-//!
-//! The failure would also have been invisible to the test suite: the unit
-//! tests default to `ConservativeStackScanMode::Full`
-//! (`gc::roots::conservative_stack_scan_mode`), whose native-stack scan
-//! accepts bare addresses and would have rescued the object, while
-//! production resolves `Auto -> SkipDisabled` and has no such safety net.
-//! Green tests, prod-only UAF. `gc::tests::root_words` therefore pins the
-//! invariant with the conservative scan explicitly `Disabled`.
-//!
-//! # Using this module
-//!
-//! Decode through [`decode_root_word`] and act on the result; do not re-type
-//! the tag comparisons or the address-range literals at a call site. Adding a
-//! representation here teaches the mark path, the rewrite path and the
-//! incremental barrier at once, which is the property that keeps them from
-//! drifting apart again.
-//!
-//! Two collector surfaces deliberately do **not** route through here, and
-//! both are safe because they are *supersets* of this decoder rather than
-//! subsets:
-//!
-//! - `try_mark_value_or_raw` — the conservative native-stack scan, which
-//!   additionally resolves *interior* pointers via `enclosing_object`.
-//! - `CopyingPointerSet::decode_bits` — the copying minor collector, which
-//!   additionally requires 8-byte alignment and a live classification, and
-//!   whose mark and rewrite are the same operation (`visit_value_bits`), so
-//!   it cannot disagree with itself.
+//! Precise marking trusts the allocation's own GcHeader. Verification builds
+//! check the producer contract; release marking performs no arena/page probe.
 
 use super::*;
 
@@ -143,15 +90,8 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
     })
 }
 
-/// Mark the object referenced by a mutable-root slot word — shadow-stack,
-/// native stack-map, and registered module-global slots alike.
-///
-/// All slot kinds are rewritten by `rewrite_mutable_root_slots` through
-/// `try_rewrite_value`, so all must be marked through the same decoder
-/// (#6910). Marking is address-identical for the forms once decoded —
-/// `try_mark_raw_root_addr` performs the same validation and mark that
-/// `try_mark_value` does after unwrapping a NaN box — so a single call
-/// covers them.
+/// Legacy untyped shadow-frame marking. These frames have no type descriptor
+/// and may contain bare pointers as well as JSValues, so retain validation.
 #[inline]
 pub(super) fn mark_mutable_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
     if super::full_trace::handle_trace_active()
@@ -163,4 +103,125 @@ pub(super) fn mark_mutable_root_bits(bits: u64, valid_ptrs: &ValidPointerSet) {
         return;
     };
     try_mark_raw_root_addr(word.addr(), valid_ptrs);
+}
+
+/// Encoding supplied by the owner of a precise root. This is transient visitor
+/// data, never a registry of slot kinds. Generated mutable slots use JSValue
+/// encoding at rest; native owners with pointer fields provide GcPointer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreciseRoot {
+    JSValue(u64),
+    GcPointer(usize),
+}
+
+impl PreciseRoot {
+    #[inline]
+    fn address(self) -> Option<usize> {
+        match self {
+            Self::JSValue(bits) => decode_tagged_root_word(bits).map(RootWord::addr),
+            Self::GcPointer(addr) => (addr != 0).then_some(addr),
+        }
+    }
+
+    #[inline]
+    fn bits(self) -> u64 {
+        match self {
+            Self::JSValue(bits) => bits,
+            Self::GcPointer(addr) => POINTER_TAG | (addr as u64 & POINTER_MASK),
+        }
+    }
+}
+
+/// Mark a root whose producer supplied its representation. The object's own
+/// header is authoritative; normal marking never asks the heap classifier.
+///
+/// Invalid typed roots are producer bugs. Instrumented verification and unit
+/// tests validate the header contract before changing its color. The evacuation
+/// verifier checks that root slots do not retain moved addresses.
+#[inline]
+pub(crate) fn mark_precise_root(root: PreciseRoot, valid_ptrs: &ValidPointerSet) -> bool {
+    mark_precise_root_in_scope(root, valid_ptrs, None)
+}
+
+/// Root writes share the marker, with the incremental cycle's scope: a minor
+/// shades nursery objects only and a forwarding alias needs no new shading.
+#[inline]
+pub(super) fn mark_precise_root_in_scope(
+    root: PreciseRoot,
+    valid_ptrs: &ValidPointerSet,
+    write_scope: Option<bool>,
+) -> bool {
+    let Some(addr) = root.address() else {
+        return false;
+    };
+    // A tagged handle is a root of its provider's JSValue edges, not a GC
+    // allocation. Decode the source first so numeric bits cannot observe ids.
+    if crate::value::addr_class::is_handle_band(addr) {
+        if super::full_trace::handle_trace_active() {
+            super::full_trace::observe_handle(root.bits(), valid_ptrs);
+        }
+        return false;
+    }
+    unsafe {
+        let header = header_from_user_ptr(addr as *const u8);
+        let flags = (*header).gc_flags;
+        // This is a structural header check, not snapshot membership:
+        // owners may publish births after the census or in generations the
+        // current collection does not enumerate. Evacuation verification
+        // separately rejects slots left pointing at moved objects.
+        #[cfg(test)]
+        assert!(
+            gc_type_info((*header).obj_type).is_some() && (*header).size as usize >= GC_HEADER_SIZE,
+            "invalid precise root header: {addr:#x}"
+        );
+        #[cfg(all(not(test), perry_gc_instruments))]
+        if super::gc_verify_mark_enabled() {
+            assert!(
+                gc_type_info((*header).obj_type).is_some()
+                    && (*header).size as usize >= GC_HEADER_SIZE,
+                "invalid precise root header: {addr:#x}"
+            );
+        }
+        if let Some(nursery_only) = write_scope {
+            if flags & GC_FLAG_FORWARDED != 0
+                || (nursery_only && !crate::arena::pointer_in_nursery(addr))
+            {
+                return false;
+            }
+        }
+        if flags & GC_FLAG_MARKED != 0 || super::pin::pinned_counts_as_marked(flags) {
+            return false;
+        }
+        (*header).gc_flags = flags | GC_FLAG_MARKED;
+        push_mark_seed(header);
+        true
+    }
+}
+
+/// Decode a JSValue root, never accepting a numeric bit pattern as an address.
+#[inline]
+pub(super) fn decode_nanboxed_root_word(bits: u64) -> Option<RootWord> {
+    let word = decode_tagged_root_word(bits)?;
+    (!crate::value::addr_class::is_handle_band(word.addr())).then_some(word)
+}
+
+/// Decode the pointer-bearing tags, including native handle payloads. Marking
+/// dispatches handles; relocation leaves them alone. Both reject numeric bits.
+#[inline]
+fn decode_tagged_root_word(bits: u64) -> Option<RootWord> {
+    match bits & TAG_MASK {
+        POINTER_TAG | STRING_TAG | BIGINT_TAG => {
+            let payload = bits & POINTER_MASK;
+            #[cfg(not(target_pointer_width = "64"))]
+            if payload > usize::MAX as u64 {
+                return None;
+            }
+            let addr = payload as usize;
+            (addr != 0).then_some(RootWord::Nanboxed {
+                addr,
+                tag: bits & TAG_MASK,
+            })
+        }
+        _ => None,
+    }
 }

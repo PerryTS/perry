@@ -179,8 +179,8 @@ unsafe fn sort_permutation(
     }
     crate::gc::with_stack_roots(
         [
-            data.arr() as u64,
-            cmp_handle.get_raw_const_ptr::<ClosureHeader>() as u64,
+            data.arr() as *mut u8,
+            cmp_handle.get_raw_const_ptr::<ClosureHeader>() as *mut u8,
         ],
         |roots| {
             indices::sort_indices(
@@ -191,14 +191,16 @@ unsafe fn sort_permutation(
                     // Each slot is bound to the shadow stack and rewritten by
                     // moving GC. Read both anew after every user-code window;
                     // no interior pointer or copied value survives a callback.
-                    let arr = roots.get(0) as *const ArrayHeader;
-                    let comparator = roots.get(1) as *const ClosureHeader;
-                    let elements = crate::array::array_elements_ptr(arr) as *const f64;
-                    c.less_equal_at(
-                        comparator,
-                        *elements.add(a as usize),
-                        *elements.add(b as usize),
-                    )
+                    roots.with_const_ptr(0, |arr: *const ArrayHeader| {
+                        roots.with_const_ptr(1, |comparator: *const ClosureHeader| {
+                            let elements = crate::array::array_elements_ptr(arr) as *const f64;
+                            c.less_equal_at(
+                                comparator,
+                                *elements.add(a as usize),
+                                *elements.add(b as usize),
+                            )
+                        })
+                    })
                 },
             );
         },

@@ -76,6 +76,11 @@ fn bind_slot(line: &str) -> Option<&str> {
     slot.starts_with('%').then_some(slot)
 }
 
+/// Whether this home is actually registered with the shadow collector.
+pub fn is_bound_slot(fn_ir: &str, slot: &str) -> bool {
+    fn_ir.lines().any(|line| bind_slot(line) == Some(slot))
+}
+
 /// The TYPE of an `alloca` definition, ignoring anything after it.
 ///
 /// Matching the whole def text (`Some(&"alloca i64")`) is one `align 8` away
@@ -90,6 +95,9 @@ pub fn alloca_type(def: &str) -> Option<&str> {
 
 fn classify(fn_ir: &str, defs: &BTreeMap<&str, &str>, slot: &str) -> SlotKind {
     match defs.get(slot).copied().and_then(alloca_type) {
+        Some("double") if super::temp_slots::zero_seeded_slots(fn_ir).contains(slot) => {
+            SlotKind::TempRoot
+        }
         Some("double") => SlotKind::Value,
         Some("i64") if fn_ir.contains(&format!("store i64 0, ptr {slot}\n")) => SlotKind::TempRoot,
         Some("i64")

@@ -1551,19 +1551,39 @@ pub(super) fn invalidate_external_dirty_slot_cache() {
 
 #[inline]
 pub(crate) fn runtime_write_barrier_root_heap_word(value_bits: u64) {
-    incremental_mark_barrier_value(value_bits);
+    // Kept as an exported ABI alias; generated/root-owned words are JSValues.
+    runtime_write_barrier_root_nanbox(value_bits);
 }
 
 #[inline]
 pub(crate) fn runtime_write_barrier_root_nanbox(value_bits: u64) {
-    incremental_mark_barrier_value(value_bits);
+    precise_root_write_barrier(super::PreciseRoot::JSValue(value_bits));
+}
+
+#[inline]
+fn precise_root_write_barrier(root: super::PreciseRoot) {
+    if incremental_mark_barrier_globally_idle() {
+        return;
+    }
+    precise_root_write_barrier_active(root);
+}
+
+#[cold]
+#[inline(never)]
+fn precise_root_write_barrier_active(root: super::PreciseRoot) {
+    let ptr = hot_incremental_mark_valid_ptrs().get();
+    if !ptr.is_null() {
+        super::mark_precise_root_in_scope(
+            root,
+            unsafe { &*ptr },
+            Some(hot_incremental_mark_minor_only().get()),
+        );
+    }
 }
 
 #[inline]
 pub(crate) fn runtime_write_barrier_root_raw_ptr<T>(ptr: *const T) {
-    if !ptr.is_null() {
-        incremental_mark_barrier_value(ptr as u64);
-    }
+    precise_root_write_barrier(super::PreciseRoot::GcPointer(ptr as usize));
 }
 
 #[inline]
@@ -1581,7 +1601,7 @@ pub(crate) unsafe fn runtime_store_root_raw_mut_ptr_slot<T>(slot: *mut *mut T, v
 #[inline]
 pub(crate) unsafe fn runtime_store_root_usize_slot(slot: *mut usize, value: usize) {
     std::ptr::write(slot, value);
-    runtime_write_barrier_root_heap_word(value as u64);
+    runtime_write_barrier_root_raw_ptr(value as usize as *const u8);
 }
 
 #[inline]
@@ -1601,7 +1621,7 @@ pub(crate) fn runtime_store_root_atomic_raw_i64(
     ordering: std::sync::atomic::Ordering,
 ) {
     slot.store(value, ordering);
-    runtime_write_barrier_root_heap_word(value as u64);
+    runtime_write_barrier_root_raw_ptr(value as usize as *const u8);
 }
 
 #[inline]
@@ -1614,7 +1634,7 @@ pub(crate) fn runtime_compare_exchange_root_atomic_raw_i64(
 ) -> Result<i64, i64> {
     let result = slot.compare_exchange(current, new, success, failure);
     if result.is_ok() {
-        runtime_write_barrier_root_heap_word(new as u64);
+        runtime_write_barrier_root_raw_ptr(new as usize as *const u8);
     }
     result
 }

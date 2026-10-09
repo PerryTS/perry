@@ -1,7 +1,7 @@
 //! Equivalence pin for the linear root lowering (#8583).
 //!
 //! The two `reference_*` functions below are the previous implementations,
-//! copied verbatim (only renamed): `reference_lower_roots_for_rs4gc` iterated
+//! retain the previous traversal (with the precise slot ABI): `reference_lower_roots_for_rs4gc` iterated
 //! every root pointer per line, `reference_retype_landing_pads_for_statepoints`
 //! rescanned the whole function per landing pad. Both were O(lines × roots)
 //! and together were the bulk of a 27-minute "partitioning" phase on the
@@ -55,7 +55,7 @@ pub(super) fn reference_lower_roots_for_rs4gc(
                     } else {
                         cast_counter += 1;
                         out.push_str(&format!(
-                            "  %rs4gc.s{cast_counter} = inttoptr i64 {value} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{cast_counter}, ptr {ptr}\n"
+                            "  %rs4gc.b{cast_counter} = or i64 {value}, 9222527611924643840\n  %rs4gc.s{cast_counter} = inttoptr i64 %rs4gc.b{cast_counter} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{cast_counter}, ptr {ptr}\n"
                         ));
                     }
                     handled = true;
@@ -65,6 +65,11 @@ pub(super) fn reference_lower_roots_for_rs4gc(
             if let Some(rest) = trimmed.strip_prefix("store double ") {
                 if let Some(value) = rest.strip_suffix(&format!(", ptr {ptr}")) {
                     let value = value.trim();
+                    if value == "0.0" {
+                        out.push_str(&format!("  store ptr addrspace(1) null, ptr {ptr}\n"));
+                        handled = true;
+                        break;
+                    }
                     cast_counter += 1;
                     out.push_str(&format!(
                         "  %rs4gc.b{cast_counter} = bitcast double {value} to i64\n  %rs4gc.s{cast_counter} = inttoptr i64 %rs4gc.b{cast_counter} to ptr addrspace(1)\n  store ptr addrspace(1) %rs4gc.s{cast_counter}, ptr {ptr}\n"
@@ -81,7 +86,7 @@ pub(super) fn reference_lower_roots_for_rs4gc(
             {
                 let result = trimmed.split(' ').next().unwrap_or("");
                 out.push_str(&format!(
-                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = {launder}(i64 {result}.rs4i) \"gc-leaf-function\"\n",
+                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {launder}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = and i64 {result}.rs4o, 281474976710655\n",
                     launder = super::ROOT_RELOAD_LAUNDER,
                 ));
                 handled = true;

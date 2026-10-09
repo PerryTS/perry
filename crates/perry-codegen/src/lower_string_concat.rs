@@ -35,6 +35,7 @@ enum StringAppendTarget {
     LocalSlot(String),
     BoxedLocal(String),
     Captured {
+        id: u32,
         index: u32,
         boxed: bool,
     },
@@ -51,6 +52,7 @@ impl StringAppendTarget {
         }
         if let Some(&index) = ctx.closure_captures.get(&local_id) {
             return Some(Self::Captured {
+                id: local_id,
                 index,
                 boxed: ctx.boxed_vars.contains(&local_id),
             });
@@ -80,7 +82,13 @@ impl StringAppendTarget {
                 let bits = blk.call(I64, "js_box_get_bits", &[(I64, &box_ptr)]);
                 Ok(blk.bitcast_i64_to_double(&bits))
             }
-            Self::Captured { index, boxed } => {
+            Self::Captured { id, index, boxed } => {
+                if *boxed {
+                    let cell = crate::expr::load_boxed_local_pointer(ctx, *id)?
+                        .expect("boxed capture has a cell here");
+                    let bits = ctx.block().call(I64, "js_box_get_bits", &[(I64, &cell)]);
+                    return Ok(ctx.block().bitcast_i64_to_double(&bits));
+                }
                 let closure_ptr =
                     current_closure_ptr_value(ctx, "captured string self-append load")?;
                 let index = index.to_string();
@@ -89,12 +97,7 @@ impl StringAppendTarget {
                     "js_closure_get_capture_bits",
                     &[(I64, &closure_ptr), (I32, &index)],
                 );
-                if *boxed {
-                    let value_bits = ctx.block().call(I64, "js_box_get_bits", &[(I64, &bits)]);
-                    Ok(ctx.block().bitcast_i64_to_double(&value_bits))
-                } else {
-                    Ok(ctx.block().bitcast_i64_to_double(&bits))
-                }
+                Ok(ctx.block().bitcast_i64_to_double(&bits))
             }
         }
     }
@@ -116,24 +119,20 @@ impl StringAppendTarget {
                 blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
                 emit_write_barrier(ctx, &box_ptr, &value_bits);
             }
-            Self::Captured { index, boxed } => {
-                // The rhs and append helper can collect. Re-read the current
-                // closure root here rather than retaining its movable pointer
-                // from the load above (#7055).
-                let closure_ptr =
-                    current_closure_ptr_value(ctx, "captured string self-append store")?;
-                let index = index.to_string();
+            Self::Captured { id, index, boxed } => {
+                // Reload through the same cell-owner accessor used by ordinary
+                // boxed reads/writes; the rhs and append helper can collect.
                 if *boxed {
-                    let box_ptr = ctx.block().call(
-                        I64,
-                        "js_closure_get_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &index)],
-                    );
+                    let cell = crate::expr::load_boxed_local_pointer(ctx, *id)?
+                        .expect("boxed capture has a cell here");
                     let value_bits = ctx.block().bitcast_double_to_i64(value);
                     ctx.block()
-                        .call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
-                    emit_write_barrier(ctx, &box_ptr, &value_bits);
+                        .call_void("js_box_set_bits", &[(I64, &cell), (I64, &value_bits)]);
+                    emit_write_barrier(ctx, &cell, &value_bits);
                 } else {
+                    let closure_ptr =
+                        current_closure_ptr_value(ctx, "captured string self-append store")?;
+                    let index = index.to_string();
                     let value_bits = ctx.block().bitcast_double_to_i64(value);
                     ctx.block().call_void(
                         "js_closure_set_capture_bits",

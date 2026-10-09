@@ -192,9 +192,9 @@ pub(super) unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64)
     // forwarding stub and the index/`length` descriptor was computed from
     // moved-out bytes.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let str_handle = scope.root_heap_word_u64(str_value.to_bits());
+    let str_handle = scope.root_nanbox_u64(str_value.to_bits());
     let key_str = crate::builtins::js_string_coerce(key_value);
-    let str_value = f64::from_bits(str_handle.get_heap_word_u64());
+    let str_value = f64::from_bits(str_handle.get_nanbox_u64());
     if key_str.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -222,7 +222,7 @@ pub(super) unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64)
             // surrogate halves. Use the same read path as s[index]; `.chars()`
             // counts Unicode scalars and returned the wrong descriptors.
             let string = crate::value::js_get_string_pointer_unified(f64::from_bits(
-                str_handle.get_heap_word_u64(),
+                str_handle.get_nanbox_u64(),
             )) as *const crate::StringHeader;
             let cstr = crate::string::js_string_char_at(string, index as i32);
             let char_val = f64::from_bits(JSValue::string_ptr(cstr).bits());

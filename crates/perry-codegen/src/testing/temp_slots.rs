@@ -152,10 +152,20 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
             if let Some((value, slot)) = rest.split_once(", ptr ") {
                 let slot = slot.split(',').next().unwrap_or(slot).trim().to_string();
                 if slot.starts_with('%') {
-                    out.entry(slot).or_default().push(SlotEvent::Store {
-                        value: value.trim().to_string(),
-                        line: line_no,
-                    });
+                    if value.trim() == "0.0" {
+                        if entry_seeds.contains_key(&slot) || out.contains_key(&slot) {
+                            out.entry(slot)
+                                .or_default()
+                                .push(SlotEvent::Clear { line: line_no });
+                        } else {
+                            entry_seeds.insert(slot, line_no);
+                        }
+                    } else if value.trim().starts_with('%') {
+                        out.entry(slot).or_default().push(SlotEvent::Store {
+                            value: value.trim().to_string(),
+                            line: line_no,
+                        });
+                    }
                 }
                 continue;
             }
@@ -424,6 +434,7 @@ pub fn zero_seeded_slots(fn_ir: &str) -> std::collections::BTreeSet<String> {
     for line in fn_ir.lines().map(str::trim) {
         let seed = line
             .strip_prefix("store i64 0, ptr ")
+            .or_else(|| line.strip_prefix("store double 0.0, ptr "))
             .or_else(|| line.strip_prefix("store ptr addrspace(1) null, ptr "));
         if let Some(rest) = seed {
             let slot = rest.split(',').next().unwrap_or(rest).trim().to_string();
@@ -462,10 +473,10 @@ fn undefined_literal() -> String {
 ///
 /// Two filters, because neither is sufficient on its own:
 ///
-/// 1. **The alloca's type.** `TempRootPool` allocates `alloca_entry(I64)`, so a
-///    pooled slot is `alloca i64` — or `alloca ptr addrspace(1)` once the
-///    native retype has run. Value storage (a named local, a scalar-replaced
-///    field, an array-literal element) is `alloca double`, which excludes it.
+/// 1. **A collector-bound home.** Typed temp homes are `alloca double` bound
+///    into the shadow frame, or native `ptr addrspace(1)` homes. Legacy
+///    `i64` fixtures remain readable. An ordinary numeric double alloca
+///    without a bind is excluded.
 /// 2. **The `undefined` seed.** Filter 1 alone is not enough under native
 ///    roots: RS4GC retypes every pointer-capable alloca to
 ///    `ptr addrspace(1)`, so a POINTER local's slot is spelled the same as a
@@ -497,12 +508,16 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
             // empties the result and every `assert_no_temp_rooting` in the tree
             // goes vacuous — the exact failure #7503 exists to remove. Raised by
             // review on #7675.
-            matches!(
-                defs.get(slot.as_str())
-                    .copied()
-                    .and_then(super::root_slots::alloca_type),
-                Some("i64") | Some("ptr addrspace(1)")
-            )
+            match defs
+                .get(slot.as_str())
+                .copied()
+                .and_then(super::root_slots::alloca_type)
+            {
+                Some("i64") | Some("ptr addrspace(1)") => true,
+                // A numeric double alloca alone does not prove GC protection.
+                Some("double") => super::root_slots::is_bound_slot(fn_ir, slot),
+                _ => false,
+            }
         })
         .filter(|(_, events)| events.iter().any(|e| matches!(e, SlotEvent::Store { .. })))
         .filter(|(_, events)| {
@@ -784,6 +799,53 @@ entry.0:
             temp_root_slots(&unrelated),
             vec!["%keys".to_string()],
             "only the registered class-key provenance is exempt; a missing temp-root clear must stay visible"
+        );
+    }
+    #[test]
+    fn typed_shadow_homes_keep_the_rooting_contract_and_its_teeth() {
+        let typed = r#"define i32 @main() {
+entry.0:
+  %s = alloca double
+  store double 0.0, ptr %s
+  call void @js_shadow_slot_bind(i32 0, ptr %s)
+  %r1 = call i64 @js_array_alloc(i32 2)
+  %tag1 = or i64 %r1, 9222527611924643840
+  %value1 = bitcast i64 %tag1 to double
+  store double %value1, ptr %s
+  %loaded1 = load double, ptr %s
+  %bits1 = bitcast double %loaded1 to i64
+  %r31 = and i64 %bits1, 281474976710655
+  %r32 = call i64 @js_array_push_f64(i64 %r31, double 1.0)
+  %tag2 = or i64 %r32, 9222527611924643840
+  %value2 = bitcast i64 %tag2 to double
+  store double %value2, ptr %s
+  %loaded2 = load double, ptr %s
+  %bits2 = bitcast double %loaded2 to i64
+  %r40 = and i64 %bits2, 281474976710655
+  call void @js_console_log_spread(i64 %r40)
+  store double 0.0, ptr %s
+  ret i32 0
+}
+"#;
+        assert_temp_rooting_count(typed, 1, "typed home");
+        assert_rooted_across(typed, "%r1", "js_array_push_f64", "typed home");
+        assert_rooted_across(typed, "%r32", "js_console_log_spread", "typed home");
+        assert!(matches!(
+            slot_traffic(typed)["%s"].last(),
+            Some(SlotEvent::Clear { .. })
+        ));
+        let unbound = typed.replace("  call void @js_shadow_slot_bind(i32 0, ptr %s)\n", "");
+        assert!(
+            temp_root_slot_holding(&unbound, "%r1").is_none(),
+            "an ordinary double home is not evidence of a GC root"
+        );
+        let stale = typed.replace("i64 %r31, double 1.0", "i64 %r1, double 1.0");
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_rooted_across(&stale, "%r1", "js_array_push_f64", "stale typed home")
+            })
+            .is_err(),
+            "a tagged store must not hide a missing reload"
         );
     }
 }

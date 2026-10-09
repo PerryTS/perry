@@ -10,11 +10,11 @@ pub(super) unsafe fn define_symbol_property(
     descriptor_value: f64,
     desc_view: Option<&super::descriptor_helpers::DescView<'_>>,
 ) -> f64 {
-    let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
-    let receiver_handle = scope.root_heap_word_u64(receiver_value.to_bits());
+    let obj_value_handle = scope.root_nanbox_u64(obj_value.to_bits());
+    let receiver_handle = scope.root_nanbox_u64(receiver_value.to_bits());
     let key_handle = scope.root_nanbox_f64(key_value);
     let desc_handle = scope.root_nanbox_f64(descriptor_value);
-    let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
+    let current_obj = || f64::from_bits(obj_value_handle.get_nanbox_u64());
     let current_key = || key_handle.get_nanbox_f64();
     let current_desc = || desc_handle.get_nanbox_f64();
     let _holder_edit = super::super::descriptor_state::HolderEdit::new(
@@ -72,7 +72,7 @@ pub(super) unsafe fn define_symbol_property(
                 .then(|| {
                     crate::closure::clone_closure_rebind_this(
                         field.bits(),
-                        f64::from_bits(receiver_handle.get_heap_word_u64()),
+                        f64::from_bits(receiver_handle.get_nanbox_u64()),
                     )
                 })
                 .unwrap_or(0)
@@ -85,7 +85,7 @@ pub(super) unsafe fn define_symbol_property(
                 .then(|| {
                     crate::closure::clone_closure_rebind_this(
                         field.bits(),
-                        f64::from_bits(receiver_handle.get_heap_word_u64()),
+                        f64::from_bits(receiver_handle.get_nanbox_u64()),
                     )
                 })
                 .unwrap_or(0)

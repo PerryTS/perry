@@ -42,7 +42,7 @@ fn test_transient_runtime_handle_slots_mark_and_rewrite() {
     let nanbox_u64 = scope.root_nanbox_u64(string_bits(nanbox_u64_user as usize));
     let raw = scope.root_raw_mut_ptr(raw_user);
     let raw_string = scope.root_string_ptr(raw_string_user as *const crate::StringHeader);
-    let heap_word = scope.root_heap_word_u64(heap_word_user as u64);
+    let heap_word = scope.root_raw_mut_ptr(heap_word_user);
 
     let mut marker = RuntimeRootVisitor::for_mark(&valid_ptrs);
     scan_runtime_handle_roots_mut(&mut marker);
@@ -85,7 +85,7 @@ fn test_transient_runtime_handle_slots_mark_and_rewrite() {
         raw_string.get_raw_const_ptr::<crate::StringHeader>() as *mut u8,
         old_raw_string
     );
-    assert_eq!(heap_word.get_heap_word_u64(), old_heap_word as u64);
+    heap_word.with_mut_ptr(|ptr: *mut u8| assert_eq!(ptr, old_heap_word));
 }
 
 #[test]

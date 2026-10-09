@@ -15,7 +15,7 @@ pub(crate) fn construct_rooted_arguments(function: f64, args: &[f64], new_target
     let argument_scope = crate::gc::RuntimeHandleScope::new();
     for cell in &args {
         unsafe {
-            argument_scope.root_heap_word_cell(cell);
+            argument_scope.root_nanbox_cell(cell);
         }
     }
     let result = crate::exception::catch_js_throw(|| unsafe {

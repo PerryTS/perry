@@ -158,7 +158,9 @@ fn leak_symbol(symbol: SymbolHeader) -> *mut SymbolHeader {
     let mut cell = Box::new(PersistentSymbol {
         header: crate::gc::GcHeader {
             obj_type: crate::gc::GC_TYPE_SYMBOL,
-            gc_flags: crate::gc::GC_FLAG_TENURED,
+            // This process-lifetime leaf is never censused or swept. It is
+            // permanently black; precise roots may inspect its real header.
+            gc_flags: crate::gc::GC_FLAG_TENURED | crate::gc::GC_FLAG_MARKED,
             _reserved: 0,
             size: std::mem::size_of::<PersistentSymbol>() as u32,
         },

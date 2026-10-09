@@ -694,10 +694,10 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     // the own-property shadow check inside the loop) were raw Rust locals
     // across it. Both stay rooted for the walk.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value_handle = scope.root_heap_word_u64(value.to_bits());
+    let value_handle = scope.root_nanbox_u64(value.to_bits());
     let key_handle = scope.root_nanbox_f64(key);
     let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
-    let value = f64::from_bits(value_handle.get_heap_word_u64());
+    let value = f64::from_bits(value_handle.get_nanbox_u64());
     if key_str.is_null() {
         return None;
     }
@@ -719,11 +719,11 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     // `current` walks the chain through its own handle: `obj_value_has_own_key`
     // and `js_object_get_prototype_of` both allocate, so the link a raw local
     // held could be evacuated out from under the next iteration (#6943).
-    let current_handle = scope.root_heap_word_u64(value.to_bits());
+    let current_handle = scope.root_nanbox_u64(value.to_bits());
     // Bounded to guard against a cyclic prototype side-table; real chains are
     // a handful of links deep.
     for _ in 0..10_000 {
-        let current = f64::from_bits(current_handle.get_heap_word_u64());
+        let current = f64::from_bits(current_handle.get_nanbox_u64());
         let obj = unsafe { extract_obj_ptr(current) };
         if obj.is_null() {
             return None;
@@ -742,12 +742,12 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
         if obj_value_has_own_key(current, key_handle.get_nanbox_f64()) {
             return None;
         }
-        let current = f64::from_bits(current_handle.get_heap_word_u64());
+        let current = f64::from_bits(current_handle.get_nanbox_u64());
         let proto = crate::object::js_object_get_prototype_of(current);
         if unsafe { extract_obj_ptr(proto) }.is_null() {
             return None;
         }
-        current_handle.set_heap_word_u64(proto.to_bits());
+        current_handle.set_nanbox_u64(proto.to_bits());
     }
     None
 }

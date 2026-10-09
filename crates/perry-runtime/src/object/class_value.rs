@@ -419,7 +419,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     }
     // SAFETY: the slot is this agent's table entry for `class_id`.
     unsafe { *class_value_slot(class_id) = ptr };
-    crate::gc::runtime_write_barrier_root_heap_word(ptr as u64);
+    crate::gc::runtime_write_barrier_root_raw_ptr(ptr as *const u8);
     // Still inside the no-collect scope: the own-property object and its
     // keys allocate.
     for key in INTRINSIC_OWN_DATA_KEYS {

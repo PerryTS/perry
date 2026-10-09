@@ -156,6 +156,10 @@ fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
         for ((label, mark_bits, expected), (_, rewrite_bits, _)) in
             mark_probes.into_iter().zip(rewrite_probes)
         {
+            // Bare address bits are a subnormal number in a precise JSValue
+            // slot; only the genuinely untyped shadow frame may probe them.
+            let expected =
+                expected && !(matches!(kind, ProbeSlot::Global) && label == "bare address");
             let marked = root_walk_marks(kind, mark_bits, mark_target, &valid_ptrs);
             let rewritten = root_walk_rewrites(kind, rewrite_bits, &valid_ptrs);
 
@@ -181,8 +185,11 @@ fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
         // stays bare, a NaN box keeps its tag.
         assert_eq!(
             root_walk_rewrites(kind, rewrite_target as u64, &valid_ptrs),
-            Some(moved as u64),
-            "{name}: bare address must rewrite to a bare address"
+            match kind {
+                ProbeSlot::Shadow => Some(moved as u64),
+                ProbeSlot::Global => None,
+            },
+            "{name}: relocation must respect the source encoding"
         );
         assert_eq!(
             root_walk_rewrites(kind, STRING_TAG | rewrite_target as u64, &valid_ptrs),
@@ -266,11 +273,9 @@ fn bare_address_in_shadow_slot_survives_a_real_collection() {
     }
 }
 
-/// Same contract for the other mutable-root kind. Module-variable globals have
-/// always stored bare addresses, so this is the regression guard for folding
-/// the old `mark_global_root_bits` into the shared decoder.
+/// A precise global root must keep its target alive with conservative scanning disabled.
 #[test]
-fn bare_address_in_global_root_survives_a_real_collection() {
+fn precise_global_root_survives_a_real_collection() {
     // #7056: drives the BUDGETED stepper via `complete_budgeted_gc_cycle`,
     // which the shipped default bypasses (scavenge defers alloc-point
     // collections to a precise safepoint). Pin legacy pacing so the cycle
@@ -289,9 +294,8 @@ fn bare_address_in_global_root_survives_a_real_collection() {
     unsafe {
         init_test_closure(live);
     }
-    // A registered global root slot holding the bare address, exactly as a
-    // module-variable global does.
-    let mut global_slot: u64 = live as u64;
+    // A registered global root carries a tagged JSValue at rest.
+    let mut global_slot: u64 = POINTER_TAG | live as u64;
     js_gc_register_global_root(&mut global_slot as *mut u64 as i64);
 
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
@@ -312,17 +316,18 @@ fn bare_address_in_global_root_survives_a_real_collection() {
         "the global root must still hold the survivor"
     );
     assert!(
-        malloc_user_ptr_tracked(global_slot as *mut u8),
-        "a bare address in a registered global root must still be marked"
+        malloc_user_ptr_tracked((global_slot & POINTER_MASK) as *mut u8),
+        "a precise registered global root must still be marked"
     );
     assert_eq!(
-        global_slot, live as u64,
-        "a malloc-backed target is never relocated, so the bare global slot \
+        global_slot,
+        POINTER_TAG | live as u64,
+        "a malloc-backed target is never relocated, so the tagged global slot \
          must come back byte-identical"
     );
     unsafe {
         assert!(
-            crate::closure::closure_kind_probe(global_slot as usize),
+            crate::closure::closure_kind_probe((global_slot & POINTER_MASK) as usize),
             "surviving object must still be intact"
         );
     }

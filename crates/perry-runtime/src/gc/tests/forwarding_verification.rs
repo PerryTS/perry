@@ -57,7 +57,7 @@ fn copying_verifier_accepts_retained_growth_chains_across_root_formats() {
     );
     let mut visitor = RuntimeRootVisitor::for_verify(verifier, "retained growth root");
     assert_eq!(visitor.visit_nanbox_bits(bits), None);
-    assert_eq!(visitor.visit_heap_word_bits(stub as usize as u64), None);
+    assert_eq!(visitor.visit_nanbox_bits(bits), None);
     assert_eq!(
         visitor.visit_tagged_raw_addr(stub as usize, POINTER_TAG),
         None
@@ -125,7 +125,7 @@ fn copying_verifier_rejects_from_space_hops_even_through_retained_stubs() {
                         visitor.visit_nanbox_bits(bits);
                     }
                     1 => {
-                        visitor.visit_heap_word_bits(source as usize as u64);
+                        visitor.visit_nanbox_bits(STRING_TAG | source as usize as u64);
                     }
                     2 => {
                         visitor.visit_tagged_raw_addr(source as usize, POINTER_TAG);

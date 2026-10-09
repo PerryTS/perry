@@ -1,6 +1,7 @@
 //! Materialization of constant trees with compiler-authored record layouts.
 //! The schema table contains addresses of existing module root slots, never a
-//! cached heap pointer. Every invocation creates fresh arrays and objects.
+//! cached heap pointer. Each keys slot holds a JSValue word. Every invocation
+//! creates fresh arrays and objects.
 
 use crate::value::JSValue;
 
@@ -89,7 +90,9 @@ impl Reader<'_> {
                     shape.class_id,
                     0,
                     shape.allocation_width,
-                    unsafe { *shape.keys_slot } as *mut super::ArrayHeader,
+                    JSValue::from_bits(unsafe { *shape.keys_slot })
+                        .as_pointer::<super::ArrayHeader>()
+                        as *mut super::ArrayHeader,
                     unsafe { *shape.shape_id_slot },
                     shape.rep,
                 );
@@ -151,11 +154,22 @@ mod tests {
         const RAW: &[u64] = &[1];
         const POINTERS: &[u64] = &[2];
         const CLASS_ID: u32 = 1017301;
-        let keys =
-            crate::object::js_build_class_keys_array(CLASS_ID, 2, b"id\0name\0".as_ptr(), 8, 0)
-                as u64;
-        let shape_id =
-            crate::object::shapes::js_object_shape_id_for_class_keys_live(keys, 2, 3, CLASS_ID, 0);
+        let mut keys = JSValue::pointer(crate::object::js_build_class_keys_array(
+            CLASS_ID,
+            2,
+            b"id\0name\0".as_ptr(),
+            8,
+            0,
+        ) as *const u8)
+        .bits();
+        crate::gc::js_gc_register_global_root(&mut keys as *mut u64 as i64);
+        let shape_id = crate::object::shapes::js_object_shape_id_for_class_keys_live(
+            JSValue::from_bits(keys).as_pointer::<crate::array::ArrayHeader>() as u64,
+            2,
+            3,
+            CLASS_ID,
+            0,
+        );
         let shape = LiteralShape {
             class_id: CLASS_ID,
             field_count: 2,
@@ -215,6 +229,7 @@ mod tests {
         let cycles = crate::gc::copying_minor_cycles();
         crate::gc::gc_collect_minor();
         assert!(crate::gc::copying_minor_cycles() > cycles);
+        assert_eq!(keys & crate::value::TAG_MASK, crate::value::POINTER_TAG);
         assert_ne!(object(&a), a_ptr, "the rooted record must actually move");
         assert_eq!(
             crate::object::js_object_get_field(object(&a), 0).as_number(),

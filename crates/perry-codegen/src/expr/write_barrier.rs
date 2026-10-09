@@ -366,16 +366,6 @@ pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, ro
     blk.store(DOUBLE, value, root_slot);
 }
 
-pub(crate) fn emit_root_heap_word_store_on_block(
-    blk: &mut LlBlock,
-    value_bits: &str,
-    root_slot: &str,
-) {
-    // GC_STORE_AUDIT(ROOT): registered mutable GC root slot. See
-    // `emit_gated_root_nanbox_store` for the final-remark proof.
-    blk.store(I64, value_bits, root_slot);
-}
-
 /// GC layout-note emission (refs #1090) — at heap-slot stores whose
 /// content is known statically, record the per-slot value type so the
 /// generational GC can decide whether the slot can be pointer-free

@@ -719,3 +719,72 @@ fn default_derived_class_finalizes_inherited_and_own_closure_fields() {
         2
     );
 }
+
+#[test]
+fn completed_class_mints_unbox_the_registered_keys_word() {
+    for private in [false, true] {
+        let mut class = user_class("RootedKeys", 7, 1);
+        if private {
+            class.fields[0].init = Some(Expr::Number(17.0));
+            class.fields[0].ty = Type::Number;
+            let mut field = class.fields[0].clone();
+            field.name = "hidden".into();
+            field.is_private = true;
+            class.fields.push(field);
+        }
+        let mut module = Module::new("rootcls_completed_keys");
+        module.classes.push(class);
+        module.init.push(Stmt::Expr(Expr::New {
+            class_name: "RootedKeys".into(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }));
+        let mut options = opts("executable");
+        let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
+        options.static_shape_ids = super::super::static_shape_ids::assign_static_shape_ids(
+            births.iter().map(|birth| &birth.shape),
+        )
+        .into_iter()
+        .collect();
+        let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+        let callee = if private {
+            "@js_object_final_shape_id_for_class_keys_static_private"
+        } else {
+            "@js_object_final_shape_id_for_class_keys_static_constfn"
+        };
+        let call = ir
+            .lines()
+            .find(|line| line.contains(callee) && line.contains("call i32"))
+            .unwrap();
+        let call_pos = ir.find(call).unwrap();
+        let function_start = ir[..call_pos].rfind("\ndefine ").unwrap();
+        let before_call = &ir[function_start..call_pos];
+        let pointer = call
+            .split("(i64 ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        let definition = before_call
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{pointer} = ")))
+            .unwrap();
+        assert!(definition.contains(" = and i64 ") && definition.ends_with(crate::nanbox::POINTER_MASK_I64),
+            "native mint must receive an unboxed address from its JSValue root: {call}\n{definition}");
+        let word = definition
+            .split("and i64 ")
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap();
+        let bits = before_call
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{word} = ")))
+            .unwrap();
+        assert!(bits.contains("bitcast double"), "{bits}");
+    }
+}

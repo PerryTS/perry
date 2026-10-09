@@ -241,9 +241,9 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
                 (obj_value, obj_js, key_value)
             } else {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+                let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
                 let key_value = super::super::js_to_property_key(key_value);
-                let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+                let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
                 (
                     obj_value,
                     crate::JSValue::from_bits(obj_value.to_bits()),
@@ -309,9 +309,9 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             )
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
             (
                 obj_value,
                 crate::JSValue::from_bits(obj_value.to_bits()),
@@ -705,9 +705,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             (obj_value, key_value)
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let key_value = super::super::js_to_property_key(key_value);
-            (f64::from_bits(obj_handle.get_heap_word_u64()), key_value)
+            (f64::from_bits(obj_handle.get_nanbox_u64()), key_value)
         };
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
@@ -767,9 +767,9 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             )
         } else {
             let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_heap_word_u64(obj_value.to_bits());
+            let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let key_str = crate::builtins::js_string_coerce(key_value);
-            let obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
+            let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
             (
                 obj_value,
                 crate::JSValue::from_bits(obj_value.to_bits()),

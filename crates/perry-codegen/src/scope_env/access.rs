@@ -50,7 +50,8 @@ pub(crate) fn load_base(ctx: &mut FnCtx<'_>, id: u32) -> Result<Option<(ScopeSlo
         let blk = ctx.block();
         let slot_addr = blk.add(I64, &closure_ptr, &offset.to_string());
         let slot_ptr = blk.inttoptr(I64, &slot_addr);
-        let base = blk.load(I64, &slot_ptr);
+        let word = blk.load(I64, &slot_ptr);
+        let base = blk.and(I64, &word, &crate::nanbox::POINTER_MASK.to_string());
         return Ok(Some((slot, base)));
     }
     if let Some(root) = ctx.locals.get(&id).cloned() {

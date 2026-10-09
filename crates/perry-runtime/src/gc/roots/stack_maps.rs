@@ -336,7 +336,7 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
     let verify_stats = visit_stack_map_root_slots(&mut |slot| unsafe {
         verify_frames += 1;
         let bits = *slot.ptr;
-        let Some(word) = super::super::root_words::decode_root_word(bits) else {
+        let Some(word) = slot.pointer_word(bits) else {
             return;
         };
         let target = word.addr();

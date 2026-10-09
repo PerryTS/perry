@@ -2747,7 +2747,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let recv = scope.root_raw_mut_ptr(raw_addr as *mut ObjectHeader);
                 let value_handle = scope.root_nanbox_f64(value);
-                let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
+                let receiver_handle = scope.root_nanbox_u64(receiver.to_bits());
                 let key_ptr = crate::value::js_jsvalue_to_string(index);
                 if !key_ptr.is_null() {
                     crate::object::js_object_set_field_by_name(
@@ -2765,11 +2765,11 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                     let key_value =
                         f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
                     crate::array::note_array_subclass_index_write(
-                        f64::from_bits(receiver_handle.get_heap_word_u64()),
+                        f64::from_bits(receiver_handle.get_nanbox_u64()),
                         key_value,
                     );
                 }
-                f64::from_bits(receiver_handle.get_heap_word_u64())
+                f64::from_bits(receiver_handle.get_nanbox_u64())
             }
             _ => receiver,
         }

@@ -864,15 +864,11 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
             // perry#4926: PreallocateBoxes can sit nested inside an If/Try/Labeled
             // body (e.g. the async state-machine wrapper), so this block's
             // box-pointer store doesn't necessarily dominate every load of the
-            // slot. Entry-init the slot to TAG_UNDEFINED so paths that bypass this
-            // statement read a defined sentinel instead of `undef` (see the boxed
-            // `Stmt::Let` arm in let_stmt.rs). The slot holds a *box pointer*, not
-            // the value, so it is TAG_UNDEFINED-initialized in both the TDZ and
-            // non-TDZ cases -- the TAG_TDZ sentinel lives in the box cell, not the
-            // slot.
-            let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+            // slot. Null-init the raw pointer home so paths bypassing this
+            // statement see an empty cell. TDZ/undefined are JSValue sentinels
+            // inside the cell, independently of the pointer home's encoding.
             ctx.func
-                .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
+                .entry_allocas_push_store(crate::types::I64, "0", &slot);
             slot
         };
         let box_ptr = binding_cell::mint_box_cell(ctx, *id, tdz);
@@ -904,12 +900,12 @@ fn emit_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool) {
     } else {
         let root = ctx.func.alloca_entry(I64);
         // A path that bypasses this statement (a sibling branch of an async
-        // wrapper, a skipped hoisted declaration) sees the TAG_UNDEFINED
+        // wrapper, a skipped hoisted declaration) sees a null pointer
         // sentinel. A closure born on such a path mints the object itself
         // (`binding_cell::ensure_capture_cells`), so no capture slot ever holds
         // the sentinel.
         ctx.func
-            .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &root);
+            .entry_allocas_push_store(I64, "0", &root);
         root
     };
     let base = binding_cell::mint_scope_object(ctx, members, tdz);

@@ -336,14 +336,19 @@ fn rest_bundling_roots_the_rest_array_across_the_arguments_array() {
     );
 }
 
-/// #10532 review (round 2): a raw, untagged heap-pointer bit pattern (the
-/// Promise executor's resolve/reject shape, `top16 == 0`) stored as an
-/// array-like element is exactly as movable as a NaN-boxed pointer, but
-/// `JSValue::is_pointer()` does not recognize it, and `root_nanbox_f64`'s
-/// `Nanbox` scanner only rewrites POINTER_TAG/STRING_TAG/BIGINT_TAG bit
-/// patterns -- it would silently do nothing for a raw one.
+/// The resolve/reject function values supplied to user code obey the JSValue
+/// ABI. A later array-like index read must relocate an already-read function.
 #[test]
-fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
+fn array_like_argument_lists_root_function_elements() {
+    argument_element_survives_relocation(true);
+}
+
+#[test]
+fn array_like_argument_lists_preserve_numeric_address_bits() {
+    argument_element_survives_relocation(false);
+}
+
+fn argument_element_survives_relocation(tagged: bool) {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
@@ -353,18 +358,22 @@ fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
     let scope = RuntimeHandleScope::new();
     let callee_handle = scope.root_nanbox_f64(f64::from_bits(ptr_bits(callee as usize)));
 
-    // A closure left in the nursery, referenced ONLY by its raw (unboxed)
-    // address -- the exact shape `js_promise_new_with_executor` hands a
-    // user's executor for `resolve`/`reject` (see proxy.rs's
-    // `ValueMoveKind::RawHeapWord` doc comment).
+    // The tagged arm is a function value. The untagged arm is a legitimate
+    // subnormal JS number with the same payload as that function's address;
+    // it must stay numeric even while the independently rooted function moves.
     let raw_closure = crate::closure::js_closure_alloc(crate::fn_info!(record_two_args, 2), 0);
     let observer = scope.root_raw_mut_ptr(raw_closure);
-    let raw_bits_before = raw_closure as usize as u64;
+    let address_before = raw_closure as usize as u64;
+    let raw_bits_before = if tagged {
+        ptr_bits(address_before as usize)
+    } else {
+        address_before
+    };
 
     // Exactly 2 elements to match `record_two_args`'s declared arity -- an
     // under-applied raw extern "C" test body has no registered arity to pad
     // against, so this keeps the call itself unremarkable and isolates the
-    // one thing under test: whether element 0 survives as a raw heap word.
+    // one thing under test: the representation of the already-read element 0.
     let source = crate::object::js_object_alloc(0, 3);
     let source_value = scope.root_nanbox_f64(f64::from_bits(ptr_bits(source as usize)));
     for (name, value) in [
@@ -378,10 +387,10 @@ fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
     }
 
     // Fire the forced collection on the SECOND loop iteration (reading
-    // element "1"), not the first: element "0"'s raw pointer is read on the
+    // element "1"), not the first: element "0" is read on the
     // first iteration and, without this fix, copied bare into `out[0]` with
     // nothing rooting it. Firing the collection a step later is what puts
-    // that already-read copy at risk, instead of the collection landing
+    // that already-read copy at risk in the function-valued arm, instead of the collection landing
     // before element "0" is ever read (which every read would trivially
     // survive, fix or no fix).
     crate::gc::arm_collection_point_after("reflect.list_from_array_like.index_key", 1);
@@ -401,13 +410,19 @@ fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
     let raw_bits_after =
         observer.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| ptr as usize as u64);
     assert_ne!(
-        raw_bits_after, raw_bits_before,
-        "premise: the raw-bit closure moved"
+        raw_bits_after, address_before,
+        "premise: the independently rooted closure moved"
     );
     assert_eq!(
         seen(),
-        vec![raw_bits_after, 7.0_f64.to_bits()],
-        "element \"0\" must be the post-collection raw address, not the \
-         pre-collection one read before the later collection at element \"1\""
+        vec![
+            if tagged {
+                ptr_bits(raw_bits_after as usize)
+            } else {
+                address_before
+            },
+            7.0_f64.to_bits()
+        ],
+        "the function must relocate, and the numeric address bits must stay numeric"
     );
 }

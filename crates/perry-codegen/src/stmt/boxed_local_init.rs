@@ -15,9 +15,7 @@ pub(super) fn ensure_reused_box_is_initialized(ctx: &mut FnCtx<'_>, id: u32) {
         return;
     };
     let pointer = ctx.block().load(I64, &slot);
-    let missing = ctx
-        .block()
-        .icmp_eq(I64, &pointer, crate::nanbox::TAG_UNDEFINED_I64);
+    let missing = ctx.block().icmp_eq(I64, &pointer, "0");
     let allocate = ctx.new_block("boxed.reuse.allocate");
     let ready = ctx.new_block("boxed.reuse.ready");
     let allocate_label = ctx.block_label(allocate);

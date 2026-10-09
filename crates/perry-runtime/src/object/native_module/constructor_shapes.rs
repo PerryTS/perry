@@ -271,7 +271,7 @@ extern "C" fn own_static_thunk(
     let argument_scope = crate::gc::RuntimeHandleScope::new();
     for arg in &args {
         unsafe {
-            argument_scope.root_heap_word_cell(arg);
+            argument_scope.root_nanbox_cell(arg);
         }
     }
     let result = crate::exception::catch_js_throw(|| unsafe {

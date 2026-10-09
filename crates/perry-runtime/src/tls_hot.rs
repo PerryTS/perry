@@ -1203,8 +1203,8 @@ mod tests {
 
             {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let handle = scope.root_heap_word_u64(0);
-                assert_eq!(handle.get_heap_word_u64(), 0);
+                let handle = scope.root_nanbox_u64(0);
+                assert_eq!(handle.get_nanbox_u64(), 0);
             }
 
             // Scope creation, push, read and drop all stayed on the fallback;

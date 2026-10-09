@@ -31,14 +31,14 @@ fn construct_class_object_instance(
     };
     let prototype =
         unsafe { super::super::field_get_set::class_object_prototype_value(class_obj()) };
-    let prototype = scope.root_heap_word_u64(prototype.bits());
+    let prototype = scope.root_nanbox_u64(prototype.bits());
     let birth = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         crate::object::shapes::object_shape_stamp(instance)
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
         super::super::prototype_chain::object_link_class_evaluation_prototype(
             instance as usize,
-            prototype.get_heap_word_u64(),
+            prototype.get_nanbox_u64(),
         )
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
@@ -47,7 +47,7 @@ fn construct_class_object_instance(
             instance,
             birth,
             width,
-            prototype.get_heap_word_u64(),
+            prototype.get_nanbox_u64(),
         );
         instance
     })
@@ -101,7 +101,7 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let instance = scope.root_raw_mut_ptr(instance);
     let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
         .or_else(global_object_prototype_bits)
-        .map(|bits| scope.root_heap_word_u64(bits));
+        .map(|bits| scope.root_nanbox_u64(bits));
     let new_target_value = new_target.get_nanbox_f64();
     if is_class_object_value(new_target_value) {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
@@ -115,7 +115,7 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
             super::super::prototype_chain::object_set_static_prototype(
                 instance as usize,
-                prototype.get_heap_word_u64(),
+                prototype.get_nanbox_u64(),
             )
         });
     }
@@ -139,7 +139,7 @@ unsafe fn construct_class_object_with_new_target(
     let nt = scope.root_nanbox_f64(new_target);
     let func = scope.root_nanbox_f64(func_value);
     let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
-        .map(|bits| scope.root_heap_word_u64(bits));
+        .map(|bits| scope.root_nanbox_u64(bits));
     let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
     if let Some(proto) = proto {
         let jv = crate::value::JSValue::from_bits(result.to_bits());
@@ -147,7 +147,7 @@ unsafe fn construct_class_object_with_new_target(
             let addr = (jv.bits() & crate::value::POINTER_MASK) as usize;
             super::super::prototype_chain::object_set_static_prototype(
                 addr,
-                proto.get_heap_word_u64(),
+                proto.get_nanbox_u64(),
             );
         }
     }

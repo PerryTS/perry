@@ -70,36 +70,8 @@ pub(crate) fn emit_grow_mutator_writeback(
     array_id: u32,
     new_box: &str,
 ) -> Result<()> {
-    if ctx.boxed_vars.contains(&array_id) {
-        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
-        if crate::scope_env::access::write_scoped(ctx, array_id, &new_bits)? {
-            return Ok(());
-        }
-        // Boxed var: the slot / capture holds the BOX pointer; update the box
-        // content so every closure sharing the box sees the new head.
-        if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
-            let closure_ptr = crate::expr::current_closure_ptr_value(ctx, "unshift boxed capture")?;
-            let idx_str = capture_idx.to_string();
-            let blk = ctx.block();
-            let box_ptr = blk.call(
-                I64,
-                "js_closure_get_capture_bits",
-                &[(I64, &closure_ptr), (I32, &idx_str)],
-            );
-            let new_bits = blk.bitcast_double_to_i64(new_box);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-            emit_write_barrier(ctx, &box_ptr, &new_bits);
-            return Ok(());
-        } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
-            let blk = ctx.block();
-            let box_ptr = blk.load(I64, &slot);
-            let new_bits = blk.bitcast_double_to_i64(new_box);
-            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-            emit_write_barrier(ctx, &box_ptr, &new_bits);
-            return Ok(());
-        }
-        // Boxed but no box location in THIS context (module global reached
-        // directly from a nested fn) — fall through to the global store.
+    if crate::scope_env::access::write_back_boxed_local(ctx, array_id, new_box)? {
+        return Ok(());
     }
     if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
         let closure_ptr = crate::expr::current_closure_ptr_value(ctx, "unshift capture")?;

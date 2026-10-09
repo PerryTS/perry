@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::expr::TrustedBoxCapturePtr;
 use crate::function::LlFunction;
 use crate::scope_env::ScopeMap;
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Cache `captures` (binding id, capture index) at entry. Each capture word is
 /// one load: the closure's layout is the proof that the slot holds a live cell
@@ -45,16 +45,19 @@ pub(crate) fn cache_capture_cells(
         // The cell (or scope object) is movable: root it once for the whole
         // invocation and derive every cached SSA value from a root load.
         if let Some(root_index) = lf.reserve_shadow_slot() {
-            let slot = lf.alloca_entry(I64);
+            let slot = lf.alloca_entry(DOUBLE);
             let blk = lf.block_mut(0).expect("closure entry");
-            blk.store(I64, &bits, &slot);
+            let value = blk.bitcast_i64_to_double(&bits);
+            blk.store(DOUBLE, &value, &slot);
             blk.call_void(
                 "js_shadow_slot_bind",
                 &[(I32, &root_index.to_string()), (PTR, &slot)],
             );
-            bits = blk.load(I64, &slot);
+            let value = blk.load(DOUBLE, &slot);
+            bits = blk.bitcast_double_to_i64(&value);
         }
         let blk = lf.block_mut(0).expect("closure entry");
+        bits = blk.and(I64, &bits, &crate::nanbox::POINTER_MASK.to_string());
         for id in ids {
             let cell_bits = match scope_map.slot(id) {
                 Some(slot) if slot.index > 0 => blk.add(

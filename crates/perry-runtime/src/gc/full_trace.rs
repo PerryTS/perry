@@ -56,6 +56,7 @@ pub(crate) fn full_trace_active() -> bool {
 
 // Provider callbacks use only C ABI data so separately linked stdlib images
 // participate in the host collector, just like mutable-root scanners.
+// Provider edges are JSValue words; the callback never accepts bare addresses.
 type Mark = extern "C" fn(u64, *mut c_void);
 type Observe = extern "C" fn(u64, Mark, *mut c_void) -> bool;
 #[derive(Clone, Copy)]
@@ -153,7 +154,7 @@ fn observe_pool_handle(bits: u64, valid_ptrs: &super::ValidPointerSet) -> bool {
     }
     extern "C" fn mark(bits: u64, ctx: *mut c_void) {
         let valid_ptrs = unsafe { &*(ctx as *const super::ValidPointerSet) };
-        super::try_mark_value_or_raw(bits, valid_ptrs);
+        super::mark_precise_root(super::PreciseRoot::JSValue(bits), valid_ptrs);
     }
     POOL_TRACE.with(|hook| match hook.get() {
         Some(hook) => (hook.observe)(bits, mark, valid_ptrs as *const _ as *mut c_void),
@@ -168,7 +169,7 @@ fn observe_fetch_handle(bits: u64, valid_ptrs: &super::ValidPointerSet) -> bool 
     }
     extern "C" fn mark(bits: u64, ctx: *mut c_void) {
         let valid_ptrs = unsafe { &*(ctx as *const super::ValidPointerSet) };
-        super::try_mark_value_or_raw(bits, valid_ptrs);
+        super::mark_precise_root(super::PreciseRoot::JSValue(bits), valid_ptrs);
     }
     FETCH_TRACE.with(|hook| match hook.get() {
         Some(hook) => (hook.observe)(bits, mark, valid_ptrs as *const _ as *mut c_void),

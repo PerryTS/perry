@@ -68,10 +68,8 @@ fn temp_rooted_value_survives_a_real_collection() {
         "precondition: live is tracked"
     );
 
-    // Both word forms the `gc::root_words` contract admits, because generated
-    // code pushes both: NaN-boxed values from `lower_expr`, and bare `i64`
-    // array pointers threaded through `js_array_alloc` / `js_array_push_f64`.
-    let bare = js_gc_temp_root_push(live as u64);
+    // Codegen tags raw pointer temporaries at rest, just like JSValue temporaries.
+    let bare = js_gc_temp_root_push(POINTER_TAG | live as u64);
     let tagged = js_gc_temp_root_push(POINTER_TAG | live as u64);
 
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
@@ -88,7 +86,7 @@ fn temp_rooted_value_survives_a_real_collection() {
     // Read the survivor back out of the ROOT, never from the pre-collection
     // register — that is the contract generated code follows, and it is the
     // stronger assertion: it also proves the slot itself was maintained.
-    let survivor = js_gc_temp_root_get(bare);
+    let survivor = js_gc_temp_root_get(bare) & POINTER_MASK;
     assert_ne!(
         survivor, 0,
         "the bare temp-root slot must still hold a value"
@@ -147,7 +145,7 @@ fn fused_array_push_writes_the_reallocated_pointer_back() {
     reset_temp_roots();
 
     let arr = crate::array::js_array_alloc(0);
-    let idx = js_gc_temp_root_push(arr as u64);
+    let idx = js_gc_temp_root_push(POINTER_TAG | arr as u64);
 
     // Push past the initial capacity so the array is forced to grow and hand
     // back a different header.
@@ -156,7 +154,7 @@ fn fused_array_push_writes_the_reallocated_pointer_back() {
         js_array_push_f64_temp_rooted(idx, i as f64);
     }
 
-    let grown = js_gc_temp_root_get(idx) as *const crate::array::ArrayHeader;
+    let grown = (js_gc_temp_root_get(idx) & POINTER_MASK) as *const crate::array::ArrayHeader;
     assert!(!grown.is_null(), "the slot must hold the grown array");
     unsafe {
         assert_eq!(
@@ -245,8 +243,8 @@ fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
 
     // The accumulator pattern: root the first value, then hand the slot the
     // successor the way `js_string_concat`'s result is written back.
-    let slot = js_gc_temp_root_push(replaced as u64);
-    js_gc_temp_root_set(slot, successor as u64);
+    let slot = js_gc_temp_root_push(POINTER_TAG | replaced as u64);
+    js_gc_temp_root_set(slot, POINTER_TAG | successor as u64);
 
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_object_count().saturating_sub(1)));
     gc_check_trigger();
@@ -259,7 +257,7 @@ fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
         "the sweep must actually have run for this test to mean anything"
     );
 
-    let survivor = js_gc_temp_root_get(slot);
+    let survivor = js_gc_temp_root_get(slot) & POINTER_MASK;
     assert_eq!(
         survivor, successor as u64,
         "the slot must still hold the value written back into it"

@@ -88,12 +88,7 @@ pub(crate) fn bind_inline_constructor_params(
             .func
             .alloca_entry(if boxed_param { I64 } else { DOUBLE });
         // Spill all incoming values before any cell allocation can collect.
-        if boxed_param {
-            let bits = ctx.block().bitcast_double_to_i64(arg_val);
-            ctx.block().store(I64, &bits, &slot);
-        } else {
-            ctx.block().store(DOUBLE, arg_val, &slot);
-        }
+        ctx.block().store(DOUBLE, arg_val, &slot);
         ctx.locals.insert(param.id, slot);
         crate::expr::emit_shadow_slot_bind_for_local(ctx, param.id);
         ctx.local_types.insert(param.id, param.ty.clone());
@@ -107,7 +102,8 @@ pub(crate) fn bind_inline_constructor_params(
     for param in params {
         if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
             let slot = ctx.locals[&param.id].clone();
-            let bits = ctx.block().load(I64, &slot);
+            let value = ctx.block().load(DOUBLE, &slot);
+            let bits = ctx.block().bitcast_double_to_i64(&value);
             let cell = ctx.block().call(I64, "js_box_alloc_bits", &[(I64, &bits)]);
             ctx.block().store(I64, &cell, &slot);
         }

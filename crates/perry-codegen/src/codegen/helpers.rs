@@ -1523,10 +1523,10 @@ pub(super) fn emit_callee_binding_resolutions(
     // parameters (whose writes are all in this body) are admitted then.
     module_reassigned: Option<&std::collections::HashSet<u32>>,
     this_closure_available: bool,
-) {
+) -> anyhow::Result<()> {
     use crate::types::{DOUBLE, I32, I64, PTR};
     if !callee_binding_resolution_enabled() {
-        return;
+        return Ok(());
     }
     // Captures and module globals are admitted only with a module-wide
     // reassignment oracle. The maps are passed as they are: collecting the
@@ -1582,23 +1582,23 @@ pub(super) fn emit_callee_binding_resolutions(
             if !this_closure_available {
                 continue;
             }
-            let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
-                + 8 * u64::from(capture_idx);
-            let blk = ctx.block();
-            let slot_addr = blk.add(I64, "%this_closure", &offset.to_string());
-            let slot_ptr = blk.inttoptr(I64, &slot_addr);
-            let bits = blk.load(I64, &slot_ptr);
-            if let (true, Some(slot)) = (
-                ctx.boxed_vars.contains(&id),
-                crate::scope_env::access::slot(ctx, id),
-            ) {
-                let cell_bits = crate::scope_env::access::read_bits(ctx, id, slot, &bits);
-                ctx.block().bitcast_i64_to_double(&cell_bits)
-            } else if ctx.boxed_vars.contains(&id) {
-                let blk = ctx.block();
-                let cell_bits = blk.call(I64, "js_box_get_bits", &[(I64, &bits)]);
+            if ctx.boxed_vars.contains(&id) {
+                let cell_bits =
+                    if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, id)? {
+                        crate::scope_env::access::read_bits(ctx, id, slot, &base)
+                    } else if let Some(cell) = crate::expr::load_boxed_local_pointer(ctx, id)? {
+                        ctx.block().call(I64, "js_box_get_bits", &[(I64, &cell)])
+                    } else {
+                        continue;
+                    };
                 ctx.block().bitcast_i64_to_double(&cell_bits)
             } else {
+                let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
+                    + 8 * u64::from(capture_idx);
+                let blk = ctx.block();
+                let slot_addr = blk.add(I64, "%this_closure", &offset.to_string());
+                let slot_ptr = blk.inttoptr(I64, &slot_addr);
+                let bits = blk.load(I64, &slot_ptr);
                 ctx.block().bitcast_i64_to_double(&bits)
             }
         } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
@@ -1620,4 +1620,5 @@ pub(super) fn emit_callee_binding_resolutions(
         ctx.resolved_plain_callback_targets
             .insert((id, arity), fn_ptr);
     }
+    Ok(())
 }

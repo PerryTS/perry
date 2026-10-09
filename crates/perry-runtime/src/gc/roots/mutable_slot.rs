@@ -1,10 +1,8 @@
 /// Which registry a mutable root slot came from.
 ///
-/// The kind selects a *telemetry bucket* only — it must never select a
-/// different pointer decoding. All kinds are marked by
-/// `mark_mutable_root_bits` and rewritten by `try_rewrite_value`, and all
-/// therefore accept a heap reference either NaN-boxed or bare. That symmetry
-/// is the #6910 invariant; see `gc::root_words`.
+/// Native statepoint slots and globals carry JSValues at rest. Shadow frames
+/// remain the documented untyped platform fallback. Mark, copy and rewrite
+/// must use the same producer encoding for each kind (#6910).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gc) enum MutableRootSlotKind {
     #[cfg_attr(perry_native_stack_maps, allow(dead_code))]
@@ -39,5 +37,37 @@ impl MutableRootSlot {
     #[inline]
     pub(in crate::gc) unsafe fn write(self, bits: u64) {
         *self.ptr = bits;
+    }
+}
+
+/// Generated native slots and globals are JSValues at rest. Legacy shadow
+/// frames on unsupported targets (including WASI) retain the untyped decoder.
+/// Provenance remains a telemetry concern; this adapter expresses the actual
+/// producer ABI, then feeds the same precise marker as runtime visitors.
+#[inline]
+pub(in crate::gc) fn mark_mutable_slot(
+    slot: MutableRootSlot,
+    bits: u64,
+    valid_ptrs: &super::super::ValidPointerSet,
+) {
+    match slot.kind {
+        MutableRootSlotKind::ShadowStack => super::super::mark_mutable_root_bits(bits, valid_ptrs),
+        MutableRootSlotKind::NativeStack | MutableRootSlotKind::GlobalRoot => {
+            super::super::mark_precise_root(super::super::PreciseRoot::JSValue(bits), valid_ptrs);
+        }
+    }
+}
+
+impl MutableRootSlot {
+    /// A word the source encoding admits as a GC reference. Keep this decision
+    /// shared by mark, preflight, copy, rewrite and verification.
+    #[inline]
+    pub(in crate::gc) fn pointer_word(self, bits: u64) -> Option<super::super::RootWord> {
+        match self.kind {
+            MutableRootSlotKind::ShadowStack => super::super::decode_root_word(bits),
+            MutableRootSlotKind::NativeStack | MutableRootSlotKind::GlobalRoot => {
+                super::super::decode_nanboxed_root_word(bits)
+            }
+        }
     }
 }
