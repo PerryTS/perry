@@ -1,1 +1,4 @@
-Array iterator records share abrupt completion and forwarding repair, read a proven array's live length directly, and memo shape-validated refusal verdicts at each entry site.
+Array iterator records share cold property-length tiers and completion helpers,
+retain one user body, and use one private payload for the proven array or captured
+iterator. Each site memoizes both proven and refused verdicts against the two
+intrinsic owners' current ShapeIds; changed owners receive a fresh verdict.

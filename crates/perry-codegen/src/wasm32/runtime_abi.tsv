@@ -148,12 +148,12 @@ js_array_push_jsvalue	ptr	ptr,i64
 js_array_push_spread_any	ptr	ptr,f64
 js_array_push_spread_f64	ptr	ptr,ptr
 js_array_push_u31_with_length	ptr	ptr,i32u,ptr
-js_array_record_abrupt	void	f64,f64,f64,f64,f64
+js_array_record_abrupt	void	f64,f64,f64,i32u
 js_array_record_close	f64	f64,f64,f64,f64,f64
 js_array_record_close_absent	i32s	
 js_array_record_enter	i32s	f64,ptr,ptr
 js_array_record_enter_counted	i32s	f64,ptr,ptr
-js_array_record_finish	f64	f64,f64,f64,f64,f64,f64,f64
+js_array_record_finish	f64	f64,f64,f64,i32u
 js_array_record_literal	f64	ptr,i32u
 js_array_record_literal_needs_iterator	i32s	ptr
 js_array_record_needs_iterator	i32s	f64
