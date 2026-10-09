@@ -58,7 +58,7 @@ pub use registry::{
 };
 pub(crate) use registry::{
     closure_body_is_non_constructor, info_receives_primitive_this, info_trusted_direct,
-    info_versioned_loop_direct,
+    info_versioned_loop_direct, plain_admits,
 };
 
 pub(crate) use dispatch::{

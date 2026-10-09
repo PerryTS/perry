@@ -15,6 +15,10 @@
 #![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.
 #![feature(thread_local)]
+// `js_closure_call{N}` jumps to a plain body with `become` (a guaranteed tail
+// call): the entry leaves no frame and touches no argument register.
+#![feature(explicit_tail_calls)]
+#![allow(incomplete_features)]
 // WASI (#11377): `std::os::wasi::fs::symlink_path` for `fs.symlink`.
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![cfg_attr(all(target_os = "wasi", target_env = "p2"), feature(wasip2))]

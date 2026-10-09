@@ -326,10 +326,19 @@ pub struct JsFunctionInfo {
     /// [`FN_HAS_DECLARED`]): what `.length` falls back to. It can differ
     /// from `params`, the ABI width a caller pads to.
     pub declared: u16,
-    /// Padding (zero). Private, so an info can only be built through
-    /// [`JsFunctionInfo::of`] (typed) or the `unsafe`
-    /// [`JsFunctionInfo::from_code`].
-    reserved: u16,
+    /// One plus the fewest JS arguments a call may hand straight to `code`: `params + 1`
+    /// for a PLAIN body, one nothing stands between a call and (no bound
+    /// value, no rest or `arguments` bundling, compiled from JS source), else
+    /// zero, the legacy padding value, when no direct call is permitted. It is written with
+    /// `code`, once, when the info is born: codegen renders it for each body
+    /// it emits, and every info the runtime or an addon builds is
+    /// zero. A call passing at least the decoded count jumps to
+    /// `code` with its registers untouched (`js_closure_call{N}`); any other
+    /// call takes the dispatcher. Private, so an info can only be built
+    /// through [`JsFunctionInfo::of`] (typed) or the `unsafe`
+    /// [`JsFunctionInfo::from_code`], and made plain only by
+    /// [`JsFunctionInfo::plain`].
+    plain_params: u16,
     /// The versioned-loop clone's boxed-capture mask. When
     /// [`FN_HAS_SOURCE`] is set and `versioned_code` is null, this otherwise
     /// idle word instead carries the signed 64-bit source displacement.
@@ -409,6 +418,12 @@ pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
 pub const JS_FUNCTION_INFO_PARAMS_OFFSET: usize = 8;
 pub const JS_FUNCTION_INFO_FLAGS_OFFSET: usize = 12;
 pub const JS_FUNCTION_INFO_SIZE: usize = 64;
+/// Former zero padding; nonzero records opt in to plain closure dispatch.
+pub const JS_FUNCTION_INFO_PLAIN_PARAMS_OFFSET: usize =
+    core::mem::offset_of!(JsFunctionInfo, plain_params);
+
+/// [`JsFunctionInfo::plain_params`] of a body no call reaches directly.
+pub const NOT_PLAIN: u16 = u16::MAX;
 
 impl JsFunctionInfo {
     /// The info of the body at `code` declaring `params` JS parameters, with
@@ -431,7 +446,7 @@ impl JsFunctionInfo {
             versioned_code: core::ptr::null(),
             versioned_captures: 0,
             declared: 0,
-            reserved: 0,
+            plain_params: 0,
             versioned_boxed_mask: 0,
         }
     }
@@ -470,9 +485,31 @@ impl JsFunctionInfo {
         info
     }
 
+    /// [`JsFunctionInfo::plain_params`]: the fewest arguments a call may hand
+    /// straight to `code`, or [`NOT_PLAIN`].
+    pub const fn plain_params(&self) -> u16 {
+        self.plain_params.wrapping_sub(1)
+    }
+
+    /// A plain body: a call passing at least `params` arguments jumps to
+    /// `code` with nothing in between. A body with a rest kind stays
+    /// [`NOT_PLAIN`] (its arguments are bundled first). Adding a rest kind
+    /// later also revokes direct-call eligibility.
+    pub const fn plain(mut self) -> Self {
+        self.plain_params = if self.flags & FN_REST_MASK == 0 {
+            self.params.wrapping_add(1)
+        } else {
+            0
+        };
+        self
+    }
+
     /// With `FN_*` bits set.
     pub const fn with_flags(mut self, flags: u32) -> Self {
         self.flags |= flags;
+        if self.flags & FN_REST_MASK != 0 {
+            self.plain_params = 0;
+        }
         self
     }
 
@@ -494,6 +531,7 @@ impl JsFunctionInfo {
     pub const fn with_rest(mut self, fixed: u16) -> Self {
         self.rest_fixed = fixed;
         self.flags = (self.flags & !FN_REST_MASK) | FN_REST_USER;
+        self.plain_params = 0;
         self
     }
 
@@ -502,6 +540,7 @@ impl JsFunctionInfo {
     pub const fn with_rest_kind(mut self, fixed: u16, kind: u32) -> Self {
         self.rest_fixed = fixed;
         self.flags = (self.flags & !FN_REST_MASK) | kind;
+        self.plain_params = 0;
         self
     }
 

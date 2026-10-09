@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
     FN_HAS_LENGTH, FN_HAS_SOURCE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE,
-    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
+    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NOT_PLAIN,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -227,6 +227,27 @@ impl FnInfoState {
     }
 }
 
+/// The info's encoded `plain_params` (perry-abi): the body's `params + 1`
+/// when a call reaches it directly, else zero (legacy records stay on the
+/// dispatcher). A compiled
+/// body is plain unless it bundles a rest or `arguments` array: that body
+/// takes its arguments through the dispatcher's bundling arm. Every other
+/// compiled body (async and generator bodies included: the body itself
+/// builds the promise or the generator) takes the call's registers as they
+/// are, the extra ones ignored.
+fn plain_params(params: usize, flags: u32) -> i64 {
+    let bundles = FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS;
+    let params = saturate_u16(params as u64);
+    let plain = if flags & bundles != 0 {
+        NOT_PLAIN
+    } else {
+        params
+    };
+    // Zero remains the legacy padding value; the runtime decodes with a
+    // wrapping subtraction, so it becomes NOT_PLAIN without a branch.
+    i64::from(plain.wrapping_add(1) as i16)
+}
+
 fn render_definition(
     body: &str,
     def: &DefinedBody,
@@ -299,9 +320,10 @@ fn render_definition(
     };
     let value = format!(
         "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
-         ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 0, \
+         ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 {plain}, \
          i64 {vmask} }}",
         params = saturate_u16(def.params as u64),
+        plain = plain_params(def.params, flags),
         rest = facts.rest_fixed,
         length = facts.length,
         tcap = trusted_captures,
@@ -369,6 +391,45 @@ mod tests {
                 FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
             )]
         );
+    }
+
+    /// Encoded `plain_params` is the body's `params + 1` unless it bundles a
+    /// rest or `arguments` array; then it is zero, and
+    /// every call of it takes the dispatcher's bundling arm.
+    #[test]
+    fn a_body_is_plain_unless_it_bundles_its_arguments() {
+        let mut state = FnInfoState::default();
+        for body in ["plain", "gen", "rest", "args", "both"] {
+            state.request(body);
+        }
+        state.facts_mut("gen").set_generator();
+        state.facts_mut("rest").set_rest(1, RestKind::User);
+        state
+            .facts_mut("args")
+            .set_rest(0, RestKind::SyntheticArguments);
+        state
+            .facts_mut("both")
+            .set_rest(2, RestKind::UserAndArguments);
+        let lines = state.render_globals(|_| defined(3, "internal"), [], false);
+        let plain_word = |body: &str| {
+            let line = lines
+                .iter()
+                .find(|l| l.starts_with(&format!("@{body}$info ")))
+                .unwrap();
+            line.rsplit(", i16 ")
+                .next()
+                .unwrap()
+                .split(',')
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(plain_word("plain"), "4");
+        assert_eq!(plain_word("gen"), "4");
+        for bundling in ["rest", "args", "both"] {
+            assert_eq!(plain_word(bundling), "0", "{bundling}");
+        }
+        assert_eq!(NOT_PLAIN as i16, -1);
     }
 
     #[test]
