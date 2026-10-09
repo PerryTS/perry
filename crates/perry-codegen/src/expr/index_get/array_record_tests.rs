@@ -567,16 +567,24 @@ fn stack_record_ir(fused: bool) -> String {
                     mutable: false,
                     init: Some(Expr::LocalGet(8)),
                 },
-                Stmt::Expr(Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
+                Stmt::If {
+                    condition: Expr::PropertyGet {
                         object: Box::new(Expr::LocalGet(10)),
-                        property: "record_body_member".into(),
+                        property: "record_body_enabled".into(),
                         byte_offset: 0,
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                    byte_offset: 0,
-                }),
+                    },
+                    then_branch: vec![Stmt::Expr(Expr::Call {
+                        callee: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(10)),
+                            property: "record_body_member".into(),
+                            byte_offset: 0,
+                        }),
+                        args: vec![],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    })],
+                    else_branch: None,
+                },
             ],
         },
         Stmt::Expr(runtime(
