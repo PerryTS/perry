@@ -76,7 +76,7 @@ pub(crate) fn dirty_external_slot_span(
     if parent_addr < GC_HEADER_SIZE || first_slot_addr == 0 || slot_count == 0 {
         return;
     }
-    if !barrier_parent_needs_remembering(parent_addr, true) {
+    if !barrier_parent_needs_remembering(parent_addr) {
         return;
     }
     let Some(bytes) = slot_count.checked_mul(std::mem::size_of::<u64>()) else {

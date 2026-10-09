@@ -22,7 +22,7 @@
 //!    "a gate must assert its subject was live"; #7690 is the precedent where
 //!    an optimization was silently deleted while every label survived.)
 //! 2. **The condition is the real one** — the block that branches loads
-//!    `gc_flags` and masks `GC_FLAG_TENURED`, and reads
+//!    `gc_flags` and masks `GC_FLAG_TENURED | GC_FLAG_ARENA`, and reads
 //!    `@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT`. Hard-wiring the claim
 //!    (`false`, or a constant, or dropping the incremental disjunct) fails
 //!    here. That is the sabotage this file is verified against.
@@ -39,9 +39,11 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param
 
 /// The block that exists only when the #7871 gate was emitted.
 const BARRIER_BLOCK: &str = "class_field_set.barrier";
-/// `GC_FLAG_TENURED` as the emitted `and i8` mask.
+/// `GC_FLAG_TENURED | GC_FLAG_ARENA` as the emitted `and i8` mask, compared
+/// against `GC_FLAG_ARENA` (an untenured arena parent is the one skip).
 const TENURED_MASK: &str = "and i8";
-const TENURED_VALUE: &str = ", 32";
+const TENURED_VALUE: &str = ", 34";
+const ARENA_COMPARAND: &str = ", 2";
 const INCREMENTAL_GLOBAL: &str = "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT";
 const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
 
@@ -341,13 +343,13 @@ pub(super) fn operand(instr: &str, i: usize) -> Option<String> {
 /// instructions somewhere nearby.
 ///
 /// ★ The weaker version of this test (assert the block *contains* an
-/// `and i8 …, 32` and the incremental global) passed a deliberate sabotage that
+/// `and i8 …, 34` and the incremental global) passed a deliberate sabotage that
 /// hard-wired the branch to `br i1 false` while leaving the now-dead predicate
 /// instructions in the block. That is precisely the "gate that cannot fail"
 /// shape CLAUDE.md catalogues, so the assertion walks:
 ///
 ///   cond → `or i1 %a, %b`
-///   %a   → `icmp ne i8 %t, 0` → %t → `and i8 %f, 32` → %f → `load i8`
+///   %a   → `icmp ne i8 %t, 2` → %t → `and i8 %f, 34` → %f → `load i8`
 ///   %b   → `icmp ne i32 %c, 0` → %c → atomic load of the incremental count
 ///
 /// Any constant condition, any dropped disjunct, and any substitution of a
@@ -387,18 +389,19 @@ fn the_class_field_barrier_sits_behind_a_live_parent_generation_test() {
     let tenured_cmp_reg = operand(or_instr, 0).expect("or lhs");
     let incremental_cmp_reg = operand(or_instr, 1).expect("or rhs");
 
-    // Clause 1: gc_flags & GC_FLAG_TENURED != 0, off a real i8 header load.
+    // Clause 1: gc_flags & (TENURED | ARENA) != ARENA, off a real i8 header load.
     let tenured_cmp = def_of(&body, &tenured_cmp_reg).unwrap_or_default();
     assert!(
-        tenured_cmp.starts_with("icmp ne i8 ") && tenured_cmp.ends_with(", 0"),
-        "the generational clause is `{tenured_cmp}`, not `gc_flags & TENURED != 0`:\n{body}"
+        tenured_cmp.starts_with("icmp ne i8 ") && tenured_cmp.ends_with(ARENA_COMPARAND),
+        "the generational clause is `{tenured_cmp}`, not \
+         `gc_flags & (TENURED | ARENA) != ARENA`:\n{body}"
     );
     let mask_reg = operand(tenured_cmp, 0).expect("icmp lhs");
     let mask = def_of(&body, &mask_reg).unwrap_or_default();
     assert!(
         mask.starts_with(TENURED_MASK) && mask.ends_with(TENURED_VALUE),
-        "the generational clause masks `{mask}` rather than GC_FLAG_TENURED \
-         (0x20) — a different bit would answer a different question:\n{body}"
+        "the generational clause masks `{mask}` rather than GC_FLAG_TENURED | \
+         GC_FLAG_ARENA (0x22) — different bits would answer a different question:\n{body}"
     );
     let flags_reg = operand(mask, 0).expect("and lhs");
     assert!(

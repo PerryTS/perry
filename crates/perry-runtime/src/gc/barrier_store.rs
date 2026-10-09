@@ -405,9 +405,9 @@ pub(super) fn barrier_remembering_active() -> bool {
 /// # Why this exists on the runtime side too
 ///
 /// Every store emitted by the compiler is already gated this way — the
-/// generated code reads the parent's `gc_flags` and, when `GC_FLAG_TENURED`
-/// is clear *and* no incremental cycle is live anywhere, jumps over the
-/// barrier call entirely. Runtime-Rust construction paths call
+/// generated code reads the parent's `gc_flags` and, when the parent is an
+/// arena object without `GC_FLAG_TENURED` *and* no incremental cycle is live
+/// anywhere, jumps over the barrier call entirely. Runtime-Rust construction paths call
 /// [`runtime_write_barrier_gc_slot`] unconditionally instead, so a native
 /// header born in the nursery pays, per pointer slot: a page-map
 /// classification for the malloc-parent probe, `barrier_child_prologue`, the
@@ -428,12 +428,17 @@ pub(super) fn barrier_remembering_active() -> bool {
 /// Exactly the two clauses the emitted gate uses, for exactly the two reasons
 /// its doc comment gives:
 ///
-///   * **`GC_FLAG_TENURED` clear** ⇒ the parent is not in the old generation,
-///     so no old→young remembered-set entry can be owed. The flag is read
-///     LIVE at the store, not claimed statically, because promotion can move
-///     an object under any static proof (#7501) — a header that a collection
-///     promoted between its allocation and this store reads TENURED here and
-///     takes the full barrier.
+///   * **`GC_FLAG_TENURED` clear and `GC_FLAG_ARENA` set** ⇒ the parent is an
+///     arena object outside the old generation, which every minor reclaims or
+///     traces, so no remembered-set entry can be owed. A parent with
+///     `GC_FLAG_ARENA` clear is a malloc object, which owes the same entries
+///     an old one does (`barrier::RememberingParent`): a large-capture
+///     closure is born there, and skipping it left its young captures
+///     unremembered. The flags are read LIVE at the store, not claimed
+///     statically, because promotion can move an object under any static
+///     proof (#7501) — a header that a collection promoted between its
+///     allocation and this store reads TENURED here and takes the full
+///     barrier.
 ///   * **`PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT == 0`** ⇒ no thread has
 ///     an incremental mark barrier installed, which is what makes it legal to
 ///     skip the SATB/insertion shading as well
@@ -452,5 +457,17 @@ pub(crate) unsafe fn newborn_parent_needs_barrier(parent_addr: usize) -> bool {
     if !super::barrier::incremental_mark_barrier_globally_idle() {
         return true;
     }
-    (*super::layout::header_from_user_ptr(parent_addr as *const u8)).gc_flags & GC_FLAG_TENURED != 0
+    parent_flags_may_need_remembering(
+        (*super::layout::header_from_user_ptr(parent_addr as *const u8)).gc_flags,
+    )
+}
+
+/// The header half of the #7511 parent gate, shared by the runtime twin above
+/// and mirrored by codegen's `emit_parent_may_need_remembering_check`: a
+/// parent may owe the remembered set an entry unless it is an arena object
+/// that is not tenured. One mask and one compare:
+/// `flags & (TENURED | ARENA) != ARENA`.
+#[inline(always)]
+pub(crate) const fn parent_flags_may_need_remembering(flags: u8) -> bool {
+    flags & (GC_FLAG_TENURED | super::types::GC_FLAG_ARENA) != super::types::GC_FLAG_ARENA
 }

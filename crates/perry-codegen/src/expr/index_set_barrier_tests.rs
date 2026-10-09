@@ -313,14 +313,16 @@ fn the_value_gate_branches_into_the_parent_generation_test() {
 
     let tenured_cmp = def_of(&body, &tenured_cmp_reg).unwrap_or_default();
     assert!(
-        tenured_cmp.starts_with("icmp ne i8 ") && tenured_cmp.ends_with(", 0"),
-        "the generational clause is `{tenured_cmp}`, not `gc_flags & TENURED != 0`:\n{body}"
+        tenured_cmp.starts_with("icmp ne i8 ") && tenured_cmp.ends_with(", 2"),
+        "the generational clause is `{tenured_cmp}`, not \
+         `gc_flags & (TENURED | ARENA) != ARENA`:\n{body}"
     );
     let mask_reg = operand(tenured_cmp, 0).expect("icmp lhs");
     let mask = def_of(&body, &mask_reg).unwrap_or_default();
     assert!(
-        mask.starts_with("and i8") && mask.ends_with(", 32"),
-        "the generational clause masks `{mask}` rather than GC_FLAG_TENURED (0x20):\n{body}"
+        mask.starts_with("and i8") && mask.ends_with(", 34"),
+        "the generational clause masks `{mask}` rather than GC_FLAG_TENURED | \
+         GC_FLAG_ARENA (0x22):\n{body}"
     );
 
     let incremental_cmp = def_of(&body, &incremental_cmp_reg).unwrap_or_default();

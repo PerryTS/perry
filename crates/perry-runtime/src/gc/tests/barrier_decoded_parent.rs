@@ -265,7 +265,7 @@ fn runtime_write_barrier_slot_matches_nanboxed_entry_point() {
 }
 
 #[test]
-fn runtime_write_barrier_slot_malloc_parent_skips_as_not_old() {
+fn runtime_write_barrier_slot_malloc_parent_remembers_its_young_edge() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
     activate_malloc_registry_for_tests();
@@ -288,13 +288,13 @@ fn runtime_write_barrier_slot_malloc_parent_skips_as_not_old() {
 
     runtime_write_barrier_slot(malloc_parent as usize, slot as usize, child_bits);
 
-    // The invariant: a malloc-GC parent reached through the NON-external entry
-    // point is not an old parent, so nothing is remembered. Unchanged by #7187
-    // — only which skip counter reports it moved.
+    // Malloc parents must keep their young words valid even through the
+    // non-external entry point. Their entries use the (page, owner) external
+    // form, because no old-arena page walk can find a malloc allocation.
     assert_eq!(
         remembered_state_fingerprint(),
-        (0, 0, 0),
-        "non-external malloc-GC parent must record no old→young edge"
+        (1, 1, 1),
+        "non-external malloc-GC parent must record its young edge"
     );
 
     let counters = take_write_barrier_trace_counters();
@@ -305,8 +305,8 @@ fn runtime_write_barrier_slot_malloc_parent_skips_as_not_old() {
             "the parent address is real — it must no longer be rejected as a non-pointer"
         );
         assert_eq!(
-            counters.parent_not_old_skips, 1,
-            "it is rejected for the reason that is actually true: not an old parent"
+            counters.parent_not_old_skips, 0,
+            "a malloc parent must not be skipped for being outside the old arena"
         );
     }
 

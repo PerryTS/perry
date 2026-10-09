@@ -107,10 +107,7 @@ fn remembering_fact_disagreements(sabotaged: bool) -> (usize, Vec<ParentRemember
             let skipped = unsafe { ParentRemembering::of(parent, true) };
             for &slot in &slots {
                 let slot = GcMutableSlot::new(slot, None);
-                let expected = crate::gc::barrier::barrier_parent_needs_remembering(
-                    parent_user,
-                    slot.external(),
-                );
+                let expected = crate::gc::barrier::barrier_parent_needs_remembering(parent_user);
                 disagreements += usize::from(fact.for_slot(slot) != expected);
                 // `skip_remembering` is a proof that nothing is remembered.
                 disagreements += usize::from(skipped.for_slot(slot));
@@ -130,9 +127,10 @@ fn the_per_object_remembering_fact_agrees_with_the_per_slot_predicate() {
         vec![
             ParentRemembering::Always,
             ParentRemembering::Never,
-            ParentRemembering::ExternalSlotsOnly,
+            ParentRemembering::Always,
         ],
-        "premise: an old, a young and a malloc parent exercise all three answers"
+        "premise: an old, a young and a malloc parent; the malloc parent owes the \
+         remembered set what the old one does"
     );
     assert_eq!(disagreements, 0);
 }

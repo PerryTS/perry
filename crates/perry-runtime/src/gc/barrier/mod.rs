@@ -947,17 +947,12 @@ pub(super) fn barrier_parent_addr_is_dereferenceable(parent_addr: usize) -> bool
 /// of that program, ~657M instructions, with zero collections running), and
 /// the only one that answered a question the caller had already answered.
 ///
-/// Dropping the round-trip is outcome-preserving, including for the one
-/// operand class that reached the bare-pointer arm and failed it: a
-/// malloc-GC parent classifies `Unknown`, so `decode_heap_addr` used to
-/// return 0 and the barrier exited at `NonPointerParentSkips`. It now
-/// reaches `barrier_parent_needs_remembering(parent, external_slot)`, which
-/// classifies `Unknown`, is not `Old`, and — for the non-external callers
-/// that took this path — exits at `ParentNotOldSkips`. Different counter,
-/// same remembered-set effect (none). The external/malloc parents that
-/// genuinely need remembering arrive through
-/// [`runtime_write_barrier_external_slot`] / [`runtime_write_barrier_gc_slot`],
-/// which already tag their parent and are unaffected.
+/// A malloc-GC parent classifies `Unknown`, so `decode_heap_addr` used to
+/// return 0 for it and the barrier exited at `NonPointerParentSkips`. It now
+/// reaches [`barrier_remembering_parent`], which remembers its young edges
+/// in the external form whatever `external_slot` the caller passed — a
+/// malloc parent owes the remembered set the same entries an old one does
+/// (see [`RememberingParent`]).
 ///
 /// Callers must pass a real GC user pointer. `decode_heap_addr`'s shape
 /// pre-filter (48-bit, above the handle band, 8-aligned) is not applied
@@ -971,9 +966,9 @@ pub(super) fn write_barrier_decoded_parent(
     child_addr: usize,
     external_slot: bool,
 ) {
-    // Old → young check. Runtime-owned malloc GC objects are outside
-    // the nursery and must be treated as old when the caller uses the
-    // external-slot path for fields or side buffers.
+    // Old → young check. Runtime-owned malloc GC objects are outside the
+    // nursery and owe the remembered set exactly what an old parent owes,
+    // always in the external `(page, owner)` form (`RememberingParent`).
     // An inline slot whose page is the one the dirty-page cache names has
     // nothing left to owe the remembered set: the cache's invariant
     // (`dirty_page_cache`) is "cached ⟹ recorded in DIRTY_OLD_PAGES AND
@@ -988,10 +983,10 @@ pub(super) fn write_barrier_decoded_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
         return;
     }
-    if !barrier_parent_needs_remembering(parent_addr, external_slot) {
+    let Some(parent_kind) = barrier_remembering_parent(parent_addr) else {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
-    }
+    };
     if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
@@ -999,7 +994,7 @@ pub(super) fn write_barrier_decoded_parent(
 
     bump_write_barrier_trace_counter(BarrierTraceCounter::OldToYoungSlowHits);
     bump_write_barrier_trace_counter(BarrierTraceCounter::RememberedSetInsertAttempts);
-    let inserted = if external_slot {
+    let inserted = if external_slot || parent_kind == RememberingParent::Malloc {
         remember_old_to_young_external_slot(parent_addr, slot_addr)
     } else {
         remember_old_to_young_inline_slot(parent_addr, slot_addr)
@@ -1055,10 +1050,10 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
-    if !barrier_parent_needs_remembering(parent_addr, false) {
+    let Some(parent_kind) = barrier_remembering_parent(parent_addr) else {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
-    }
+    };
     let mut dirtied_page = usize::MAX;
     for i in 0..count {
         let slot_addr = slots as usize + i * std::mem::size_of::<u64>();
@@ -1082,7 +1077,11 @@ pub(super) fn replay_old_parent_slot_range(parent_addr: usize, slots: *mut u64, 
         // Only a slot that classifies Old is described by its own page; the
         // fallback (`mark_dirty_parent_span`) covers the parent's whole span
         // and gives no single page to latch, so it must not arm the skip.
-        if matches!(
+        if parent_kind == RememberingParent::Malloc {
+            if remember_old_to_young_external_slot(parent_addr, slot_addr) {
+                bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+            }
+        } else if matches!(
             crate::arena::classify_heap_generation(slot_addr),
             crate::arena::HeapGeneration::Old
         ) {
@@ -1152,7 +1151,7 @@ fn relocate_old_object_dirty_pages(
         return true;
     }
     if !barrier_parent_addr_is_dereferenceable(new_parent_addr)
-        || !barrier_parent_needs_remembering(new_parent_addr, false)
+        || !barrier_parent_needs_remembering(new_parent_addr)
     {
         return true;
     }
@@ -1246,18 +1245,45 @@ pub(crate) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
     }
 }
 
+/// Which kind of parent owes the remembered set an entry for a young (or
+/// malloc) child it holds.
+///
+/// The remembered set has one job: keep every word a minor can neither
+/// reclaim nor is guaranteed to trace valid across that minor. A nursery
+/// parent is reclaimed or traced by every minor. Two kinds of parent are
+/// neither:
+///
+///   * an **old** parent is a black leaf in a minor;
+///   * a **malloc** parent is traced only when the minor reaches it, and freed
+///     only by a minor whose malloc sweep is due. A dead one survives every
+///     other minor untraced, and the conservative stack scan can reach it
+///     again afterwards (exact registry membership is its only test), so an
+///     unremembered young word in it goes stale exactly like one in a dead
+///     old parent.
+///
+/// Every slot of a malloc parent lies outside the old arena — the same answer
+/// `GcMutableSlot::external` gives the collector — so a malloc parent's
+/// entries always take the `(page, owner)` external form; a dirty page there
+/// would name memory no old-arena walk can find. Whether the CALLER called its
+/// slot external does not enter into it: the store sites that pass
+/// `external_slot = false` (`js_write_barrier_slot`, the bare runtime slot
+/// barrier) reach malloc parents too, and gating the malloc clause on that
+/// flag left their edges unremembered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RememberingParent {
+    Old,
+    Malloc,
+}
+
 #[inline]
-pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot: bool) -> bool {
-    if matches!(
-        crate::arena::classify_heap_generation(parent_addr),
-        crate::arena::HeapGeneration::Old
-    ) {
-        // #7511: generated code skips this whole call when the parent's header
-        // has no `GC_FLAG_TENURED` (`emit_parent_may_need_remembering_check`),
-        // which is sound only while `Old ⟹ TENURED` — and nothing in the
-        // allocator enforces that, so it is pinned by
-        // `gc::tests::inline_generation_gate_contract` over the production
-        // birth paths instead.
+pub(crate) fn barrier_remembering_parent(parent_addr: usize) -> Option<RememberingParent> {
+    match crate::arena::classify_heap_generation(parent_addr) {
+        // #7511: generated code skips the barrier call when the parent's header
+        // is neither TENURED nor outside the arenas
+        // (`emit_parent_may_need_remembering_check`), which is sound only
+        // while `Old ⟹ TENURED` — and nothing in the allocator enforces that,
+        // so it is pinned by `gc::tests::inline_generation_gate_contract` over
+        // the production birth paths instead.
         //
         // A `debug_assert!` here was tried and REVERTED: it is the right
         // enforcement point in principle, but dozens of tests build old-gen
@@ -1265,9 +1291,19 @@ pub(super) fn barrier_parent_needs_remembering(parent_addr: usize, external_slot
         // (`alloc_old_test_object`, `alloc_old_test_promise`, the
         // `gc/tests/oldgen.rs` family), some deliberately. It fired on those,
         // not on a defect. Reinstating it means fixing those fixtures first.
-        return true;
+        crate::arena::HeapGeneration::Old => Some(RememberingParent::Old),
+        crate::arena::HeapGeneration::Unknown if malloc_gc_parent_addr(parent_addr) => {
+            Some(RememberingParent::Malloc)
+        }
+        _ => None,
     }
-    external_slot && malloc_gc_parent_addr(parent_addr)
+}
+
+/// Does a store into `parent_addr` owe the remembered set an entry? See
+/// [`RememberingParent`].
+#[inline]
+pub(crate) fn barrier_parent_needs_remembering(parent_addr: usize) -> bool {
+    barrier_remembering_parent(parent_addr).is_some()
 }
 
 /// #7187: this DEREFERENCES `parent_addr - GC_HEADER_SIZE`, and its only

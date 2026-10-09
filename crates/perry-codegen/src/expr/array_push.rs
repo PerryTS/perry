@@ -1825,10 +1825,10 @@ mod parent_gate_tests {
     }
 
     /// Follow the `cond_br`'s condition back to its definition and require it to
-    /// be the `or` of a `GC_FLAG_TENURED` header test and the incremental-count
+    /// be the `or` of a `GC_FLAG_TENURED | GC_FLAG_ARENA` header test and the incremental-count
     /// test.
     ///
-    /// Checking only that the IR *contains* `and i8 …, 32` and the global's name
+    /// Checking only that the IR *contains* `and i8 …, 34` and the global's name
     /// is not enough, and this is not hypothetical: replacing the `or` with a
     /// constant-true left both of those substrings in place (the clauses are
     /// still computed, just no longer consulted) and the test stayed green while
@@ -1878,8 +1878,8 @@ mod parent_gate_tests {
             def_of(incremental)
         );
         assert!(
-            ir.contains("and i8") && ir.contains(", 32"),
-            "the header test must mask GC_FLAG_TENURED (0x20):\n{ir}"
+            ir.contains("and i8") && ir.contains(", 34"),
+            "the header test must mask GC_FLAG_TENURED | GC_FLAG_ARENA (0x22):\n{ir}"
         );
         assert!(
             ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),

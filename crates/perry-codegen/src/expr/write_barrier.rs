@@ -92,14 +92,17 @@ pub(crate) fn emit_write_barrier_slot_on_block(
     );
 }
 
-/// #7511 — `GC_FLAG_TENURED`, the one header bit that decides whether a
-/// parent's slot store can possibly need remembering.
+/// #7511 — `GC_FLAG_TENURED | GC_FLAG_ARENA`, the two header bits that decide
+/// whether a parent's slot store can possibly need remembering, and
+/// `GC_FLAG_ARENA`, the one answer (an untenured arena object) that cannot.
 ///
-/// Pinned against the runtime constant by
-/// `perry-runtime`'s `gc::tests::inline_generation_gate_contract`; codegen
-/// cannot `use` the runtime crate, so the value is duplicated and the test is
-/// what keeps the two from drifting.
-const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
+/// Pinned against the runtime constants and the runtime's own predicate
+/// (`gc::parent_flags_may_need_remembering`) by `perry-runtime`'s
+/// `gc::tests::inline_generation_gate_contract`; codegen cannot `use` the
+/// runtime crate, so the values are duplicated and the test is what keeps the
+/// two from drifting.
+const GC_FLAG_TENURED_OR_ARENA_I8: &str = "34"; // 0x20 | 0x02
+const GC_FLAG_ARENA_I8: &str = "2"; // 0x02
 
 /// #7511 — emit the `i1` predicate "this store may need remembered-set work",
 /// as a **superset** of the condition the runtime barrier itself acts on.
@@ -119,15 +122,18 @@ const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
 ///
 /// The call is skipped only when BOTH are false.
 ///
-/// 1. **`gc_flags & GC_FLAG_TENURED`** — the remembered set exists so a minor
-///    GC can skip retracing parents it treats as black leaves. Those are
-///    exactly the objects that are physically old-gen
-///    (`barrier_parent_needs_remembering`'s `classify_heap_generation == Old`)
-///    or logically tenured (`GC_FLAG_TENURED`, whose doc records that a tenured
-///    object may stay physically in the nursery while "the trace pretends
-///    they're old-gen" — `gc/trace.rs:747`). A parent that is neither is
-///    **fully traced by every minor GC**, so the edge is rediscovered and needs
-///    no record.
+/// 1. **`gc_flags & (GC_FLAG_TENURED | GC_FLAG_ARENA) != GC_FLAG_ARENA`** — the
+///    remembered set keeps valid every word a minor can neither reclaim nor is
+///    sure to trace. Those parents are the physically old-gen ones
+///    (`barrier_parent_needs_remembering`'s `classify_heap_generation == Old`),
+///    the logically tenured ones (`GC_FLAG_TENURED`, whose doc records that a
+///    tenured object may stay physically in the nursery while "the trace
+///    pretends they're old-gen" — `gc/trace.rs:747`), and the malloc objects
+///    (`GC_FLAG_ARENA` clear), which a minor traces only if it reaches them and
+///    frees only when its malloc sweep is due. An untenured arena parent is
+///    **reclaimed or fully traced by every minor GC**, so the edge is
+///    rediscovered and needs no record. The mask and compare cost what the
+///    single-bit test did: one `and`, one `icmp`.
 ///
 ///    Soundness rests on `Old ⟹ TENURED`, i.e. `!TENURED ⟹ !Old`, so this
 ///    predicate can only skip a subset of what the runtime already skips — the
@@ -177,8 +183,8 @@ pub(crate) fn emit_parent_may_need_remembering_check(
     let gc_flags_addr = blk.sub(I64, parent_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
-    let tenured_bits = blk.and(I8, &gc_flags, GC_FLAG_TENURED_I8);
-    let is_tenured = blk.icmp_ne(I8, &tenured_bits, "0");
+    let gate_bits = blk.and(I8, &gc_flags, GC_FLAG_TENURED_OR_ARENA_I8);
+    let is_tenured = blk.icmp_ne(I8, &gate_bits, GC_FLAG_ARENA_I8);
     let active = blk.load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
     let incremental_active = blk.icmp_ne(I32, &active, "0");
     blk.or(I1, &is_tenured, &incremental_active)
