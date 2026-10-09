@@ -157,6 +157,7 @@ js_array_record_finish	f64	f64,f64,f64,i32u
 js_array_record_literal	f64	ptr,i32u
 js_array_record_literal_needs_iterator	i32s	ptr
 js_array_record_needs_iterator	i32s	f64
+js_array_record_stack_dispatch	f64	ptr,i32u
 js_array_reduce	f64	ptr,ptr,i32s,f64
 js_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_array_refresh_local_head	f64	f64

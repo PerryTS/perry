@@ -956,6 +956,7 @@ pub(crate) struct FnCtx<'a> {
     pub pending_helpers: Vec<LlFunction>,
     /// Entry-proved source, scoped to the existing length-property lowering.
     pub array_record_length_local: Option<u32>,
+    pub array_stack_records: std::collections::HashMap<u32, crate::array_record_stack::Record>,
     pub pending_declares: Vec<(String, crate::types::LlvmType, Vec<crate::types::LlvmType>)>,
 
     /// LocalIds that are provably integer-valued — i.e., initialized from

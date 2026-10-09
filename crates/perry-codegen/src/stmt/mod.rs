@@ -214,6 +214,7 @@ fn lower_stmts_list(
     emit_shadow_clears: bool,
     version_tails: bool,
 ) -> Result<()> {
+    crate::array_record_stack::prepare(ctx, stmts);
     let mut i = 0;
     while i < stmts.len() {
         ctx.ready_cell_roots.discard_notes();

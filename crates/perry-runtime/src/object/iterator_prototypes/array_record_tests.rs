@@ -184,6 +184,20 @@ fn array_record_next_shape_guard() {
 
 #[test]
 fn array_record_rejects_other_brands_and_custom_prototype() {
+    let _guard = crate::typed_feedback::typed_feedback_test_lock();
+    struct RestoreArrayGuard(bool, u8);
+    impl Drop for RestoreArrayGuard {
+        fn drop(&mut self) {
+            crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.0);
+            crate::array::test_swap_array_index_fast_path_invalidated(self.1);
+        }
+    }
+    // This test's private custom-prototype array dies with its thread. Restore
+    // the process summary so later guard tests still check their real premise.
+    let _restore = RestoreArrayGuard(
+        crate::object::prototype_chain::array_static_proto_recorded(),
+        crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed),
+    );
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();

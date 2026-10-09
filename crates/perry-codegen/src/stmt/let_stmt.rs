@@ -27,6 +27,9 @@ pub(crate) fn lower_let(
     ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
+    if crate::array_record_stack::bind_field(ctx, id, name, init, ty)? {
+        return Ok(());
+    }
     // #7771 / #10123: inside an element-shape fast clone the body's `const`
     // binding is VIRTUAL — the element binding emits nothing and the derived
     // index emits one `srem`. Both live with the clone, which is where their

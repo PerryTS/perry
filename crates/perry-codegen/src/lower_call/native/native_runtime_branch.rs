@@ -1,5 +1,6 @@
 {
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
+        if let Some(result) = crate::array_record_stack::lower(ctx, method, args)? { return Ok(result); }
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
                 // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
