@@ -655,7 +655,7 @@ pub(super) unsafe fn retain_holder(cache: *mut PicCache) {
     let index = s
         .holders
         .iter()
-        .position(|c| c[HOLDER_RECV] == entry[HOLDER_RECV] || super::holder_entry_retired(c))
+        .position(|c| super::function_own::same_answer(c, &entry) || super::holder_entry_retired(c))
         .unwrap_or_else(|| {
             if s.holders.len() < 8 {
                 let i = s.holders.len();
@@ -668,6 +668,17 @@ pub(super) unsafe fn retain_holder(cache: *mut PicCache) {
             }
         });
     s.holders[index] = entry;
+}
+
+pub(super) unsafe fn function_bag_answer(
+    c: &PicCache,
+    recv: *const ObjectHeader,
+    token: i64,
+) -> Option<u64> {
+    let s = site(c)?;
+    s.holders
+        .iter()
+        .find_map(|entry| super::function_own::entry_answer(entry, recv, token))
 }
 
 #[cold]
