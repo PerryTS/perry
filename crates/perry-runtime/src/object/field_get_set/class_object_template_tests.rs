@@ -403,18 +403,24 @@ fn s7b_evaluation_chain_miss_does_not_build_a_canonical_holder() {
             0,
             crate::fn_info!(body, 0) as *const crate::closure::JsFunctionInfo as usize as i64,
         );
-        // Use the production entry with already evaluated heritage, so this
-        // evaluation has no reason to materialize a canonical parent holder.
+        // Use already validated null heritage: the evaluation records a real
+        // prototype template without materializing a canonical parent holder.
         let class = js_class_evaluation_object_with_prototype(
             cid,
             6,
             0,
             cell(64),
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_NULL),
         ) as *mut ObjectHeader;
         let proto = super::class_object_props::class_object_prototype_value(class)
             .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        assert!(
+            class_object_template_cell(class)
+                .and_then(|cell| cell.proto_template())
+                .is_some(),
+            "the evaluation recorded the template shape used by this proof"
+        );
         let method_key = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);
         crate::object::js_object_delete_field(proto, method_key);
         assert!(crate::object::class_holder_prototype(cid).is_null());
