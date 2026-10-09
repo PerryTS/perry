@@ -21,14 +21,23 @@ per_test_global! {
 #[derive(Default)]
 struct Probe {
     link: Option<OwnerLink>,
+    worker_observations: Option<std::sync::Arc<[AtomicUsize; 2]>>,
 }
 impl Drop for Probe {
     fn drop(&mut self) {
         DROPS.fetch_add(1, Ordering::SeqCst);
+        let mut final_js = false;
         if let Some(link) = self.link {
             // Simulate a C xFinal called by native resource destruction.
             if unsafe { np::link_owner(link) }.is_some() {
                 FINAL_JS.fetch_add(1, Ordering::SeqCst);
+                final_js = true;
+            }
+        }
+        if let Some(observations) = &self.worker_observations {
+            observations[0].fetch_add(1, Ordering::SeqCst);
+            if final_js {
+                observations[1].fetch_add(1, Ordering::SeqCst);
             }
         }
     }
@@ -353,8 +362,20 @@ fn t6_t11_finalization_callbacks_stay_out_of_js() {
     }
     assert_eq!(DROPS.load(Ordering::SeqCst), 3);
     assert_eq!(FINAL_JS.load(Ordering::SeqCst), 0);
-    std::thread::spawn(|| {
-        let value = owner();
+    // The worker's payload owns its observations, so TLS teardown can report
+    // to this test without turning the per-thread sinks into shared globals.
+    let observations = std::sync::Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+    let worker_observations = observations.clone();
+    std::thread::spawn(move || {
+        let value = np::alloc(
+            &FAMILY,
+            Probe {
+                worker_observations: Some(worker_observations),
+                ..Default::default()
+            },
+            0,
+            &[],
+        );
         let link = np::owner_link(value, &FAMILY).unwrap();
         unsafe {
             np::payload_mut::<Probe>(value, &FAMILY).unwrap().link = Some(link);
@@ -363,7 +384,9 @@ fn t6_t11_finalization_callbacks_stay_out_of_js() {
     })
     .join()
     .unwrap();
-    assert_eq!(DROPS.load(Ordering::SeqCst), 4);
+    assert_eq!(DROPS.load(Ordering::SeqCst), 3);
+    assert_eq!(observations[0].load(Ordering::SeqCst), 1);
+    assert_eq!(observations[1].load(Ordering::SeqCst), 0);
     assert_eq!(FINAL_JS.load(Ordering::SeqCst), 0);
 }
 
