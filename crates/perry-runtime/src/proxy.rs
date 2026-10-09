@@ -3497,3 +3497,5 @@ mod tests {
         }
     }
 }
+
+pub(crate) use reflect_misc::proxy_define_own_property_decoded;

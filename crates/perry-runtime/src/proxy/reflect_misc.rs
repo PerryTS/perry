@@ -121,63 +121,78 @@ pub extern "C" fn js_reflect_apply(f: f64, this_arg: f64, args_array: f64) -> f6
 /// property. Successful definitions return `true`. For a proxy target, the
 /// coerced `defineProperty` trap result is returned.
 #[no_mangle]
-pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
-    if lookup(obj).is_some() {
-        let _proxy_pin = pin_proxy_for_native_call(obj);
-        let id = lookup(obj).unwrap();
-        let (target, handler, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| (e.target, e.handler, e.revoked))
-                .unwrap_or((
-                    f64::from_bits(TAG_UNDEFINED),
-                    f64::from_bits(TAG_UNDEFINED),
-                    false,
-                ))
-        });
-        if revoked {
-            return revoked_return();
+pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, bag: f64) -> f64 {
+    unsafe {
+        if !crate::object::object_ops::definition_target_is_object(obj) {
+            return reflect_non_object_typeerror("defineProperty");
         }
-        let trap = handler_trap(handler, "defineProperty");
-        if is_callable(trap) {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let target_h = scope.root_nanbox_f64(target);
-            let key_h = scope.root_nanbox_f64(key);
-            let desc_h = scope.root_nanbox_f64(descriptor);
-            let trap_result = call_trap(
-                handler,
-                trap,
-                &[
-                    target_h.get_nanbox_f64(),
-                    key_h.get_nanbox_f64(),
-                    desc_h.get_nanbox_f64(),
-                ],
-            );
-            if crate::value::js_is_truthy(trap_result) == 0 {
-                return nanbox_bool(false);
-            }
-            invariants::enforce_define_property_invariant(
-                target_h.get_nanbox_f64(),
-                key_h.get_nanbox_f64(),
-                desc_h.get_nanbox_f64(),
-            );
-            return nanbox_bool(true);
-        }
-        // No trap — define on the underlying target. When the target is itself
-        // a Proxy, recurse through the proxy dispatch rather than the ordinary
-        // path, which would deref the fake pointer.
-        if lookup(target).is_some() {
-            return js_reflect_define_property(target, key, descriptor);
-        }
-        return crate::object::reflect_define_property(target, key, descriptor);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_heap_word_u64(obj.to_bits());
+        let bag = scope.root_heap_word_u64(bag.to_bits());
+        let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
+        let bag = scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(
+            f64::from_bits(bag.get_heap_word_u64()),
+        ));
+        let descriptor = crate::object::object_ops::decode_property_descriptor(&scope, &bag);
+        nanbox_bool(crate::object::object_ops::define_own_property_decoded(
+            &scope,
+            &receiver,
+            &key,
+            &descriptor,
+        ))
     }
-    // ECMA-262 28.1.3: Reflect.defineProperty throws when target is not an
-    // Object (a Symbol / BigInt primitive slips past the heap-pointer probe).
-    if !reflect_value_is_object(obj) {
-        return reflect_non_object_typeerror("defineProperty");
+}
+
+pub(crate) unsafe fn proxy_define_own_property_decoded(
+    scope: &crate::gc::RuntimeHandleScope,
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: &crate::gc::RuntimeHandle<'_>,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    let obj = f64::from_bits(receiver.get_heap_word_u64());
+    let _proxy_pin = pin_proxy_for_native_call(obj);
+    let id = lookup(obj).expect("decoded proxy receiver");
+    let (target, handler, revoked) = PROXIES.with(|proxies| {
+        let proxies = proxies.borrow();
+        let entry = proxies[id as usize].as_ref().unwrap();
+        (entry.target, entry.handler, entry.revoked)
+    });
+    if revoked {
+        revoked_return();
+        return false;
     }
-    crate::object::reflect_define_property(obj, key, descriptor)
+    let target = scope.root_heap_word_u64(target.to_bits());
+    let handler = scope.root_nanbox_f64(handler);
+    let trap = scope.root_nanbox_f64(handler_trap(handler.get_nanbox_f64(), "defineProperty"));
+    if trap.get_nanbox_u64() == TAG_UNDEFINED || trap.get_nanbox_u64() == TAG_NULL {
+        return crate::object::object_ops::define_own_property_decoded(
+            scope, &target, key, descriptor,
+        );
+    }
+    if !is_callable(trap.get_nanbox_f64()) {
+        throw_type_error("proxy defineProperty trap is not a function");
+    }
+    let bag = scope.root_nanbox_f64(crate::object::object_ops::descriptor_object_from_view(
+        scope, descriptor,
+    ));
+    let result = call_trap(
+        handler.get_nanbox_f64(),
+        trap.get_nanbox_f64(),
+        &[
+            f64::from_bits(target.get_heap_word_u64()),
+            key.get_nanbox_f64(),
+            bag.get_nanbox_f64(),
+        ],
+    );
+    if crate::value::js_is_truthy(result) == 0 {
+        return false;
+    }
+    invariants::enforce_define_property_invariant(
+        f64::from_bits(target.get_heap_word_u64()),
+        key.get_nanbox_f64(),
+        descriptor,
+    );
+    true
 }
 
 /// `[[GetPrototypeOf]]` for a Proxy: invoke the handler's `getPrototypeOf`

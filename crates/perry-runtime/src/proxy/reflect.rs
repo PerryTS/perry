@@ -315,70 +315,24 @@ pub(super) unsafe fn descriptor_bool_field(desc: f64, name: &[u8]) -> Option<boo
 }
 
 unsafe fn complete_proxy_descriptor_result(desc: f64) -> f64 {
-    if !reflect_value_is_object(desc) {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let desc_handle = scope.root_nanbox_f64(desc);
-
-    let has_enumerable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"enumerable");
-    let has_configurable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"configurable");
-    let has_value = descriptor_field_present(desc_handle.get_nanbox_f64(), b"value");
-    let has_writable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"writable");
-    let has_get = descriptor_field_present(desc_handle.get_nanbox_f64(), b"get");
-    let has_set = descriptor_field_present(desc_handle.get_nanbox_f64(), b"set");
-
-    let enumerable = has_enumerable
-        && crate::value::js_is_truthy(descriptor_field(
-            desc_handle.get_nanbox_f64(),
-            b"enumerable",
-        )) != 0;
-    let configurable = has_configurable
-        && crate::value::js_is_truthy(descriptor_field(
-            desc_handle.get_nanbox_f64(),
-            b"configurable",
-        )) != 0;
-    let value = if has_value {
-        descriptor_field(desc_handle.get_nanbox_f64(), b"value")
-    } else {
-        f64::from_bits(TAG_UNDEFINED)
-    };
-    let value_handle = scope.root_nanbox_f64(value);
-    let writable = has_writable
-        && crate::value::js_is_truthy(descriptor_field(desc_handle.get_nanbox_f64(), b"writable"))
-            != 0;
-
-    let getter = if has_get {
-        descriptor_field(desc_handle.get_nanbox_f64(), b"get")
-    } else {
-        f64::from_bits(TAG_UNDEFINED)
-    };
-    let getter_handle = scope.root_nanbox_f64(getter);
-    let setter = if has_set {
-        descriptor_field(desc_handle.get_nanbox_f64(), b"set")
-    } else {
-        f64::from_bits(TAG_UNDEFINED)
-    };
-    let setter_handle = scope.root_nanbox_f64(setter);
-
-    let getter = getter_handle.get_nanbox_f64();
-    if getter.to_bits() != TAG_UNDEFINED && !is_callable_function(getter) {
-        throw_type_error("Getter must be a function");
-    }
-    let setter = setter_handle.get_nanbox_f64();
-    if setter.to_bits() != TAG_UNDEFINED && !is_callable_function(setter) {
-        throw_type_error("Setter must be a function");
-    }
-    if (has_get || has_set) && (has_value || has_writable) {
-        throw_type_error("Invalid property descriptor");
-    }
-
-    if has_get || has_set {
-        crate::object::build_accessor_descriptor(getter, setter, enumerable, configurable)
+    let desc = scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(
+        desc,
+    ));
+    let view = crate::object::object_ops::decode_property_descriptor(&scope, &desc);
+    let enumerable = view.flag(b"enumerable").unwrap_or(false);
+    let configurable = view.flag(b"configurable").unwrap_or(false);
+    if view.has_named(b"get") || view.has_named(b"set") {
+        crate::object::build_accessor_descriptor(
+            f64::from_bits(view.read_named(b"get").bits()),
+            f64::from_bits(view.read_named(b"set").bits()),
+            enumerable,
+            configurable,
+        )
     } else {
         crate::object::build_data_descriptor(
-            value_handle.get_nanbox_f64(),
-            writable,
+            f64::from_bits(view.read_named(b"value").bits()),
+            view.flag(b"writable").unwrap_or(false),
             enumerable,
             configurable,
         )

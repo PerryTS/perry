@@ -897,7 +897,7 @@ pub(crate) unsafe fn arguments_object_before_delete(
 pub(crate) unsafe fn arguments_object_after_define(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
-    descriptor_value: f64,
+    descriptor: &super::object_ops::DescView<'_>,
 ) {
     let Some(name) = key_name(key) else {
         return;
@@ -905,47 +905,22 @@ pub(crate) unsafe fn arguments_object_after_define(
     let Some(index) = super::canonical_array_index(&name) else {
         return;
     };
-    let desc_ptr = super::extract_obj_ptr(descriptor_value);
-    if desc_ptr.is_null() {
-        return;
-    }
-    // The descriptor reads below intern their keys and may run getters, so
-    // both objects are rooted across them and re-read afterwards.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(obj);
-    let desc = scope.root_raw_mut_ptr(desc_ptr);
-    let value_key = intern_key("value");
-    let value = if desc.with_mut_ptr(|desc| super::own_key_present(desc, value_key)) {
-        Some(f64::from_bits(
-            desc.with_const_ptr(|desc| js_object_get_field_by_name(desc, value_key))
-                .bits(),
-        ))
-    } else {
-        None
-    };
-    let value = value.map(|value| scope.root_nanbox_f64(value));
-    let get_key = intern_key("get");
-    let set_key = intern_key("set");
-    let writable_key = intern_key("writable");
-    let has_accessor = desc.with_mut_ptr(|desc| {
-        super::own_key_present(desc, get_key) || super::own_key_present(desc, set_key)
-    });
-    let writable_false = if desc.with_mut_ptr(|desc| super::own_key_present(desc, writable_key)) {
-        let writable = desc.with_const_ptr(|desc| js_object_get_field_by_name(desc, writable_key));
-        crate::value::js_is_truthy(f64::from_bits(writable.bits())) == 0
-    } else {
-        false
-    };
-    let Some(state) = obj.with_mut_ptr(|obj: *mut ObjectHeader| arguments_state(obj)) else {
+    let Some(state) = arguments_state(obj) else {
         return;
     };
     let Some(box_ptr) = state.mapped_box(index) else {
         return;
     };
-    if let Some(value) = value {
-        crate::r#box::js_box_set(box_ptr, value.get_nanbox_f64());
+    if descriptor.has_named(b"value") {
+        crate::r#box::js_box_set(
+            box_ptr,
+            f64::from_bits(descriptor.read_named(b"value").bits()),
+        );
     }
-    if has_accessor || writable_false {
+    if descriptor.has_named(b"get")
+        || descriptor.has_named(b"set")
+        || descriptor.flag(b"writable") == Some(false)
+    {
         state.unmap(index);
     }
 }
