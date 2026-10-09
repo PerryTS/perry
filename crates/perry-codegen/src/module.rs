@@ -204,6 +204,18 @@ impl LlModule {
         }
     }
 
+    /// Let the backend read 64-bit NaN-box operands from the runtime's
+    /// operand table rather than encode them as immediates
+    /// (`inprocess/nanbox_operands.rs`). Only for an image the runtime archive
+    /// is linked into: the table is referenced `hidden`. Marks every function
+    /// the module defines; the mark is a function attribute, so each emitted
+    /// unit states it in its own IR.
+    pub(crate) fn read_nanbox_operands_from_runtime(&mut self) {
+        for f in &mut self.functions {
+            f.nanbox_operands = true;
+        }
+    }
+
     /// The TLS specifier a declaration this module adds later must carry to
     /// agree with its definitions ([`Self::use_local_exec_tls`]).
     pub(crate) fn thread_local_specifier(&self) -> &'static str {

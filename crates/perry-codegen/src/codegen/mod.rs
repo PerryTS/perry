@@ -4060,6 +4060,11 @@ fn compile_module_impl(
     // own output kind before any emission path renders it.
     if crate::expr::agent_ptr::program_tls_is_local_exec(&triple, &opts.output_type) {
         llmod.use_local_exec_tls();
+        // The same fact: the runtime archive is linked into this image, so
+        // its NaN-box operand table binds here (`inprocess/nanbox_operands.rs`).
+        if triple.starts_with("x86_64") {
+            llmod.read_nanbox_operands_from_runtime();
+        }
     }
     let wasm32 = crate::target_layout::wasm32_lowering(&triple);
     let n_units = if opts.emit_ir_only || wasm32 {

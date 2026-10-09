@@ -16,6 +16,7 @@
 //! clang 22's `clang -c`.
 
 mod function_layout;
+mod nanbox_operands;
 mod native_homes;
 mod optimize_emit;
 use optimize_emit::optimize_and_emit;

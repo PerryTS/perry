@@ -103,6 +103,58 @@ pub(crate) const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 pub(crate) const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 pub(crate) const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
+/// The read-only table x86-64 generated code reads its most frequent 64-bit
+/// NaN-box operands from instead of encoding each as a `movabs` immediate
+/// (`perry-codegen/src/inprocess/nanbox_operands.rs`). Its contents are
+/// `perry_abi::NANBOX_OPERANDS`; codegen references it `hidden` from images
+/// this archive is linked into, and never sees the values, so a wrong entry
+/// here is a wrong operand in every compiled function that uses it (the test
+/// below pins the named entries to this file's constants).
+#[no_mangle]
+pub static PERRY_NANBOX_OPERANDS: [u64; crate::codegen_abi::NANBOX_OPERANDS.len()] =
+    crate::codegen_abi::NANBOX_OPERANDS;
+
+#[cfg(test)]
+mod nanbox_operand_tests {
+    use super::*;
+
+    #[test]
+    fn the_operand_table_holds_this_files_tags() {
+        let table = &PERRY_NANBOX_OPERANDS;
+        let pointer_floor = POINTER_TAG + crate::codegen_abi::RECEIVER_HANDLE_FLOOR as u64;
+        for (name, value) in [
+            ("POINTER_TAG", POINTER_TAG),
+            ("TAG_HOLE", TAG_HOLE),
+            ("TAG_MASK", TAG_MASK),
+            ("TAG_UNDEFINED", TAG_UNDEFINED),
+            ("-TAG_UNDEFINED", TAG_UNDEFINED.wrapping_neg()),
+            ("-POINTER_TAG", POINTER_TAG.wrapping_neg()),
+            ("STRING_TAG", STRING_TAG),
+            ("SHORT_STRING_TAG", SHORT_STRING_TAG),
+            (
+                "-(POINTER_TAG + handle floor)",
+                pointer_floor.wrapping_neg(),
+            ),
+            ("TAG_TRUE", TAG_TRUE),
+            ("INT32_TAG", INT32_TAG),
+            ("BIGINT_TAG", BIGINT_TAG),
+            ("TAG_TDZ", TAG_TDZ),
+            ("TAG_FALSE", TAG_FALSE),
+            ("TAG_NULL", TAG_NULL),
+            ("TAG_MARKER", TAG_MARKER),
+            ("canonical NaN", f64::NAN.to_bits()),
+        ] {
+            assert!(
+                table.contains(&value),
+                "PERRY_NANBOX_OPERANDS lost {name} ({value:#018x})"
+            );
+        }
+        // The rest are `perry_abi`'s documented spans and site-word masks;
+        // the table must hold exactly the list codegen maps operands to.
+        assert_eq!(table, &crate::codegen_abi::NANBOX_OPERANDS);
+    }
+}
+
 // ----- JS handle function-pointer types (used by handle.rs FFI setters) -----
 
 pub(crate) type JsHandleArrayGetFn = extern "C" fn(f64, i32) -> f64;
