@@ -215,7 +215,7 @@ fn primed_literal_is_born_in_the_inline_arena() {
     );
     assert_eq!(unsafe { (*state).offset }, offset + super::BIRTH_BYTES);
     unsafe {
-        let gc = &*((at - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        let gc = &*crate::gc::header_from_trusted_user_ptr(at as *const u8);
         assert_eq!(gc.obj_type, crate::gc::GC_TYPE_OBJECT);
         assert_eq!(gc.gc_flags, crate::gc::GC_FLAG_ARENA);
         assert_eq!(gc._reserved, crate::gc::OBJ_FLAG_PLAIN_ORDINARY);
@@ -259,7 +259,7 @@ fn primed_literal_born_during_a_mark_is_seeded() {
         regex_flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
     });
     unsafe { birth_flags.write(0) };
-    let header = (born as usize - crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(born.cast()).cast_mut() };
     let seeded = seeds.len() == queued + 1 && seeds.last() == Some(&header);
     if seeded {
         seeds.pop();
