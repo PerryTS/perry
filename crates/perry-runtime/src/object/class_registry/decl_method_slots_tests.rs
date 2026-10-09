@@ -172,7 +172,9 @@ fn s7b_private_accessor_reads_its_materialized_pair() {
         );
         // The declaration installed the pair on its function's traced holder.
         // Removing materialization input cannot change the private read.
-        CLASS_VTABLE_REGISTRY.write().unwrap().as_mut().unwrap().remove(&cid);
+        if let Some(declarations) = CLASS_VTABLE_REGISTRY.write().unwrap().as_mut() {
+            declarations.remove(&cid);
+        }
         for _ in 0..2 {
             assert_eq!(
                 super::class_private_instance_getter_value(cid, "#x", 0.0),
