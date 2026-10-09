@@ -190,8 +190,22 @@ unsafe fn set_integrity_flags(obj: *mut ObjectHeader, flags: u16) {
     }
 }
 
+/// Step 1 of every integrity-level algorithm: "If Type(O) is not Object".
+/// A Symbol is pointer-tagged, and `extract_obj_ptr` hands back its cell (a
+/// fresh symbol is a leaf cell of the string kind, a registered one a boxed
+/// `GC_TYPE_SYMBOL`), so these entries ask the value's type, never the address.
+/// Without it `Object.freeze(sym)` reached the descriptor holder refusal and
+/// `Object.isFrozen(sym)` answered `false`.
+#[inline]
+fn is_symbol_primitive(value: f64) -> bool {
+    unsafe { crate::symbol::js_is_symbol(value) != 0 }
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
+    if is_symbol_primitive(obj_value) {
+        return obj_value;
+    }
     crate::array::subclass_elements::deopt_value(obj_value);
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return unsafe {
@@ -298,6 +312,9 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
 /// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
+    if is_symbol_primitive(obj_value) {
+        return obj_value;
+    }
     crate::array::subclass_elements::deopt_value(obj_value);
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return unsafe {
@@ -395,6 +412,9 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
 /// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
+    if is_symbol_primitive(obj_value) {
+        return obj_value;
+    }
     crate::array::subclass_elements::deopt_value(obj_value);
     // A Proxy is a small registered id, not a heap object — `extract_obj_ptr`
     // yields the fake pointer and `gc_header_for` would deref unmapped memory.
@@ -584,6 +604,9 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
 pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    if is_symbol_primitive(obj_value) {
+        return f64::from_bits(TAG_TRUE);
+    }
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ true)
@@ -616,6 +639,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
 pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    if is_symbol_primitive(obj_value) {
+        return f64::from_bits(TAG_TRUE);
+    }
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ false)
@@ -647,6 +673,9 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
 pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    if is_symbol_primitive(obj_value) {
+        return f64::from_bits(TAG_FALSE);
+    }
     // Proxy receiver: route through the `[[IsExtensible]]` trap rather than
     // dereferencing the fake pointer. (Proxy crash cluster.)
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {

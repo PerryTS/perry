@@ -987,6 +987,16 @@ macro_rules! reg_budgeted_scanner {
     };
 }
 
+/// The memoized intrinsic prototype addresses (`array::prototype_addr`) are
+/// runtime state, filled by the lazy realm build whenever it first runs. Every
+/// heap that can move them must rewrite them: `gc_init` registers this for a
+/// program, and a GC test window that starts from an empty scanner registry
+/// registers it too (`ScopedRootScannerRegistryGuard`), because the realm
+/// build can run inside that window.
+pub(crate) fn register_prototype_addr_cache_scanner() {
+    reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
+}
+
 pub fn gc_init() {
     // Idempotent per thread: production calls this at startup, and
     // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the
@@ -1080,7 +1090,7 @@ pub fn gc_init() {
     // that does not rewrite them leaves the hole/OOB read fallback comparing a
     // stale address against a forwarding-resolved receiver, which defeats its
     // own self-recursion guard and drives the mutator into unbounded recursion.
-    reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
+    register_prototype_addr_cache_scanner();
     // #6763: inherited-property resolution retains an owner while an accessor
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.

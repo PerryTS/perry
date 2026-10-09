@@ -33,8 +33,7 @@ unsafe fn define_property_on_handle(
     // A handle IS an object in Node, so the ordinary descriptor validation
     // applies: the descriptor must be an object, data and accessor fields can't
     // be mixed, and a present `get`/`set` must be callable.
-    if !value_is_object_like(descriptor_value) || crate::symbol::js_is_symbol(descriptor_value) != 0
-    {
+    if !value_is_object_like(descriptor_value) {
         let desc = describe_value_for_type_error(descriptor_value);
         throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
     }
@@ -237,9 +236,7 @@ pub extern "C" fn js_object_define_property(
         // `[[DefineOwnProperty]]` trap, and throw a TypeError if it reports
         // failure. (Proxy crash cluster.)
         if !receiver_plain_object && crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-            if !value_is_object_like(descriptor_value)
-                || crate::symbol::js_is_symbol(descriptor_value) != 0
-            {
+            if !value_is_object_like(descriptor_value) {
                 let desc = describe_value_for_type_error(descriptor_value);
                 throw_object_type_error_with_suffix(
                     "Property description must be an object: ",
@@ -329,9 +326,7 @@ pub extern "C" fn js_object_define_property(
         // A descriptor must be an Object; a Symbol is pointer-tagged but not an
         // object, so `ToPropertyDescriptor(Symbol())` throws (test262
         // property-description-must-be-an-object-not-symbol).
-        if !value_is_object_like(descriptor_value)
-            || crate::symbol::js_is_symbol(descriptor_value) != 0
-        {
+        if !value_is_object_like(descriptor_value) {
             let desc = describe_value_for_type_error(descriptor_value);
             throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
         }

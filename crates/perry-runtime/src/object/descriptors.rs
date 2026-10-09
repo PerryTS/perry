@@ -1586,6 +1586,12 @@ unsafe fn proxy_get_own_property_descriptors(obj_value: f64) -> f64 {
 pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 {
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     unsafe {
+        // ToObject(Symbol) is a wrapper with no own properties. The symbol's
+        // own cell is not a property holder, so never walk it as one.
+        if crate::symbol::js_is_symbol(obj_value) != 0 {
+            let result = super::js_object_alloc(0, 0);
+            return f64::from_bits(POINTER_TAG | (result as u64 & crate::value::POINTER_MASK));
+        }
         // A Proxy receiver gets its own arm: the spec performs ONE
         // [[OwnPropertyKeys]] (`ownKeys` trap), then a [[GetOwnProperty]]
         // (`getOwnPropertyDescriptor` trap) per key. The generic path below

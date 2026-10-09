@@ -47,6 +47,55 @@ fn descriptor_holder_refusal_never_roots_internal_gc_cells() {
     }
 }
 
+/// The kind a stale intrinsic address turned into in the promise-combinator
+/// window (a string reused the from-space `Object.prototype`), and the other
+/// cells that hold a primitive. None of them is a property holder: routing
+/// refuses them, and the Object predicate every define consults says no, so
+/// a JS define on one throws before it can reach the refusal.
+#[test]
+fn descriptor_holder_refusal_covers_primitive_cells() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let string = crate::string::js_string_from_bytes(b"plain".as_ptr(), 5) as usize;
+    // A fresh symbol is a leaf cell of the string kind (#7246).
+    let symbol_value = unsafe { crate::symbol::js_symbol_new_empty() };
+    let symbol = crate::value::js_nanbox_get_pointer(symbol_value) as usize;
+    let bigint = crate::bigint::js_bigint_from_i64(3) as usize;
+    for (kind, owner) in [
+        (crate::gc::GC_TYPE_STRING, string),
+        (crate::gc::GC_TYPE_STRING, symbol),
+        (crate::gc::GC_TYPE_BIGINT, bigint),
+    ] {
+        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }
+            .expect("premise: a tracked GC cell");
+        assert_eq!(
+            unsafe { (*header.as_ptr()).obj_type },
+            kind,
+            "premise: the cell kind"
+        );
+        assert_refused(owner);
+        let value = crate::value::js_nanbox_pointer(owner as i64);
+        assert!(
+            !unsafe { crate::object::object_ops::value_is_object_like(value) },
+            "a primitive cell of kind {kind} must not pass as an Object"
+        );
+    }
+    // Symbols as JS holds them, fresh and persistent (`Symbol.for` and the
+    // well-known ones live outside the GC heap), are not Objects either.
+    let registered = unsafe {
+        crate::symbol::js_symbol_for(crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"lane12201".as_ptr(), 9) as i64,
+        ))
+    };
+    for value in [
+        symbol_value,
+        registered,
+        crate::symbol::js_symbol_well_known_iterator(),
+    ] {
+        assert!(!unsafe { crate::object::object_ops::value_is_object_like(value) });
+    }
+}
+
 #[test]
 fn descriptor_holder_refusal_reads_ignore_a_native_registry_collision() {
     let _lock = crate::gc::global_side_table_test_lock();
