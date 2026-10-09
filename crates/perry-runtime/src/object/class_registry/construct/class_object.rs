@@ -59,8 +59,7 @@ fn allocate_class_instance(class_cid: u32) -> (*mut ObjectHeader, u32) {
     if let Some((keys_array, field_count)) = registered_class_keys_array(class_cid) {
         // As wide as the class's instances have been learned to grow, so the
         // keys a constructor adds beyond the declared ones stay inline.
-        let field_count =
-            field_count.max(crate::object::learned_inline_field_count(class_cid));
+        let field_count = field_count.max(crate::object::learned_inline_field_count(class_cid));
         let inst = crate::object::alloc::alloc_class_instance_with_keys(
             class_cid,
             0,
@@ -105,10 +104,7 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let new_target_value = new_target.get_nanbox_f64();
     if is_class_object_value(new_target_value) {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
-            super::super::field_get_set::stamp_private_evaluation_brand(
-                instance,
-                new_target_value,
-            )
+            super::super::field_get_set::stamp_private_evaluation_brand(instance, new_target_value)
         });
     }
     if let Some(prototype) = prototype {
