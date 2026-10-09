@@ -11,6 +11,7 @@ pub(crate) struct OwnDataShape {
     pub(crate) live_inline_slot_count: u32,
     plain_bound: u32,
     pub(crate) summary: u8,
+    pub(crate) proto_id: u64,
 }
 
 /// A live ordinary layout, a proven other layout (`Some(None)`), or no proof
@@ -47,13 +48,18 @@ pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Opt
         live_inline_slot_count: record.live_inline_slot_count,
         plain_bound,
         summary: record.summary(),
+        proto_id: record.proto_id,
     }))
 }
 
 impl OwnDataShape {
     /// `key` is the text of `key_bits` (zero when only bytes are available).
     #[inline]
-    pub(crate) unsafe fn plain_slot(self, key_bits: u64, key: &[u8]) -> Option<(u32, u32)> {
+    pub(crate) unsafe fn plain_lookup(
+        self,
+        key_bits: u64,
+        key: &[u8],
+    ) -> Option<Option<(u32, u32)>> {
         let bound = self.plain_bound;
         if bound == 0 || self.logical_key_count >= crate::object::KEYS_INDEX_THRESHOLD {
             return None;
@@ -72,9 +78,14 @@ impl OwnDataShape {
                 || crate::string::js_string_key_matches_bytes(crate::JSValue::from_bits(word), key)
             {
                 return ((slot as u32) < bound)
-                    .then_some((slot as u32, self.live_inline_slot_count));
+                    .then_some(Some((slot as u32, self.live_inline_slot_count)));
             }
         }
-        None
+        Some(None)
+    }
+
+    #[cfg(test)]
+    pub(crate) unsafe fn plain_slot(self, key_bits: u64, key: &[u8]) -> Option<(u32, u32)> {
+        self.plain_lookup(key_bits, key).flatten()
     }
 }

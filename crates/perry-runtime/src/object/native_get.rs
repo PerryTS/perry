@@ -79,6 +79,7 @@ unsafe fn try_data_lookup_key(
     let object = receiver.as_pointer::<ObjectHeader>();
     let addr = object as usize;
     let mut first_shape = None;
+    let mut own_absent = false;
     if crate::value::addr_class::is_plausible_heap_addr(addr)
         && addr.is_multiple_of(std::mem::align_of::<ObjectHeader>())
     {
@@ -100,7 +101,9 @@ unsafe fn try_data_lookup_key(
             // still handles class getters and other special receiver reads.
             let shape = own_shape?;
             first_shape = Some(shape);
-            if let Some((slot, live)) = shape.plain_slot(key_bits, key) {
+            let lookup = shape.plain_lookup(key_bits, key);
+            own_absent = lookup == Some(None);
+            if let Some(Some((slot, live))) = lookup {
                 // The live shape proves a shaped ObjectHeader. Owner-local state
                 // still controls forwarding and indexed/exotic receiver layouts.
                 let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
@@ -128,7 +131,7 @@ unsafe fn try_data_lookup_key(
     let mut inherited = false;
     for _ in 0..32 {
         let addr = object as usize;
-        let (header, keys, key_count, live, summary, dictionary) = if let Some(shape) =
+        let (header, keys, key_count, live, summary, dictionary, proto_id) = if let Some(shape) =
             first_shape.take()
         {
             // The receiver's live ordinary shape already proved ObjectHeader
@@ -141,6 +144,7 @@ unsafe fn try_data_lookup_key(
                 shape.live_inline_slot_count,
                 shape.summary,
                 false, // The retained proof came from the ordinary ShapeId band.
+                shape.proto_id,
             )
         } else {
             // An inherited hop or unproved cell still needs positive arena
@@ -169,6 +173,7 @@ unsafe fn try_data_lookup_key(
                 descriptor.live_inline_slot_count,
                 descriptor.summary,
                 descriptor.semantic_generation & super::dictionary::DICTIONARY_GENERATION_TAG != 0,
+                descriptor.proto_id,
             )
         };
         if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -176,19 +181,15 @@ unsafe fn try_data_lookup_key(
         {
             return None;
         }
-        let class_id = (*object).class_id;
-        // Positive membership, rather than a blacklist of native class ids.
-        // Synthetic function/Object.create ids occupy the allocated prefix
-        // of this counter's range; reserved native ids are outside it.
-        let synthetic = class_id >= super::class_registry::SYNTHETIC_CLASS_ID_BASE
-            && class_id < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
-        if class_id != 0 && !synthetic && !super::is_anon_shape_class_id(class_id) {
+        // The live shape is the read authority. A declared class or exotic
+        // receiver still needs its generic semantics; ordinary serial links
+        // (including ES5 constructors) need no class-id classification.
+        if (shapes::PROTO_ID_CLASS..shapes::PROTO_ID_UNIQUE).contains(&proto_id)
+            || proto_id == shapes::PROTO_ID_PER_OBJECT
+        {
             return None;
         }
-        if crate::process::is_process_env_ptr(addr)
-            || super::is_arguments_object(object)
-            || (key == b"toJSON" && crate::perf_hooks::is_perf_entry_object(object))
-        {
+        if key == b"toJSON" && crate::perf_hooks::is_perf_entry_object(object) {
             return None;
         }
         let meta = (*object).meta;
@@ -196,7 +197,11 @@ unsafe fn try_data_lookup_key(
             return None;
         }
         // The shape entry decides whether this own slot contains data.
-        if !super::key_attrs::object_key_is_accessor(object, key) {
+        if own_absent {
+            // The positional shape lookup already proved absence. Do not
+            // search the same key list again before following its link.
+            own_absent = false;
+        } else if !super::key_attrs::object_key_is_accessor(object, key) {
             let keys = keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 // Public reads skip intrinsic and class-private entries.
@@ -232,27 +237,28 @@ unsafe fn try_data_lookup_key(
         } else {
             return None;
         }
-        let recorded = crate::object::shapes::object_prototype_word(object);
-        if recorded == crate::value::TAG_NULL
-            || (recorded == 0 && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
-        {
+        if proto_id == shapes::PROTO_ID_NULL {
             // The chain ends here, and no hop listed the key.
             return Some(None);
         }
+        let recorded = crate::object::shapes::object_prototype_word(object);
         if recorded != 0 {
             let prototype = JSValue::from_bits(recorded);
             if !prototype.is_pointer() {
                 return None;
             }
             object = prototype.as_pointer();
-        } else if synthetic {
-            // These are already-rooted per-class pointers, with no builtin
-            // name lookup or lazy construction. Declared prototype metadata
-            // has separate precedence and stays on the generic path.
-            if !super::class_decl_prototype_object(class_id).is_null() {
+        } else if proto_id == shapes::PROTO_ID_DEFAULT {
+            // A resolved realm prototype is an existing shape-held link's
+            // default endpoint. The borrowed walk never initializes it.
+            let prototype = crate::array::object_prototype_addr_if_resolved();
+            if prototype == 0 {
                 return None;
             }
-            object = super::class_prototype_object(class_id);
+            if prototype == object as usize {
+                return Some(None);
+            }
+            object = prototype as *const ObjectHeader;
         } else {
             // Default builtin prototypes may need initialization and can be
             // replaced through globalThis. Do not resolve them under a borrow.

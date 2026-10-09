@@ -71,9 +71,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod accessor_guard;
 mod accessor_path;
+mod function_own;
 #[cfg(any(test, feature = "regex-engine"))]
 use accessor_path::accessor_holder;
 pub(crate) use accessor_path::accessor_walk;
+use function_own::HOLDER_FUNCTION_BAG;
 pub(crate) mod class_read;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod probe;
@@ -357,6 +359,9 @@ unsafe fn holder_entry_retired(c: &HolderEntry) -> bool {
 #[cold]
 #[inline(never)]
 unsafe fn entry_answer_other(c: &HolderEntry, kind: i64) -> Option<u64> {
+    if kind as u64 & HOLDER_FUNCTION_BAG != 0 {
+        return None; // An own bag entry needs the current receiver, below.
+    }
     if kind as u64 & (HOLDER_ACCESSOR | HOLDER_MULTI_ABSENT) != 0 {
         if kind as u64 & HOLDER_ACCESSOR != 0 {
             return None;
@@ -472,6 +477,9 @@ pub(crate) unsafe fn class_entry_answer(
 ) -> u64 {
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 || token == 0 {
         return crate::value::TAG_HOLE;
+    }
+    if let Some(bits) = function_own::answer(c, recv, token) {
+        return bits;
     }
     class_read::leaf_bits(c, recv, token)
 }
@@ -715,8 +723,11 @@ pub(super) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
         }
         return Some((pid, word));
     }
-    let (stated, word) = stated_link(obj);
-    (stated == pid).then_some((pid, word))
+    // The prototype funnel minted this identity with the owner's keys and
+    // link. Re-deriving it through object_proto_id_for repeats class/anon
+    // registry queries at each hop and cannot strengthen the live shape
+    // proof. A structural write moves the owner to a successor ShapeId.
+    Some((pid, crate::object::shapes::object_prototype_word(obj)))
 }
 
 /// The prototype identity `obj`'s shape records, if it admits: a serial, the
@@ -731,6 +742,11 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// ShapeId (see the module docs), which the hit's holder compare sees.
 pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
+    // Most ordinary receivers have serial/default links. Their shape rules
+    // out a class entry before any registry-backed identity derivation.
+    if !(PROTO_ID_CLASS..PROTO_ID_UNIQUE).contains(&pid) {
+        return None;
+    }
     let (stated, word) = stated_link(recv);
     if stated != pid {
         return None;
@@ -1227,6 +1243,9 @@ pub(crate) unsafe fn prime_function_read(
         }
     }
     let name = crate::string::header_str_checked(key)?.as_bytes();
+    if let Some(value) = function_own::prime(closure, name, cache_slot) {
+        return Some(value);
+    }
     function_walk(closure, name)?;
     // The answer, from the path the miss handler takes for a function
     // receiver. It can run user code and collect: root across it.

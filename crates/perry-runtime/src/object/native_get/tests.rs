@@ -135,6 +135,73 @@ fn prototype_data_mutation_shadow_delete_and_freeze_match_forced_slow() {
     differential(child, "value", 17.0);
 }
 
+#[test]
+fn an_own_absence_proof_is_not_searched_again_before_the_holder() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let prototype = object("value", 7.0);
+    let child = js_object_create(boxed(prototype));
+    let child_ptr = crate::value::js_nanbox_get_pointer(child) as *mut ObjectHeader;
+    js_object_set_field_by_name(child_ptr, key("other"), 1.0);
+    let shape = unsafe {
+        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*child_ptr).parent_class_id)
+            .flatten()
+            .unwrap()
+    };
+    let before = crate::string::test_key_byte_reads();
+    assert_eq!(unsafe { shape.plain_lookup(0, b"value") }, Some(None));
+    let absence_reads = crate::string::test_key_byte_reads() - before;
+    assert!(absence_reads > 0, "the absence fixture must search a key");
+    let before = crate::string::test_key_byte_reads();
+    assert_eq!(
+        unsafe { try_data_get_by_name(child_ptr, key("value")) }
+            .unwrap()
+            .bits(),
+        7.0f64.to_bits()
+    );
+    let child_reads = crate::string::test_key_byte_reads() - before;
+    let before = crate::string::test_key_byte_reads();
+    assert_eq!(
+        unsafe { try_data_get_by_name(prototype, key("value")) }
+            .unwrap()
+            .bits(),
+        7.0f64.to_bits()
+    );
+    let holder_reads = crate::string::test_key_byte_reads() - before;
+    // The inherited byte lookup reads the holder's key once. Sabotaging
+    // own_absent adds another full receiver search to this exact count.
+    assert_eq!(child_reads, absence_reads + holder_reads);
+}
+
+#[test]
+fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let proto = crate::object::builtin_prototype_value("Object");
+    let ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+    assert!(!ptr.is_null());
+    js_object_set_field_by_name(ptr, key("shape_read_test"), 31.0);
+    let child = js_object_alloc(0, 0);
+    assert_eq!(
+        unsafe { shapes::object_shape_identity(child) },
+        shapes::PROTO_ID_DEFAULT
+    );
+    assert_eq!(
+        unsafe { try_data_get_by_name(child, key("shape_read_test")) }
+            .unwrap()
+            .bits(),
+        31.0f64.to_bits()
+    );
+    assert_eq!(js_object_delete_field(ptr, key("shape_read_test")), 1);
+    assert!(matches!(
+        unsafe {
+            try_data_lookup_bytes(
+                JSValue::from_bits(boxed(child).to_bits()),
+                b"shape_read_test",
+            )
+        },
+        Some(None)
+    ));
+}
+
 static GETTER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 extern "C" fn getter(

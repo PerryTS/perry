@@ -4619,7 +4619,14 @@ pub(crate) fn fresh_unique_proto_id() -> u64 {
 fn vtable_class(class_id: u32) -> u32 {
     if class_id == 0
         || class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
-        || crate::object::is_anon_shape_class_id(class_id)
+    {
+        return 0;
+    }
+    // Module-local anonymous ids may collide with declarations. Project the
+    // existing reflective precedence when minting the shape, so a CLASS
+    // link remains a shape fact instead of a registry check on every read.
+    if crate::object::is_anon_shape_class_id(class_id)
+        && !crate::object::class_registry::declared_class_outranks_anon_shape(class_id)
     {
         return 0;
     }
