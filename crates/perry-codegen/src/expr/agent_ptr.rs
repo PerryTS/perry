@@ -5,12 +5,16 @@
 //! `PERRY_AGENT_PTRS` (a `#[thread_local]` array of [`AGENT_PTR_SLOTS`]
 //! pointers). How emitted code reaches it depends on the target:
 //!
-//! * [`AgentPtrAccess::InitialExec`] — ELF executables (Linux, Android;
-//!   x86-64 and aarch64): the block is an `external thread_local(initialexec)`
-//!   global, so the access is a thread-pointer-relative load (`mov %fs:off`
-//!   after linker relaxation on x86-64; `mrs tpidr_el0` + GOT offset on
-//!   aarch64). Not used for dylib/staticlib outputs: an image that can be
-//!   `dlopen`ed may not fit its initial-exec TLS in the static TLS block.
+//! * [`AgentPtrAccess::ExecutableTls`] — ELF executables (Linux, Android;
+//!   x86-64 and aarch64): the block is an `external thread_local` global in
+//!   the static TLS block of the executable the runtime archive is linked
+//!   into, which the module addresses local-exec
+//!   ([`crate::module::LlModule::use_local_exec_tls`]): the access is one
+//!   thread-pointer-relative load (`mov %fs:PERRY_AGENT_PTRS@TPOFF+off` on
+//!   x86-64, which folds into a consuming compare; `mrs tpidr_el0` + a
+//!   `:tprel:` offset on aarch64). Not used for dylib/staticlib outputs: an
+//!   image that can be `dlopen`ed has no fixed offset in the static TLS
+//!   block.
 //! * [`AgentPtrAccess::AppleTsd`] — Apple aarch64: Mach-O has no initial-exec
 //!   model (every thread-local access is a TLV thunk call), so the block's
 //!   address is read from the runtime's `HotTls` cache through the pthread
@@ -46,7 +50,7 @@ pub(crate) const AGENT_PTRS_SYMBOL: &str = "PERRY_AGENT_PTRS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentPtrAccess {
-    InitialExec,
+    ExecutableTls,
     WindowsTeb,
     AppleTsd,
     Call,
@@ -62,7 +66,7 @@ const TEB_TLS_POINTER_OFFSET: &str = "88";
 thread_local! {
     /// Whether the module being compiled is linked into an EXECUTABLE (set per
     /// module by `codegen::compile_module`); anything else must not assume
-    /// initial-exec TLS.
+    /// a fixed thread-pointer offset (local-exec TLS).
     static OUTPUT_IS_EXECUTABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
@@ -94,7 +98,7 @@ pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {
     }
     let triple = ctx.target_triple;
     if elf_triple(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get()) {
-        return AgentPtrAccess::InitialExec;
+        return AgentPtrAccess::ExecutableTls;
     }
     if triple.starts_with("x86_64") && triple.contains("windows") {
         return AgentPtrAccess::WindowsTeb;
@@ -107,7 +111,7 @@ pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {
 
 /// The current value of per-agent pointer `slot`, for a GC-leaf callee that
 /// accepts `absent` (a constant operand meaning "not available here") in its
-/// place: one initial-exec load in an ELF executable (the slot must never be
+/// place: one thread-pointer-relative load in an ELF executable (the slot must never be
 /// null there); the `HotTls` read on Apple aarch64, `absent` when the direct
 /// TSD path is unavailable or the block is not published; the slot's `gc-leaf`
 /// runtime accessor everywhere else. No null test and no fallback call on the
@@ -118,7 +122,7 @@ pub(crate) fn emit_agent_ptr_or(ctx: &mut FnCtx<'_>, slot: usize, absent: &str) 
     let slot_off = (slot * 8).to_string();
     let access = agent_ptr_access(ctx);
     match access {
-        AgentPtrAccess::InitialExec | AgentPtrAccess::WindowsTeb => {
+        AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb => {
             let at = emit_slot_addr(ctx, access, &slot_off);
             ctx.block().load(PTR, &at)
         }
@@ -161,7 +165,7 @@ pub(crate) fn emit_slot_addr(
 ) -> String {
     let blk = ctx.block();
     let block = match access {
-        AgentPtrAccess::InitialExec => format!("@{AGENT_PTRS_SYMBOL}"),
+        AgentPtrAccess::ExecutableTls => format!("@{AGENT_PTRS_SYMBOL}"),
         AgentPtrAccess::WindowsTeb => {
             // `mov gs:[0x58]` — a plain load in the x86 `gs` address space
             // (256). Plain, not volatile: it is re-read after every call, and
@@ -209,7 +213,7 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
     }
     let slot_off = (slot * 8).to_string();
     let (fast_pred, fast_val, slow_idx) = match access {
-        AgentPtrAccess::InitialExec | AgentPtrAccess::WindowsTeb => {
+        AgentPtrAccess::ExecutableTls | AgentPtrAccess::WindowsTeb => {
             let slow_idx = ctx.new_block("agent_ptr.slow");
             let fast_idx = ctx.new_block("agent_ptr.fast");
             let at = emit_slot_addr(ctx, access, &slot_off);

@@ -833,6 +833,21 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
         for a in split_top_level(args_str) {
             let (aty, atok) = ty_and_val(&a)?;
+            if aty == "metadata" {
+                // `metadata !{!"NAME"}`: the one metadata operand Perry
+                // emits, `llvm.read_register`'s register name
+                // (`expr/stack_guard.rs`).
+                let name = atok
+                    .strip_prefix("!{!\"")
+                    .and_then(|t| t.strip_suffix("\"}"))
+                    .ok_or_else(|| anyhow!("unsupported metadata operand `{atok}`"))?;
+                let node = self
+                    .ctx
+                    .metadata_node(&[self.ctx.metadata_string(name).into()]);
+                args.push(node.into());
+                arg_types.push(self.ctx.metadata_type().into());
+                continue;
+            }
             let ty = basic_type(self.ctx, aty)?;
             args.push(self.val(ty, atok)?.into());
             arg_types.push(ty.into());

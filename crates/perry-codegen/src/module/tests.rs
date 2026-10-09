@@ -894,9 +894,9 @@ fn gep_unused_helper_imports_compile() {
     let _ = (PTR, I64);
 }
 
-/// The module's own default-model thread-locals become local-exec; a
-/// runtime thread-local declared with its own model keeps it; a plain global
-/// stays a plain global. The model is in the IR text the module renders, so
+/// Every thread-local the module names becomes local-exec, the runtime's
+/// `initialexec` block included (it is linked into the same executable); a
+/// plain global stays a plain global. The model is in the IR text the module renders, so
 /// no emitter needs to know the output kind.
 #[test]
 fn local_exec_tls_is_written_into_the_module() {
@@ -918,7 +918,7 @@ fn local_exec_tls_is_written_into_the_module() {
     assert!(ir.contains("@module_state = thread_local(localexec) global double 0.0"));
     assert!(ir.contains("@init_done = internal thread_local(localexec) global i8 0"));
     assert!(ir.contains("@other_unit = external thread_local(localexec) global i8"));
-    assert!(ir.contains("@runtime_block = external thread_local(initialexec) global [8 x i64]"));
+    assert!(ir.contains("@runtime_block = external thread_local(localexec) global [8 x i64]"));
     assert!(ir.contains("@plain = global i8 0"));
     assert_eq!(m.thread_local_specifier(), "thread_local(localexec)");
     // Names of defined thread-locals still include rewritten definitions.
@@ -927,14 +927,18 @@ fn local_exec_tls_is_written_into_the_module() {
 }
 
 #[test]
-fn with_local_exec_tls_only_touches_the_default_model() {
+fn with_local_exec_tls_rewrites_every_thread_local_model() {
     use crate::module::linkage::with_local_exec_tls;
     assert_eq!(
         with_local_exec_tls("@g = private thread_local global i64 0").as_deref(),
         Some("@g = private thread_local(localexec) global i64 0")
     );
     assert_eq!(
-        with_local_exec_tls("@g = thread_local(initialexec) global i64 0"),
+        with_local_exec_tls("@g = external thread_local(initialexec) global [4 x ptr]").as_deref(),
+        Some("@g = external thread_local(localexec) global [4 x ptr]")
+    );
+    assert_eq!(
+        with_local_exec_tls("@g = thread_local(localexec) global i64 0"),
         None
     );
     assert_eq!(with_local_exec_tls("@g = global i64 0"), None);

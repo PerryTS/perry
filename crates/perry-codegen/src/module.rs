@@ -183,10 +183,12 @@ impl LlModule {
     /// general-dynamic `__tls_get_addr` call that the register allocator
     /// treated as a call clobbering every caller-saved register.
     ///
-    /// Every definition and declaration still at the default
-    /// (general-dynamic) model is rewritten; a runtime thread-local declared
-    /// with the model its definition needs (`PERRY_AGENT_PTRS` is
-    /// `initialexec`) keeps it. The model is written into the module itself,
+    /// Every definition and declaration is rewritten, the runtime's own
+    /// thread-locals included: the runtime archive is linked into the same
+    /// executable, so `PERRY_AGENT_PTRS` (declared `initialexec`, the model
+    /// any other output may use) sits at a fixed offset in the same static
+    /// TLS block, and its stack-limit slot folds into the prologue's compare
+    /// (`expr/stack_guard.rs`). The model is written into the module itself,
     /// so the IR text (and the object-cache key derived from it) states it,
     /// and an emitter running on another thread needs no outside input.
     pub(crate) fn use_local_exec_tls(&mut self) {
