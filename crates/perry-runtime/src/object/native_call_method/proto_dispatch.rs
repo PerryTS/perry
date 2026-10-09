@@ -26,6 +26,18 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
 ) -> Option<f64> {
     let name = value_called_proto_method_name(closure)?;
     let receiver = this.as_f64();
+    // A native base's prototype method called on a subclass instance (the
+    // value `sub.text` reads through `Sub.prototype` -> `Response.prototype`)
+    // runs on the instance's native backing. Re-dispatching it by name on the
+    // instance would read the same inherited value again and recurse.
+    let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    if let Some(result) = call_on_native_backing(receiver, name, args) {
+        return Some(result);
+    }
     Some(js_native_call_method(
         receiver,
         name.as_ptr() as *const i8,
@@ -33,6 +45,74 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
         args_ptr,
         args_len,
     ))
+}
+
+/// Call built-in method `method_name` of a native base on `object`'s native
+/// backing, when `object` is a subclass instance that carries one beside its
+/// JS object: a Web Fetch handle (`class X extends Request/Response`, body
+/// methods only), a Temporal cell (`class X extends Temporal.<Type>`), or an
+/// inherits-pattern alias handle (`http.Server.call(this, ...)`). `None` when
+/// `object` has no such backing, so the caller's dispatch proceeds.
+///
+/// One forward for both ways an inherited built-in is reached: the by-name
+/// tower after every user-defined layer missed, and a call of the prototype
+/// method VALUE the instance's holder chain answers (`Response.prototype.text`
+/// is the built-in prototype's own function object; the chain names it, and
+/// calling it must reach the instance's handle, not the chain again).
+pub(crate) unsafe fn call_on_native_backing(
+    object: f64,
+    method_name: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if !JSValue::from_bits(object.to_bits()).is_pointer() {
+        return None;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+    if crate::object::field_get_set::is_fetch_subclass_body_method(method_name.as_bytes()) {
+        if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
+            if let Some(dispatch) = super::super::class_handles::handle_method_dispatch() {
+                return Some(dispatch(
+                    id,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                ));
+            }
+        }
+    }
+    if let Some(cell) = crate::temporal::hooked::subclass_cell(raw) {
+        return Some(crate::temporal::hooked::call_method(
+            cell,
+            method_name,
+            args,
+        ));
+    }
+    if let Some((handle_val, composite)) =
+        super::super::native_this_alias::alias_handle_for_object(object)
+    {
+        // Server aliases dispatch through the PRIMARY handle dispatcher
+        // only: the composite's extension dispatchers (ext-net) may own
+        // an id-colliding socket that would claim shared names like
+        // `address`/`on` first. A `ServerResponse` alias (#10454) needs
+        // the composite, whose http extension owns that handle.
+        let dispatch = if composite {
+            super::super::class_handles::handle_method_dispatch()
+        } else {
+            super::super::class_handles::handle_method_dispatch_primary()
+        };
+        if let Some(dispatch) = dispatch {
+            let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
+            return Some(dispatch(
+                handle,
+                method_name.as_ptr(),
+                method_name.len(),
+                args.as_ptr(),
+                args.len(),
+            ));
+        }
+    }
+    None
 }
 
 /// #11700: whether `value` is a no-op-backed built-in prototype method that

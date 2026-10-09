@@ -59,14 +59,14 @@ mod decl_method_slots_tests;
 #[cfg(test)]
 #[path = "class_registry/decl_prototype_birth_tests.rs"]
 mod decl_prototype_birth_tests;
-#[cfg(test)]
-mod retired_symbols_tests;
 mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;
 mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
+#[cfg(test)]
+mod retired_symbols_tests;
 mod state;
 mod vm_brand;
 

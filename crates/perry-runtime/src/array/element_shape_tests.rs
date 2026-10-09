@@ -18,7 +18,8 @@
 
 use super::*;
 use crate::array::{
-    js_array_alloc, js_array_delete, js_array_push_f64, js_array_set_f64, js_array_set_length,
+    js_array_alloc, js_array_delete, js_array_get_f64, js_array_push_f64, js_array_set_f64,
+    js_array_set_length,
 };
 
 /// Two distinct shaped classes, chosen well clear of the ids the runtime
@@ -375,13 +376,15 @@ fn declaring_a_numeric_layout_clears_the_invariant() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn prototype_surgery_retires_every_outstanding_proof() {
+fn prototype_writes_keep_proofs_and_an_instance_relink_retires_them() {
     let _serialized = test_serialize();
     let a = built_from_pushes(CLASS_A, 2);
     let b = built_from_pushes(CLASS_B, 2);
     assert!(proof(a).is_some());
     assert!(proof(b).is_some());
 
+    // A proof is about the elements' own fields, which no prototype member
+    // can shadow: writing a method onto the class prototype retires nothing.
     let name = b"patched";
     unsafe {
         crate::object::js_register_class_name(CLASS_A, b"ElementShapeA".as_ptr(), 13);
@@ -392,16 +395,26 @@ fn prototype_surgery_retires_every_outstanding_proof() {
             f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
+    assert!(
+        proof(a).is_some(),
+        "a prototype write must not retire the patched class's proofs"
+    );
+    assert!(proof(b).is_some(), "nor any other class's");
 
+    // Replacing a live instance's [[Prototype]] is what retires them, and
+    // the retirement is global: conservative in the safe direction.
+    let element = js_array_get_f64(a, 0);
+    let replacement = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    crate::object::js_object_set_prototype_of(element, replacement);
     assert!(
         proof(a).is_none(),
-        "a prototype write must retire the patched class's proofs"
+        "an instance relink must retire the relinked class's proofs"
     );
     assert!(
         proof(b).is_none(),
         "the generation bump is global — conservative in the safe direction"
     );
-    // …and the array self-heals if it is still homogeneous.
+    // …and an array that is still homogeneous self-heals.
     assert_eq!(
         unsafe { ensure_element_shape(b) }.map(|p| p.class_id),
         Some(CLASS_B)
