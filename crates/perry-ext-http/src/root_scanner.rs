@@ -6,6 +6,9 @@ use perry_ffi::GcRootVisitor;
 /// rewrite them after relocation.
 pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
+        if req.owner_agent != perry_ffi::agent_post::current_agent() {
+            return;
+        }
         visitor.visit_i64_slot(&mut req.response_callback);
         visitor.visit_i64_slot(&mut req.response_raw_wrapper);
         visitor.visit_i64_slot(&mut req.end_callback);
@@ -35,6 +38,9 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     });
 
     iter_handles_of_mut::<IncomingMessageHandle, _>(|msg| {
+        if msg.owner_agent != perry_ffi::agent_post::current_agent() {
+            return;
+        }
         for cbs in msg.listeners.values_mut() {
             for cb in cbs {
                 visitor.visit_i64_slot(cb);
