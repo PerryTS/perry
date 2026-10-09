@@ -90,6 +90,13 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
                 flags,
             );
         }
+        5 => {
+            return super::js_array_get_f64(
+                crate::value::js_nanbox_get_pointer(payload.get_nanbox_f64())
+                    as *const super::ArrayHeader,
+                index as u32,
+            );
+        }
         3 => {
             super::iterator_record_cleanup::js_array_record_abrupt(
                 payload.get_nanbox_f64(),
@@ -186,6 +193,27 @@ mod tests {
             (record.index, record.state, record.protocol),
             (4.0, 0.0, 1.0)
         );
+    }
+    #[test]
+    fn stack_record_read_uses_the_existing_getter_and_releases_custody() {
+        let _stable = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let array = super::super::js_array_alloc(2);
+            let array = super::super::js_array_push_f64(array, 11.0);
+            let array = super::super::js_array_push_f64(array, 17.0);
+            let mut record = ArrayStackRecord {
+                payload: crate::value::js_nanbox_pointer(array as i64),
+                next: f64::from_bits(TAG_UNDEFINED),
+                value: f64::from_bits(TAG_UNDEFINED),
+                index: 1.0,
+                state: 2.0,
+                protocol: 0.0,
+            };
+            assert_eq!(js_array_record_stack_dispatch(&mut record, 5), 17.0);
+            assert_eq!(record.payload.to_bits(), TAG_UNDEFINED);
+            assert_eq!(record.next.to_bits(), TAG_UNDEFINED);
+            assert_eq!(record.value.to_bits(), TAG_UNDEFINED);
+        }
     }
     #[test]
     fn stack_record_abi_is_six_gc_words() {

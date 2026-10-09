@@ -581,8 +581,16 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         .count();
     assert_eq!(
         calls,
-        consumers * 3,
-        "capture, step and finish use the same ABI in each specialization"
+        consumers * 4,
+        "capture, step, residual read and finish use the same ABI in each specialization"
+    );
+    assert!(
+        ll.contains("record.read.cold") && ll.contains("i32 5"),
+        "the residual array read shares the record dispatcher"
+    );
+    assert!(
+        !ll.contains("arrlike.u8.brand"),
+        "record reads must not carry the generic array-like dispatch"
     );
     for callee in [
         "js_get_iterator",
