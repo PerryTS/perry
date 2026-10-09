@@ -36,6 +36,9 @@ fn callback_value(raw: i64) -> f64 {
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_read(handle: i64, _size: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -48,6 +51,9 @@ pub unsafe extern "C" fn js_ext_net_socket_read(handle: i64, _size: f64) -> f64 
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_read(handle: i64, size: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -60,6 +66,9 @@ pub unsafe extern "C" fn js_net_socket_read(handle: i64, size: f64) -> f64 {
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -68,6 +77,9 @@ pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "pending")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_connecting(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -76,6 +88,9 @@ pub unsafe extern "C" fn js_net_socket_get_connecting(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "connecting")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_destroyed(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -84,6 +99,9 @@ pub unsafe extern "C" fn js_net_socket_get_destroyed(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "destroyed")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -92,6 +110,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "writable")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_readable(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -100,6 +121,9 @@ pub unsafe extern "C" fn js_net_socket_get_readable(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "readable")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable_ended(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -108,6 +132,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable_ended(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "writableEnded")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_readable_ended(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -116,6 +143,9 @@ pub unsafe extern "C" fn js_net_socket_get_readable_ended(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "readableEnded")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable_state(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -125,6 +155,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable_state(handle: i64) -> *mut S
     js_json_stringify(value, 0)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_readable_state(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -134,6 +167,9 @@ pub unsafe extern "C" fn js_net_socket_get_readable_state(handle: i64) -> *mut S
     js_json_stringify(value, 0)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_ready_state(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -143,6 +179,9 @@ pub unsafe extern "C" fn js_net_socket_get_ready_state(handle: i64) -> *mut Stri
     alloc_string(&jsvalue_to_owned_string(value).unwrap_or_default()).as_raw()
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_bytes_read(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -151,6 +190,9 @@ pub unsafe extern "C" fn js_net_socket_get_bytes_read(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "bytesRead")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_bytes_written(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -159,6 +201,9 @@ pub unsafe extern "C" fn js_net_socket_get_bytes_written(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "bytesWritten")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_timeout(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -167,6 +212,9 @@ pub unsafe extern "C" fn js_net_socket_get_timeout(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "timeout")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_local_address(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -175,6 +223,9 @@ pub unsafe extern "C" fn js_net_socket_get_local_address(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "localAddress")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_local_port(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -183,6 +234,9 @@ pub unsafe extern "C" fn js_net_socket_get_local_port(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "localPort")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_local_family(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -191,6 +245,9 @@ pub unsafe extern "C" fn js_net_socket_get_local_family(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "localFamily")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_remote_address(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -199,6 +256,9 @@ pub unsafe extern "C" fn js_net_socket_get_remote_address(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "remoteAddress")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_remote_port(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -207,6 +267,9 @@ pub unsafe extern "C" fn js_net_socket_get_remote_port(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "remotePort")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_remote_family(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -215,6 +278,9 @@ pub unsafe extern "C" fn js_net_socket_get_remote_family(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "remoteFamily")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_buffer_size(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -223,6 +289,9 @@ pub unsafe extern "C" fn js_net_socket_get_buffer_size(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "bufferSize")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable_length(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -231,6 +300,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable_length(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "writableLength")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable_need_drain(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -239,6 +311,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable_need_drain(handle: i64) -> f
     socket::get(owner(handle_root.get()), "writableNeedDrain")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -251,6 +326,9 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) -
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     let scope = TransientRootScope::enter();
@@ -263,6 +341,9 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_write3(
     handle: i64,
@@ -286,6 +367,9 @@ pub unsafe extern "C" fn js_ext_net_socket_write3(
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
     let scope = TransientRootScope::enter();
@@ -298,6 +382,9 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     let scope = TransientRootScope::enter();
@@ -310,6 +397,9 @@ pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_end3(
     handle: i64,
@@ -334,6 +424,9 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
     );
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     let scope = TransientRootScope::enter();
@@ -345,6 +438,9 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     let scope = TransientRootScope::enter();
@@ -356,6 +452,9 @@ pub unsafe extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_address(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -368,6 +467,9 @@ pub unsafe extern "C" fn js_net_socket_address(handle: i64) -> *mut StringHeader
     js_json_stringify(value, 0)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -383,6 +485,9 @@ pub unsafe extern "C" fn js_net_socket_once(handle: i64, event_ptr: i64, cb: i64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_prepend_listener(
     handle: i64,
@@ -402,6 +507,9 @@ pub unsafe extern "C" fn js_net_socket_prepend_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_prepend_once_listener(
     handle: i64,
@@ -421,6 +529,9 @@ pub unsafe extern "C" fn js_net_socket_prepend_once_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_remove_listener(
     handle: i64,
@@ -440,6 +551,9 @@ pub unsafe extern "C" fn js_net_socket_remove_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -453,6 +567,9 @@ pub unsafe extern "C" fn js_net_socket_remove_all_listeners(handle: i64, event_p
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -465,6 +582,9 @@ pub unsafe extern "C" fn js_net_socket_listener_count(handle: i64, event_ptr: i6
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -477,6 +597,9 @@ pub unsafe extern "C" fn js_ext_net_socket_listener_count(handle: i64, event_ptr
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_get_max_listeners(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -488,6 +611,9 @@ pub unsafe extern "C" fn js_ext_net_socket_get_max_listeners(handle: i64) -> f64
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_set_max_listeners(handle: i64, n: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -500,6 +626,9 @@ pub unsafe extern "C" fn js_ext_net_socket_set_max_listeners(handle: i64, n: f64
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_event_names(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -512,6 +641,9 @@ pub unsafe extern "C" fn js_net_socket_event_names(handle: i64) -> *mut StringHe
     js_json_stringify(value, 0)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -525,6 +657,9 @@ pub unsafe extern "C" fn js_net_socket_listeners(handle: i64, event_ptr: i64) ->
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -538,6 +673,9 @@ pub unsafe extern "C" fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -551,6 +689,9 @@ pub unsafe extern "C" fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_reset_and_destroy(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -563,6 +704,9 @@ pub unsafe extern "C" fn js_net_socket_reset_and_destroy(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -578,6 +722,9 @@ pub unsafe extern "C" fn js_net_server_once(handle: i64, event_ptr: i64, cb: i64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_prepend_listener(
     handle: i64,
@@ -597,6 +744,9 @@ pub unsafe extern "C" fn js_net_server_prepend_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_prepend_once_listener(
     handle: i64,
@@ -616,6 +766,9 @@ pub unsafe extern "C" fn js_net_server_prepend_once_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_remove_listener(
     handle: i64,
@@ -635,6 +788,9 @@ pub unsafe extern "C" fn js_net_server_remove_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_remove_all_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -648,6 +804,9 @@ pub unsafe extern "C" fn js_net_server_remove_all_listeners(handle: i64, event_p
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_listener_count(handle: i64, event_ptr: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -660,6 +819,9 @@ pub unsafe extern "C" fn js_net_server_listener_count(handle: i64, event_ptr: i6
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_event_names(handle: i64) -> *mut StringHeader {
     let scope = TransientRootScope::enter();
@@ -672,6 +834,9 @@ pub unsafe extern "C" fn js_net_server_event_names(handle: i64) -> *mut StringHe
     js_json_stringify(value, 0)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -685,6 +850,9 @@ pub unsafe extern "C" fn js_net_server_listeners(handle: i64, event_ptr: i64) ->
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_raw_listeners(handle: i64, event_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -698,6 +866,9 @@ pub unsafe extern "C" fn js_net_server_raw_listeners(handle: i64, event_ptr: i64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -710,6 +881,9 @@ pub unsafe extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_ref(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -722,6 +896,9 @@ pub unsafe extern "C" fn js_net_socket_ref(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_unref(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -734,6 +911,9 @@ pub unsafe extern "C" fn js_net_socket_unref(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_set_timeout(
     handle: i64,
@@ -756,6 +936,9 @@ pub unsafe extern "C" fn js_net_socket_set_timeout(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_noop_self(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -768,6 +951,9 @@ pub unsafe extern "C" fn js_net_server_noop_self(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_type_of_service(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -779,6 +965,9 @@ pub unsafe extern "C" fn js_net_socket_get_type_of_service(handle: i64) -> f64 {
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -792,6 +981,9 @@ pub unsafe extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_set_no_delay(handle: i64, arg_bits: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -805,6 +997,9 @@ pub unsafe extern "C" fn js_net_socket_set_no_delay(handle: i64, arg_bits: i64) 
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_set_encoding(handle: i64, enc_ptr: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -818,6 +1013,9 @@ pub unsafe extern "C" fn js_net_socket_set_encoding(handle: i64, enc_ptr: i64) -
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) {
     let scope = TransientRootScope::enter();
@@ -834,6 +1032,9 @@ pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) 
     };
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -851,6 +1052,9 @@ pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -866,6 +1070,9 @@ pub unsafe extern "C" fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb:
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_remove_listener(
     handle: i64,
@@ -885,6 +1092,9 @@ pub unsafe extern "C" fn js_ext_net_socket_remove_listener(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
     handle: i64,
@@ -901,6 +1111,9 @@ pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_cork(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -913,6 +1126,9 @@ pub unsafe extern "C" fn js_net_socket_cork(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_uncork(handle: i64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -925,6 +1141,9 @@ pub unsafe extern "C" fn js_net_socket_uncork(handle: i64) -> i64 {
     p::raw_owner(value)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable_corked(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -933,6 +1152,9 @@ pub unsafe extern "C" fn js_net_socket_get_writable_corked(handle: i64) -> f64 {
     socket::get(owner(handle_root.get()), "writableCorked")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_get_listening(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -941,11 +1163,17 @@ pub unsafe extern "C" fn js_net_server_get_listening(handle: i64) -> f64 {
     server::get(owner(handle_root.get()), "listening")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_get_connections(handle: i64) -> f64 {
     server::get(owner(handle), "_connections")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_get_max_connections(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -954,6 +1182,9 @@ pub unsafe extern "C" fn js_net_server_get_max_connections(handle: i64) -> f64 {
     server::get(owner(handle_root.get()), "maxConnections")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_set_max_connections(handle: i64, value: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -967,6 +1198,9 @@ pub unsafe extern "C" fn js_net_server_set_max_connections(handle: i64, value: f
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_get_drop_max_connection(handle: i64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -975,6 +1209,9 @@ pub unsafe extern "C" fn js_net_server_get_drop_max_connection(handle: i64) -> f
     server::get(owner(handle_root.get()), "dropMaxConnection")
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_set_drop_max_connection(handle: i64, value: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -992,6 +1229,9 @@ pub unsafe extern "C" fn js_net_server_set_drop_max_connection(handle: i64, valu
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -1005,6 +1245,9 @@ pub unsafe extern "C" fn js_net_socket_pipe(handle: i64, dest: f64, options: f64
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_unpipe(handle: i64, dest: f64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -1022,6 +1265,9 @@ pub unsafe extern "C" fn js_net_socket_unpipe(handle: i64, dest: f64) -> i64 {
 pub extern "C" fn js_net_has_pending() -> i32 {
     0
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
     0
@@ -1040,6 +1286,9 @@ pub extern "C" fn js_ext_net_is_server_handle(raw: i64) -> i32 {
 pub extern "C" fn js_net_server_listening(raw: i64) -> i32 {
     JsValue::from_bits(server::get(owner(raw), "listening").to_bits()).to_bool() as i32
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_on(raw: i64, event_ptr: i64, cb: i64) {
     let scope = TransientRootScope::enter();
@@ -1055,6 +1304,9 @@ pub unsafe extern "C" fn js_net_socket_on(raw: i64, event_ptr: i64, cb: i64) {
         call(raw_root.get(), "on", &args)
     };
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_emit(
     raw: i64,
@@ -1077,6 +1329,9 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
     values.extend(args.iter().map(|arg| arg.get()));
     call(p::raw_owner(owner.get()), "emit", &values)
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_emit_abort_error(raw: i64) {
     let scope = TransientRootScope::enter();
@@ -1087,6 +1342,9 @@ pub unsafe extern "C" fn js_ext_net_socket_emit_abort_error(raw: i64) {
         socket::error("ABORT_ERR", "The operation was aborted"),
     );
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_upgrade_tls(
     raw: i64,

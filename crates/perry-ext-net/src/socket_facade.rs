@@ -13,6 +13,10 @@ fn tls_field(handle: i64, key: &str) -> f64 {
 }
 
 /// TLS compatibility facts are ordinary Socket JS state, never an id record.
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
     handle: i64,
@@ -67,18 +71,34 @@ pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
     );
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_encrypted(handle: i64) -> f64 {
     tls_field(handle, "encrypted")
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_authorized(handle: i64) -> f64 {
     tls_field(handle, "authorized")
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_servername(handle: i64) -> f64 {
     tls_field(handle, "servername")
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_session(
     handle: i64,
@@ -86,10 +106,18 @@ pub unsafe extern "C" fn js_ext_net_socket_tls_session(
     let bytes = crate::jsvalue_to_socket_bytes(tls_field(handle, "session")).unwrap_or_default();
     alloc_buffer(&bytes)
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_session_reused(handle: i64) -> f64 {
     tls_field(handle, "sessionReused")
 }
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
+/// Non-null byte pointers must be readable for their paired length.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_peer_certificate_json(handle: i64) -> *mut StringHeader {
     let cn = crate::jsvalue_to_owned_string(tls_field(handle, "peerCertificateCn"));

@@ -255,6 +255,9 @@ fn string_from_js_value(value: JsValue) -> Option<String> {
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
     handle_from_value(unsafe {
@@ -279,6 +282,9 @@ pub extern "C" fn js_net_block_list_is_block_list(value: f64) -> f64 {
     js_bool(np::lifecycle(value, &BLOCK_LIST).is_ok())
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_add_address(
     handle: i64,
@@ -294,6 +300,9 @@ pub unsafe extern "C" fn js_net_block_list_add_address(
     undefined()
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_add_range(
     handle: i64,
@@ -316,6 +325,9 @@ pub unsafe extern "C" fn js_net_block_list_add_range(
     undefined()
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_add_subnet(
     handle: i64,
@@ -336,6 +348,9 @@ pub unsafe extern "C" fn js_net_block_list_add_subnet(
     undefined()
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_check(
     handle: i64,
@@ -362,6 +377,9 @@ pub extern "C" fn js_net_block_list_rules(handle: i64) -> *mut ArrayHeader {
     block_list_rules_array(handle)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) -> f64 {
     let scope = TransientRootScope::enter();
@@ -406,6 +424,9 @@ fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
     }
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -432,6 +453,9 @@ pub extern "C" fn js_ext_net_is_socket_address_handle(handle: i64) -> i32 {
     np::lifecycle(boxed_handle(handle), &SOCKET_ADDRESS).is_ok() as i32
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_address_parse(input_ptr: i64) -> f64 {
     let Some(input) = string_from_header_i64(input_ptr) else {
@@ -506,6 +530,9 @@ pub extern "C" fn js_net_socket_address_get_flowlabel(handle: i64) -> f64 {
     with_socket_address(handle, 0, |s| s.flowlabel) as f64
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_address_parse_value(input: f64) -> f64 {
     extern "C" {
