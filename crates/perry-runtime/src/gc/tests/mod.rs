@@ -15,6 +15,7 @@ mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
 mod bulk_closure_captures;
+mod burst_pacing;
 mod canonical_keys_holders;
 pub(super) mod canonical_keys_minor_prune;
 mod census;

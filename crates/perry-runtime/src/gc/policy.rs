@@ -1294,38 +1294,18 @@ crate::perry_thread_local! {
     /// since the last trigger decision (`note_young_leaf_born_old`).
     pub(super) static GC_YOUNG_LEAF_BORN_OLD: TriggerInput<bool> = const { TriggerInput::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: TriggerInput<usize> = const { TriggerInput::new(0) };
-    /// Live allocated arena bytes measured right after the last FULL
+    /// Reclaimable old bytes measured right after the last FULL
     /// mark-sweep — the baseline for major-GC pacing
     /// (`arena_growth_full_escalation_due`).
-    pub(super) static GC_LAST_FULL_ARENA_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Live allocated arena bytes measured when the last FULL mark-sweep STARTED.
-    /// Paired with `GC_LAST_FULL_ARENA_IN_USE_BYTES` to price what that full
+    pub(super) static GC_LAST_FULL_OLD_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Reclaimable old bytes measured when the last FULL mark-sweep STARTED.
+    /// Paired with `GC_LAST_FULL_OLD_IN_USE_BYTES` to price what that full
     /// actually reclaimed — see `GC_MAJOR_PACING_BACKOFF_SHIFT`.
-    pub(super) static GC_FULL_CYCLE_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Live allocated arena bytes measured at the END of the most recent
-    /// collection of ANY kind — the reading arena-growth pacing tests against
-    /// its boundary (#7865).
-    ///
-    /// The pacing baseline (`GC_LAST_FULL_ARENA_IN_USE_BYTES`) is a *post*-full
-    /// reading, i.e. LIVE bytes. Before #7879, testing it against
-    /// `arena_in_use_bytes()` at the moment a trigger fired compared it against
-    /// allocation high-water — the
-    /// entire un-collected nursery, most of which is garbage a minor is about
-    /// to reclaim for free. On `gc-handoff/bench/tree.ts` that reading is
-    /// 37.7 MB against a 32 MB floor on **every** cycle, so all 40 collections
-    /// escalated to a whole-heap mark-sweep and the copying minor was never
-    /// even attempted (`copying_nursery.eligible: false`,
-    /// `fallback_reason: "not_attempted"`). The escalation then perpetuates
-    /// itself: `note_copying_minor_young_survival` is the only thing that can
-    /// widen the band, and it only runs when a copying minor runs.
-    ///
-    /// A post-collection reading is the same *kind* of quantity as the
-    /// baseline, and it says exactly what the escalation exists to detect:
-    /// **bytes the last minor could not reclaim.** Array-growth forwarding
-    /// stubs — the hazard `arena_growth_full_escalation_due` was written for —
-    /// pin their blocks through a non-moving minor, so they are still in this
-    /// reading and still escalate. Nursery garbage is not.
-    pub(super) static GC_LAST_COLLECTION_POST_IN_USE_BYTES: Cell<usize> =
+    pub(super) static GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Reclaimable old bytes at the end of the most recent collection.
+    /// Retained nursery cohorts still belong to minors; neither their live
+    /// census nor their block-rounded capacity can escalate an old trace.
+    pub(super) static GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES: Cell<usize> =
         const { Cell::new(0) };
     /// #9831: `arena_in_use_bytes()` as the most recent collection of ANY kind
     /// ended — the base the tiny-parse pressure guard measures growth from.
@@ -1354,7 +1334,7 @@ crate::perry_thread_local! {
     /// #10928: pre-full LIVE reading for the old-reclaim full that is about to
     /// run, recorded by `old_reclaim_pressure_due` itself so a future call site
     /// cannot forget to. Zero means "no start reading was taken", exactly as
-    /// `GC_FULL_CYCLE_PRE_IN_USE_BYTES` uses it.
+    /// `GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES` uses it.
     pub(super) static GC_OLD_RECLAIM_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// #10928: how far left to shift the old-reclaim growth band because the
     /// preceding old-reclaim fulls were unproductive. Reset to 0 by the first
@@ -2419,8 +2399,8 @@ pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
     if !retaining {
         return;
     }
-    let survived = pacing_arena_in_use_bytes();
-    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
+    let survived = pacing_old_in_use_bytes();
+    GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.set(bytes.get().max(survived)));
 }
 
 /// Whether the last copying minor measured a retaining heap. Trace/test
@@ -2473,12 +2453,12 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     // #10182: this full verified everything old; the promoted cohort starts over.
     super::promoted_cohort::note_full_finished(old_in_use);
-    // Record the TOTAL post-full live set for major-GC pacing (young+old): the
-    // full sweep is the only collection that frees forwarding stubs, so this is
-    // the "clean" size the arena returns to and the base for the K× growth gate.
+    // Price escalation against old objects on both sides of the full.
+    // Keep the whole-arena census only for the existing old-reclaim yield.
     let post_in_use = crate::arena::arena_live_allocated_bytes();
-    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(post_in_use));
-    update_major_pacing_backoff(post_in_use);
+    let post_old = pacing_old_in_use_bytes();
+    GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.set(post_old));
+    update_major_pacing_backoff(post_old);
     // #10928: and price THIS full against the old-reclaim band that scheduled it.
     update_old_reclaim_backoff(post_in_use);
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
@@ -2539,20 +2519,20 @@ const MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER: usize = 4;
 
 /// Record what the just-finished full reclaimed and adjust the pacing backoff.
 ///
-/// `pre` is the arena in-use reading captured when the full cycle started
+/// `pre` is the reclaimable old reading captured when the full cycle started
 /// (`note_full_cycle_started`); a full that shrinks it by less than
 /// `MAJOR_PACING_PRODUCTIVE_YIELD_PCT` shifts the next escalation threshold
 /// left by one, a productive full resets the shift to 0. Deliberately measured
-/// on the SAME metric the escalation gate reads (`arena_in_use_bytes`) so the
+/// on the SAME metric the escalation gate reads (reclaimable old bytes) so the
 /// two cannot disagree about whether a full helped.
 fn update_major_pacing_backoff(post_in_use: usize) {
-    let pre_in_use = GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.get());
+    let pre_in_use = GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.get());
     if pre_in_use == 0 {
         // No start reading (a full driven from a path that does not announce
         // itself): leave the shift alone rather than guess a yield.
         return;
     }
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+    GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.set(0));
     let reclaimed = pre_in_use.saturating_sub(post_in_use);
     let productive =
         reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
@@ -2576,30 +2556,21 @@ fn update_major_pacing_backoff(post_in_use: usize) {
 /// nothing about arena-growth pacing, and whose repeated use would otherwise
 /// drive the shift to its cap — never moves the backoff.
 fn note_full_cycle_started() {
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(pacing_arena_in_use_bytes()));
+    GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.set(pacing_old_in_use_bytes()));
 }
 
-/// The arena reading BOTH halves of arena-growth pacing must use: the
-/// escalation predicate's comparison against the boundary, and the pre-full
-/// reading `note_full_cycle_started` records for `update_major_pacing_backoff`
-/// to price the result against.
-///
-/// `update_major_pacing_backoff`'s doc already says these are "deliberately
-/// measured on the SAME metric ... so the two cannot disagree about whether a
-/// full helped". The accessor now deliberately reads live allocated object
-/// bytes, not block high-water: fragmentation must not schedule a full or make
-/// one look unproductive (#7879).
-///
-/// It is also the injection point the positive-direction test needs. Forcing a
-/// `true` verdict from the REAL predicate otherwise requires an arena above
-/// `PERRY_GC_MAJOR_PACING_FLOOR_MB` (32 MB by default), and the floor cannot be
-/// lowered per-test: `major_pacing_config` is a process-wide `OnceLock`, so an
-/// env var only takes effect if this test happens to run first. A 32 MB live
-/// heap in a unit test is what `major_pacing_escalation_threshold_for` was
-/// factored out to avoid, so the seam goes here instead — `#[cfg(test)]`, so it
-/// compiles out of every shipping build and is not a mode anything can be
-/// configured into (CLAUDE.md's GC knob kill-policy is about runtime knobs;
-/// this is not one).
+/// One old-generation basis for the escalation predicate, its post-full
+/// baseline and its yield. Nursery occupancy and block capacity are not old
+/// growth. Swept holes are already reusable and do not count as pressure.
+fn pacing_old_in_use_bytes() -> usize {
+    #[cfg(test)]
+    if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
+        return bytes;
+    }
+    old_gen_reclaimable_pressure_bytes()
+}
+
+/// Whole-arena live census, used only by the arena right-sizer.
 pub(super) fn pacing_arena_in_use_bytes() -> usize {
     #[cfg(test)]
     if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
@@ -2608,8 +2579,8 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
     crate::arena::arena_live_allocated_bytes()
 }
 
-/// Record the post-collection live arena bytes arena-growth pacing tests
-/// against, and feed the same exact census to the idle arena right-sizer.
+/// Record post-collection old bytes for major escalation, and independently
+/// feed the whole-arena live census to the existing idle right-sizer.
 /// Called once at the end of every cycle, minor and full alike. The copying
 /// fast path publishes directly; non-copying cycles publish from
 /// `GcCycle::publish_reclaim_outcome` after their sweep census.
@@ -2620,7 +2591,7 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 ///
 /// | cell | unit | read by |
 /// |---|---|---|
-/// | `GC_LAST_COLLECTION_POST_IN_USE_BYTES` | `pacing_arena_in_use_bytes()` — the LIVE census (`arena_live_allocated_bytes`), test-injectable | `arena_growth_full_escalation_due` |
+/// | `GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES` | `pacing_old_in_use_bytes()` — reclaimable OLD object bytes, test-injectable | `arena_growth_full_escalation_due` |
 /// | `GC_TINY_PARSE_PRESSURE_BASE_BYTES` (#9831) | `arena_in_use_bytes()` — BUMP OFFSETS, the same reading the guard takes at each parse boundary | `tiny_parse_pressure_due_with` |
 /// | `GC_NEXT_TRIGGER_BYTES` (#9840) | `arena_total_bytes()` — COMMITTED bytes, which is what `next_arena_trigger_base()` is compared against | `gc_budgeted_due_trigger`'s `ArenaBytes` arm |
 ///
@@ -2638,7 +2609,7 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 /// make the arm due the instant it re-armed.
 pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
-    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
+    GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES.with(|cell| cell.set(pacing_old_in_use_bytes()));
     // #9831: the same moment, in the units the tiny-parse guard reads.
     GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(crate::arena::arena_in_use_bytes()));
     // Medium-parse pacing (2026-09-14): and in the units the parse-boundary
@@ -2650,8 +2621,8 @@ pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     super::arena_right_size::note_collection_finished(bytes, full);
 }
 
-/// The arena reading [`arena_growth_full_escalation_due`] tests — see
-/// [`GC_LAST_COLLECTION_POST_IN_USE_BYTES`].
+/// The old-generation reading [`arena_growth_full_escalation_due`] tests — see
+/// [`GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES`].
 ///
 /// Zero before any collection has finished, so the very first collection of a
 /// process is never escalated: there is no evidence yet that a minor would
@@ -2666,7 +2637,7 @@ pub(super) fn pacing_escalation_reading_bytes() -> usize {
     if let Some(bytes) = TEST_PACING_ARENA_IN_USE.with(|cell| cell.get()) {
         return bytes;
     }
-    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.get())
+    GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES.with(|cell| cell.get())
 }
 
 #[cfg(test)]
@@ -2683,7 +2654,7 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
 }
 
-/// `(post-full baseline bytes, backoff shift, live allocated bytes at or above
+/// `(post-full old baseline bytes, backoff shift, reclaimable old bytes at or above
 /// which the next minor escalates to a full)` — emitted in the GC trace so a
 /// gate can prove the backoff actually engaged rather than merely that nothing
 /// threw.
@@ -2699,7 +2670,7 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
 // `--no-default-features`, where the trace itself is compiled out.
 #[cfg(any(perry_diagnostics, test))]
 pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
-    let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
+    let baseline = GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.get());
     let shift = major_pacing_backoff_shift();
     (baseline, shift, major_pacing_escalation_threshold_bytes())
 }
@@ -2707,24 +2678,24 @@ pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
 #[cfg(test)]
 pub(super) fn test_reset_major_pacing_backoff() {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.set(0));
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+    GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.set(0));
     GC_MAJOR_PACING_RETAINING.with(|c| c.set(false));
 }
 
-/// The pre-full arena reading `arena_growth_full_escalation_due` recorded, or 0
+/// The pre-full old reading `arena_growth_full_escalation_due` recorded, or 0
 /// if it declined to escalate. Non-zero is the proof that the escalation is
 /// PRICED — without it the backoff cannot fire and the pacing silently reverts
 /// to the unconditional K× rule.
 #[cfg(test)]
 pub(super) fn test_major_pacing_pre_in_use_bytes() -> usize {
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.get())
+    GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.get())
 }
 
 /// Override the post-collection occupancy the escalation predicate reads.
 /// Returns the previous value so a test can restore it.
 #[cfg(test)]
 pub(super) fn test_set_collection_post_in_use_bytes(bytes: usize) -> usize {
-    GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| {
+    GC_LAST_COLLECTION_POST_OLD_IN_USE_BYTES.with(|cell| {
         let previous = cell.get();
         cell.set(bytes);
         previous
@@ -2733,7 +2704,7 @@ pub(super) fn test_set_collection_post_in_use_bytes(bytes: usize) -> usize {
 
 #[cfg(test)]
 pub(super) fn test_set_major_pacing_baseline(bytes: usize) -> usize {
-    GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|cell| {
+    GC_LAST_FULL_OLD_IN_USE_BYTES.with(|cell| {
         let previous = cell.get();
         cell.set(bytes);
         previous
@@ -2754,7 +2725,7 @@ pub(super) fn test_set_pacing_arena_in_use(bytes: Option<usize>) -> Option<usize
 
 #[cfg(test)]
 pub(super) fn test_note_full_cycle_reclaimed(pre_in_use: usize, post_in_use: usize) {
-    GC_FULL_CYCLE_PRE_IN_USE_BYTES.with(|bytes| bytes.set(pre_in_use));
+    GC_FULL_CYCLE_PRE_OLD_IN_USE_BYTES.with(|bytes| bytes.set(pre_in_use));
     update_major_pacing_backoff(post_in_use);
 }
 
@@ -3623,6 +3594,8 @@ struct BudgetedGcCycle {
     trigger_kind: GcTriggerKind,
     collection_kind: GcCollectionKind,
     rebaseline: BudgetedGcRebaseline,
+    /// Next automatic slice. Caller-requested budgets do not advance it.
+    automatic_work_units: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4240,6 +4213,7 @@ fn gc_start_budgeted_full_cycle(
         state,
         trigger_kind,
         rebaseline,
+        automatic_work_units: GC_MUTATOR_ASSIST_WORK_UNITS,
     }
 }
 
@@ -4316,6 +4290,7 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
         state,
         trigger_kind: trigger.kind,
         rebaseline,
+        automatic_work_units: GC_MUTATOR_ASSIST_WORK_UNITS,
     }
 }
 
@@ -4419,7 +4394,7 @@ fn arena_growth_full_escalation_due_inner() -> bool {
 /// the fix is one source of truth, not two that match.
 fn major_pacing_escalation_threshold_bytes() -> Option<usize> {
     let (floor_bytes, growth_num) = major_pacing_config();
-    let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
+    let baseline = GC_LAST_FULL_OLD_IN_USE_BYTES.with(|bytes| bytes.get());
     // Yield-adaptive: a full that reclaimed almost nothing pushes the next
     // escalation out (`GC_MAJOR_PACING_BACKOFF_SHIFT`). Shift the multiplier,
     // not the baseline, so one productive full restores the original pacing.
@@ -4699,7 +4674,11 @@ pub(super) fn gc_drain_active_budgeted_cycle() {
 }
 
 fn gc_budgeted_step_work_units_inner(work_units: usize) -> GcStepReport {
-    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
+    gc_budgeted_step_work_units_inner_with_progress(
+        work_units,
+        GcProgressKind::NormalIncremental,
+        false,
+    )
 }
 
 /// Start a FULL budgeted cycle on behalf of the idle-time reclaim
@@ -4738,11 +4717,19 @@ pub(super) fn gc_idle_reclaim_try_start() -> bool {
 /// safepoint.
 pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
     let start = Instant::now();
-    let mut result = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+    let mut result = gc_budgeted_step_work_units_inner_with_progress(
+        GC_NORMAL_INCREMENTAL_WORK_UNITS,
+        GcProgressKind::NormalIncremental,
+        true,
+    );
     while result.status == JS_GC_STEP_STATUS_ACTIVE
         && start.elapsed().as_micros() < u128::from(budget_us)
     {
-        result = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+        result = gc_budgeted_step_work_units_inner_with_progress(
+            GC_NORMAL_INCREMENTAL_WORK_UNITS,
+            GcProgressKind::NormalIncremental,
+            true,
+        );
     }
     result
 }
@@ -4763,6 +4750,7 @@ fn defer_nursery_cap_to_precise_safepoint() {
 fn gc_budgeted_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
+    automatic: bool,
 ) -> GcStepReport {
     if work_units == 0 {
         return gc_budgeted_status_result();
@@ -4790,7 +4778,7 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         };
         Some(due)
     };
-    gc_budgeted_start_or_step(due, work_units, start_progress_kind)
+    gc_budgeted_start_or_step(due, work_units, start_progress_kind, automatic)
 }
 
 /// The part of [`gc_budgeted_step_work_units_inner_with_progress`] that starts
@@ -4801,44 +4789,23 @@ fn gc_budgeted_start_or_step(
     due: Option<BudgetedGcTrigger>,
     work_units: usize,
     start_progress_kind: GcProgressKind,
+    automatic: bool,
 ) -> GcStepReport {
     if let Some(due) = due {
-        if due == BudgetedGcTrigger::YoungScavengeCap && start_progress_kind.is_budgeted() {
-            // ★ #7909. Starting a budgeted cycle here is strictly worse than
-            // starting nothing, and it is self-sustaining.
-            //
-            // A budgeted cycle is `low_pause_non_moving` by construction
-            // (`progress_kind.is_budgeted()` at the collection site), so it
-            // sweeps in place and CANNOT lower
-            // `copying_from_space_in_use_bytes()` — the exact quantity
-            // `young_scavenge_cap_due()` tests. So the trigger it was started
-            // for survives the cycle. Worse, while the cycle is open
-            // `gc_safepoint_moving_minor` rejects every precise safepoint at
-            // its `budgeted` entry guard, so the ONE collector that can lower
-            // that quantity is locked out for the cycle's whole life. If the
-            // host's step cadence cannot finish the cycle — 2048 work units
-            // per microtask drain, and `asyncpipe` reaches ~15 drains after the
-            // cap goes due — the cycle never completes, is never cancelled, and
-            // the composition is permanent: cap due -> cycle started -> moving
-            // minor blocked -> nothing reclaims -> cap still due. The mutator
-            // then pays the SATB mark barrier for the rest of the process
-            // (measured: 22.9-42.5 ms of a ~127 ms program) for a collection
-            // that reclaims nothing, and the `[gc]` trace stays EMPTY because
-            // it is written by the completion path.
-            //
-            // The alloc-point arm already routes nursery pressure away from
-            // this stepper for the same reason (`gc_check_trigger`'s direct /
-            // deferred arm, which runs before the mutator assist). This is that
-            // asymmetry closed: the host-safepoint path now defers nursery
-            // pressure to the precise safepoint too, where the copying minor
-            // runs with rewritable roots and actually reclaims it.
-            //
-            // Note what is NOT skipped: `young_scavenge_cap_due()` is false
-            // unless `nursery_cap_active()`, which IS
-            // `gc_moving_loop_polls_enabled()`. So the cap can only be the due
-            // trigger in exactly the configuration where the precise route
-            // exists. When it does not, this branch is unreachable and the cap
-            // never fires at all.
+        if start_progress_kind.is_budgeted()
+            && (due == BudgetedGcTrigger::YoungScavengeCap
+                || (automatic
+                    && gc_moving_loop_polls_enabled()
+                    && matches!(
+                        due,
+                        BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::MallocCount
+                    )))
+        {
+            // Nursery allocation and reserved capacity are minor pressure, even
+            // when old storage makes the whole-arena trigger cross first. A
+            // non-moving budgeted cycle blocks the precise minor that can pay
+            // this debt. Use the allocation path's existing deferral for all
+            // nursery triggers. OldReclaim is selected earlier from old growth.
             super::instruments::note_budgeted_step_skip(
                 super::instruments::BudgetedStepSkip::NurseryCapUndischargeable,
             );
@@ -4885,7 +4852,31 @@ fn gc_budgeted_start_or_step(
         // only honest statement about pause is a measured maximum.
         let step_started = std::time::Instant::now();
         let phase_code = cycle.state.phase().ffi_code();
-        let step = cycle.state.step(GcWorkBudget::bounded(work_units));
+        let work_units = if automatic {
+            work_units.max(cycle.automatic_work_units)
+        } else {
+            work_units
+        };
+        let mut step = cycle.state.step(GcWorkBudget::bounded(work_units));
+        // Conditional edges can require several rounds even with an unlimited
+        // work budget. An unlimited request finishes this phase through the
+        // same stepper, including automatic slices whose budget has saturated
+        // and the existing synchronous drain. Finite requests stay sliced.
+        while work_units == usize::MAX
+            && !step.completed
+            && cycle.state.phase().ffi_code() == phase_code
+        {
+            step = cycle.state.step(GcWorkBudget::unbounded());
+        }
+        if automatic {
+            // A fixed slice lets a large heap keep the mark barrier active for
+            // thousands of polls. Grow the existing slice until it pays the
+            // work: after at most usize::BITS successful automatic polls it is
+            // unbounded, then each remaining phase finishes in one poll. The
+            // allocation assist's debt-scaled request can advance it sooner.
+            // Explicit step APIs retain exactly the budget their caller asked.
+            cycle.automatic_work_units = work_units.saturating_mul(2);
+        }
         let step_us = step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
         super::instruments::note_budgeted_step_duration(step_us);
         super::diag_sites::budgeted_step_done(phase_code, step_us, work_units);
@@ -4908,7 +4899,7 @@ fn gc_budgeted_start_or_step(
     }
 }
 
-/// Allocation-side mutator assist: a bounded (`GC_MUTATOR_ASSIST_WORK_UNITS`)
+/// Allocation-side mutator assist: a debt-scaled, automatically growing
 /// slice of GC work performed from the allocator (`gc_check_trigger`) rather
 /// than from a host safepoint. Assists drive **every** resumable phase of the
 /// active budgeted cycle, exactly like a host safepoint — the only difference
@@ -4918,13 +4909,13 @@ fn gc_budgeted_start_or_step(
 /// barrier / reclaims memory) purely from the allocations it keeps making, so
 /// RSS stays bounded. `AtomicFinalizeSubphase::WeakProcessing` snapshots the
 /// live-holder registry and consumes at most the supplied number of holders per
-/// assist, so unrelated heap size cannot turn one assist into a whole-arena
-/// pause.
+/// assist. Under persistent work the budget grows toward completion rather
+/// than leaving the incremental barrier active indefinitely.
 fn gc_mutator_assist_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
 ) -> GcStepReport {
-    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind)
+    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind, true)
 }
 
 /// A host safepoint that reports what it did, debt included. For callers
@@ -4946,7 +4937,11 @@ fn gc_runtime_safepoint_report() -> GcStepReport {
     let Some(work_units) = budget.work_units else {
         return gc_budgeted_status_result();
     };
-    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
+    gc_budgeted_step_work_units_inner_with_progress(
+        work_units,
+        GcProgressKind::NormalIncremental,
+        true,
+    )
 }
 
 fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32 {

@@ -97,6 +97,7 @@ fn no_pressure_runtime_safepoint_reports_idle_without_starting_cycle() {
 
 #[test]
 fn arena_pressure_runtime_safepoint_starts_bounded_normal_work() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -120,6 +121,7 @@ fn arena_pressure_runtime_safepoint_starts_bounded_normal_work() {
 
 #[test]
 fn repeated_runtime_safepoints_complete_cycle_rebaseline_debt_and_preserve_roots() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -146,6 +148,7 @@ fn repeated_runtime_safepoints_complete_cycle_rebaseline_debt_and_preserve_roots
 
 #[test]
 fn microtask_runner_tail_pays_bounded_safepoint_under_pressure() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -165,6 +168,7 @@ fn microtask_runner_tail_pays_bounded_safepoint_under_pressure() {
 
 #[test]
 fn empty_event_loop_checkpoint_advances_gc_and_preserves_roots() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -196,6 +200,7 @@ fn empty_event_loop_checkpoint_advances_gc_and_preserves_roots() {
 
 #[test]
 fn stdlib_pump_and_perry_poll_pay_debt_through_shared_scheduler_surfaces() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -220,6 +225,7 @@ fn stdlib_pump_and_perry_poll_pay_debt_through_shared_scheduler_surfaces() {
 
 #[test]
 fn js_gc_safepoint_null_and_output_pointer_are_safe() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -243,6 +249,7 @@ fn js_gc_safepoint_null_and_output_pointer_are_safe() {
 
 #[test]
 fn unsafe_suppressed_and_root_locked_safepoints_skip_without_collecting() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -276,6 +283,7 @@ fn unsafe_suppressed_and_root_locked_safepoints_skip_without_collecting() {
 
 #[test]
 fn host_safepoint_trace_reports_normal_incremental_budgeted_steps() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _trace_guard = TestGcTraceCaptureGuard::force_enabled();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -358,6 +366,7 @@ fn host_safepoint_trace_reports_normal_incremental_budgeted_steps() {
 /// when it is allowed to be paid.
 #[test]
 fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_armed() {
+    let _legacy = policy::force_legacy_gc_pacing();
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -539,18 +548,19 @@ fn a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it
     );
 
     // ── phase 2 (control): the SAME fixture, a discharge-able trigger ────────
-    // Same thread, same heap, same guards — only the due trigger differs. A
-    // cycle must start here, or phase 1 proves nothing.
+    // Same thread, heap and guards. An explicit slice still starts the
+    // discharge-able arena cycle; automatic nursery polls now defer it.
     trigger_guard.make_arena_trigger_due();
     assert!(
         crate::arena::arena_total_bytes() >= super::super::policy::next_arena_trigger_base(),
         "control phase must present a due whole-arena trigger"
     );
 
-    let started = gc_runtime_safepoint();
+    let mut started = JsGcStepResult::default();
+    js_gc_step_work_units(256, &mut started);
     assert_eq!(
         started.status, JS_GC_STEP_STATUS_ACTIVE,
-        "a whole-arena trigger IS discharge-able by a budgeted cycle and must still start one"
+        "an explicit whole-arena slice must still start a budgeted cycle"
     );
     assert_eq!(
         super::super::instruments::incremental_cycle_starts(),
@@ -638,7 +648,10 @@ fn rearm_after_idle_eden(discharge: Discharge) -> (Rearm, usize) {
         // blocks outside its keep window and counts each of them idle once.
         grow_eden_with_garbage(10);
         trigger_guard.make_arena_trigger_due();
-        let _ = complete_host_safepoint_cycle();
+        let _ = {
+            let _legacy = policy::force_legacy_gc_pacing();
+            complete_host_safepoint_cycle()
+        };
         let before = crate::arena::arena_total_bytes();
 
         // A small heap re-arms at the absolute ceiling whatever its total, which
@@ -651,6 +664,7 @@ fn rearm_after_idle_eden(discharge: Discharge) -> (Rearm, usize) {
         let collections = gc_collection_count();
         match discharge {
             Discharge::Budgeted => {
+                let _legacy = policy::force_legacy_gc_pacing();
                 let completed = complete_host_safepoint_cycle();
                 assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
                 assert_eq!(gc_collection_count(), collections + 1);

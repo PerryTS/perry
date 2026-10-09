@@ -1636,7 +1636,7 @@ fn retaining_rebaseline_never_lowers_the_pacing_baseline() {
 /// #7865 — arena-growth pacing must escalate on **bytes a collection could not
 /// reclaim**, not on allocation volume.
 ///
-/// The baseline (`GC_LAST_FULL_ARENA_IN_USE_BYTES`) is a post-full reading, so
+/// The baseline (`GC_LAST_FULL_OLD_IN_USE_BYTES`) is a post-full reading, so
 /// it is LIVE bytes. Testing it against `arena_in_use_bytes()` at the moment a
 /// trigger fires compared it against ALLOCATED bytes — the whole un-collected
 /// nursery. `gc-handoff/bench/tree.ts` reads 37.7 MB against the 32 MB floor on
