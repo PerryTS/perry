@@ -67,6 +67,14 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
         let before = crate::map::test_thread_map_side_deallocation_snapshot();
         let map = crate::map::js_map_alloc(8);
         assert!(!map.is_null());
+        ARENA.with(|cell| {
+            let arena = &*cell.get();
+            let inline = &*hot_inline_state();
+            assert!(
+                arena.blocks[arena.current].offset < inline.offset,
+                "fixture must leave owned storage in a pending fast-path burst"
+            );
+        });
         // Exercise Arena::drop directly, before test TLS destructors remove
         // the per-thread deallocation counter. The thread makes no further
         // JS allocations after taking out its Eden arena.
