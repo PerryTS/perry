@@ -832,3 +832,6 @@ fn descriptor_snapshot_typed_array_legacy_receivers_keep_bags_through_moving_key
         }
     }
 }
+
+#[path = "rooted_array_accessors.rs"]
+mod array_rebind;
