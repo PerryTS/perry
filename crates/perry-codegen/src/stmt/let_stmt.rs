@@ -963,6 +963,7 @@ pub(crate) fn lower_let(
             &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
         );
         super::record_boxed_slot_js_value_bits(ctx, id, &box_ptr, "boxed_let.box_ptr_slot");
+        ctx.ready_cell_roots.note_stored(id);
         // Step 2: register BEFORE lowering init.
         ctx.locals.insert(id, slot);
         ctx.local_types.insert(id, refined_ty.clone());

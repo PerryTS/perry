@@ -367,7 +367,6 @@ js_bool_box_set	Leaf
 js_bootstrap_cjs_main_module_placeholder	Reenters
 js_box_alloc	AllocOnly
 js_box_alloc_bits	AllocOnly
-js_box_capture_cell_ptr	Leaf
 js_box_get	Reenters
 js_box_get_bits	Reenters
 js_box_get_bits_named	Reenters
@@ -540,6 +539,7 @@ js_callback_timer_has_pending	Leaf
 js_callback_timer_next_deadline	Reenters
 js_callback_timer_tick	Reenters
 js_cancel_frame	Leaf
+js_capture_cell_assert	Leaf
 js_catch_enter	Leaf
 js_checkpoint	Reenters
 js_cheerio_load	Reenters
@@ -2843,7 +2843,6 @@ js_runtime_validate_crypto_key_arg	Reenters
 js_runtime_validate_integer_arg	Reenters
 js_runtime_validate_string_arg	Reenters
 js_scope_alloc	AllocOnly
-js_scope_capture_base	Leaf
 js_scope_set	Leaf
 js_sea_get_asset	Reenters
 js_sea_get_asset_as_blob	Reenters

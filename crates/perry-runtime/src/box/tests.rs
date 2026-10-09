@@ -136,3 +136,31 @@ fn recycled_activation_token_rejects_a_stale_generation() {
     assert_eq!(find_async_box_activation(second, second_id), second);
     finish_async_box_activation(second);
 }
+
+/// The birth check accepts exactly the live capture cells: a JSValue, i32 or
+/// bool box and a scope object. The entry sentinel a frame root holds before
+/// its declaration runs, a null word, a NaN-boxed value and a structurally
+/// plausible static are all rejected, so a birth that skipped the cell rule
+/// cannot pass `js_capture_cell_assert`.
+#[test]
+fn capture_cell_check_accepts_only_live_cells() {
+    let boxed = js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64) as u64;
+    let i32_box = js_i32_box_alloc(0) as u64;
+    let bool_box = js_bool_box_alloc(0) as u64;
+    let scope = crate::r#box::scope::js_scope_alloc(3, crate::value::TAG_UNDEFINED as i64) as u64;
+    for cell in [boxed, i32_box, bool_box, scope] {
+        assert!(is_live_capture_cell(cell), "{cell:#x} is a live cell");
+    }
+    static RODATA: [u64; 2] = [0xDEAD_BEEF, 0xFEED_FACE];
+    let not_cells = [
+        crate::value::TAG_UNDEFINED,
+        crate::value::TAG_TDZ,
+        0,
+        1.5f64.to_bits(),
+        &RODATA[0] as *const u64 as u64,
+        boxed + 8,
+    ];
+    for word in not_cells {
+        assert!(!is_live_capture_cell(word), "{word:#x} is not a cell");
+    }
+}

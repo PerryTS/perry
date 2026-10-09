@@ -815,6 +815,7 @@ pub(super) fn compile_module_entry(
             trusted_box_captures: false,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
+            ready_cell_roots: Default::default(),
             local_func_ref_ids: HashMap::new(),
             option_object_locals: HashMap::new(),
             object_literal_locals: HashSet::new(),

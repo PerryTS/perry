@@ -28,13 +28,6 @@ pub const SCOPE_I32_SLOT_SEED: u64 = 0x7FFE_0000_0000_0000;
 /// is the `bool` (0), the high half the non-pointer special-constant tag.
 pub const SCOPE_I1_SLOT_SEED: u64 = 0x7FFC_0000_0000_0000;
 
-/// Read-only `undefined` slots that an entry-cached capture base resolves to
-/// when the capture word is not a scope object (see `js_scope_capture_base`).
-/// The cache admits only bindings its body never writes, so nothing stores
-/// here. Never a heap address: root enumeration ignores it.
-static SCOPE_FALLBACK_SLOTS: [u64; SCOPE_MAX_SLOTS] =
-    [crate::value::TAG_UNDEFINED; SCOPE_MAX_SLOTS];
-
 /// A group root whose allocating statement did not run on this path (a sibling
 /// branch of an async state-machine wrapper, a skipped hoisted declaration)
 /// still holds its TAG_UNDEFINED entry sentinel. A per-binding cell in that
@@ -117,23 +110,9 @@ pub fn is_capture_cell_ptr(bits: u64) -> bool {
     crate::r#box::box_slot_contents_bits(bits).is_some() || is_scope_ptr(bits)
 }
 
-/// Resolve a captured scope base for a cached read: the object itself when
-/// valid, otherwise the fallback region (mirrors `js_box_capture_cell_ptr`).
-#[no_mangle]
-pub extern "C" fn js_scope_capture_base(bits: i64) -> i64 {
-    if is_scope_ptr(bits as u64) {
-        bits
-    } else {
-        SCOPE_FALLBACK_SLOTS.as_ptr() as i64
-    }
-}
-
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_SCOPE_ALLOC: extern "C" fn(i32, i64) -> i64 = js_scope_alloc;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_SCOPE_SET: unsafe extern "C" fn(i64, i32, i64) = js_scope_set;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SCOPE_CAPTURE_BASE: extern "C" fn(i64) -> i64 = js_scope_capture_base;

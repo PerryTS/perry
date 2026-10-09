@@ -903,7 +903,8 @@ pub(super) fn compile_function(
     };
     // A parameter cell allocation can collect. Root the receiver before the
     // first such allocation so a moving collection rewrites its entry slot.
-    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
+    let entry_param_cells =
+        super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
@@ -1258,6 +1259,9 @@ pub(super) fn compile_function(
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
+        ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
+            entry_param_cells,
+        ),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),

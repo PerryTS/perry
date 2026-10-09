@@ -362,7 +362,6 @@ js_bool_box_set	void	ptr,i32s
 js_bootstrap_cjs_main_module_placeholder	void	
 js_box_alloc	ptr	f64
 js_box_alloc_bits	ptr	i64
-js_box_capture_cell_ptr	i64	i64
 js_box_get	f64	ptr
 js_box_get_bits	i64	ptr
 js_box_get_bits_named	i64	ptr,f64
@@ -548,6 +547,7 @@ js_callback_timer_has_pending	i32s
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
 js_cancel_frame	void	i64
+js_capture_cell_assert	void	i64
 js_catch_enter	f64	
 js_checkpoint	void	i32s
 js_cheerio_load	i64	ptr
@@ -3358,7 +3358,6 @@ js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u
 js_scope_alloc	i64	i32s,i64
-js_scope_capture_base	i64	i64
 js_scope_set	void	i64,i32s,i64
 js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64

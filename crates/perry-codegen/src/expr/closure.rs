@@ -155,7 +155,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .as_ref()
                     .is_some_and(|cells| cells.contains(cap_id))
             };
-            let mut captured_value_bits: Vec<String> = Vec::with_capacity(auto_captures.len());
+            // The birth rule (`stmt::binding_cell`): every cell binding this
+            // closure captures has its cell before any slot word is read.
+            crate::stmt::binding_cell::ensure_capture_cells(ctx, &auto_captures);
+            // A capture with no storage here gets a cell of its own, and a
+            // mint allocates: `BirthWords` mints those cells before any other
+            // word is read and keeps them rooted across each other.
+            let mut birth = crate::stmt::binding_cell::BirthWords::new(ctx, &auto_captures);
+            let mut cell_capture_slots: Vec<usize> = Vec::new();
             for cap_id in &auto_captures {
                 if ctx.boxed_vars.contains(cap_id) {
                     // If the enclosing function has this id boxed,
@@ -177,12 +184,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_closure_get_capture_bits",
                             &[(I64, &closure_ptr), (I32, &idx_str)],
                         );
-                        captured_value_bits.push(v);
+                        birth.push(v);
                     } else if let Some(slot) = ctx.locals.get(cap_id).cloned() {
                         // Enclosing function owns the box: slot holds
                         // the raw box pointer as i64.
                         let box_ptr = ctx.block().load(I64, &slot);
-                        captured_value_bits.push(box_ptr);
+                        birth.push(box_ptr);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).
                         let v = crate::codegen::global_transfer::load_module_global(
@@ -191,14 +198,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &global_name,
                         );
                         let v_bits = ctx.block().bitcast_double_to_i64(&v);
-                        captured_value_bits.push(v_bits);
+                        birth.push(v_bits);
                     } else {
-                        captured_value_bits.push("0".to_string());
+                        // No storage for the binding in this context: the
+                        // closure's own cell, minted above.
+                        birth.push_minted();
+                    }
+                    if !ctx.module_globals.contains_key(cap_id) {
+                        cell_capture_slots.push(birth.len() - 1);
                     }
                 } else {
                     let v = lower_expr(ctx, &Expr::LocalGet(*cap_id))?;
                     let v_bits = ctx.block().bitcast_double_to_i64(&v);
-                    captured_value_bits.push(v_bits);
+                    birth.push(v_bits);
+                }
+            }
+            let captured_value_bits = birth.read(ctx);
+
+            if crate::stmt::binding_cell::capture_cell_asserts_enabled() {
+                for &slot in &cell_capture_slots {
+                    crate::stmt::binding_cell::emit_capture_cell_assert(
+                        ctx,
+                        &captured_value_bits[slot],
+                    );
                 }
             }
 
@@ -476,6 +498,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .iter()
                 .map(|cap_id| ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id))
                 .collect::<Vec<_>>();
+            // The allocation above collects: the setters below take the words
+            // as of here.
+            let captured_value_bits = if bulk_fresh_init {
+                captured_value_bits
+            } else {
+                birth.read(ctx)
+            };
+            birth.release(ctx);
             let blk = ctx.block();
             for (idx, val_bits) in captured_value_bits.iter().enumerate() {
                 let track_box_capture = tracked_box_capture_slots[idx];
