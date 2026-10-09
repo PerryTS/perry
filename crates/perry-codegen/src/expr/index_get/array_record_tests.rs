@@ -406,3 +406,199 @@ fn constructed_done_predicate_keeps_normal_completion_outlined() {
     #[cfg(feature = "llvm-inprocess")]
     crate::testing::verify_ir(&ll, "constructed_done_completion").unwrap();
 }
+
+#[test]
+fn ordinary_indexed_length_keeps_main_hot_guard() {
+    crate::temp_root_coverage::under_both_lowerings(|_mode| {
+        let ll = ir(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "length".into(),
+            byte_offset: 0,
+        });
+        let check = ll
+            .split("plen.check_gc")
+            .skip(2)
+            .next()
+            .expect("guard block");
+        let check = check.split("plen.typed_array").next().unwrap();
+        assert!(
+            check.contains("load i8"),
+            "ordinary guard keeps separate header bytes: {check}"
+        );
+        assert!(
+            !check.contains("load i16"),
+            "a packed guard changes indexed-loop register allocation"
+        );
+        assert!(ll.contains("icmp ugt i64") && ll.contains("1048575"));
+        assert!(ll.contains("call double @perry_length_cold_"));
+        #[cfg(feature = "llvm-inprocess")]
+        crate::testing::verify_ir(&ll, "ordinary_length_hot").unwrap();
+    });
+}
+
+#[test]
+fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
+    let mode = || Expr::Compare {
+        op: perry_hir::CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(4)),
+        right: Box::new(Expr::Bool(true)),
+    };
+    let local = |id, ty, init| Stmt::Let {
+        id,
+        name: format!("record_{id}"),
+        ty,
+        mutable: true,
+        init: Some(init),
+    };
+    let ll = ir_body(vec![
+        local(3, Type::Any, Expr::LocalGet(1)),
+        local(
+            4,
+            Type::Boolean,
+            runtime(
+                "arrayRecordNeedsIterator",
+                vec![Expr::LocalSet(3, Box::new(Expr::LocalGet(3)))],
+            ),
+        ),
+        local(
+            5,
+            Type::Number,
+            runtime("arrayRecordIndex", vec![Expr::Integer(0)]),
+        ),
+        local(
+            6,
+            Type::Any,
+            runtime(
+                "arrayRecordPayload",
+                vec![
+                    Expr::LocalGet(3),
+                    Expr::LocalSet(
+                        6,
+                        Box::new(Expr::Conditional {
+                            condition: Box::new(mode()),
+                            then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(3)))),
+                            else_expr: Box::new(Expr::LocalGet(3)),
+                        }),
+                    ),
+                    Expr::LocalSet(3, Box::new(Expr::Undefined)),
+                ],
+            ),
+        ),
+        local(
+            7,
+            Type::Any,
+            runtime("iteratorNextMethod", vec![Expr::LocalGet(6)]),
+        ),
+        local(8, Type::Any, Expr::Undefined),
+        local(9, Type::Number, Expr::Number(2.0)),
+        Stmt::For {
+            init: None,
+            condition: Some(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(runtime(
+                    "arrayRecordForBound",
+                    vec![
+                        mode(),
+                        runtime("arrayRecordLength", vec![Expr::LocalGet(6)]),
+                        Expr::LocalGet(5),
+                        runtime(
+                            "iteratorStep",
+                            vec![
+                                Expr::LocalGet(6),
+                                Expr::LocalGet(7),
+                                Expr::LocalSet(8, Box::new(Expr::Undefined)),
+                                Expr::Bool(true),
+                            ],
+                        ),
+                        Expr::LocalSet(9, Box::new(Expr::Number(2.0))),
+                    ],
+                )),
+            }),
+            update: Some(Expr::Update {
+                id: 5,
+                op: perry_hir::UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![
+                Stmt::Expr(Expr::LocalSet(
+                    8,
+                    Box::new(runtime(
+                        "arrayRecordForValue",
+                        vec![
+                            mode(),
+                            Expr::LocalGet(8),
+                            Expr::IndexGet {
+                                object: Box::new(Expr::LocalGet(6)),
+                                index: Box::new(runtime(
+                                    "arrayRecordIndex",
+                                    vec![Expr::LocalGet(5)],
+                                )),
+                            },
+                        ],
+                    )),
+                )),
+                Stmt::Expr(Expr::LocalSet(9, Box::new(Expr::Number(1.0)))),
+            ],
+        },
+        Stmt::Expr(runtime(
+            "arrayRecordFinish",
+            vec![
+                Expr::LocalGet(4),
+                Expr::LocalGet(6),
+                Expr::LocalGet(5),
+                Expr::LocalGet(6),
+                Expr::Bool(true),
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )),
+        Stmt::Expr(Expr::LocalSet(7, Box::new(Expr::Undefined))),
+        Stmt::Return(Some(Expr::LocalGet(5))),
+    ]);
+    for field in ll
+        .lines()
+        .filter(|l| l.contains("getelementptr double, ptr ") && l.ends_with("i64 1"))
+    {
+        let slot = field.trim().split(" = ").next().unwrap();
+        assert!(!ll.lines().any(|l| l.contains("store volatile double") && l.ends_with(&format!("ptr {slot}"))),
+            "the shared dispatcher owns next release; a proven loop has no next spill");
+    }
+    assert!(
+        ll.contains("alloca [6 x ptr addrspace(1)]"),
+        "one whole native GC home owns the record"
+    );
+    let calls = ll
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@js_array_record_stack_dispatch"))
+        .count();
+    let consumers = ll
+        .split("\ndefine ")
+        .filter(|f| {
+            f.starts_with("internal double @perry_fn")
+                && f.lines().next().unwrap().contains("__read$")
+        })
+        .count();
+    assert_eq!(
+        calls,
+        consumers * 3,
+        "capture, step and finish use the same ABI in each specialization"
+    );
+    for callee in [
+        "js_get_iterator",
+        "js_iterator_next_method",
+        "js_iterator_step",
+        "js_array_record_finish",
+    ] {
+        assert!(
+            !ll.lines()
+                .any(|l| l.contains("call") && l.contains(&format!("@{callee}("))),
+            "the inline consumer must not duplicate cold protocol: {callee}"
+        );
+    }
+    assert!(
+        ll.contains("load volatile double") && ll.contains("store volatile double"),
+        "a safepoint cannot cache a record field across a collection"
+    );
+    crate::testing::verify_ir(&ll, "array_stack_record").unwrap();
+}

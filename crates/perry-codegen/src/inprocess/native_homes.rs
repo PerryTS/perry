@@ -28,6 +28,10 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
     for function in module.get_functions() {
         let (_, sites) = rs4gc_preflight_factors(function);
         if sites < HOME_CALL_SPAN {
+            // Explicit compiler-owned ranges are already homes, independent
+            // of the SSA lifetime heuristic. Coalesce them before LLVM walks
+            // the function once per alloca.
+            merge_before_optimization(module, function);
             continue;
         }
         // Representation choice only: a root that is read after multiple
@@ -111,6 +115,7 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         if retained.len() <= SMALL_HOME_SET {
+            merge_before_optimization(module, function);
             continue;
         }
         for slot in retained {
@@ -193,6 +198,22 @@ unsafe fn home_address_is_private(slot: LLVMValueRef) -> bool {
     }
 }
 
+/// The allocated type is the range's word count, for both scalar homes and
+/// compiler-owned records. Every merge and publication uses this same fact.
+unsafe fn home_word_count(home: LLVMValueRef) -> Option<u64> {
+    unsafe {
+        let ty = LLVMGetAllocatedType(home);
+        let (element, words) = match LLVMGetTypeKind(ty) {
+            LLVMTypeKind::LLVMPointerTypeKind => (ty, 1),
+            LLVMTypeKind::LLVMArrayTypeKind => (LLVMGetElementType(ty), LLVMGetArrayLength2(ty)),
+            _ => return None,
+        };
+        (LLVMGetTypeKind(element) == LLVMTypeKind::LLVMPointerTypeKind
+            && LLVMGetPointerAddressSpace(element) == 1)
+            .then_some(words)
+    }
+}
+
 // Keep the number of retained allocas constant before optimization too.
 // LLVM's TailCallElim walks the entire body once per alloca (#8883); late
 // publication alone would leave that walk quadratic. An empty asm use makes
@@ -213,7 +234,8 @@ fn merge_before_optimization(
                 if inst.get_opcode() == inkwell::values::InstructionOpcode::Alloca
                     && !LLVMGetMetadata(inst.as_value_ref(), kind).is_null()
                 {
-                    slots.push(inst.as_value_ref());
+                    let words = home_word_count(inst.as_value_ref()).expect("managed home type");
+                    slots.push((inst.as_value_ref(), words));
                 }
             }
         }
@@ -226,15 +248,16 @@ fn merge_before_optimization(
             LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(function.as_value_ref())),
         );
         let pointer = LLVMPointerTypeInContext(context, 1);
-        let array = LLVMArrayType2(pointer, slots.len() as u64);
+        let array = LLVMArrayType2(pointer, slots.iter().map(|(_, words)| *words).sum());
         let home = LLVMBuildAlloca(builder, array, c"gc.homes.entry".as_ptr());
         LLVMSetAlignment(home, 8);
         let node = LLVMMDNodeInContext2(context, std::ptr::null_mut(), 0);
         LLVMSetMetadata(home, kind, LLVMMetadataAsValue(context, node));
-        for (offset, &slot) in slots.iter().enumerate() {
+        let mut offset = 0u64;
+        for &(slot, words) in &slots {
             let mut indices = [
                 LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
-                LLVMConstInt(LLVMInt64TypeInContext(context), offset as u64, 0),
+                LLVMConstInt(LLVMInt64TypeInContext(context), offset, 0),
             ];
             let address = LLVMBuildInBoundsGEP2(
                 builder,
@@ -245,6 +268,7 @@ fn merge_before_optimization(
                 c"gc.home.entry".as_ptr(),
             );
             LLVMReplaceAllUsesWith(slot, address);
+            offset += words;
         }
         let mut arguments = [LLVMPointerTypeInContext(context, 0)];
         let signature =
@@ -278,7 +302,7 @@ fn merge_before_optimization(
             0,
         );
         LLVMAddCallSiteAttribute(escape, llvm_sys::LLVMAttributeFunctionIndex, leaf);
-        for slot in slots {
+        for (slot, _) in slots {
             LLVMInstructionEraseFromParent(slot);
         }
         LLVMDisposeBuilder(builder);
@@ -417,17 +441,7 @@ unsafe fn publish_with_builder(
                             if LLVMGetMetadata(raw, home_kind).is_null() {
                                 continue;
                             }
-                            let ty = LLVMGetAllocatedType(raw);
-                            let (element, words) = match LLVMGetTypeKind(ty) {
-                                LLVMTypeKind::LLVMPointerTypeKind => (ty, 1),
-                                LLVMTypeKind::LLVMArrayTypeKind => {
-                                    (LLVMGetElementType(ty), LLVMGetArrayLength2(ty))
-                                }
-                                _ => continue,
-                            };
-                            if LLVMGetTypeKind(element) == LLVMTypeKind::LLVMPointerTypeKind
-                                && LLVMGetPointerAddressSpace(element) == 1
-                            {
+                            if let Some(words) = home_word_count(raw) {
                                 slots.push((raw, words));
                             }
                         }

@@ -339,6 +339,7 @@ pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_ro
 pub(crate) use iter_object::dispatch_array_iterator_step;
 
 mod iterator_record_cleanup;
+mod iterator_stack_record;
 mod iterator_step;
 pub use iterator_record_cleanup::{js_array_record_abrupt, js_array_record_finish};
 pub use iterator_step::{
@@ -348,9 +349,11 @@ pub use iterator_step::{
     js_iterator_step_rest_to_array,
 };
 
+pub(crate) use iterator_step::array_intrinsic_values_iterator;
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;
-pub(crate) use iterator_step::{array_intrinsic_values_iterator, ArrayRecordSite};
+#[cfg(test)]
+pub(crate) use iterator_step::ArrayRecordSite;
 
 #[cfg(test)]
 pub(crate) use iterator_step::array_record_full_proof_calls;

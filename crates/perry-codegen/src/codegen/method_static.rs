@@ -333,6 +333,7 @@ pub(in crate::codegen) fn compile_static_method(
         pending_declares: Vec::new(),
         pending_helpers: Vec::new(),
         array_record_length_local: None,
+        array_stack_records: Default::default(),
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),

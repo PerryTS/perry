@@ -331,6 +331,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             crate::rooting::lower_scoped_binding(ctx, *id, value, body)
         }
         Expr::LocalGet(id) => {
+            if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::rooting::read_scoped_binding(ctx, *id) {
                 return Ok(value);
             }
@@ -1241,6 +1244,9 @@ pub(crate) fn bind_lowered_value_to_local(
     // string growing in place with its boxed accumulator (#8432).
     if matches!(value, Expr::LocalGet(source_id) if *source_id != id) {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
+    }
+    if crate::array_record_stack::write_local(ctx, id, v, value) {
+        return Ok(());
     }
     // Closure captures first (write through the runtime), then
     // locals, then module globals.

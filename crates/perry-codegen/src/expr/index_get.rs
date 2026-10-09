@@ -1287,8 +1287,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // keys on an array claim are handled below by an SSO-tag guard;
             // heap strings remain pointers and are classified inside the
             // established array-key fallback before object lookup.
+            // The record's entry proof selects this same guarded backend.
+            // Its erased Any hint does not require the unrelated typed-array
+            // and byte-buffer dispatch at every residual indexed read.
             let declared_array_claim =
-                crate::type_analysis::declared_array_property_claim(ctx, object);
+                crate::type_analysis::declared_array_property_claim(ctx, object)
+                    || crate::array_record_stack::indexed_source(ctx, object, index);
             let claimed_array =
                 recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
             let recv_unknown = recv_unknown && !claimed_array;

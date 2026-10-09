@@ -576,6 +576,46 @@ impl LlFunction {
         r
     }
 
+    /// A compiler-owned stack record is a range of ordinary GC words.
+    /// Native emission publishes the range through the existing home map;
+    /// the shadow backend binds its fields to the existing frame instead.
+    pub(crate) fn alloca_entry_root_record(&mut self, count: usize) -> (String, Vec<String>) {
+        let native = crate::codegen::helpers::native_stack_roots_enabled();
+        let record = format!("%r{}", self.reg_counter.next());
+        let elem = if native { "ptr addrspace(1)" } else { "double" };
+        let metadata = if native {
+            ", !perry.native.home !{}"
+        } else {
+            ""
+        };
+        self.entry_allocas.push(format!(
+            "  {record} = alloca [{count} x {elem}], align 8{metadata}"
+        ));
+        let mut fields = Vec::new();
+        for i in 0..count {
+            let field = format!("%r{}", self.reg_counter.next());
+            self.entry_allocas.push(format!(
+                "  {field} = getelementptr double, ptr {record}, i64 {i}"
+            ));
+            self.entry_allocas
+                .push(format!("  store double 0.0, ptr {field}"));
+            let slot = self
+                .reserve_shadow_slot()
+                .expect("record needs a root frame");
+            if !native {
+                self.entry_setup_call_void(
+                    "js_shadow_slot_bind",
+                    &[
+                        (crate::types::I32, &slot.to_string()),
+                        (crate::types::PTR, &field),
+                    ],
+                );
+            }
+            fields.push(field);
+        }
+        (record, fields)
+    }
+
     /// Allocate a byte buffer in the entry block with an explicit ABI
     /// alignment. Used for C-layout POD records where field GEPs must rest on
     /// a verifier-checked stack object, not JS object storage.

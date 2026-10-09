@@ -671,3 +671,45 @@ fn emit_array_subclass_length_body(
     ctx.block().br(outer_merge_label);
     (length, end)
 }
+
+/// The record's captured array proof narrows only its hot guard. All cold
+/// property semantics still have the same per-module backend.
+pub(super) fn emit_record_length(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    recv_bits: &str,
+    recv_handle: &str,
+) -> String {
+    let tagged = ctx
+        .block()
+        .and(I64, recv_bits, &crate::nanbox::i64_literal(!(1u64 << 49)));
+    let base = crate::nanbox::i64_literal((0x7ffdu64 << 48) | 1048576);
+    let offset = ctx.block().sub(I64, &tagged, &base);
+    let valid = ctx.block().icmp_ult(I64, &offset, "281474975662080");
+    let check = ctx.new_block("plen.check_gc");
+    let fast = ctx.new_block("plen.fast");
+    let slow = ctx.new_block("plen.slow");
+    let merge = ctx.new_block("plen.merge");
+    let cl = ctx.block_label(check);
+    let fl = ctx.block_label(fast);
+    let sl = ctx.block_label(slow);
+    let ml = ctx.block_label(merge);
+    ctx.block().cond_br(&valid, &cl, &sl);
+    ctx.current_block = check;
+    let header = ctx.block().sub(I64, recv_handle, "8");
+    let header = ctx.block().inttoptr(I64, &header);
+    let word = ctx.block().load(crate::types::I16, &header);
+    let kind = ctx.block().and(crate::types::I16, &word, "33021");
+    let live = ctx.block().icmp_eq(crate::types::I16, &kind, "1");
+    ctx.block().cond_br(&live, &fl, &sl);
+    ctx.current_block = fast;
+    let ptr = ctx.block().inttoptr(I64, recv_handle);
+    let length = ctx.block().load(I32, &ptr);
+    let length = ctx.block().uitofp(I32, &length, DOUBLE);
+    let fp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = slow;
+    let (cold, sp) = emit_array_subclass_length_ic(ctx, recv_box, recv_bits, recv_handle, &ml);
+    ctx.current_block = merge;
+    ctx.block().phi(DOUBLE, &[(&length, &fp), (&cold, &sp)])
+}
