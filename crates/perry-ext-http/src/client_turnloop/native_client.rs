@@ -40,13 +40,14 @@ pub(super) fn available() -> bool {
 /// `f` returns owned Rust data. End every projection before performing an
 /// effect, allocating JS, closing a parser or touching the driver.
 fn with_conn<R>(socket: &RootedSocket, f: impl FnOnce(&mut Conn) -> R) -> Option<R> {
-    if !socket.is_current() || net::socket_link(socket.value()).is_err() {
-        return None;
+    unsafe {
+        socket
+            .with_current(|_, state| {
+                let parser = net::record_get(state, PARSER_EDGE);
+                np::payload_mut::<Conn>(parser, &PARSER).ok().map(f)
+            })
+            .flatten()
     }
-    let scope = TransientRootScope::enter();
-    let state = scope.root_nanbox(net::state(socket.value()));
-    let parser = scope.root_nanbox(net::own_get(state.get(), PARSER_EDGE));
-    unsafe { np::payload_mut::<Conn>(parser.get(), &PARSER).ok().map(f) }
 }
 
 pub(super) fn reusable(owner: f64, key: &PoolKey) -> bool {
@@ -76,14 +77,14 @@ unsafe fn close_parser(owner: f64) {
     let socket = RootedSocket::new(owner);
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let error = scope.root_nanbox(net::own_get(state.get(), "closeError"));
+    let error = scope.root_nanbox(net::record_get(state.get(), "closeError"));
     let text =
         |key: &str| JsValue::from_bits(net::own_get(error.get(), key).to_bits()).to_owned_string();
     let code = text("code").unwrap_or_else(|| "ECONNRESET".into());
     let message = text("message").unwrap_or_else(|| "socket hang up".into());
     let effects =
         with_conn(&socket, |conn| protocol::on_destroy(conn, &code, &message)).unwrap_or_default();
-    let parser = scope.root_nanbox(net::own_get(state.get(), PARSER_EDGE));
+    let parser = scope.root_nanbox(net::record_get(state.get(), PARSER_EDGE));
     np::close(parser.get(), &PARSER);
     for effect in effects {
         match effect {
@@ -97,7 +98,7 @@ unsafe fn close_parser(owner: f64) {
 fn dispose_parser(socket: &RootedSocket) {
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let parser = scope.root_nanbox(net::own_get(state.get(), PARSER_EDGE));
+    let parser = scope.root_nanbox(net::record_get(state.get(), PARSER_EDGE));
     np::close(parser.get(), &PARSER);
 }
 
@@ -219,11 +220,73 @@ pub(super) fn cancel(_owner: f64, request: Handle) {
 
 fn run(socket: &RootedSocket, effects: Vec<Effect>) {
     let supplied = JsValue::from_bits(
-        net::own_get(net::state(socket.value()), "httpClientSupplied").to_bits(),
+        net::record_get(net::state(socket.value()), "httpClientSupplied").to_bits(),
     )
     .to_bool();
     let mut effects = VecDeque::from(effects);
-    while let Some(effect) = effects.pop_front() {
+    while !effects.is_empty() {
+        // Native effects cannot run JS. Keep one proven socket through the
+        // batch, then end it before close, TLS hooks, upgrade or retry.
+        let failure = if matches!(
+            effects.front(),
+            Some(Effect::Write(_) | Effect::Deadline(_) | Effect::Park(_))
+        ) {
+            unsafe {
+                socket
+                    .with_native_io(|io| {
+                        loop {
+                            match effects.front() {
+                                Some(Effect::Write(_)) if io.can_write_without_js() => {
+                                    let Some(Effect::Write(bytes)) = effects.pop_front() else {
+                                        unreachable!()
+                                    };
+                                    if let Err(error) = io.write(&bytes, 0) {
+                                        return Some(error);
+                                    }
+                                }
+                                Some(Effect::Deadline(_)) => {
+                                    let Some(Effect::Deadline(ms)) = effects.pop_front() else {
+                                        unreachable!()
+                                    };
+                                    io.deadline(ms);
+                                }
+                                Some(Effect::Park(policy)) => {
+                                    if !io.set_ref(false) {
+                                        break;
+                                    }
+                                    let ms = policy.idle_ms;
+                                    effects.pop_front();
+                                    io.deadline(Some(ms));
+                                    #[cfg(test)]
+                                    if std::env::var("PERRY_NET_A_CLIENT_SABOTAGE").as_deref()
+                                        == Ok("idlepark")
+                                    {
+                                        // Keep this sabotage at the same semantic boundary.
+                                        io.park_deadline();
+                                    }
+                                }
+                                _ => break,
+                            }
+                        }
+                        None
+                    })
+                    .flatten()
+            }
+        } else {
+            None
+        };
+        if let Some(error) = failure {
+            effects.extend(
+                with_conn(socket, |conn| {
+                    protocol::on_error(conn, &error.code, &error.syscall, error.errno as i64)
+                })
+                .unwrap_or_default(),
+            );
+        }
+        let Some(effect) = effects.pop_front() else {
+            break;
+        };
+
         // App outcomes still settle the original request if a Socket listener
         // closed/reopened it; the generational check forbids I/O on its new use.
         match effect {
@@ -365,8 +428,8 @@ unsafe extern "C" fn http_socket_error(
 fn detach_http_errors(socket: &RootedSocket) {
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(net::state(socket.value()));
-    let error = scope.root_nanbox(net::own_get(state.get(), "httpErrorListener"));
-    let close = scope.root_nanbox(net::own_get(state.get(), "httpCloseListener"));
+    let error = scope.root_nanbox(net::record_get(state.get(), "httpErrorListener"));
+    let close = scope.root_nanbox(net::record_get(state.get(), "httpCloseListener"));
     net::own_set(
         state.get(),
         "httpErrorListener",
@@ -393,7 +456,7 @@ unsafe extern "C" fn http_socket_closed(
     net::remove_listener(owner.get(), "error", error.get());
     // A previous listener may already have reopened the Socket and installed
     // another handler. Remove only the handler this closure actually owns.
-    if net::own_get(state.get(), "httpErrorListener").to_bits() == error.get().to_bits() {
+    if net::record_get(state.get(), "httpErrorListener").to_bits() == error.get().to_bits() {
         net::own_set(
             state.get(),
             "httpErrorListener",
@@ -516,10 +579,31 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     let Some(owner) = (unsafe { np::link_event_owner(link) }) else {
         return;
     };
-    let socket = RootedSocket::new(owner);
-    if net::socket_link(socket.value()).is_err() {
+    if event.kind == tl::NET_DATA {
+        let bytes = unsafe { event.bytes() };
+        let received = unsafe {
+            RootedSocket::receive(
+                owner,
+                event.flags & tl::NET_FLAG_PLAINTEXT != 0,
+                bytes.len(),
+                false,
+                |_, state| {
+                    let parser = net::record_get(state, PARSER_EDGE);
+                    np::payload_mut::<Conn>(parser, &PARSER)
+                        .ok()
+                        .map(|conn| protocol::on_data(conn, bytes))
+                        .unwrap_or_default()
+                },
+            )
+        };
+        match received {
+            Some((socket, Some(effects))) => run(&socket, effects),
+            Some((socket, None)) => net::receive_tls(socket.value(), bytes),
+            None => {}
+        }
         return;
     }
+    let socket = RootedSocket::new(owner);
     match event.kind {
         tl::NET_CONNECT => {
             unsafe {
@@ -527,17 +611,6 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             }
             let effects = with_conn(&socket, protocol::on_connect).unwrap_or_default();
             run(&socket, effects);
-        }
-        tl::NET_DATA => {
-            let bytes = unsafe { event.bytes() };
-            if event.flags & tl::NET_FLAG_PLAINTEXT == 0 && net::tls_installed(socket.value()) {
-                net::receive_tls(socket.value(), bytes);
-            } else {
-                net::received(socket.value(), bytes.len());
-                let effects =
-                    with_conn(&socket, |conn| protocol::on_data(conn, bytes)).unwrap_or_default();
-                run(&socket, effects);
-            }
         }
         tl::NET_EOF => {
             let effects = with_conn(&socket, protocol::on_eof).unwrap_or_default();

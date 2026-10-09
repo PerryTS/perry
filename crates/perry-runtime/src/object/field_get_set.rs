@@ -271,7 +271,6 @@ impl FieldLookupCaches {
 // paths keep resolving (a glob re-export does not reliably propagate through
 // `object/mod.rs`'s `pub use field_get_set::*`), and so sibling modules can
 // reach the cross-module helpers via their own `use super::*;`.
-pub use accessors::js_object_get_field;
 pub(crate) use accessors::{
     accessor_receiver_override_armed, accessor_receiver_override_begin,
     accessor_receiver_override_end, accessor_receiver_override_take,
@@ -280,6 +279,9 @@ pub(crate) use accessors::{
     ordinary_object_prototype_property_value, own_data_field_by_name, own_property_get_by_bytes,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor,
     primitive_tagged_prototype_property, string_index_value,
+};
+pub use accessors::{
+    js_object_get_field, js_object_record_get_by_bytes, js_object_record_set_by_bytes,
 };
 pub(crate) use class_object_props::{
     class_evaluation_prototype_class_id, class_object_default_to_string,

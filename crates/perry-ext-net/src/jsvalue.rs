@@ -93,14 +93,14 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
     if v.is_undefined() || v.is_null() {
         return None;
     }
-    // JS string — heap STRING_TAG *or* inline SSO SHORT_STRING_TAG.
-    // #1781: the strict `is_string()` matches STRING_TAG only, so a
-    // short string (`socket.write("hi")`) used to fall through every
-    // branch to `None` and was silently dropped. Gate on
-    // `is_any_string()` and route through `js_get_string_pointer_unified`,
-    // which materializes the SSO bytes onto the heap (and returns the
-    // existing pointer for a heap string), so the `StringHeader` read
-    // below works for both representations.
+    // Inline strings already contain their wire bytes. Copy them directly
+    // instead of materializing a transient GC StringHeader on every write.
+    // Heap strings retain their existing header-backed read below.
+    if v.is_short_string() {
+        let mut buffer = [0; perry_ffi::SHORT_STRING_MAX_LEN];
+        let len = v.short_string_to_buf(&mut buffer)?;
+        return Some(buffer[..len].to_vec());
+    }
     if v.is_any_string() {
         let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         if ptr.is_null() {

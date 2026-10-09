@@ -44,6 +44,83 @@ fn register_handle_scanner() {
 }
 
 #[test]
+fn opaque_record_writes_preserve_inline_and_overflow_edges_when_they_move() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_handle_scanner();
+    let scope = RuntimeHandleScope::new();
+    let record = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_null_proto(0, 0) as i64,
+    ));
+    for i in 0..32 {
+        let name = format!("field{i}");
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        unsafe {
+            crate::object::js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(record.get_nanbox_f64()) as *mut _,
+                key,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+        }
+    }
+    let obj = crate::value::js_nanbox_get_pointer(record.get_nanbox_f64())
+        as *mut crate::object::ObjectHeader;
+    assert!(
+        unsafe { crate::object::object_live_slot_count(obj) } < 31,
+        "premise: field31 must exercise overflow storage"
+    );
+    let children = [
+        scope.root_nanbox_f64(string_value("record-write-inline")),
+        scope.root_nanbox_f64(string_value("record-write-overflow")),
+    ];
+    let before: Vec<_> = children
+        .iter()
+        .map(|child| child.get_nanbox_f64().to_bits())
+        .collect();
+    for (key, child) in [b"field0".as_slice(), b"field31".as_slice()]
+        .into_iter()
+        .zip(&children)
+    {
+        assert_eq!(
+            unsafe {
+                crate::object::js_object_record_set_by_bytes(
+                    obj,
+                    key.as_ptr(),
+                    key.len(),
+                    crate::JSValue::from_bits(child.get_nanbox_f64().to_bits()),
+                )
+            },
+            1
+        );
+    }
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(
+        trace.copying_nursery.copied_objects > 0,
+        "premise: the collection must copy"
+    );
+    for ((key, child), old) in [b"field0".as_slice(), b"field31".as_slice()]
+        .into_iter()
+        .zip(&children)
+        .zip(before)
+    {
+        assert_ne!(
+            child.get_nanbox_f64().to_bits(),
+            old,
+            "premise: the child must move"
+        );
+        let obj = crate::value::js_nanbox_get_pointer(record.get_nanbox_f64())
+            as *const crate::object::ObjectHeader;
+        let stored =
+            unsafe { crate::object::js_object_record_get_by_bytes(obj, key.as_ptr(), key.len()) };
+        assert_eq!(
+            stored.bits(),
+            child.get_nanbox_f64().to_bits(),
+            "record edge was not rewritten"
+        );
+    }
+}
+
+#[test]
 fn rooted_values_elements_survive_a_collection_that_moved_them() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

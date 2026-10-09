@@ -1,6 +1,6 @@
 //! Async provider objects are ordinary JS edges, never SocketFields members.
 
-use super::{payload_server as server, payload_socket as socket, payload_transport as p};
+use super::payload_transport as p;
 use perry_ffi::{JsValue, TransientRootScope};
 
 extern "C" {
@@ -42,38 +42,35 @@ pub(crate) fn publish(state: f64, key: &str, name: &'static [u8], trigger: u64) 
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(state);
     let resource = scope.root_nanbox(new(name, trigger));
-    p::own_set(state.get(), key, resource.get());
+    p::record_set(state.get(), key, resource.get());
     resource.get()
 }
 pub(crate) fn resource(owner: f64) -> f64 {
-    let scope = TransientRootScope::enter();
-    let owner = scope.root_nanbox(owner);
-    if p::server_link(owner.get()).is_ok() {
-        let state = scope.root_nanbox(server::state(owner.get()));
-        p::own_get(state.get(), SERVER)
-    } else if p::socket_link(owner.get()).is_ok() {
-        let state = scope.root_nanbox(socket::state(owner.get()));
-        p::own_get(state.get(), TCP)
+    if let Ok(link) = p::server_link(owner) {
+        p::record_get(unsafe { p::server_state(link, false) }, SERVER)
+    } else if let Ok(link) = p::socket_link(owner) {
+        p::record_get(unsafe { p::socket_state(link, false) }, TCP)
     } else {
         p::undefined()
     }
 }
+
 pub(crate) fn capture_socket(state: f64, record: f64) {
     let scope = TransientRootScope::enter();
     let state = scope.root_nanbox(state);
     let record = scope.root_nanbox(record);
     for key in [TCP, CONNECT, SHUTDOWN] {
-        let resource = scope.root_nanbox(p::own_get(state.get(), key));
-        p::own_set(record.get(), key, resource.get());
-        p::own_set(state.get(), key, p::undefined());
+        let resource = scope.root_nanbox(p::record_get(state.get(), key));
+        p::record_set(record.get(), key, resource.get());
+        p::record_set(state.get(), key, p::undefined());
     }
 }
 pub(crate) fn retire_socket(record: f64) {
     let scope = TransientRootScope::enter();
     let record = scope.root_nanbox(record);
     for key in [CONNECT, SHUTDOWN, TCP] {
-        let resource = scope.root_nanbox(p::own_get(record.get(), key));
+        let resource = scope.root_nanbox(p::record_get(record.get(), key));
         retire(resource.get());
-        p::own_set(record.get(), key, p::undefined());
+        p::record_set(record.get(), key, p::undefined());
     }
 }

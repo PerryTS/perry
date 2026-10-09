@@ -175,27 +175,27 @@ method0!(listening, |owner| super::payload_server::get(
     "listening"
 ));
 
-method0!(tls_encrypted, |owner| p::own_get(
+method0!(tls_encrypted, |owner| p::record_get(
     socket::state(owner),
     "encrypted"
 ));
-method0!(tls_authorized, |owner| p::own_get(
+method0!(tls_authorized, |owner| p::record_get(
     socket::state(owner),
     "authorized"
 ));
-method0!(tls_servername, |owner| p::own_get(
+method0!(tls_servername, |owner| p::record_get(
     socket::state(owner),
     "servername"
 ));
-method0!(tls_alpn, |owner| p::own_get(
+method0!(tls_alpn, |owner| p::record_get(
     socket::state(owner),
     "alpnProtocol"
 ));
-method0!(tls_auth_error, |owner| p::own_get(
+method0!(tls_auth_error, |owner| p::record_get(
     socket::state(owner),
     "authorizationError"
 ));
-method0!(tls_cipher, |owner| p::own_get(
+method0!(tls_cipher, |owner| p::record_get(
     socket::state(owner),
     "cipher"
 ));
@@ -203,30 +203,30 @@ method0!(tls_protocol, |owner| {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(socket::state(owner.get()));
-    if JsValue::from_bits(p::own_get(state.get(), "destroyed").to_bits()).to_bool() {
+    if JsValue::from_bits(p::record_get(state.get(), "destroyed").to_bits()).to_bool() {
         f64::from_bits(JsValue::NULL.bits())
     } else {
-        p::own_get(state.get(), "protocol")
+        p::record_get(state.get(), "protocol")
     }
 });
 method0!(tls_session_reused, |owner| {
-    let value = p::own_get(socket::state(owner), "sessionSupplied");
+    let value = p::record_get(socket::state(owner), "sessionSupplied");
     f64::from_bits(JsValue::from_bool(JsValue::from_bits(value.to_bits()).to_bool()).bits())
 });
 method0!(tls_session, |owner| {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(socket::state(owner.get()));
-    let session = scope.root_nanbox(p::own_get(state.get(), "session"));
+    let session = scope.root_nanbox(p::record_get(state.get(), "session"));
     if JsValue::from_bits(session.get().to_bits()).is_pointer() {
         return session.get();
     }
-    if !JsValue::from_bits(p::own_get(state.get(), "tlsConnected").to_bits()).to_bool()
-        || JsValue::from_bits(p::own_get(state.get(), "destroyed").to_bits()).to_bool()
+    if !JsValue::from_bits(p::record_get(state.get(), "tlsConnected").to_bits()).to_bool()
+        || JsValue::from_bits(p::record_get(state.get(), "destroyed").to_bits()).to_bool()
     {
         return p::undefined();
     }
-    let der = p::own_get(state.get(), "peerCertificateDer");
+    let der = p::record_get(state.get(), "peerCertificateDer");
     let bytes = crate::jsvalue_to_socket_bytes(der).unwrap_or_default();
     if bytes.is_empty() {
         p::undefined()

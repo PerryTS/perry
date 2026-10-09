@@ -335,6 +335,12 @@ impl std::fmt::Debug for JsValue {
 // ── string arguments for `*const StringHeader` natives ───────────
 
 extern "C" {
+    fn js_object_record_set_by_bytes(
+        obj: *mut ObjectHeader,
+        key: *const u8,
+        len: usize,
+        value: JsValue,
+    ) -> i32;
     fn js_ffi_arg_ptr(value: f64) -> i64;
 }
 
@@ -405,6 +411,11 @@ extern "C" {
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader);
+    fn js_object_record_get_by_bytes(
+        obj: *const ObjectHeader,
+        key: *const u8,
+        len: usize,
+    ) -> JsValue;
     fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *const StringHeader) -> JsValue;
 
     #[link_name = "js_set_alloc"]
@@ -463,6 +474,23 @@ pub fn set_delete(set: JsValue, value: JsValue) -> bool {
     let set_ptr = set.as_pointer::<RuntimeSetHeader>();
     !set_ptr.is_null()
         && unsafe { runtime_js_set_delete(set_ptr, f64::from_bits(value.bits())) != 0 }
+}
+
+/// Callback-free own-data lookup on an opaque binding record. No allocation
+/// or prototype/accessor semantics; public property reads use object_field_by_name.
+pub fn object_record_field(value: JsValue, key: &str) -> JsValue {
+    if !value.is_pointer() {
+        return JsValue::UNDEFINED;
+    }
+    unsafe { js_object_record_get_by_bytes(value.as_pointer(), key.as_ptr(), key.len()) }
+}
+
+/// Overwrite an existing own data field without allocation or JS callbacks.
+/// # Safety
+/// record is a rooted, mutable opaque binding record inaccessible to JS.
+pub unsafe fn object_record_set(record: JsValue, key: &str, value: JsValue) -> bool {
+    record.is_pointer()
+        && js_object_record_set_by_bytes(record.as_pointer(), key.as_ptr(), key.len(), value) != 0
 }
 
 /// Compute `(packed_keys_bytes, shape_id)` for use with

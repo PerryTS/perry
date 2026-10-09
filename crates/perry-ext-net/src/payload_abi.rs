@@ -1357,7 +1357,7 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
     let name = string_from_header_i64(servername_ptr).unwrap_or_default();
     let promise = scope.root_addr(perry_ffi::JsPromise::new().as_raw() as i64);
     let state = scope.root_nanbox(socket::state(owner.get()));
-    p::own_set(state.get(), "upgradePromise", p::boxed_addr(promise.get()));
+    p::record_set(state.get(), "upgradePromise", p::boxed_addr(promise.get()));
     if let Err(message) = super::payload_tls::install_client(
         owner.get(),
         name,

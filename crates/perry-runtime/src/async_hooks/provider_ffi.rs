@@ -90,6 +90,15 @@ pub(crate) fn owned_provider_scope(
 ) -> Result<f64, f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(resource);
+    owned_provider_scope_rooted(&scope, &owner, callback)
+}
+
+/// Share the event boundary's roots; before/after hooks may move its inputs.
+pub(crate) fn owned_provider_scope_rooted(
+    scope: &crate::gc::RuntimeHandleScope,
+    owner: &crate::gc::RuntimeHandle<'_>,
+    callback: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
     if !crate::value::JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_pointer() {
         return crate::exception::js_call_catching(callback);
     }

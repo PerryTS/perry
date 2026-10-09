@@ -1279,7 +1279,7 @@ unsafe fn raw_field_memo(obj: *mut ObjectHeader, key: &[u8], memo: &'static Stat
 }
 
 /// The JS state object of `obj` if it has one (no allocation).
-unsafe fn raw_js_state(obj: *mut ObjectHeader) -> Option<*mut ObjectHeader> {
+pub(crate) unsafe fn raw_js_state(obj: *mut ObjectHeader) -> Option<*mut ObjectHeader> {
     let state = raw_field_memo(obj, JS_STATE_KEY, &JS_STATE_MEMO);
     let js = crate::value::JSValue::from_bits(state.to_bits());
     js.is_pointer()

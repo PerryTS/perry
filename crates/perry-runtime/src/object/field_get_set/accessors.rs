@@ -98,6 +98,59 @@ pub(crate) unsafe fn own_data_field_by_name(
     .map(OwnSlot::data_or_undefined)
 }
 
+/// Callback-free read of an opaque binding record's own data property.
+/// No string allocation, prototype lookup, accessor invocation or safepoint.
+///
+/// # Safety
+/// obj and key must be readable. The caller retains the object during the read.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_record_get_by_bytes(
+    obj: *const ObjectHeader,
+    key: *const u8,
+    len: usize,
+) -> JSValue {
+    let key = std::slice::from_raw_parts(key, len);
+    own_property_slot(obj, |keys, count| {
+        crate::object::keys_find_property_slot_by_bytes(keys, count, key)
+    })
+    .map(OwnSlot::data_or_undefined)
+    .unwrap_or_else(JSValue::undefined)
+}
+
+/// Overwrite an existing data field of an opaque binding-owned record.
+/// Missing keys and accessors are refused; the caller can use ordinary Set.
+/// The indexed store retains the runtime's exact-slot write barrier.
+///
+/// # Safety
+/// obj is a rooted, mutable ordinary binding record, inaccessible to JS; key
+/// is readable for len bytes. This call neither allocates GC cells nor runs JS.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_record_set_by_bytes(
+    obj: *mut ObjectHeader,
+    key: *const u8,
+    len: usize,
+    value: JSValue,
+) -> i32 {
+    let key = std::slice::from_raw_parts(key, len);
+    let mut index = 0;
+    let Some(OwnSlot::Data(_)) = own_property_slot(obj, |keys, count| {
+        index = crate::object::keys_find_property_slot_by_bytes(keys, count, key)?;
+        Some(index)
+    }) else {
+        return 0;
+    };
+    let inline_limit =
+        crate::object::object_live_slot_count(obj).max(crate::object::INLINE_SLOT_FLOOR as u32);
+    if index < inline_limit {
+        js_object_set_field(obj, index, value);
+    } else {
+        // The ordinary overflow store supplies the corresponding root/slot
+        // barrier. A key index need not be an inline physical field index.
+        crate::object::overflow_set(obj as usize, index as usize, value.bits());
+    }
+    1
+}
+
 /// [[Get]] of an own property of `obj` named by the bytes `key` (a method
 /// name from rodata, so no key string is built): a data value as stored,
 /// `undefined` included; an accessor through its getter, called on
