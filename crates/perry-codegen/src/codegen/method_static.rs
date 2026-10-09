@@ -133,7 +133,7 @@ pub(in crate::codegen) fn compile_static_method(
         }
         (this_slot, map)
     };
-    crate::codegen::arguments::box_rooted_parameter_slots(
+    let entry_param_cells = crate::codegen::arguments::box_rooted_parameter_slots(
         lf,
         &f.params,
         &static_boxed_vars,
@@ -300,6 +300,9 @@ pub(in crate::codegen) fn compile_static_method(
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
+        ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
+            entry_param_cells,
+        ),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),

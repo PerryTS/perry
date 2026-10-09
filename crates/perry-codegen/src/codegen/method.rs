@@ -428,7 +428,12 @@ pub(super) fn compile_method(
         }
         (this_slot, map)
     };
-    super::arguments::box_rooted_parameter_slots(lf, &method.params, &method_boxed_vars, &locals);
+    let entry_param_cells = super::arguments::box_rooted_parameter_slots(
+        lf,
+        &method.params,
+        &method_boxed_vars,
+        &locals,
+    );
 
     let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()
@@ -621,6 +626,9 @@ pub(super) fn compile_method(
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
+        ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
+            entry_param_cells,
+        ),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),

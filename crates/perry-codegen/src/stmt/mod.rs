@@ -11,6 +11,9 @@ use crate::expr::{lower_expr, lower_expr_value, materialize_js_value, FnCtx};
 use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
+pub(crate) mod binding_cell;
+#[cfg(test)]
+mod binding_cell_tests;
 #[cfg(test)]
 mod boxed_continuation_tests;
 pub(crate) mod boxed_frame_release;
@@ -197,8 +200,23 @@ fn lower_stmts_from(
     emit_shadow_clears: bool,
     version_tails: bool,
 ) -> Result<()> {
+    // The list's frame of cell roots its direct statements initialize
+    // (`binding_cell::ReadyCellRoots`).
+    ctx.ready_cell_roots.push_list();
+    let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    ctx.ready_cell_roots.pop_list();
+    lowered
+}
+
+fn lower_stmts_list(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+    version_tails: bool,
+) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
+        ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
         // and no run lowered as one unit may reach past the next statement
         // that may expose one (`let_buffer_views::late_exposure_limit`).
@@ -327,6 +345,8 @@ fn lower_stmts_from(
             continue;
         }
         lower_stmt(ctx, &stmts[i])?;
+        let declared = binding_cell::declared_cell_roots(ctx, &stmts[i]);
+        ctx.ready_cell_roots.settle(declared);
         region_loop::after_stmt(ctx, &stmts[i]);
         // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a
         // pre-pass-proven typed-array binding makes the binding "ready" — the
@@ -832,36 +852,6 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
             ctx.boxed_vars.insert(*id);
             continue;
         }
-        let is_i32_control = crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
-        let is_i1_control = crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
-        // Seed the JSValue box with TAG_TDZ (Temporal Dead Zone) when
-        // requested -- a read before the declaration runs throws a spec
-        // ReferenceError via the runtime `js_box_get_bits` choke point.
-        // Compiler-private i32/i1 control cells are never TDZ.
-        let seed_bits = if tdz {
-            crate::nanbox::TAG_TDZ_I64.to_string()
-        } else {
-            crate::nanbox::TAG_UNDEFINED_I64.to_string()
-        };
-        let (alloc_fn, alloc_arg, cell_note) = if is_i32_control {
-            (
-                "js_i32_box_alloc",
-                (crate::types::I32, "0"),
-                "primitive_i32_control_cell",
-            )
-        } else if is_i1_control {
-            (
-                "js_bool_box_alloc",
-                (crate::types::I32, "0"),
-                "primitive_i1_control_cell",
-            )
-        } else {
-            (
-                "js_box_alloc_bits",
-                (crate::types::I64, seed_bits.as_str()),
-                "jsvalue_box_cell",
-            )
-        };
         // #10051: a TDZ statement creates this entry's lexical environment.
         // Emit its allocation even when an earlier COPY of the statement was
         // lowered already (normal/exceptional finally paths, for example).
@@ -885,24 +875,10 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
             slot
         };
-        let box_ptr = ctx.block().call(crate::types::I64, alloc_fn, &[alloc_arg]);
+        let box_ptr = binding_cell::mint_box_cell(ctx, *id, tdz);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
+        ctx.ready_cell_roots.note_stored(*id);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
-        if cell_note != "jsvalue_box_cell" {
-            let lowered = LoweredValue::js_value_bits(&box_ptr);
-            ctx.record_lowered_value(
-                "CompilerPrivateAsyncControlCell",
-                Some(*id),
-                cell_note,
-                &lowered,
-                None,
-                None,
-                None,
-                false,
-                false,
-                Vec::new(),
-            );
-        }
         ctx.locals.insert(*id, slot);
         ctx.prealloc_boxes.insert(*id);
         ctx.boxed_vars.insert(*id);
@@ -920,7 +896,7 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
 /// copied onto two paths, a loop body clone) allocates again, exactly as the
 /// per-binding cells did: each execution creates a fresh environment.
 fn emit_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool) {
-    use crate::types::{I32, I64};
+    use crate::types::I64;
     let slot0 = crate::scope_env::access::slot(ctx, members[0]).expect("scoped");
     let rep = slot0.rep;
     let root = if let Some(root) = ctx.locals.get(&rep) {
@@ -929,57 +905,16 @@ fn emit_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool) {
         let root = ctx.func.alloca_entry(I64);
         // A path that bypasses this statement (a sibling branch of an async
         // wrapper, a skipped hoisted declaration) sees the TAG_UNDEFINED
-        // sentinel; the scope accessors answer `undefined` for it and drop a
-        // write — the behaviour an unallocated per-binding cell had.
+        // sentinel. A closure born on such a path mints the object itself
+        // (`binding_cell::ensure_capture_cells`), so no capture slot ever holds
+        // the sentinel.
         ctx.func
             .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &root);
         root
     };
-    let seed = if tdz {
-        crate::nanbox::TAG_TDZ_I64.to_string()
-    } else {
-        crate::nanbox::TAG_UNDEFINED_I64.to_string()
-    };
-    let len = slot0.len.to_string();
-    let base = ctx
-        .block()
-        .call(I64, "js_scope_alloc", &[(I32, &len), (I64, &seed)]);
-    // Compiler-private control words keep a non-pointer tag in the slot's
-    // high half; their typed loads and stores touch only the low bytes.
-    for id in members {
-        let seed = if crate::expr::is_compiler_private_async_i32_control_local(ctx, *id) {
-            Some("9222809086901354496") // 0x7FFE_0000_0000_0000 (INT32_TAG)
-        } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, *id) {
-            Some("9222246136947933184") // 0x7FFC_0000_0000_0000
-        } else {
-            None
-        };
-        if let Some(seed) = seed {
-            let slot = crate::scope_env::access::slot(ctx, *id).expect("scoped");
-            let addr = crate::scope_env::access::cell_addr(ctx, slot, &base);
-            let ptr = ctx.block().inttoptr(I64, &addr);
-            ctx.block().store(I64, seed, &ptr);
-            let cell_note = if seed.starts_with("92228") {
-                "primitive_i32_control_cell"
-            } else {
-                "primitive_i1_control_cell"
-            };
-            let lowered = LoweredValue::js_value_bits(&addr);
-            ctx.record_lowered_value(
-                "CompilerPrivateAsyncControlCell",
-                Some(*id),
-                cell_note,
-                &lowered,
-                None,
-                None,
-                None,
-                false,
-                false,
-                Vec::new(),
-            );
-        }
-    }
+    let base = binding_cell::mint_scope_object(ctx, members, tdz);
     ctx.block().store(I64, &base, &root);
+    ctx.ready_cell_roots.note_stored(rep);
     record_boxed_slot_js_value_bits(ctx, rep, &base, "scope_object.root_slot");
     for id in members {
         ctx.locals.insert(*id, root.clone());

@@ -63,12 +63,14 @@ pub(crate) fn store_param_slot(
 /// After every incoming parameter has a root slot, replace boxed parameters'
 /// value words with freshly allocated GC cells. An allocation can collect, so
 /// boxing during the initial spill loop would lose the later arguments.
+/// Returns the boxed parameters: their roots hold a cell from entry on.
 pub(crate) fn box_rooted_parameter_slots(
     lf: &mut crate::function::LlFunction,
     params: &[Param],
     boxed_vars: &HashSet<u32>,
     slots: &std::collections::HashMap<u32, String>,
-) {
+) -> Vec<u32> {
+    let mut boxed = Vec::new();
     for p in params {
         if !boxed_vars.contains(&p.id) || p.arguments_object.is_some() {
             continue;
@@ -79,8 +81,10 @@ pub(crate) fn box_rooted_parameter_slots(
             let bits = blk.load(I64, slot);
             let cell = blk.call(I64, "js_box_alloc_bits", &[(I64, &bits)]);
             blk.store(I64, &cell, slot);
+            boxed.push(p.id);
         }
     }
+    boxed
 }
 
 pub(crate) fn materialize_arguments_object(

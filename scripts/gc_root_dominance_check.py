@@ -494,8 +494,8 @@ NONCOLLECTING = {
     "js_closure_set_box_capture_ptr", # declared box edge + same raw slot write
     "js_closure_get_capture_bits",   # closure/alloc.rs:463 raw slot read
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
-    "js_box_capture_cell_ptr", "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",
-    "js_scope_capture_base",                         # box/scope.rs: object-start probe + select
+    "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",
+    "js_capture_cell_assert",                        # box.rs: cell probe, aborts on a non-cell
     "js_box_get_bits",                               # box.rs: raw cell access
     "js_i32_box_set", "js_bool_box_set",
     "js_i32_box_get", "js_bool_box_get",            # registry check + raw read, no TDZ

@@ -778,6 +778,10 @@ pub(crate) struct FnCtx<'a> {
     /// for the invocation, so these SSA values remain valid across safepoints
     /// even though the closure object itself may relocate.
     pub trusted_box_capture_ptrs: std::collections::HashMap<u32, TrustedBoxCapturePtr>,
+    /// Cell roots a statement of an enclosing (or the current) statement
+    /// list initialized, so a closure born below needs no birth check for them
+    /// (`crate::stmt::binding_cell`).
+    pub ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots,
     /// Immutable local aliases of same-module function declarations.
     /// Calling one is semantically the same as calling its `FuncRef` directly;
     /// retain the runtime function object in the local for identity/property
