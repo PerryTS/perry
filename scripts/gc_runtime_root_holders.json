@@ -390,10 +390,10 @@
       "why": "Cell<Option<&'static str>>: a static string-literal site NAME an armed rooting-regression test compares against, never a GC heap pointer. Declared under #[cfg(test)] only (collection_points.rs:15); the whole module compiles to an empty inline no-op outside cfg(test), so this storage never exists in a shipped binary."
     },
     {
-      "file": "crates/perry-runtime/src/gc/copying.rs",
+      "file": "crates/perry-runtime/src/gc/copying/cohort_test_state.rs",
       "name": "LAST_COHORT_SPLIT",
       "verdict": "test_only",
-      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/copying.rs:1951; this Cell<(usize, usize, usize, usize)> holds only the byte counts of the last survivor-space/fresh-cohort split for the tenuring lock tests. It is absent from shipped binaries."
+      "why": "The parent copying.rs declares cohort_test_state under #[cfg(test)]; this Cell<(usize, usize, usize, usize)> holds only the byte counts of the last survivor-space/fresh-cohort split for the tenuring lock tests. It is absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/gc/diag_sites.rs",
