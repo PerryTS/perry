@@ -467,9 +467,18 @@ pub(crate) fn class_holder_prototype(class_id: u32) -> *mut ObjectHeader {
 /// unbuilt, and a pointer names the actual holder.
 #[inline]
 pub(crate) fn class_holder_word(class_id: u32) -> u64 {
-    crate::object::shapes::identity_prototype_word(crate::object::shapes::class_identity_proto_id(
-        class_id,
-    ))
+    class_holder_word_selected(decl_prototype_identity_id(class_id))
+}
+
+/// Read the identity word for an origin already selected by the caller.
+/// Keeping selection outside this helper avoids projecting an alias twice.
+#[inline]
+pub(crate) fn class_holder_word_selected(selected: u32) -> u64 {
+    crate::object::shapes::identity_prototype_word(if selected == 0 {
+        crate::object::shapes::PROTO_ID_DEFAULT
+    } else {
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
+    })
 }
 
 /// Lookup helper for the dispatch chain walk: returns the prototype

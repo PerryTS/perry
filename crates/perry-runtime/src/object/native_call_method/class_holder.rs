@@ -347,11 +347,7 @@ pub(crate) unsafe fn class_instance_prototype_built(
         return std::ptr::null();
     };
     let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
-    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
-        crate::object::shapes::PROTO_ID_DEFAULT
-    } else {
-        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
-    });
+    let word = crate::object::class_holder_word_selected(selected);
     let existing = word_object(word);
     if !existing.is_null() {
         return existing;
