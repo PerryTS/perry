@@ -75,6 +75,9 @@ mod tests {
             )
             .unwrap();
             assert!(ir.contains("plen."));
+            assert!(ir.lines().any(|line| line
+                .starts_with("define internal double @perry_length_cold_")
+                && line.contains("noinline")));
             assert_eq!(
                 ir.lines()
                     .filter(|line| line.starts_with("define internal double @perry_length_cold_"))

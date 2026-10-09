@@ -354,8 +354,16 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);
     module.declare_function("js_array_record_literal_needs_iterator", I32, &[PTR]);
     module.declare_function("js_array_record_close_absent", I32, &[]);
-    module.declare_function("js_array_record_finish", DOUBLE, &[DOUBLE; 7]);
-    module.declare_function("js_array_record_abrupt", crate::types::VOID, &[DOUBLE; 5]);
+    module.declare_function(
+        "js_array_record_finish",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_array_record_abrupt",
+        crate::types::VOID,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_array_record_close",
         DOUBLE,

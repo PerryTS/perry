@@ -71,8 +71,17 @@ pub(crate) fn finish_args(
     {
         return None;
     }
+    let Expr::Compare {
+        left: protocol_mode,
+        ..
+    } = condition
+    else {
+        unreachable!()
+    };
+    // The shared callee consumes exactly the original strict-true predicate.
+    // Passing the binding avoids boxing and testing the predicate twice.
     Some(vec![
-        condition.clone(),
+        protocol_mode.as_ref().clone(),
         array[0].clone(),
         array[1].clone(),
         protocol[0].clone(),
@@ -380,6 +389,11 @@ mod tests {
                     .count(),
                 1,
                 "{mode}: {ir}"
+            );
+            assert!(
+                ir.lines()
+                    .any(|line| line.contains("call double @js_array_record_finish(")),
+                "{mode}: normal completion must also share the protocol: {ir}"
             );
             assert!(
                 !ir.lines().any(|l| l.contains("call void @js_eh_try_push(")),
