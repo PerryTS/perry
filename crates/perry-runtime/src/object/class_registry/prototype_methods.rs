@@ -300,7 +300,9 @@ pub(crate) fn retire_prototype_caches_without_direct_arms() {
 pub(crate) fn class_prototype_set(class_id: u32, name: String, value_bits: u64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_u64(value_bits);
-    let proto = class_prototype_object(class_id);
+    // The holder an instance read walks (declared, else synthetic); a class
+    // with neither builds its declared prototype.
+    let proto = super::prototype_objects::class_holder_prototype(class_id);
     let proto = if proto.is_null() {
         class_decl_prototype_value(class_id)
     } else {
