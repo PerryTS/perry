@@ -245,17 +245,10 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             let mut entries = 0usize;
             let mut inner = 0usize;
             for vt in m.values() {
-                entries += vt.methods.len() + vt.accessors.len() + vt.private_accessors.len();
-                inner += map_bytes(&vt.methods)
-                    + map_bytes(&vt.accessors)
-                    + map_bytes(&vt.private_accessors);
+                entries += vt.methods.len() + vt.accessors.len();
+                inner += map_bytes(&vt.methods) + map_bytes(&vt.accessors);
                 inner += vt.methods.keys().map(|k| k.capacity()).sum::<usize>();
                 inner += vt.accessors.keys().map(|k| k.capacity()).sum::<usize>();
-                inner += vt
-                    .private_accessors
-                    .keys()
-                    .map(|k| k.capacity())
-                    .sum::<usize>();
             }
             rows.push((
                 "class.vtables(methods+accessors)",
