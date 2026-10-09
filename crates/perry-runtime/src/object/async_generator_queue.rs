@@ -2,9 +2,9 @@
 //!
 //! Perry lowers a generator call to an object with own `next` / `return` /
 //! `throw` closures. For async generators those closures already return
-//! promises, but calling a second method in the same stack used to resume the
-//! state machine synchronously. ECMAScript async generators queue requests:
-//! same-stack follow-up requests resume from the microtask queue.
+//! promises. Requests wait until the active step yields or completes; that
+//! settlement resumes queued requests directly in the same job, as required by
+//! AsyncGeneratorCompleteStep / AsyncGeneratorYield / AsyncGeneratorDrainQueue.
 
 use super::{js_object_get_own_field_or_undef, js_object_set_field_by_name, ObjectHeader};
 use crate::closure::{
@@ -41,8 +41,6 @@ struct AsyncGeneratorRequest {
 
 struct AsyncGeneratorQueueState {
     active: bool,
-    drain_scheduled: bool,
-    started: bool,
     completed: bool,
     queue: VecDeque<AsyncGeneratorRequest>,
 }
@@ -102,8 +100,6 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
         let id = states.len() + 1;
         states.push(AsyncGeneratorQueueState {
             active: false,
-            drain_scheduled: false,
-            started: false,
             completed: false,
             queue: VecDeque::new(),
         });
@@ -216,25 +212,12 @@ static ASYNC_GENERATOR_THROW_WRAPPER: crate::closure::JsFunctionInfo =
 // leaves no correct way to call this helper; per CLAUDE.md's kill-policy the
 // losing shape is deleted rather than left for a future caller to reach for.
 
-fn make_settle_wrapper(
-    state_id: usize,
-    out: *mut Promise,
-    is_fulfilled: bool,
-) -> *mut ClosureHeader {
-    let func = if is_fulfilled {
-        crate::fn_info!(async_generator_settle_fulfill, 1)
-    } else {
-        crate::fn_info!(async_generator_settle_reject, 1)
-    };
-    let wrapper = js_closure_alloc(func, 2);
+fn make_settle_wrapper(state_id: usize, out: *mut Promise) -> *mut ClosureHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let out = scope.root_raw_mut_ptr(out);
+    let wrapper = js_closure_alloc(crate::fn_info!(async_generator_complete_step, 2), 2);
     js_closure_set_capture_f64(wrapper, 0, state_id as f64);
-    js_closure_set_capture_ptr(wrapper, 1, out as i64);
-    wrapper
-}
-
-fn make_drain_wrapper(state_id: usize) -> *mut ClosureHeader {
-    let wrapper = js_closure_alloc(crate::fn_info!(async_generator_drain_wrapper, 0), 1);
-    js_closure_set_capture_f64(wrapper, 0, state_id as f64);
+    out.with_mut_ptr::<Promise, _>(|out| js_closure_set_capture_ptr(wrapper, 1, out as i64));
     wrapper
 }
 
@@ -370,7 +353,7 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
     // an explicit output promise so the unwrap happens on the microtask queue.
     if kind == RequestKind::Return {
         let out_h = scope.root_raw_mut_ptr(js_promise_new());
-        original_h.with_const_ptr(|original| {
+        let completed = original_h.with_const_ptr(|original| {
             throw_h.with_const_ptr(|original_throw| {
                 dispatch_return_with_await(
                     state_id,
@@ -381,26 +364,30 @@ fn async_generator_request(closure: *const ClosureHeader, arg: f64, kind: Reques
                 )
             })
         });
+        if completed {
+            drain_queue(state_id);
+        }
         return out_h.with_mut_ptr::<Promise, _>(boxed_promise);
     }
 
     let result =
         original_h.with_const_ptr(|original| call_original(original, arg_h.get_nanbox_f64()));
-    after_initial_result(state_id, result);
-    result
+    let result = scope.root_nanbox_f64(result);
+    after_initial_result(state_id, result.get_nanbox_f64());
+    result.get_nanbox_f64()
 }
 
 /// Await the `.return(v)` value, then invoke the original return closure with
-/// the unwrapped value and settle `out` from its result. A rejected await
-/// reports the rejection through `out` (the generator is left closed by the
-/// fulfill path's `call_original`, never resumed).
+/// the unwrapped value and settle `out` from its result. Return whether an
+/// abrupt PromiseResolve completed synchronously, so the caller can continue
+/// the same iterative drain rather than recursively draining the tail.
 fn dispatch_return_with_await(
     state_id: usize,
     original: *const ClosureHeader,
     original_throw: *const ClosureHeader,
     arg: f64,
     out: *mut Promise,
-) {
+) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let original_h = scope.root_raw_const_ptr(original);
     let throw_h = scope.root_raw_const_ptr(original_throw);
@@ -413,29 +400,28 @@ fn dispatch_return_with_await(
                 states
                     .borrow()
                     .get(state_id - 1)
-                    .filter(|state| state.started && !state.completed)
+                    .filter(|state| !state.completed)
                     .map(|_| throw_h.with_const_ptr::<ClosureHeader, _>(|throw| throw))
             });
             if let Some(throw_original) = suspended_throw {
                 let throw_h = scope.root_raw_const_ptr(throw_original);
                 let result = throw_h.with_const_ptr(|throw| call_original(throw, reason));
-                out_h.with_mut_ptr(|out| after_queued_result(state_id, out, result));
+                return out_h.with_mut_ptr(|out| settle_step_result(state_id, out, result));
             } else {
-                out_h.with_mut_ptr(|out| {
-                    finish_after_immediate_queued_result(state_id, out, false, reason)
-                });
+                out_h.with_mut_ptr(|out| complete_request(state_id, out, false, reason));
             }
-            return;
+            return true;
         }
     };
     let arg_promise_h = scope.root_raw_mut_ptr(arg_promise);
     let fulfill = make_return_step_wrapper(state_id, &original_h, &out_h, true);
     let fulfill_h = scope.root_raw_mut_ptr(fulfill);
-    let reject = make_return_step_wrapper(state_id, &original_h, &out_h, false);
+    let reject = make_return_step_wrapper(state_id, &throw_h, &out_h, false);
     arg_promise_h.with_mut_ptr(|arg_promise| {
         fulfill_h
             .with_mut_ptr(|fulfill| js_promise_attach_settle_listener(arg_promise, fulfill, reject))
     });
+    false
 }
 
 fn make_return_step_wrapper(
@@ -469,10 +455,12 @@ extern "C" fn async_generator_return_step_fulfill(
         // Resume the generator's close path with the unwrapped value: runs any
         // pending finallys and yields `{ value, done: true }` (or a
         // finally-overridden completion).
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let out = scope.root_raw_mut_ptr(out);
         let result = call_original(original, value);
-        after_queued_result(state_id, out, result);
+        out.with_mut_ptr(|out| after_queued_result(state_id, out, result));
     }
-    value
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 extern "C" fn async_generator_return_step_reject(
@@ -481,46 +469,44 @@ extern "C" fn async_generator_return_step_reject(
     reason: f64,
 ) -> f64 {
     if let Some(state_id) = state_id_from_wrapper(closure) {
-        let out = js_closure_get_capture_ptr(closure, 2) as *mut Promise;
-        // Await(v) threw: reject this request and resume the queue without
-        // touching the generator body (spec `AsyncGeneratorReject`).
-        finish_after_immediate_queued_result(state_id, out, false, reason);
-    }
-    reason
-}
-
-extern "C" fn async_generator_drain_wrapper(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    if let Some(state_id) = state_id_from_wrapper(closure) {
-        process_one_queued_request(state_id);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let out = scope.root_raw_mut_ptr(js_closure_get_capture_ptr(closure, 2) as *mut Promise);
+        let suspended = STATES.with(|states| {
+            states
+                .borrow()
+                .get(state_id - 1)
+                .is_some_and(|state| !state.completed)
+        });
+        if suspended {
+            // The original throw transition closes suspendedStart without
+            // entering the body, or throws at suspendedYield so catch/finally
+            // runs. Keep the generator's own state authoritative in both cases.
+            let original_throw = js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
+            let result = call_original(original_throw, reason);
+            out.with_mut_ptr(|out| after_queued_result(state_id, out, result));
+        } else {
+            out.with_mut_ptr(|out| finish_step(state_id, out, false, reason));
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn async_generator_settle_fulfill(
+extern "C" fn async_generator_complete_step(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
     value: f64,
+    fulfilled: f64,
 ) -> f64 {
     if let Some(state_id) = state_id_from_wrapper(closure) {
         let out = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        finish_after_pending_result(state_id, out, true, value);
+        finish_step(
+            state_id,
+            out,
+            crate::value::js_is_truthy(fulfilled) != 0,
+            value,
+        );
     }
-    value
-}
-
-extern "C" fn async_generator_settle_reject(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    reason: f64,
-) -> f64 {
-    if let Some(state_id) = state_id_from_wrapper(closure) {
-        let out = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        finish_after_pending_result(state_id, out, false, reason);
-    }
-    reason
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 fn call_original(original: *const ClosureHeader, arg: f64) -> f64 {
@@ -533,134 +519,94 @@ fn call_original(original: *const ClosureHeader, arg: f64) -> f64 {
 }
 
 fn after_initial_result(state_id: usize, result: f64) {
-    if let Some(promise) = promise_ptr(result) {
-        // The async generator is the consumer of this step promise — its
-        // rejection (now or later) is observed here, so it is not an unhandled
-        // rejection even though the already-settled paths read `reason`
-        // directly rather than attaching a reaction.
-        crate::promise::mark_rejection_handled(promise);
-        let state = unsafe { (*promise).state };
-        if state == PromiseState::Pending {
-            attach_pending_settle(state_id, promise, std::ptr::null_mut());
-            return;
-        }
-        if state == PromiseState::Fulfilled {
-            note_step_settlement(state_id, true, unsafe { (*promise).value });
-        } else if state == PromiseState::Rejected {
-            note_step_settlement(state_id, false, unsafe { (*promise).reason });
-        }
-    }
-    schedule_drain(state_id);
+    after_queued_result(state_id, std::ptr::null_mut(), result);
 }
 
 fn after_queued_result(state_id: usize, out: *mut Promise, result: f64) {
+    if settle_step_result(state_id, out, result) {
+        drain_queue(state_id);
+    }
+}
+
+/// Return whether this step completed without another Await.
+fn settle_step_result(state_id: usize, out: *mut Promise, result: f64) -> bool {
     if let Some(promise) = promise_ptr(result) {
         crate::promise::mark_rejection_handled(promise);
         match unsafe { (*promise).state } {
             PromiseState::Pending => {
                 attach_pending_settle(state_id, promise, out);
+                return false;
             }
             PromiseState::Fulfilled => {
-                let value = unsafe { (*promise).value };
-                finish_after_immediate_queued_result(state_id, out, true, value);
+                complete_request(state_id, out, true, unsafe { (*promise).value });
             }
             PromiseState::Rejected => {
-                let reason = unsafe { (*promise).reason };
-                finish_after_immediate_queued_result(state_id, out, false, reason);
+                complete_request(state_id, out, false, unsafe { (*promise).reason });
             }
         }
     } else {
-        finish_after_immediate_queued_result(state_id, out, true, result);
+        complete_request(state_id, out, true, result);
     }
+    true
 }
 
 fn attach_pending_settle(state_id: usize, promise: *mut Promise, out: *mut Promise) {
-    let fulfill = make_settle_wrapper(state_id, out, true);
-    let reject = make_settle_wrapper(state_id, out, false);
-    js_promise_attach_settle_listener(promise, fulfill, reject);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise = scope.root_raw_mut_ptr(promise);
+    let completion = make_settle_wrapper(state_id, out);
+    promise.with_mut_ptr(|promise| {
+        crate::promise::step_completion::attach_step_completion(promise, completion)
+    });
 }
 
-fn process_one_queued_request(state_id: usize) {
-    let request_and_original = STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(state_id - 1) else {
-            return None;
+fn drain_queue(state_id: usize) {
+    // A completed generator may have an arbitrarily long tail of requests
+    // that complete synchronously. Drain it without jobs or recursive calls.
+    loop {
+        let request = STATES.with(|states| {
+            let mut states = states.borrow_mut();
+            let state = states.get_mut(state_id - 1)?;
+            let request = state.queue.pop_front();
+            if request.is_none() {
+                state.active = false;
+            }
+            request
+        });
+        let Some(request) = request else {
+            return;
         };
-        state.drain_scheduled = false;
-        let Some(request) = state.queue.pop_front() else {
-            state.active = false;
-            return None;
-        };
-        let original = request.original;
-        Some((request, original))
-    });
-
-    let Some((request, original)) = request_and_original else {
-        return;
-    };
-    // A queued `.return(v)` awaits `v` before resuming the close path, same as
-    // the head-of-line case in `async_generator_request`.
-    if request.kind == RequestKind::Return {
-        dispatch_return_with_await(
-            state_id,
-            original,
-            request.original_throw,
-            request.arg,
-            request.promise,
-        );
-        return;
-    }
-    let result = call_original(original, request.arg);
-    after_queued_result(state_id, request.promise, result);
-}
-
-fn finish_after_pending_result(state_id: usize, out: *mut Promise, fulfilled: bool, value: f64) {
-    // #6709: settle THIS request's promise BEFORE draining the queue, so its
-    // reactions are enqueued ahead of the next request's. Spec order is
-    // AsyncGeneratorResolve (settle the front request's promise) *then*
-    // AsyncGeneratorDrainQueue (resume the next). Draining first let a
-    // synchronously-completing next request — e.g. the terminal
-    // `{value: undefined, done: true}` after the last `yield` — resolve and
-    // fire its `.then` before this (non-terminal) one, reordering the results
-    // of three eagerly-queued `iter.next()` calls. This only surfaced once
-    // async-generator `.next()` began returning a *pending* Promise for every
-    // `yield` (the spec `AsyncGeneratorYield(? Await(value))` tick) so this
-    // pending path is now always taken; before #6709 `.next()` resolved
-    // synchronously (busy-wait) and hit the immediate path, which already
-    // deferred the drain via `schedule_drain`.
-    note_step_settlement(state_id, fulfilled, value);
-    settle_out(out, fulfilled, value);
-    let has_queue = STATES.with(|states| {
-        states
-            .borrow()
-            .get(state_id - 1)
-            .is_some_and(|state| !state.queue.is_empty())
-    });
-    if has_queue {
-        process_one_queued_request(state_id);
-    } else {
-        mark_inactive(state_id);
+        // Return's argument really is awaited; this is a suspension, unlike
+        // the producer completion that brought us into the drain.
+        if request.kind == RequestKind::Return {
+            if dispatch_return_with_await(
+                state_id,
+                request.original,
+                request.original_throw,
+                request.arg,
+                request.promise,
+            ) {
+                continue;
+            }
+            return;
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let out = scope.root_raw_mut_ptr(request.promise);
+        let result = call_original(request.original, request.arg);
+        if !out.with_mut_ptr(|out| settle_step_result(state_id, out, result)) {
+            return;
+        }
     }
 }
 
-fn finish_after_immediate_queued_result(
-    state_id: usize,
-    out: *mut Promise,
-    fulfilled: bool,
-    value: f64,
-) {
+fn finish_step(state_id: usize, out: *mut Promise, fulfilled: bool, value: f64) {
+    complete_request(state_id, out, fulfilled, value);
+    drain_queue(state_id);
+}
+
+fn complete_request(state_id: usize, out: *mut Promise, fulfilled: bool, value: f64) {
     note_step_settlement(state_id, fulfilled, value);
-    let has_queue = STATES.with(|states| {
-        states
-            .borrow()
-            .get(state_id - 1)
-            .is_some_and(|state| !state.queue.is_empty())
-    });
-    if has_queue {
-        schedule_drain(state_id);
-    } else {
-        mark_inactive(state_id);
-    }
+    // CompleteStep settles the front request before Yield / DrainQueue
+    // continues with the next queued completion in the same job.
     settle_out(out, fulfilled, value);
 }
 
@@ -681,37 +627,8 @@ fn note_step_settlement(state_id: usize, fulfilled: bool, value: f64) {
             state.completed = true;
         } else if let Some(true) = done {
             state.completed = true;
-        } else if let Some(false) = done {
-            state.started = true;
         }
     });
-}
-
-fn mark_inactive(state_id: usize) {
-    STATES.with(|states| {
-        if let Some(state) = states.borrow_mut().get_mut(state_id - 1) {
-            state.active = false;
-            state.drain_scheduled = false;
-        }
-    });
-}
-
-fn schedule_drain(state_id: usize) {
-    let should_schedule = STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(state_id - 1) else {
-            return false;
-        };
-        if state.drain_scheduled {
-            return false;
-        }
-        state.drain_scheduled = true;
-        true
-    });
-    if should_schedule {
-        let closure = make_drain_wrapper(state_id);
-        crate::promise::enqueue_queue_microtask(closure as i64);
-    }
 }
 
 fn settle_out(out: *mut Promise, fulfilled: bool, value: f64) {

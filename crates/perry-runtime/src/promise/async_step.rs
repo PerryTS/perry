@@ -1137,7 +1137,7 @@ fn call_async_step_body(
 /// `js_async_step_done`'s non-reuse arm returning a user
 /// `return <rejected promise>` also lands here, which matches spec (the
 /// async fn's result rejects with the inner reason).
-fn forward_swallowed_rejection(result: f64, trap_next: *mut Promise) {
+pub(super) fn forward_swallowed_rejection(result: f64, trap_next: *mut Promise) {
     if trap_next.is_null() {
         return;
     }
