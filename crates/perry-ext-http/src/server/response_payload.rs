@@ -10,7 +10,11 @@ static FAMILY: payload::PayloadFamily = payload::PayloadFamily::new::<ResponseSt
     false,
     &VTABLE,
 );
-const JS_STATE: &str = "#<perry:native-payload-js-state>";
+extern "C" {
+    fn js_node_http_response_state_get(owner: f64) -> f64;
+    fn js_node_http_response_state_set(owner: f64, state: f64);
+    fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mut perry_ffi::ArrayHeader;
+}
 fn value(handle: i64) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & PTR_MASK))
 }
@@ -69,54 +73,103 @@ pub(crate) fn restate(handle: i64) {
         payload::set_external_bytes(value(handle), &VTABLE, retained_bytes(s));
     }
 }
+/// Fixed JS state slots in a private traced record.
+#[derive(Clone, Copy)]
+#[repr(u32)]
+pub(crate) enum Key {
+    Socket,
+    WriteCallbacks,
+    StatusCode,
+    HeadersSent,
+    WritableEnded,
+    WritableFinished,
+    Finished,
+    Destroyed,
+    SendDate,
+    StrictContentLength,
+    Headers,
+    StatusMessage,
+    Events,
+    #[cfg(test)]
+    ListenerCalls,
+}
 fn js_state(handle: i64) -> f64 {
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(value(handle));
-    let old = perry_ffi::object_field_by_name(JsValue::from_bits(owner.get().to_bits()), JS_STATE);
-    if !old.is_undefined() {
-        return f64::from_bits(old.bits());
+    let old = unsafe { js_node_http_response_state_get(owner.get()) };
+    if old.to_bits() != TAG_UNDEFINED {
+        return old;
     }
-    let state = perry_ffi::alloc_null_proto_object(&[]);
-    let state = roots.root_nanbox(f64::from_bits(state.bits()));
-    payload::own(owner.get(), JS_STATE, state.get());
+    let empty = [TAG_UNDEFINED; Key::Events as usize + 1 + cfg!(test) as usize];
+    let state = unsafe { js_array_from_jsvalue(empty.as_ptr(), empty.len() as u32) };
+    let state = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(state.cast::<u8>()).bits(),
+    ));
+    #[cfg(test)]
+    if std::env::var_os("PERRY_TEST_HTTP_STATE_BY_NAME").is_some() {
+        payload::own(owner.get(), "#<perry:native-payload-js-state>", state.get());
+        return state.get();
+    }
+    unsafe { js_node_http_response_state_set(owner.get(), state.get()) };
     state.get()
 }
-pub(crate) fn get(handle: i64, key: &str) -> f64 {
-    f64::from_bits(
-        perry_ffi::object_field_by_name(JsValue::from_bits(js_state(handle).to_bits()), key).bits(),
-    )
+pub(crate) fn get(handle: i64, key: Key) -> f64 {
+    let state = js_state(handle);
+    unsafe {
+        f64::from_bits(
+            perry_ffi::js_array_get(
+                (state.to_bits() & PTR_MASK) as *const perry_ffi::ArrayHeader,
+                key as u32,
+            )
+            .bits(),
+        )
+    }
 }
-pub(crate) fn set(handle: i64, key: &str, v: f64) {
+pub(crate) fn set(handle: i64, key: Key, v: f64) {
     let roots = TransientRootScope::enter();
     let v = roots.root_nanbox(v);
     let state = js_state(handle);
-    payload::own(state, key, v.get());
+    unsafe {
+        perry_ffi::js_array_set(
+            (state.to_bits() & PTR_MASK) as *mut perry_ffi::ArrayHeader,
+            key as u32,
+            JsValue::from_bits(v.get().to_bits()),
+        )
+    };
 }
-pub(crate) fn push(handle: i64, key: &str, callback: i64) {
+pub(crate) fn push(handle: i64, key: Key, callback: i64) {
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(value(handle));
     let cb = roots.root_nanbox(value(callback));
-    let old = get(handle, key);
+    let arr = append_callback(get(handle, key), cb.get());
+    set((owner.get().to_bits() & PTR_MASK) as i64, key, arr);
+}
+fn append_callback(old: f64, cb: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let cb = roots.root_nanbox(cb);
     let arr = if old.to_bits() == TAG_UNDEFINED {
         unsafe { perry_ffi::js_array_alloc(0) }
     } else {
         (old.to_bits() & PTR_MASK) as *mut perry_ffi::ArrayHeader
     };
     let arr = unsafe { perry_ffi::js_array_push(arr, JsValue::from_bits(cb.get().to_bits())) };
-    set(
-        (owner.get().to_bits() & PTR_MASK) as i64,
-        key,
-        f64::from_bits(JsValue::from_object_ptr(arr.cast::<u8>()).bits()),
-    );
+    f64::from_bits(JsValue::from_object_ptr(arr.cast::<u8>()).bits())
 }
-pub(crate) fn callbacks(handle: i64, key: &str, take: bool) -> Vec<i64> {
-    let roots = TransientRootScope::enter();
-    let owner = roots.root_nanbox(value(handle));
-    let arr = get(handle, key);
+fn callback_values(arr: f64) -> Vec<i64> {
     if arr.to_bits() == TAG_UNDEFINED {
         return Vec::new();
     }
-    let arr = roots.root_nanbox(arr);
+    let p = (arr.to_bits() & PTR_MASK) as *const perry_ffi::ArrayHeader;
+    unsafe {
+        (0..perry_ffi::js_array_length(p))
+            .map(|i| (perry_ffi::js_array_get(p, i).bits() & PTR_MASK) as i64)
+            .collect()
+    }
+}
+pub(crate) fn callbacks(handle: i64, key: Key, take: bool) -> Vec<i64> {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    let arr = roots.root_nanbox(get(handle, key));
     if take {
         set(
             (owner.get().to_bits() & PTR_MASK) as i64,
@@ -124,19 +177,50 @@ pub(crate) fn callbacks(handle: i64, key: &str, take: bool) -> Vec<i64> {
             f64::from_bits(TAG_UNDEFINED),
         );
     }
-    let p = (arr.get().to_bits() & PTR_MASK) as *const perry_ffi::ArrayHeader;
-    unsafe {
-        (0..perry_ffi::js_array_length(p))
-            .map(|i| (perry_ffi::js_array_get(p, i).bits() & PTR_MASK) as i64)
-            .collect()
+    callback_values(arr.get())
+}
+// Event names are user input. Their callback arrays live in an ordinary
+// null-prototype dictionary, reached through the fixed Events slot.
+fn events(handle: i64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    let old = get(handle, Key::Events);
+    if old.to_bits() != TAG_UNDEFINED {
+        return old;
     }
+    let events = perry_ffi::alloc_null_proto_object(&[]);
+    let events = roots.root_nanbox(f64::from_bits(events.bits()));
+    set(
+        (owner.get().to_bits() & PTR_MASK) as i64,
+        Key::Events,
+        events.get(),
+    );
+    events.get()
+}
+pub(crate) fn push_event(handle: i64, key: &str, callback: i64) {
+    let roots = TransientRootScope::enter();
+    let cb = roots.root_nanbox(value(callback));
+    let events = roots.root_nanbox(events(handle));
+    let old = perry_ffi::object_field_by_name(JsValue::from_bits(events.get().to_bits()), key);
+    let arr = append_callback(f64::from_bits(old.bits()), cb.get());
+    payload::own(events.get(), key, arr);
+}
+fn event_callbacks(handle: i64, key: &str, take: bool) -> Vec<i64> {
+    let roots = TransientRootScope::enter();
+    let events = roots.root_nanbox(events(handle));
+    let arr = perry_ffi::object_field_by_name(JsValue::from_bits(events.get().to_bits()), key);
+    let arr = roots.root_nanbox(f64::from_bits(arr.bits()));
+    if take {
+        payload::own(events.get(), key, f64::from_bits(TAG_UNDEFINED));
+    }
+    callback_values(arr.get())
 }
 pub(crate) fn listeners(handle: i64, event: &str) -> Vec<i64> {
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(value(handle));
-    let on = callbacks(handle, &format!("on:{event}"), false);
+    let on = event_callbacks(handle, &format!("on:{event}"), false);
     let on = roots.root_addrs(&on);
-    let mut once = callbacks(
+    let mut once = event_callbacks(
         (owner.get().to_bits() & PTR_MASK) as i64,
         &format!("once:{event}"),
         true,
@@ -155,14 +239,14 @@ pub(crate) fn close(handle: i64) {
     };
     let headers = serde_json::to_string(&s.headers).unwrap();
     let props = [
-        ("statusCode", s.status_code as f64),
-        ("headersSent", boolean(s.headers_sent)),
-        ("writableEnded", boolean(s.writable_ended)),
-        ("writableFinished", boolean(s.writable_finished)),
-        ("finished", boolean(s.writable_ended)),
-        ("destroyed", boolean(s.destroyed)),
-        ("sendDate", boolean(s.send_date)),
-        ("strictContentLength", boolean(s.strict_content_length)),
+        (Key::StatusCode, s.status_code as f64),
+        (Key::HeadersSent, boolean(s.headers_sent)),
+        (Key::WritableEnded, boolean(s.writable_ended)),
+        (Key::WritableFinished, boolean(s.writable_finished)),
+        (Key::Finished, boolean(s.writable_ended)),
+        (Key::Destroyed, boolean(s.destroyed)),
+        (Key::SendDate, boolean(s.send_date)),
+        (Key::StrictContentLength, boolean(s.strict_content_length)),
     ];
     let message = s.status_message.clone();
     for (key, v) in props {
@@ -171,14 +255,14 @@ pub(crate) fn close(handle: i64) {
     let h = perry_ffi::alloc_string(&headers);
     set(
         (owner.get().to_bits() & PTR_MASK) as i64,
-        "headers",
+        Key::Headers,
         f64::from_bits(JsValue::from_string_ptr(h.as_raw()).bits()),
     );
     if let Some(m) = message {
         let m = perry_ffi::alloc_string(&m);
         set(
             (owner.get().to_bits() & PTR_MASK) as i64,
-            "statusMessage",
+            Key::StatusMessage,
             f64::from_bits(JsValue::from_string_ptr(m.as_raw()).bits()),
         );
     }
@@ -187,11 +271,19 @@ pub(crate) fn close(handle: i64) {
 fn boolean(v: bool) -> f64 {
     f64::from_bits(JsValue::from_bool(v).bits())
 }
-pub(crate) fn closed_property(handle: i64, key: &str) -> Option<f64> {
+pub(crate) fn closed_property(handle: i64, key: Key) -> Option<f64> {
     (is_response(handle) && unsafe { state(handle) }.is_none()).then(|| get(handle, key))
 }
+pub(crate) fn set_closed_property(handle: i64, key: Key, value: f64) -> bool {
+    if is_response(handle) && unsafe { state(handle) }.is_none() {
+        set(handle, key, value);
+        true
+    } else {
+        false
+    }
+}
 pub(crate) fn closed_headers(handle: i64) -> Option<std::collections::HashMap<String, String>> {
-    let json = closed_property(handle, "headers")?;
+    let json = closed_property(handle, Key::Headers)?;
     let json = JsValue::from_bits(json.to_bits()).to_owned_string()?;
     serde_json::from_str(&json).ok()
 }

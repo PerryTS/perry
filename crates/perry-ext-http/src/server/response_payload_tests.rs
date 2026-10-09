@@ -46,7 +46,7 @@ fn response_cycles_are_collected() {
                 perry_runtime::closure::js_closure_set_capture_f64(c, 0, response.get_nanbox_f64())
             });
             let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
-            push(handle(), "once:close", cb.get_raw_mut_ptr::<u8>() as i64);
+            push_event(handle(), "once:close", cb.get_raw_mut_ptr::<u8>() as i64);
             // Socket error listener -> response -> socket, plus response listener
             // -> response. Neither cycle has a global root.
             let socket = inner.root_raw_mut_ptr(object::js_object_alloc(0, 0));
@@ -56,7 +56,7 @@ fn response_cycles_are_collected() {
                 key,
                 cb.with_mut_ptr(|c: *mut u8| value::js_nanbox_pointer(c as i64)),
             );
-            set(handle(), "socket", boxed(&socket));
+            set(handle(), Key::Socket, boxed(&socket));
             if i % 2 == 0 {
                 close(handle());
             }
@@ -97,7 +97,7 @@ fn explicit_close_releases_the_payload_but_preserves_metadata() {
     close(handle());
     close(handle());
     assert!(unsafe { state(handle()) }.is_none());
-    assert_eq!(closed_property(handle(), "statusCode"), Some(201.0));
+    assert_eq!(closed_property(handle(), Key::StatusCode), Some(201.0));
     assert_eq!(
         closed_headers(handle())
             .unwrap()
@@ -147,7 +147,7 @@ fn every_end_entry_point_releases_the_payload() {
         }
         assert!(unsafe { state(handle()) }.is_none());
         assert_eq!(
-            closed_property(handle(), "writableFinished").map(f64::to_bits),
+            closed_property(handle(), Key::WritableFinished).map(f64::to_bits),
             Some(boolean(true).to_bits())
         );
     }
@@ -204,8 +204,8 @@ extern "C" fn finish_collects(
     let owner = scope.root_nanbox(perry_runtime::closure::js_closure_get_capture_f64(c, 0));
     let handle = || (owner.get().to_bits() & PTR_MASK) as i64;
     assert!(unsafe { state(handle()) }.is_none());
-    let count = get(handle(), "listenerCalls");
-    set(handle(), "listenerCalls", count + 1.0);
+    let count = get(handle(), Key::ListenerCalls);
+    set(handle(), Key::ListenerCalls, count + 1.0);
     gc::js_gc_collect();
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -219,7 +219,7 @@ fn end_releases_before_reentrant_listeners_collect() {
     let response = scope.root_nanbox_f64(value(unsafe { alloc(data) }));
     set(
         (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-        "listenerCalls",
+        Key::ListenerCalls,
         0.0,
     );
     for event in ["once:finish", "once:close"] {
@@ -231,7 +231,7 @@ fn end_releases_before_reentrant_listeners_collect() {
         cb.with_mut_ptr(|c| {
             perry_runtime::closure::js_closure_set_capture_f64(c, 0, response.get_nanbox_f64())
         });
-        push(
+        push_event(
             (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
             event,
             cb.get_raw_mut_ptr::<u8>() as i64,
@@ -245,9 +245,50 @@ fn end_releases_before_reentrant_listeners_collect() {
     assert_eq!(
         get(
             (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64,
-            "listenerCalls"
+            Key::ListenerCalls
         ),
         2.0,
         "both listeners must run, including the snapshot crossing the first collection"
     );
+}
+
+#[test]
+fn by_name_state_sabotage_reddens_fixed_slot_witness() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "server::response_payload::tests::response_state_is_reached_by_the_record",
+            "--nocapture",
+        ])
+        .env("PERRY_TEST_HTTP_STATE_BY_NAME", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "by-name state sabotage must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("record must carry response state"));
+}
+
+#[test]
+fn response_state_is_reached_by_the_record() {
+    unsafe { super::super::native_dispatch::js_ext_http_nm_install() };
+    let scope = gc::RuntimeHandleScope::new();
+    let response = scope.root_nanbox_f64(value(unsafe { alloc(ResponseState::new()) }));
+    let handle = || (response.get_nanbox_f64().to_bits() & PTR_MASK) as i64;
+    set(handle(), Key::Socket, 123.0);
+    let record_state = unsafe { js_node_http_response_state_get(response.get_nanbox_f64()) };
+    assert_ne!(
+        record_state.to_bits(),
+        TAG_UNDEFINED,
+        "record must carry response state"
+    );
+    assert_eq!(get(handle(), Key::Socket), 123.0);
+    let named = perry_ffi::object_field_by_name(
+        JsValue::from_bits(response.get_nanbox_f64().to_bits()),
+        "#<perry:native-payload-js-state>",
+    );
+    assert!(
+        named.is_undefined(),
+        "response state must not be a named property"
+    );
+    gc::js_gc_collect();
+    assert_eq!(get(handle(), Key::Socket), 123.0);
 }
