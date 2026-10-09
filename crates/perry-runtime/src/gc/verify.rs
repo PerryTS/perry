@@ -523,12 +523,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         let deref_safe = matches!(
             crate::arena::classify_heap_generation(header_addr),
             crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
-        ) || MALLOC_STATE.with(|s| {
-            s.borrow()
-                .objects
-                .iter()
-                .any(|&h| h as usize == header_addr)
-        });
+        ) || super::malloc::gc_malloc_header_is_owned(header_addr as *const GcHeader);
         if deref_safe {
             visit_parent(header_addr as *mut GcHeader);
         }
