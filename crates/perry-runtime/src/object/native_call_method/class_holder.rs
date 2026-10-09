@@ -307,6 +307,15 @@ unsafe fn guarded_class_instance_prototype(obj: *const ObjectHeader) -> *const O
     if !own.is_null() {
         return own;
     }
+    // Only the identical raw identity repeats the lookup above. A shape
+    // naming the selected origin instead may project a second edge of a chain.
+    let recorded = crate::object::shapes::object_prototype_word(obj);
+    if recorded != 0 {
+        return word_object(recorded);
+    }
+    if shape_named_class(obj) == Some((*obj).class_id) {
+        return own;
+    }
     class_instance_prototype(obj)
 }
 
@@ -330,23 +339,26 @@ fn word_object(word: u64) -> *const ObjectHeader {
 pub(crate) unsafe fn class_instance_prototype_built(
     obj: *const ObjectHeader,
 ) -> *const ObjectHeader {
-    let existing = class_instance_prototype(obj);
-    if !existing.is_null() {
-        return existing;
-    }
-    if crate::object::shapes::object_prototype_word(obj) != 0 {
-        return std::ptr::null();
+    let recorded = crate::object::shapes::object_prototype_word(obj);
+    if recorded != 0 {
+        return word_object(recorded);
     }
     let Some(class_id) = shape_named_class(obj) else {
         return std::ptr::null();
     };
-    let v = crate::object::class_registry::class_decl_prototype_value(class_id);
-    let v = crate::JSValue::from_bits(v.to_bits());
-    if v.is_pointer() {
-        v.as_pointer::<ObjectHeader>() as *const ObjectHeader
+    let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
+    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
+        crate::object::shapes::PROTO_ID_DEFAULT
     } else {
-        std::ptr::null()
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
+    });
+    let existing = word_object(word);
+    if !existing.is_null() {
+        return existing;
     }
+    word_object(
+        crate::object::class_registry::class_decl_prototype_value_selected(selected).to_bits(),
+    )
 }
 
 /// The iterator-helper names (`crate::iterator_helpers::is_iterator_helper_method`),
@@ -747,3 +759,6 @@ pub(crate) unsafe fn call_class_ref_method(
         args.len(),
     ))
 }
+
+#[cfg(test)]
+mod selection_tests;

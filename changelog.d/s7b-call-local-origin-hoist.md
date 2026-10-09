@@ -1,0 +1,1 @@
+Reuse a class prototype read's outer generic-origin selection in its existing lazy materializer. Method-slot, own-method and built-instance queries retain inner projections and late redirects; guarded lookup reuses a missing word only when both reads name the exact same raw class identity. No identity publication or persistent cache changes.

@@ -1630,10 +1630,15 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 /// receiver/argument pointers while asking this question.
 pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let word = crate::object::class_holder_word(class_id);
+    let selected = decl_prototype_identity_id(class_id);
+    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
+        crate::object::shapes::PROTO_ID_DEFAULT
+    } else {
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
+    });
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
-        let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
+        let v = crate::JSValue::from_bits(class_decl_prototype_value_selected(selected).to_bits());
         if !v.is_pointer() {
             return None;
         }
@@ -1673,10 +1678,15 @@ pub(crate) fn class_method_slot_target(
 /// The holder's owner identity, when a data property exists on the chain.
 pub(crate) fn class_method_slot_owner(class_id: u32, name: &str) -> Option<u32> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let word = crate::object::class_holder_word(class_id);
+    let selected = decl_prototype_identity_id(class_id);
+    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
+        crate::object::shapes::PROTO_ID_DEFAULT
+    } else {
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
+    });
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
-        let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
+        let v = crate::JSValue::from_bits(class_decl_prototype_value_selected(selected).to_bits());
         if !v.is_pointer() {
             return None;
         }

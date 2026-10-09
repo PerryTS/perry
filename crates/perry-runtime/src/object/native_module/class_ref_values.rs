@@ -80,11 +80,17 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
             return true;
         }
     }
-    let word = crate::object::class_holder_word(class_id);
+    let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
+    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
+        crate::object::shapes::PROTO_ID_DEFAULT
+    } else {
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
+    });
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
-        let proto =
-            JSValue::from_bits(crate::object::class_decl_prototype_value(class_id).to_bits());
+        let proto = JSValue::from_bits(
+            crate::object::class_registry::class_decl_prototype_value_selected(selected).to_bits(),
+        );
         if !proto.is_pointer() {
             return false;
         }
