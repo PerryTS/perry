@@ -1,3 +1,4 @@
+mod precise_root_ownership;
 mod adopt_census;
 mod alloc;
 mod allocation_pacing;

@@ -237,9 +237,12 @@ Root owners supply the representation. Generated globals and native
 statepoint homes keep JSValue words at rest; raw managed locals are boxed when
 stored and unboxed after a root reload. Runtime scanners and handles distinguish
 JSValues from pointer fields whose owners guarantee a GC header. Both feed one
-precise marker: decode the value tag, read the header's color, and enqueue an
-unmarked object. Normal root marking does not probe arena/page metadata or the
-malloc registry. A numeric word that resembles an address remains a number;
+precise marker: decode the declared value representation, confirm current-heap
+ownership in live arena or malloc metadata, then read the header's color and
+enqueue an unmarked object. Global scanners can emit another agent's roots, so
+ownership is checked before any header access. This check does not depend on a
+collection census: local allocations born later and local old-generation roots
+remain eligible. A numeric word that resembles an address remains a number;
 native handle payloads are excluded by their value-encoding band. Closure
 capture cells and temporary roots obey the same producer contract.
 
