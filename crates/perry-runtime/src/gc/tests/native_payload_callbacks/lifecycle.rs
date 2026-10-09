@@ -90,7 +90,8 @@ fn l5_teardown_finalized_cell_cannot_attach() {
 
 // Same size/alignment as Probe, but a different destructor. A safe attach
 // must never install this under Probe's retained drop thunk.
-struct OtherProbe([usize; 2]);
+const PROBE_WORDS: usize = std::mem::size_of::<Probe>() / std::mem::size_of::<usize>();
+struct OtherProbe([usize; PROBE_WORDS]);
 impl Drop for OtherProbe {
     fn drop(&mut self) {
         CALLS.fetch_add(self.0[0], Ordering::SeqCst);
@@ -131,7 +132,10 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
             np::attach(
                 value.get_nanbox_f64(),
                 &FAMILY,
-                Probe { link: Some(link) },
+                Probe {
+                    link: Some(link),
+                    worker_observations: None,
+                },
                 4096
             ),
             Ok(())
@@ -182,7 +186,7 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
         std::mem::align_of::<Probe>()
     );
     assert_eq!(
-        np::attach(value.get_nanbox_f64(), &FAMILY, OtherProbe([1, 0]), 0),
+        np::attach(value.get_nanbox_f64(), &FAMILY, OtherProbe([1; PROBE_WORDS]), 0),
         Err(AttachMiss::Foreign)
     );
     assert_eq!(
@@ -284,6 +288,7 @@ fn l8_worker_discards_queued_items_before_finalization_without_dispatch() {
         unsafe { np::link_ref(link) };
         let mut queue = vec![link]; // plain queued data; Drop never dereferences a link
         assert_eq!(np::close(value, &FAMILY), CloseOutcome::Closed);
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
         let mut dispatches = 0;
         if np::lifecycle_sabotage("teardown_drain") {
             unsafe { crate::native_handle::finalize_native_handle_at_teardown(cell(link)) };
@@ -296,6 +301,7 @@ fn l8_worker_discards_queued_items_before_finalization_without_dispatch() {
         } else {
             queue.clear();
         }
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0);
         // TLS heap teardown finalizes even though the queue's ref pin remains.
         dispatches
     })
@@ -307,8 +313,6 @@ fn l8_worker_discards_queued_items_before_finalization_without_dispatch() {
         before + 1,
         "a pending ref cannot leak the worker cell"
     );
-    assert_eq!(DROPS.load(Ordering::SeqCst), 1);
-    assert_eq!(CALLS.load(Ordering::SeqCst), 0);
 }
 
 extern "C" fn closes_then_throws(

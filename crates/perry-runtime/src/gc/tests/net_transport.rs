@@ -637,6 +637,7 @@ fn n6_teardown_discards_owed_completions_without_dispatch() {
         }
         assert!(destroy(link));
         drop(scope);
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
         // The agent's teardown sets the discard rule before its last turns.
         transport::begin_teardown_for_test();
         assert!(
@@ -655,7 +656,6 @@ fn n6_teardown_discards_owed_completions_without_dispatch() {
         before + 1,
         "the worker heap teardown finalizes the pinned cell"
     );
-    assert_eq!(DROPS.load(Ordering::SeqCst), 1);
 }
 
 /// The ABI digest folds the opaque core block: a binding built against
