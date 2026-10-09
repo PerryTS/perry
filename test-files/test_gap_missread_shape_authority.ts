@@ -81,6 +81,16 @@ console.log("function bags", readPrototype(F) === F.prototype, readPrototype(G) 
 console.log("prototype overwrite", readPrototype(F).marker);
 (F as any).tag = undefined;
 console.log("own undefined", readTag(F));
+(G as any).tag = true;
+console.log("own boolean", readTag(G) === true);
+(G as any).tag = "boxed";
+console.log("own string", readTag(G));
+const bagObject = { marker: 73 };
+(G as any).tag = bagObject;
+console.log("own object", readTag(G) === bagObject, readTag(G).marker);
+const bagSymbol = Symbol("bag value");
+(G as any).tag = bagSymbol;
+console.log("own symbol", readTag(G) === bagSymbol);
 delete (G as any).tag;
 console.log("own deleted", readTag(G));
 let getterCalls = 0;
