@@ -134,7 +134,12 @@ pub(crate) unsafe fn declaration_parent_identity(
     let parent = if pid == PROTO_ID_DEFAULT {
         crate::array::object_prototype_addr_if_resolved() as *const crate::object::ObjectHeader
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
-        crate::object::class_decl_prototype_object(pid as u32)
+        let word = crate::object::class_holder_word_selected(pid as u32);
+        let value = crate::JSValue::from_bits(word);
+        if !value.is_pointer() {
+            return None;
+        }
+        value.as_pointer::<crate::object::ObjectHeader>()
     } else {
         return None;
     };
@@ -142,6 +147,40 @@ pub(crate) unsafe fn declaration_parent_identity(
         Some(pid)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod readpath_decl_identity_tests {
+    use super::*;
+
+    #[test]
+    fn declaration_parent_uses_the_origin_already_recorded_in_the_shape() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let (cid, alias) = (190_727, 190_728);
+        let parent = crate::object::js_object_alloc(0, 0);
+        let other = crate::object::js_object_alloc(0, 0);
+        crate::object::class_registry::class_decl_prototype_object_root_store(cid, parent);
+        crate::object::class_registry::class_decl_prototype_object_root_store(alias, other);
+        let holder = crate::object::js_object_alloc(0, 0);
+        let pid = PROTO_ID_CLASS | u64::from(cid);
+        let shape = shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            0x8000_0000_0000_0000,
+            ShapeObjectKind::Ordinary,
+            pid,
+            ReceiverFacts::NONE,
+        )
+        .unwrap();
+        let recorded = crate::value::js_nanbox_pointer(parent as i64).to_bits();
+        unsafe {
+            stamp_object_shape_id_with_carrier_note(holder, shape);
+            assert_eq!(declaration_parent_identity(holder, recorded), Some(pid));
+            crate::object::js_register_class_generic_origin(cid, alias);
+            assert_eq!(declaration_parent_identity(holder, recorded), Some(pid));
+        }
     }
 }
 
