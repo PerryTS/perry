@@ -200,7 +200,7 @@ database-sqlite = ["dep:rusqlite"]
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
+crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:ring", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
 bundled-argon2 = ["dep:argon2", "async-bridge"]
 # ethers blockchain utilities — pure Rust, no extra deps. Default-on
@@ -343,6 +343,8 @@ rustls-pemfile = { workspace = true, optional = true }
 rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
+# SHA-384/512 streaming contexts share the existing TLS crypto provider.
+ring = { version = "0.17", optional = true }
 sha2 = { version = "0.11", optional = true }
 sha1 = { version = "0.11", optional = true }
 sha3 = { version = "0.12", optional = true }

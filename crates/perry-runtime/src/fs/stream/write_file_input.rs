@@ -56,31 +56,33 @@ fn check_write_file_aborted(signal: Option<*mut ObjectHeader>) -> Result<(), f64
     }
 }
 
-fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<Vec<u8>, f64> {
+// A write can allocate an error value. Use the existing B1 read lease for
+// both visible byte spans and owned string/array decoding. Its pin retains
+// native storage until the write (and any error construction) has finished.
+use crate::buffer::bytes::ReadLease;
+
+fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<ReadLease, f64> {
     let js = JSValue::from_bits(value.to_bits());
     if js.is_any_string() {
-        return Ok(bytes_from_string_value(value, encoding_tag));
+        return Ok(ReadLease::Snapshot(bytes_from_string_value(
+            value,
+            encoding_tag,
+        )));
     }
-    if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
-        return Ok(bytes_from_buffer_value(value));
-    }
-    // #10694: the brand probes read the cell's header, so only a POINTER
-    // payload or an allocator-owned raw word is an address here.
     let addr = crate::value::addr_class::object_ref_addr(value);
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return Ok(crate::buffer::bytes::no_gc(|scope| {
-            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
-                .map(<[u8]>::to_vec)
-                .unwrap_or_default()
-        }));
+    if crate::buffer::is_registered_buffer(addr)
+        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+    {
+        return ReadLease::new(crate::value::js_nanbox_pointer(addr as i64))
+            .map_err(|_| write_file_data_type_error(value));
     }
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
         let buf = crate::buffer::js_buffer_from_value(value.to_bits() as i64, encoding_tag);
         if buf.is_null() {
-            return Ok(Vec::new());
+            return Ok(ReadLease::Snapshot(Vec::new()));
         }
-        return Ok(bytes_from_buffer_value(crate::value::js_nanbox_pointer(
-            buf as i64,
+        return Ok(ReadLease::Snapshot(bytes_from_buffer_value(
+            crate::value::js_nanbox_pointer(buf as i64),
         )));
     }
     Err(write_file_data_type_error(value))
@@ -416,4 +418,39 @@ pub(crate) unsafe fn write_file_path_or_fd_result(
         file.write_all(bytes)
             .map_err(|err| build_fs_error_value(&err, "write", &path))
     })
+}
+
+#[cfg(test)]
+mod write_input_tests {
+    use super::*;
+    use crate::buffer::bytes::{self, Brand};
+
+    #[test]
+    fn byte_write_input_retains_the_visible_storage_without_a_copy() {
+        // Pointer identity is the B1 contract: copying can preserve output
+        // while reintroducing an allocation for every extracted file.
+        for brand in [Brand::Buffer, Brand::Uint8Array, Brand::DataView] {
+            for len in [1, 255, 256, 257, 1024 * 1024] {
+                let data = vec![0x61; len];
+                let value = bytes::from_slice(brand, &data);
+                let visible = bytes::no_gc(|scope| bytes::bytes(value, scope).unwrap().as_ptr());
+                let chunk = write_file_chunk_bytes(value, 0).unwrap();
+                assert_eq!(
+                    chunk.as_ptr(),
+                    visible,
+                    "writeFile copied {brand:?}, {len} bytes"
+                );
+                assert_eq!(&*chunk, data);
+            }
+        }
+        let source = bytes::from_slice(Brand::Buffer, b"before-visible-after");
+        let source_ptr =
+            JSValue::from_bits(source.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
+        let view = crate::buffer::js_buffer_slice(source_ptr, 7, 14);
+        let value = crate::value::js_nanbox_pointer(view as i64);
+        let visible = bytes::no_gc(|scope| bytes::bytes(value, scope).unwrap().as_ptr());
+        let chunk = write_file_chunk_bytes(value, 2).unwrap();
+        assert_eq!(chunk.as_ptr(), visible);
+        assert_eq!(&*chunk, b"visible");
+    }
 }

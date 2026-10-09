@@ -83,3 +83,79 @@ fn each_b2c_sabotage_turns_its_consumer_witness_red() {
         eprintln!("B2c sabotage {fault}: RED");
     }
 }
+
+#[test]
+fn hash_update_borrows_the_visible_byte_span_and_ignores_string_encoding() {
+    use super::hash_handles::with_hash_update_bytes;
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let enc = scope.root_nanbox_f64(unsafe { string_value(b"hex") });
+    for brand in [Brand::Buffer, Brand::Uint8Array, Brand::DataView] {
+        for len in [1, 255, 256, 257, 1024 * 1024] {
+            let data = vec![b'a'; len];
+            let source = bytes::from_slice(brand, &data);
+            let visible = bytes::no_gc(|scope| bytes::bytes(source, scope).unwrap().as_ptr());
+            unsafe {
+                with_hash_update_bytes(&[source, enc.get_nanbox_f64()], |input| {
+                    assert_eq!(
+                        input.as_ptr(),
+                        visible,
+                        "Hash.update copied {brand:?}, {len} bytes"
+                    );
+                    assert_eq!(input, data);
+                });
+            }
+        }
+    }
+    let source = bytes::from_slice(Brand::Buffer, b"prefix-payload-suffix");
+    let ptr = JSValue::from_bits(source.to_bits()).as_pointer::<buffer::BufferHeader>();
+    let view = buffer::js_buffer_slice(ptr, 7, 14);
+    unsafe {
+        with_hash_update_bytes(&[value(view), enc.get_nanbox_f64()], |input| {
+            assert_eq!(input, b"payload")
+        });
+        with_hash_update_bytes(&[string_value(b"616263"), enc.get_nanbox_f64()], |input| {
+            assert_eq!(input, b"abc")
+        });
+    }
+}
+
+#[test]
+fn one_shot_hash_allocates_only_its_byte_result() {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let data = scope.root_nanbox_f64(bytes::from_slice(Brand::Buffer, b"payload"));
+    let encoding = scope.root_nanbox_f64(unsafe { string_value(b"buffer") });
+    for algorithm in [b"sha256".as_slice(), b"sha384", b"sha512"] {
+        let alg = scope.root_nanbox_f64(unsafe { string_value(algorithm) });
+        let args = || {
+            [
+                alg.get_nanbox_f64(),
+                data.get_nanbox_f64(),
+                encoding.get_nanbox_f64(),
+            ]
+        };
+        let call = || unsafe {
+            let values = args();
+            js_crypto_native_dispatch(b"hash".as_ptr(), 4, values.as_ptr(), values.len())
+        };
+        // Warm lazy prototype/module initialization outside the contract.
+        let warm = scope.root_nanbox_f64(call());
+        let expected = bytes::no_gc(|s| bytes::bytes(warm.get_nanbox_f64(), s).unwrap().to_vec());
+        let before = perry_runtime::arena::arena_live_allocated_bytes();
+        let control = scope.root_nanbox_f64(bytes::from_slice(Brand::Buffer, &expected));
+        let result_bytes = perry_runtime::arena::arena_live_allocated_bytes() - before;
+        assert!(result_bytes > 0, "control must allocate the byte result");
+        let before = perry_runtime::arena::arena_live_allocated_bytes();
+        let result = scope.root_nanbox_f64(call());
+        let allocated = perry_runtime::arena::arena_live_allocated_bytes() - before;
+        assert_eq!(
+            allocated, result_bytes,
+            "crypto.hash allocated a temporary JS object"
+        );
+        bytes::no_gc(|s| {
+            assert_eq!(
+                bytes::bytes(result.get_nanbox_f64(), s).unwrap(),
+                bytes::bytes(control.get_nanbox_f64(), s).unwrap()
+            )
+        });
+    }
+}
