@@ -1470,9 +1470,9 @@ fn get_field_by_name_past_data_probe(
             // #2138: auto-box the primitive number for the inherited
             // `.constructor` read so `n.constructor === Number` (and the
             // duck-type `value.constructor.name === "Number"` lodash/date-fns
-            // use to discriminate primitives). Route through the same
-            // `js_get_global_this_builtin_value` helper that backs bare-`Number`
-            // identifier resolution so identity comparison holds. Other unknown
+            // use to discriminate primitives). Read the actual intrinsic
+            // prototype, whose shape owns its constructor property. A replaced
+            // global binding does not change that prototype. Other unknown
             // keys still return undefined per #2128 (was SIGSEGV pre-#2128).
             if !key.is_null() {
                 unsafe {
@@ -1487,8 +1487,7 @@ fn get_field_by_name_past_data_probe(
                             return v;
                         }
                     }
-                    if let Some(v) =
-                        primitive_builtin_prototype_property(b"Number", key, f64::from_bits(bits))
+                    if let Some(v) = primitive_builtin_prototype_property(key, f64::from_bits(bits))
                     {
                         return v;
                     }
@@ -1893,7 +1892,7 @@ fn get_field_by_name_past_data_probe(
                         return v;
                     }
                 }
-                if let Some(v) = primitive_builtin_prototype_property(b"Number", key, f) {
+                if let Some(v) = primitive_builtin_prototype_property(key, f) {
                     return v;
                 }
                 if let Some(bound) = bind_primitive_proto_method_static(f, name_bytes) {

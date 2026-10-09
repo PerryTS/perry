@@ -1,0 +1,3 @@
+Number property fallback and primitive Object-prototype accessors now read the realm's existing intrinsic prototype roots instead of looking up the writable global constructor and its `prototype` on each read. Both prototype property changes and getters still go through the ordinary property machinery.
+
+Prime the existing primitive prototype rows alongside the other intrinsic rows during realm bootstrap. Reassigning `globalThis.Number` or `globalThis.Object` before a primitive's first property read therefore keeps that primitive on its original prototype chain. No new cache, name table, shape/holder mechanism or GC root is introduced.
