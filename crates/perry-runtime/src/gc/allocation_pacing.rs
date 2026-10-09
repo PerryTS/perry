@@ -198,6 +198,10 @@ impl CollectorStepGuard {
 
 impl Drop for CollectorStepGuard {
     fn drop(&mut self) {
+        // Runtime helpers now share generated Eden bumps. Flush while the
+        // collector guard is still active so these bytes cannot become
+        // mutator debt at the next checkpoint.
+        crate::arena::sync_inline_arena_state();
         sample_arena();
         COLLECTOR_STEP.with(|active| active.set(self.0));
     }
@@ -247,5 +251,41 @@ impl BurstBoundaryGuard {
 impl Drop for BurstBoundaryGuard {
     fn drop(&mut self) {
         BURST_BOUNDARY.with(|boundary| boundary.set(self.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_runtime_bumps_do_not_charge_collector_bytes_to_mutator() {
+        std::thread::spawn(|| {
+            let _triggers =
+                super::super::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+            crate::arena::js_inline_arena_state();
+            let before = test_debt();
+            for _ in 0..16 {
+                crate::arena::arena_alloc_gc(32, 8, super::super::GC_TYPE_STRING);
+            }
+            let mutator = test_debt();
+            assert_eq!(mutator.0 - before.0, 16 * 40);
+            assert_eq!(mutator.1, before.1);
+            {
+                let _step = CollectorStepGuard::enter();
+                for _ in 0..64 {
+                    crate::arena::arena_alloc_gc(32, 8, super::super::GC_TYPE_STRING);
+                }
+            }
+            assert_eq!(
+                test_debt(),
+                mutator,
+                "collector bumps are not allocation pressure"
+            );
+            crate::arena::arena_alloc_gc(32, 8, super::super::GC_TYPE_STRING);
+            assert_eq!(test_debt().0, mutator.0 + 40);
+        })
+        .join()
+        .unwrap();
     }
 }
