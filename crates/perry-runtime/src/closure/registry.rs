@@ -58,7 +58,9 @@ pub fn resolve_strategy(info: &JsFunctionInfo) -> DispatchStrategy {
 /// count reaches.
 #[inline(always)]
 pub(crate) fn plain_admits(info: &JsFunctionInfo, argc: u32) -> bool {
-    !super::dispatch::arity_needs_dispatch(u32::from(info.plain_params()), argc)
+    let params = info.plain_params();
+    params != crate::codegen_abi::NOT_PLAIN
+        && !super::dispatch::arity_needs_dispatch(u32::from(params), argc)
 }
 
 /// `info`'s rest kind and its fixed parameter count, if it has one.

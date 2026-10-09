@@ -399,11 +399,6 @@ fn dispatch_call_wide(closure: *const ClosureHeader, this: JsThis, args: &[f64])
         return dispatch_proxy_callee_or_throw(closure, this, args);
     };
     let func_ptr = info.code;
-    if plain_admits(info, args.len() as u32) {
-        return unsafe {
-            super::super::dispatch_wide_abi(closure, func_ptr, this, args, args.len())
-        };
-    }
     match resolve_strategy(info).kind() {
         DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, this, args) },
         DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, args) },
@@ -490,6 +485,8 @@ mod plain_call_tests {
             crate::value::TAG_UNDEFINED
         );
         assert_eq!(dispatch_call_slice(closure, undefined, &[3.0; 20]), 3.0);
+        // Surplus arguments never widen the body's ABI or trip its width cap.
+        assert_eq!(dispatch_call_slice(closure, undefined, &[3.0; 2048]), 3.0);
     }
 
     /// Only a compiled body is plain: a bound value, a body with a rest kind
@@ -510,7 +507,15 @@ mod plain_call_tests {
         let args_after_plain = unsafe {
             &*crate::fn_info!(second_arg, 2; plain(), with_rest_kind(0, crate::codegen_abi::FN_REST_SYNTHETIC_ARGUMENTS))
         };
-        for argc in [0, 1, 2, 16, u32::from(u16::MAX) - 1] {
+        for argc in [
+            0,
+            1,
+            2,
+            16,
+            u32::from(u16::MAX) - 1,
+            u32::from(u16::MAX),
+            u32::MAX,
+        ] {
             assert!(!plain_admits(native, argc) && !plain_admits(rest, argc));
             assert!(!plain_admits(rest_after_plain, argc) && !plain_admits(args_after_plain, argc));
         }
