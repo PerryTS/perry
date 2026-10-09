@@ -43,20 +43,20 @@ pub(crate) use callable_exports::minted_native_callable_export;
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
     bound_native_callable_module_and_method, bound_native_callable_value_arity,
-    buffer_constructor_value, buffer_intrinsic_prototype_parent, buffer_intrinsic_prototype_value,
-    buffer_original_prototype_value, builtin_closure_is_non_constructable_value,
-    builtin_closure_length, cached_buffer_intrinsic_prototype_value,
-    fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
-    is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
-    module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
-    module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
-    native_string_value, prune_dead_builtin_closure_metadata_owners,
+    bound_native_parent, buffer_constructor_value, buffer_intrinsic_prototype_parent,
+    buffer_intrinsic_prototype_value, buffer_original_prototype_value,
+    builtin_closure_is_non_constructable_value, builtin_closure_length,
+    cached_buffer_intrinsic_prototype_value, fs_namespace_descriptor_getter_value,
+    fs_namespace_descriptor_setter_value, is_buffer_constructor_value, is_cluster_emitter_method,
+    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
+    module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
+    module_constants_value, native_string_value, prune_dead_builtin_closure_metadata_owners,
     prune_dead_builtin_closure_metadata_owners_young, scan_builtin_closure_metadata_roots_mut,
     scan_tls_derived_prototype_roots_mut, set_bound_native_closure_metadata,
     set_bound_native_closure_name, set_builtin_closure_length,
     set_builtin_closure_non_constructable, timers_promises_parent_namespace,
     tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
-    zlib_codes_object,
+    zlib_codes_object, BoundNativeParent,
 };
 pub(crate) use constants::{get_native_module_constant, native_module_constant_is_live};
 pub(crate) use constructor_exports::{

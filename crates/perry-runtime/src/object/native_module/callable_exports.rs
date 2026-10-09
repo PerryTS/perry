@@ -1175,9 +1175,37 @@ pub(crate) fn tls_constructor_prototype_is_instance_of(value: f64, parent_name: 
     })
 }
 
+/// One validated parent fact for super dispatch. Native net constructors carry
+/// class identity; other native exports keep their existing dispatch metadata.
+pub(crate) enum BoundNativeParent {
+    NativeClass(u32),
+    Export(String, String),
+}
+
+pub(crate) unsafe fn bound_native_parent(value: f64) -> Option<BoundNativeParent> {
+    let closure = bound_native_callable_closure(value)?;
+    if std::ptr::eq(
+        (*closure).info,
+        &crate::closure::BOUND_NATIVE_CONSTRUCTOR_INFO,
+    ) && crate::closure::real_capture_count((*closure).capture_count) == 4
+    {
+        return Some(BoundNativeParent::NativeClass(
+            crate::closure::js_closure_get_capture_f64(closure, 3) as u32,
+        ));
+    }
+    let (module, method) = bound_native_export_metadata(closure)?;
+    Some(BoundNativeParent::Export(module, method))
+}
+
 pub(crate) unsafe fn bound_native_callable_module_and_method(
     value: f64,
 ) -> Option<(String, String)> {
+    bound_native_export_metadata(bound_native_callable_closure(value)?)
+}
+
+unsafe fn bound_native_callable_closure(
+    value: f64,
+) -> Option<*const crate::closure::ClosureHeader> {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return None;
@@ -1197,6 +1225,12 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
     {
         return None;
     }
+    Some(closure)
+}
+
+unsafe fn bound_native_export_metadata(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<(String, String)> {
     let ns = crate::closure::js_closure_get_capture_f64(closure, 0);
     let module = get_module_name_from_namespace(ns);
     let method_ptr = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const u8;
