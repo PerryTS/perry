@@ -254,10 +254,12 @@ fn primed_literal_born_during_a_mark_is_seeded() {
     let birth_flags = crate::gc::gc_birth_flags_address() as *mut u8;
     // SAFETY: this thread's live birth-flags cell; restored below. Nothing
     // else allocates while it is set.
+    // GC_STORE_AUDIT(POINTER_FREE): test adjusts allocator mark-state flags, never a heap edge.
     unsafe { birth_flags.write(crate::gc::GC_FLAG_MARKED) };
     let born = source.with_const_ptr(|source| {
         regex_flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
     });
+    // GC_STORE_AUDIT(POINTER_FREE): test adjusts allocator mark-state flags, never a heap edge.
     unsafe { birth_flags.write(0) };
     let header = unsafe { crate::gc::header_from_trusted_user_ptr(born.cast()).cast_mut() };
     let seeded = seeds.len() == queued + 1 && seeds.last() == Some(&header);
