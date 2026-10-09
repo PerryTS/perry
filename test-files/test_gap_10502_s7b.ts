@@ -54,4 +54,15 @@ console.log('literal proto', Object.getPrototypeOf(withMethod) === Object.protot
 const Anon = [class { q() { return 7; } }][0];
 const anon: any = new Anon();
 console.log('anon class', anon.constructor === Anon, anon.q(), Object.getPrototypeOf(anon) === Anon.prototype);
+
+// Default heritage goes through the production class-evaluation entry: each
+// captured evaluation owns its prototype, including after deletion/redefine.
+function capturedClass(tag: string) { return class { m() { return tag; } }; }
+const e1: any = capturedClass('one'), e2: any = capturedClass('two'), e3: any = capturedClass('three');
+console.log('eval default', Object.getPrototypeOf(e2.prototype) === Object.prototype,
+    new e1().m(), new e2().m(), new e3().m());
+delete e2.prototype.m;
+console.log('eval delete', typeof e2.prototype.m, typeof new e2().m(), new e1().m(), new e3().m());
+e2.prototype.m = function () { return 'again'; };
+console.log('eval redefine', new e2().m(), new e1().m(), new e3().m());
 thenProbe();
