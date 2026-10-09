@@ -272,6 +272,109 @@ fn function_body(ir: &str, symbol: &str) -> String {
         .join("\n")
 }
 
+fn erased_captured_closure_ir(reassigned: bool, under_applied: bool) -> String {
+    let params = if under_applied {
+        vec![param(30, "value", Type::Any)]
+    } else {
+        Vec::new()
+    };
+    let mut target = callback_with(98, params, vec![Stmt::Return(Some(Expr::Integer(7)))]);
+    if let Expr::Closure {
+        return_type,
+        captures,
+        mutable_captures,
+        ..
+    } = &mut target
+    {
+        *return_type = Type::Number;
+        captures.clear();
+        mutable_captures.clear();
+    }
+    let mut caller = callback_with(
+        CALLBACK_FUNC,
+        Vec::new(),
+        vec![Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::LocalGet(CALLBACK)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })],
+    );
+    if let Expr::Closure {
+        captures,
+        mutable_captures,
+        ..
+    } = &mut caller
+    {
+        *captures = vec![CALLBACK];
+        *mutable_captures = vec![CALLBACK];
+    }
+    let mut outer = outer_function(false);
+    outer.body = vec![
+        Stmt::PreallocateBoxes(vec![CALLBACK]),
+        Stmt::Let {
+            id: CALLBACK,
+            name: "target".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(target),
+        },
+        Stmt::Expr(caller),
+    ];
+    if reassigned {
+        outer
+            .body
+            .push(Stmt::Expr(Expr::LocalSet(CALLBACK, Box::new(Expr::Null))));
+    }
+    let mut module = Module::new("erased_immutable_closure.ts");
+    module.init_kind = ModuleInitKind::Eager;
+    module.functions = vec![outer];
+    String::from_utf8(
+        compile_module(
+            &module,
+            CompileOptions {
+                emit_ir_only: true,
+                output_type: "executable".into(),
+                ..Default::default()
+            },
+        )
+        .expect("fixture compiles"),
+    )
+    .expect("UTF-8 IR")
+}
+
+#[test]
+fn immutable_captured_closure_with_erased_type_uses_its_proven_body() {
+    let ir = erased_captured_closure_ir(false, false);
+    let caller = function_body(&ir, "perry_closure_erased_immutable_closure_ts__99");
+    assert!(
+        caller.contains("call double @perry_closure_erased_immutable_closure_ts__98"),
+        "an immutable captured target must use its proven body despite the erased type:\n{caller}"
+    );
+}
+
+#[test]
+fn reassigned_captured_closure_with_erased_type_keeps_dynamic_dispatch() {
+    let ir = erased_captured_closure_ir(true, false);
+    let caller = function_body(&ir, "perry_closure_erased_immutable_closure_ts__99");
+    assert!(caller.contains("@js_closure_call0("), "{caller}");
+    assert!(
+        !caller.contains("call double @perry_closure_erased_immutable_closure_ts__98"),
+        "{caller}"
+    );
+}
+
+#[test]
+fn under_applied_captured_closure_with_erased_type_keeps_argument_padding() {
+    let ir = erased_captured_closure_ir(false, true);
+    let caller = function_body(&ir, "perry_closure_erased_immutable_closure_ts__99");
+    assert!(caller.contains("@js_closure_call0("), "{caller}");
+    assert!(
+        !caller.contains("call double @perry_closure_erased_immutable_closure_ts__98"),
+        "{caller}"
+    );
+}
+
 fn named_block_body<'a>(function: &'a str, prefix: &str) -> String {
     let start = function
         .lines()

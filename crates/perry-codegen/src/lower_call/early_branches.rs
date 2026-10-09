@@ -417,6 +417,10 @@ pub fn try_lower_closure_typed_local_call(
         // diamond, full-dispatcher fallback); the hint only ever selected who
         // enters it.
         if matches!(ctx.local_type_hint(id), Some(HirType::Function(_)))
+            // Captured immutable closures can also lose their function type.
+            // The whole-module single-binding proof still identifies their
+            // body; the existing arm checks arity and preserves argument roots.
+            || ctx.guard_free_closure_bindings.contains(id)
             || ctx
                 .resolved_plain_callback_targets
                 .contains_key(&(*id, args.len()))
