@@ -814,6 +814,12 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
+        let word = (*obj).parent_class_id;
+        // Plain shapes cannot replace a class surface. Preserve this
+        // header-only admission before validating a linked ShapeId.
+        if !crate::object::shapes::shape_word_may_be_linked(word) {
+            return false;
+        }
         let stamp = crate::object::shapes::object_shape_stamp(obj);
         // The null identity is already encoded in the ShapeId. Read that
         // fact before the class eligibility guard, without fetching a slab.
@@ -823,9 +829,8 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
             return true;
         }
         // A non-class receiver has no shared class surface to supersede.
-        // Plain shape identities also need no class override walk. These
-        // eligibility guards do not select any default prototype.
-        if (*obj).class_id == 0 || !crate::object::shapes::shape_word_may_be_linked(stamp) {
+        // This eligibility guard does not select any default prototype.
+        if (*obj).class_id == 0 {
             return false;
         }
         let pid = crate::object::shapes::object_shape_identity(obj);
