@@ -130,16 +130,31 @@ pub fn owns(owner: AgentId) -> bool {
 /// queues below, and need the same purge when that agent dies — but they cannot
 /// be named from here. A hook registers once per process and runs inside
 /// [`retire_agent`] with the dying agent's id.
-static RETIRE_HOOKS: Mutex<Vec<fn(AgentId)>> = Mutex::new(Vec::new());
+#[derive(Clone, Copy)]
+enum RetireHook {
+    Rust(fn(AgentId)),
+    Ffi(extern "C" fn(AgentId)),
+}
+static RETIRE_HOOKS: Mutex<Vec<RetireHook>> = Mutex::new(Vec::new());
 
 /// Register `hook` to run from [`retire_agent`]. Idempotent per function.
 pub fn register_retire_hook(hook: fn(AgentId)) {
     let mut hooks = RETIRE_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
     if !hooks
         .iter()
-        .any(|existing| std::ptr::fn_addr_eq(*existing, hook))
+        .any(|existing| matches!(existing, RetireHook::Rust(existing) if std::ptr::fn_addr_eq(*existing, hook)))
     {
-        hooks.push(hook);
+        hooks.push(RetireHook::Rust(hook));
+    }
+}
+
+/// Native bindings share the existing retire-hook list. Hooks release their
+/// logical JS edges while the dying heap still exists; no JS may run here.
+#[no_mangle]
+pub extern "C" fn js_perry_agent_register_retire_hook(hook: extern "C" fn(AgentId)) {
+    let mut hooks = RETIRE_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !hooks.iter().any(|existing| matches!(existing, RetireHook::Ffi(existing) if std::ptr::fn_addr_eq(*existing, hook))) {
+        hooks.push(RetireHook::Ffi(hook));
     }
 }
 
@@ -178,12 +193,15 @@ pub fn retire_agent(id: AgentId) {
     crate::timer::purge_agent_timers(id);
     crate::thread::purge_agent_thread_results(id);
     // Copied out so a hook may itself take locks without holding this one.
-    let hooks: Vec<fn(AgentId)> = RETIRE_HOOKS
+    let hooks: Vec<RetireHook> = RETIRE_HOOKS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     for hook in hooks {
-        hook(id);
+        match hook {
+            RetireHook::Rust(hook) => hook(id),
+            RetireHook::Ffi(hook) => hook(id),
+        }
     }
     // Deliberately do NOT clear `CURRENT_AGENT`. Clearing it would make
     // `current_agent()` fall back to `PRIMARY_AGENT` for the rest of this
@@ -196,6 +214,30 @@ pub fn retire_agent(id: AgentId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ffi_retire_hooks_share_the_existing_once_per_agent_cleanup_list() {
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        static SEEN: AtomicU64 = AtomicU64::new(0);
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        extern "C" fn hook(agent: AgentId) {
+            assert_eq!(current_agent(), agent);
+            SEEN.store(agent, Ordering::SeqCst);
+            CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+        js_perry_agent_register_retire_hook(hook);
+        js_perry_agent_register_retire_hook(hook);
+        let before = CALLS.load(Ordering::SeqCst);
+        let agent = std::thread::spawn(|| {
+            let agent = enter_worker_agent();
+            retire_agent(agent);
+            agent
+        })
+        .join()
+        .unwrap();
+        assert_eq!(SEEN.load(Ordering::SeqCst), agent);
+        assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+    }
 
     /// A plain thread that never claims a worker agent — the main thread, or a
     /// pump like Android's UI thread — resolves to the primary agent, so it

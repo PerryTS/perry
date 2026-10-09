@@ -100,11 +100,23 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
         }
     };
     match method {
+        "Socket.init" => crate::payload_socket::initialize_socket(
+            crate::payload_io::ROUTE,
+            arg(1),
+            u64::MAX,
+            Some(arg(0)),
+        ),
+        "Server.init" => crate::payload_server::initialize_server(
+            crate::payload_io::ROUTE,
+            arg(1),
+            arg(2),
+            Some(arg(0)),
+        ),
         "connect" | "createConnection" => {
             handle_value(crate::js_ext_net_socket_connect(arg(0), arg(1), arg(2)))
         }
         "createServer" | "Server" => handle_value(create_server(args_ptr, args_len)),
-        "Socket" | "Stream" => handle_value(crate::js_net_socket_alloc()),
+        "Socket" | "Stream" => crate::payload_socket::new_socket(crate::payload_io::ROUTE, arg(0)),
         "isIP" => crate::ip::js_net_is_ip(js_value_to_str_ptr_for_ffi(arg(0))),
         "isIPv4" => crate::ip::js_net_is_ipv4(js_value_to_str_ptr_for_ffi(arg(0))),
         "isIPv6" => crate::ip::js_net_is_ipv6(js_value_to_str_ptr_for_ffi(arg(0))),

@@ -310,6 +310,12 @@ pub fn gc_collect_minor() -> u64 {
         .emit_after_current()
 }
 
+/// Synchronous full collection for the default-off native payload acceptance census.
+#[cfg(feature = "native-payload-test-census")]
+pub fn native_payload_test_collect_full() {
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual));
+}
+
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here

@@ -9,9 +9,8 @@ use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::string::StringHeader;
 use crate::value::{JSValue, TAG_UNDEFINED};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 pub const CLASS_ID_TLS_SECURE_CONTEXT: u32 = 0xFFFF_00B5;
 
@@ -47,7 +46,6 @@ static DEFAULT_CA_CONFIG: Mutex<Option<Vec<String>>> = Mutex::new(None);
 /// default array that predates the latest configuration. Starts at 1: a
 /// thread's cache generation 0 means "never built".
 static DEFAULT_CA_GENERATION: AtomicU64 = AtomicU64::new(1);
-static TLS_CLIENT_METADATA: OnceLock<Mutex<HashMap<i64, TlsClientMetadata>>> = OnceLock::new();
 
 /// `tls.connect` as perry-ext-net implements it (`js_tls_connect`).
 pub type TlsConnectProviderFn = unsafe extern "C" fn(f64, f64, f64, f64) -> i64;
@@ -88,49 +86,72 @@ pub struct TlsClientMetadata {
     pub peer_certificate: Vec<u8>,
     pub own_certificate: Vec<u8>,
     pub connected: bool,
-    pub check_server_identity: i64,
     pub session_supplied: bool,
 }
 
-fn client_metadata() -> &'static Mutex<HashMap<i64, TlsClientMetadata>> {
-    // #11541: the map registers its thread-exit hook when it is created (every
-    // insert goes through here; the release reads the `OnceLock` directly)
-    // instead of being named in `arena::thread_exit`'s dispatcher, which
-    // linked it into every binary.
-    crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || {
-        crate::arena::thread_exit::register_thread_exit_range_hook(
-            release_tls_client_metadata_in_freed_ranges,
-        );
-        Mutex::new(HashMap::new())
+/// TLS facts belong to the actual Socket's ordinary hidden JS state.
+/// The attached family's class proves the state receiver, including subclasses;
+/// no id lookup, constructor name or Rust projection is involved.
+fn client_state(handle: i64, create: bool) -> Option<f64> {
+    let value = ptr_value(handle as *mut u8);
+    (crate::native_payload::attached_family_class_id(value)
+        == Some(crate::native_class_ids::NET_SOCKET))
+    .then(|| crate::native_payload::js_state_object(value, create))
+    .filter(|value| !JSValue::from_bits(value.to_bits()).is_undefined())
+}
+fn state_field(state: f64, key: &str) -> f64 {
+    object_ptr(state)
+        .map(|object| get_field(object, key))
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let state = scope.root_nanbox_f64(client_state(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        false,
+    )?);
+    if !JSValue::from_bits(state_field(state.get_nanbox_f64(), "encrypted").to_bits()).to_bool() {
+        return None;
+    }
+    let string = |key| strict_string(state_field(state.get_nanbox_f64(), key));
+    let bytes = |key| {
+        let value = state_field(state.get_nanbox_f64(), key);
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(value, scope)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default()
+        })
+    };
+    let connected = !JSValue::from_bits(state_field(state.get_nanbox_f64(), "destroyed").to_bits())
+        .to_bool()
+        && JSValue::from_bits(state_field(state.get_nanbox_f64(), "tlsConnected").to_bits())
+            .to_bool();
+    Some(TlsClientMetadata {
+        servername: string("servername"),
+        authorized: JSValue::from_bits(state_field(state.get_nanbox_f64(), "authorized").to_bits())
+            .to_bool(),
+        authorization_error: string("authorizationError"),
+        protocol: connected.then(|| string("protocol")).flatten(),
+        alpn_protocol: string("alpnProtocol"),
+        peer_certificate: bytes("peerCertificateDer"),
+        own_certificate: bytes("ownCertificateDer"),
+        connected,
+        session_supplied: JSValue::from_bits(
+            state_field(state.get_nanbox_f64(), "sessionSupplied").to_bits(),
+        )
+        .to_bool(),
     })
 }
-
-/// #11471: drop every client record whose `checkServerIdentity` closure lives
-/// in an exiting thread's arena. The map is process-global while
-/// `tls.connect` can run on any thread, and closing a socket keeps its record,
-/// so a left-behind entry would be rooted as a dangling address and called by a
-/// late `js_tls_client_check_identity`.
-pub(crate) fn release_tls_client_metadata_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    if let Some(map) = TLS_CLIENT_METADATA.get() {
-        map.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|_, metadata| !freed.holds_i64(metadata.check_server_identity));
-    }
-}
-
-pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
-    client_metadata().lock().ok()?.get(&handle).cloned()
-}
-
 pub fn is_tls_client_handle(handle: i64) -> bool {
-    client_metadata()
-        .lock()
-        .map(|all| all.contains_key(&handle))
-        .unwrap_or(false)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    client_state(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        false,
+    )
+    .is_some_and(|state| JSValue::from_bits(state_field(state, "encrypted").to_bits()).to_bool())
 }
-
 #[no_mangle]
 pub extern "C" fn js_tls_client_is_connected(handle: i64) -> i32 {
     tls_client_metadata(handle)
@@ -450,13 +471,6 @@ pub fn scan_tls_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             visitor.visit_atomic_nanbox_u64_slot(slot, Ordering::Relaxed, Ordering::Relaxed)
         });
     }
-    if let Ok(mut all) = client_metadata().lock() {
-        for metadata in all.values_mut() {
-            if metadata.check_server_identity != 0 {
-                visitor.visit_i64_slot(&mut metadata.check_server_identity);
-            }
-        }
-    }
 }
 
 pub fn tls_shared_signature_algorithms() -> f64 {
@@ -471,9 +485,7 @@ pub fn tls_shared_signature_algorithms() -> f64 {
     value
 }
 
-/// Register a TLS client handle synchronously, before `tls.connect()` returns.
-/// The external net archive calls this bridge too, keeping its small numeric
-/// socket handles visible to the stdlib TLS class/property dispatcher.
+/// Publish TLS options on the actual Socket before connect returns.
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_client_record_start(
     handle: i64,
@@ -481,45 +493,56 @@ pub unsafe extern "C" fn js_tls_client_record_start(
     servername_ptr: *const u8,
     servername_len: usize,
 ) {
-    if handle <= 0 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let options = scope.root_nanbox_f64(options);
+    let Some(state) = client_state(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        true,
+    ) else {
         return;
-    }
+    };
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
     let servername = if servername_ptr.is_null() {
         None
     } else {
         std::str::from_utf8(std::slice::from_raw_parts(servername_ptr, servername_len))
             .ok()
             .map(str::to_string)
-            .filter(|name| !name.is_empty())
     };
-    let check_server_identity = object_ptr(options)
-        .map(|obj| get_field(obj, "checkServerIdentity"))
-        .filter(|value| {
-            let js = JSValue::from_bits(value.to_bits());
-            js.is_pointer() && crate::closure::is_closure_ptr(js.as_pointer::<u8>() as usize)
-        })
-        .map(|value| (value.to_bits() & crate::value::POINTER_MASK) as i64)
-        .unwrap_or(0);
-    let session_supplied = object_ptr(options).is_some_and(|object| {
-        let value = get_field(object, "session");
-        let js = JSValue::from_bits(value.to_bits());
-        !js.is_undefined() && !js.is_null()
-    });
-    client_metadata().lock().unwrap().insert(
-        handle,
-        TlsClientMetadata {
-            servername,
-            authorized: false,
-            authorization_error: None,
-            protocol: Some("TLSv1.3".to_string()),
-            alpn_protocol: None,
-            peer_certificate: Vec::new(),
-            own_certificate: Vec::new(),
-            connected: false,
-            check_server_identity,
-            session_supplied,
-        },
+    let callback = scope.root_nanbox_f64(
+        object_ptr(options.get_nanbox_f64())
+            .map(|obj| get_field(obj, "checkServerIdentity"))
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
     );
+    let session_supplied = object_ptr(options.get_nanbox_f64()).is_some_and(|obj| {
+        let value = JSValue::from_bits(get_field(obj, "session").to_bits());
+        !value.is_undefined() && !value.is_null()
+    });
+    set_rooted_object_field(&state, "checkServerIdentity", callback.get_nanbox_f64());
+    set_rooted_object_field(
+        &state,
+        "sessionSupplied",
+        f64::from_bits(JSValue::bool(session_supplied).bits()),
+    );
+    set_rooted_object_field(
+        &state,
+        "encrypted",
+        f64::from_bits(JSValue::bool(true).bits()),
+    );
+    set_rooted_object_field(
+        &state,
+        "tlsConnected",
+        f64::from_bits(JSValue::bool(false).bits()),
+    );
+    set_rooted_object_field(
+        &state,
+        "authorized",
+        f64::from_bits(JSValue::bool(false).bits()),
+    );
+    if let Some(servername) = servername {
+        set_rooted_object_field(&state, "servername", string_value(&servername));
+    }
 }
 
 #[no_mangle]
@@ -537,59 +560,100 @@ pub unsafe extern "C" fn js_tls_client_record_connected(
     own_cert_ptr: *const u8,
     own_cert_len: usize,
 ) {
-    let copy_string = |ptr: *const u8, len: usize| {
-        if ptr.is_null() || len == 0 {
-            None
-        } else {
-            std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
-                .ok()
-                .map(str::to_string)
-        }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let Some(state) = client_state(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        true,
+    ) else {
+        return;
     };
-    let copy_bytes = |ptr: *const u8, len: usize| {
-        if ptr.is_null() || len == 0 {
-            Vec::new()
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
+    for (key, ptr, len) in [
+        (
+            "authorizationError",
+            authorization_error_ptr,
+            authorization_error_len,
+        ),
+        ("protocol", protocol_ptr, protocol_len),
+        ("alpnProtocol", alpn_ptr, alpn_len),
+    ] {
+        let value = if ptr.is_null() || len == 0 {
+            f64::from_bits(TAG_UNDEFINED)
         } else {
-            std::slice::from_raw_parts(ptr, len).to_vec()
-        }
-    };
-    if let Some(metadata) = client_metadata().lock().unwrap().get_mut(&handle) {
-        metadata.authorized = authorized != 0;
-        metadata.authorization_error =
-            copy_string(authorization_error_ptr, authorization_error_len);
-        metadata.protocol = copy_string(protocol_ptr, protocol_len);
-        metadata.alpn_protocol = copy_string(alpn_ptr, alpn_len);
-        metadata.peer_certificate = copy_bytes(peer_cert_ptr, peer_cert_len);
-        metadata.own_certificate = copy_bytes(own_cert_ptr, own_cert_len);
-        metadata.connected = true;
+            string_value(&String::from_utf8_lossy(std::slice::from_raw_parts(
+                ptr, len,
+            )))
+        };
+        set_rooted_object_field(&state, key, value);
     }
+    for (key, ptr, len) in [
+        ("peerCertificateDer", peer_cert_ptr, peer_cert_len),
+        ("ownCertificateDer", own_cert_ptr, own_cert_len),
+    ] {
+        let bytes = if ptr.is_null() || len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(ptr, len)
+        };
+        let buffer = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes);
+        set_rooted_object_field(&state, key, buffer);
+    }
+    set_rooted_object_field(
+        &state,
+        "authorized",
+        f64::from_bits(JSValue::bool(authorized != 0).bits()),
+    );
+    set_rooted_object_field(
+        &state,
+        "tlsConnected",
+        f64::from_bits(JSValue::bool(true).bits()),
+    );
 }
 
 #[no_mangle]
 pub extern "C" fn js_tls_client_record_closed(handle: i64) {
-    if let Some(metadata) = client_metadata().lock().unwrap().get_mut(&handle) {
-        metadata.connected = false;
-        metadata.protocol = None;
+    let Some(state) = client_state(handle, false) else {
+        return;
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap() as *mut ObjectHeader);
+    unsafe {
+        set_rooted_object_field(
+            &state,
+            "tlsConnected",
+            f64::from_bits(JSValue::bool(false).bits()),
+        );
     }
 }
 
-/// Run a user supplied `checkServerIdentity` callback after the native TLS
-/// handshake has produced the peer-certificate object. An `undefined` return
-/// accepts the identity; any other value is emitted as the socket error.
+/// The Socket JS state owns and traces the callback. Root every operand before
+/// allocating the hostname or invoking user code; no payload borrow spans JS.
 #[no_mangle]
 pub extern "C" fn js_tls_client_check_identity(handle: i64, certificate: f64) -> f64 {
-    let Some(metadata) = tls_client_metadata(handle) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let certificate = scope.root_nanbox_f64(certificate);
+    let Some(state) = client_state(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        false,
+    ) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    if metadata.check_server_identity == 0 {
+    let state = scope.root_nanbox_f64(state);
+    let callback =
+        scope.root_nanbox_f64(state_field(state.get_nanbox_f64(), "checkServerIdentity"));
+    let callback_ptr = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64());
+    if !crate::closure::is_closure_ptr(callback_ptr as usize) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let host = string_value(metadata.servername.as_deref().unwrap_or_default());
+    let host = scope.root_nanbox_f64(state_field(state.get_nanbox_f64(), "servername"));
     crate::closure::js_closure_call2(
-        metadata.check_server_identity as *const crate::ClosureHeader,
+        crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
+            as *const crate::ClosureHeader,
         crate::closure::plain_call_receiver(),
-        host,
-        certificate,
+        host.get_nanbox_f64(),
+        certificate.get_nanbox_f64(),
     )
 }
 
@@ -669,6 +733,51 @@ fn certificate_subject_alt_name(cert: &x509_cert::Certificate) -> Option<String>
 /// `checkServerIdentity` callback. This lives in the runtime (rather than the
 /// TLS stdlib) because the external net archive must also work in optimized
 /// programs whose direct `TLSSocket` use does not enable the stdlib TLS gate.
+/// Decode a Socket-owned DER snapshot without retaining a GC address.
+#[no_mangle]
+pub unsafe extern "C" fn js_tls_client_certificate(owner: i64, own: i32, detailed: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner_root = scope.root_nanbox_f64(ptr_value(owner as *mut u8));
+    let metadata = tls_client_metadata(crate::value::js_nanbox_get_pointer(
+        owner_root.get_nanbox_f64(),
+    ));
+    let bytes = metadata
+        .map(|metadata| {
+            if own != 0 {
+                metadata.own_certificate
+            } else {
+                metadata.peer_certificate
+            }
+        })
+        .unwrap_or_default();
+    tls_legacy_certificate_object(&bytes, JSValue::from_bits(detailed.to_bits()).to_bool())
+}
+
+/// TLS client transports use the Socket payload, with Node's ordinary
+/// TLSSocket prototype above Socket.prototype. No transport identity changes.
+#[no_mangle]
+pub extern "C" fn js_tls_client_attach_socket_prototype(owner: i64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(owner as *mut u8));
+    if crate::native_payload::attached_family_class_id(owner.get_nanbox_f64())
+        != Some(crate::native_class_ids::NET_SOCKET)
+    {
+        return;
+    }
+    // Direct FFI factories can reach TLS without materializing its module
+    // namespace. Install the canonical constructor hierarchy before minting
+    // TLSSocket, just as the value-form import path does.
+    crate::object::js_nm_install_tls();
+    let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "tls",
+        "TLSSocket",
+    ));
+    let prototype = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+        constructor.get_nanbox_f64(),
+    ));
+    crate::object::js_object_set_prototype_of(owner.get_nanbox_f64(), prototype.get_nanbox_f64());
+}
+
 pub unsafe fn tls_legacy_certificate_object(der: &[u8], detailed: bool) -> f64 {
     use x509_cert::der::Decode;
     let Ok(cert) = x509_cert::Certificate::from_der(der) else {
@@ -710,11 +819,16 @@ pub unsafe extern "C" fn js_tls_client_check_identity_from_metadata(handle: i64)
     let Some(metadata) = tls_client_metadata(handle) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    if metadata.check_server_identity == 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let certificate = tls_legacy_certificate_object(&metadata.peer_certificate, true);
-    js_tls_client_check_identity(handle, certificate)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let certificate = scope.root_nanbox_f64(tls_legacy_certificate_object(
+        &metadata.peer_certificate,
+        true,
+    ));
+    js_tls_client_check_identity(
+        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+        certificate.get_nanbox_f64(),
+    )
 }
 
 pub fn js_tls_root_certificates() -> f64 {
@@ -1599,6 +1713,14 @@ static KEEP_JS_TLS_VALIDATE_POSITIONAL_CONNECT_OPTIONS: extern "C" fn(f64) =
 #[used(compiler)]
 static KEEP_JS_TLS_CLIENT_CHECK_IDENTITY: extern "C" fn(i64, f64) -> f64 =
     js_tls_client_check_identity;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_TLS_CLIENT_ATTACH_SOCKET_PROTOTYPE: extern "C" fn(i64) =
+    js_tls_client_attach_socket_prototype;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_TLS_CLIENT_CERTIFICATE: unsafe extern "C" fn(i64, i32, f64) -> f64 =
+    js_tls_client_certificate;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_TLS_CLIENT_CHECK_IDENTITY_FROM_METADATA: unsafe extern "C" fn(i64) -> f64 =

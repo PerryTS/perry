@@ -555,6 +555,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
+            if let Some((module, export)) = current_class.native_extends.as_ref() {
+                if module.trim_start_matches("node:") == "net"
+                    && matches!(export.as_str(), "Socket" | "Stream" | "Server")
+                {
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let (args, roots) = crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
+                    let options = args.first().cloned().unwrap_or_else(|| undef.clone());
+                    let callback = args.get(1).cloned().unwrap_or_else(|| undef.clone());
+                    let this = ctx
+                        .this_stack
+                        .last()
+                        .cloned()
+                        .map(|slot| ctx.block().load(DOUBLE, &slot))
+                        .unwrap_or_else(|| undef.clone());
+                    let kind = u32::from(export == "Server").to_string();
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_net_subclass_init",
+                        &[
+                            (DOUBLE, &this),
+                            (DOUBLE, &options),
+                            (DOUBLE, &callback),
+                            (I32, &kind),
+                        ],
+                    );
+                    bind_derived_this_after_super(ctx);
+                    crate::lower_call::apply_field_initializers_recursive(
+                        ctx,
+                        &current_class_name,
+                        crate::lower_call::FieldInitMode::SelfOnly,
+                    )?;
+                    roots.release(ctx);
+                    return Ok(undef);
+                }
+            }
             // #5437 (Next.js p-queue `PQueue`): when HIR captured a dynamic
             // `extends_expr` for this class, the parent is a LEXICAL runtime
             // value (an in-scope local / require result) — NOT the same-named

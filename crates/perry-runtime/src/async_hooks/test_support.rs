@@ -66,6 +66,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn owned_native_provider_publishes_resource_and_restores_context_after_throw() {
+        reset_for_tests();
+        let storage = crate::async_context::AsyncLocalStoragePayload::default();
+        let token = storage.token();
+        crate::async_context::enter_with(token, 11.0);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let resource = scope.root_nanbox_f64(unsafe {
+            provider_ffi::js_async_hooks_owned_provider_new(b"TCPWRAP".as_ptr(), 7, u64::MAX)
+        });
+        let raw = crate::value::js_nanbox_get_pointer(resource.get_nanbox_f64());
+        let ids = unsafe { resource_payload(raw) }.unwrap().ids;
+        let metadata = RESOURCES.lock().unwrap();
+        assert_eq!(
+            metadata.get(&ids.async_id).unwrap().resource.to_bits(),
+            TAG_UNDEFINED_F64.to_bits(),
+            "the existing async registry must not root the owning provider object"
+        );
+        drop(metadata);
+        crate::async_context::enter_with(token, 22.0);
+        let outcome = provider_ffi::owned_provider_scope(resource.get_nanbox_f64(), || {
+            assert_eq!(execution_async_id_u64(), ids.async_id);
+            assert_eq!(crate::async_context::get_store(token), Some(11.0));
+            assert_eq!(
+                js_async_hooks_execution_async_resource().to_bits(),
+                resource.get_nanbox_f64().to_bits()
+            );
+            crate::exception::js_throw(41.0)
+        });
+        assert_eq!(outcome.unwrap_err(), 41.0);
+        assert_eq!(execution_async_id_u64(), 0);
+        assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
+        assert_eq!(crate::async_context::get_store(token), Some(22.0));
+        assert_eq!(
+            RESOURCES
+                .lock()
+                .unwrap()
+                .get(&ids.async_id)
+                .unwrap()
+                .resource
+                .to_bits(),
+            TAG_UNDEFINED_F64.to_bits()
+        );
+        provider_ffi::js_async_hooks_owned_provider_destroy(resource.get_nanbox_f64());
+        provider_ffi::js_async_hooks_owned_provider_destroy(resource.get_nanbox_f64());
+        assert!(!RESOURCES.lock().unwrap().contains_key(&ids.async_id));
+        crate::async_context::clear_store(token);
+        reset_for_tests();
+    }
+
+    #[test]
+    fn owned_native_provider_payload_drop_removes_existing_metadata_without_js() {
+        reset_for_tests();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let resource = scope.root_nanbox_f64(unsafe {
+            provider_ffi::js_async_hooks_owned_provider_new(b"TCPWRAP".as_ptr(), 7, u64::MAX)
+        });
+        let raw = crate::value::js_nanbox_get_pointer(resource.get_nanbox_f64());
+        let id = unsafe { resource_payload(raw) }.unwrap().ids.async_id;
+        assert!(RESOURCES.lock().unwrap().contains_key(&id));
+        assert!(
+            crate::native_payload::close_attached::<AsyncResourcePayload>(
+                resource.get_nanbox_f64(),
+                &ASYNC_RESOURCE_FAMILY
+            )
+        );
+        assert!(!RESOURCES.lock().unwrap().contains_key(&id));
+        reset_for_tests();
+    }
+
+    #[test]
     fn disabled_hooks_release_payloads_and_retire_callback_records() {
         reset_for_tests();
         let scope = crate::gc::RuntimeHandleScope::new();

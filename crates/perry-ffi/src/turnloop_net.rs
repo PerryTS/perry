@@ -48,6 +48,14 @@ pub const NET_ERROR: i32 = 8;
 pub const NET_TIMER: i32 = 9;
 /// `NetCompletion::flags`: a link route's completion (`id` is an owner link).
 pub const NET_FLAG_LINK: i32 = 1;
+/// A link `Closed` for an earlier handle of a reopened, OPEN cell. Emit only
+/// the terminal event; do not mark the new transport closed.
+pub const NET_FLAG_STALE: i32 = 2;
+/// A link `Closed` lends its generational driver handle as four u32s
+/// ([`NetCompletion::closed_handle_parts`]).
+pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
+/// TLS plaintext, already decoded, on the socket's current link route.
+pub const NET_FLAG_PLAINTEXT: i32 = 8;
 
 /// This module's view of the runtime's completion record.
 ///
@@ -90,6 +98,22 @@ pub struct NetCompletion {
 }
 
 impl NetCompletion {
+    /// The closing driver handle's owner/key (low/high u32s), for callback
+    /// context kept in the owner's JS state. No id is minted.
+    ///
+    /// # Safety
+    /// Only during the sink call receiving this runtime completion.
+    pub unsafe fn closed_handle_parts(&self) -> Option<[u32; 4]> {
+        if self.kind != NET_CLOSED
+            || self.flags & NET_FLAG_HANDLE_PARTS == 0
+            || self.data.is_null()
+            || self.len != std::mem::size_of::<[u32; 4]>()
+        {
+            return None;
+        }
+        Some(std::ptr::read_unaligned(self.data.cast::<[u32; 4]>()))
+    }
+
     /// The payload this completion is for, on a link route.
     pub fn link(&self) -> Option<crate::native_payload::OwnerLink> {
         (self.flags & NET_FLAG_LINK != 0 && self.id != 0).then(|| {
@@ -1658,6 +1682,147 @@ pub fn link_set_route(
         },
         {
             let _ = (core, link, route);
+            Err(unavailable())
+        }
+    )
+}
+
+/// An ephemeral copy of the driver's generational handle or pending resolve,
+/// for checking the incarnation after JS re-entry. Opaque native data: no JS
+/// pointer, ref, id or ownership of the resource.
+#[repr(C, align(8))]
+#[derive(Clone, Copy)]
+pub struct HandleSnapshot {
+    words: [std::mem::MaybeUninit<u64>; 4],
+}
+
+#[cfg(any(not(test), feature = "runtime-link"))]
+extern "C" {
+    fn js_perry_net_link_handle_parts(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        out: *mut u32,
+    ) -> i32;
+    fn js_perry_net_link_snapshot_handle(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        out: *mut std::ffi::c_void,
+    ) -> i32;
+    fn js_perry_net_link_handle_matches(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        snapshot: *const std::ffi::c_void,
+    ) -> i32;
+    fn js_perry_net_link_retained_bytes(core: *mut std::ffi::c_void, link: usize) -> usize;
+    fn js_perry_net_link_dispatch_plaintext(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        bytes: *const u8,
+        len: usize,
+        eof: i32,
+        err: *mut RawNetError,
+    ) -> i32;
+}
+
+/// The installed handle as four u32s.
+pub fn link_handle_parts(core: &mut TransportCore, link: OwnerLink) -> Option<[u32; 4]> {
+    runtime_call!(
+        {
+            let mut parts = [0u32; 4];
+            (unsafe { js_perry_net_link_handle_parts(core.raw(), link.raw(), parts.as_mut_ptr()) }
+                != 0)
+                .then_some(parts)
+        },
+        {
+            let _ = (core, link);
+            None
+        }
+    )
+}
+
+/// Snapshot the current handle (or pending resolve) before running JS.
+pub fn link_snapshot_handle(core: &mut TransportCore, link: OwnerLink) -> Option<HandleSnapshot> {
+    runtime_call!(
+        {
+            let mut snapshot = HandleSnapshot {
+                words: [std::mem::MaybeUninit::uninit(); 4],
+            };
+            (unsafe {
+                js_perry_net_link_snapshot_handle(
+                    core.raw(),
+                    link.raw(),
+                    (&mut snapshot as *mut HandleSnapshot).cast(),
+                )
+            } != 0)
+                .then_some(snapshot)
+        },
+        {
+            let _ = (core, link);
+            None
+        }
+    )
+}
+
+/// Whether the freshly projected core still holds the snapshot's resource.
+pub fn link_handle_matches(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    snapshot: &HandleSnapshot,
+) -> bool {
+    runtime_call!(
+        {
+            unsafe {
+                js_perry_net_link_handle_matches(
+                    core.raw(),
+                    link.raw(),
+                    (snapshot as *const HandleSnapshot).cast(),
+                ) != 0
+            }
+        },
+        {
+            let _ = (core, link, snapshot);
+            false
+        }
+    )
+}
+
+/// Heap bytes the core owns, for the payload's external-bytes accounting.
+pub fn link_retained_bytes(core: &mut TransportCore, link: OwnerLink) -> usize {
+    runtime_call!(
+        { unsafe { js_perry_net_link_retained_bytes(core.raw(), link.raw()) } },
+        {
+            let _ = (core, link);
+            0
+        }
+    )
+}
+
+/// Deliver decoded TLS plaintext (or EOF) on the core's current route.
+///
+/// # Safety
+/// `core`/`link` name an OPEN payload whose owner is rooted. The sink may run
+/// JS: re-project the core afterwards.
+pub unsafe fn link_dispatch_plaintext(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    bytes: &[u8],
+    eof: bool,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| {
+                js_perry_net_link_dispatch_plaintext(
+                    core.cast(),
+                    link.raw(),
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    i32::from(eof),
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, bytes, eof);
             Err(unavailable())
         }
     )

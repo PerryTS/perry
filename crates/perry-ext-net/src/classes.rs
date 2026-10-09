@@ -1,13 +1,24 @@
+use perry_ffi::native_payload::{self as np, PayloadFamily, PayloadMiss};
+use perry_ffi::TransientRootScope;
 use perry_ffi::{
     alloc_string, js_array_alloc, js_array_get, js_array_push, ArrayHeader, JsValue, StringHeader,
 };
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Mutex, OnceLock};
+#[path = "classes_prototype.rs"]
+mod prototype;
 
-use crate::{
-    get_object_number_field, get_object_string_field, next_id_or_throw, string_from_header_i64,
-};
+const BLOCK_LIST_ID: u32 = perry_ffi::native_class_ids::NET_BLOCK_LIST;
+const SOCKET_ADDRESS_ID: u32 = perry_ffi::native_class_ids::NET_SOCKET_ADDRESS;
+static BLOCK_LIST_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<BlockListState>(None);
+static BLOCK_LIST: PayloadFamily = PayloadFamily::new::<BlockListState>(BLOCK_LIST_ID, "BlockList", false, &BLOCK_LIST_VTABLE)
+    .with_constructor_length(0)
+    .with_installer(prototype::install_block_list);
+static SOCKET_ADDRESS_VTABLE: perry_ffi::native_stream::PayloadVTable = perry_ffi::native_stream::payload_vtable::<SocketAddressState>(None);
+static SOCKET_ADDRESS: PayloadFamily = PayloadFamily::new::<SocketAddressState>(SOCKET_ADDRESS_ID, "SocketAddress", false, &SOCKET_ADDRESS_VTABLE)
+    .with_constructor_length(0)
+    .with_installer(prototype::install_socket_address);
+
+use crate::{get_object_number_field, get_object_string_field, string_from_header_i64};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -30,14 +41,36 @@ struct SocketAddressState {
     flowlabel: u32,
 }
 
-fn block_lists() -> &'static Mutex<HashMap<i64, BlockListState>> {
-    static MAP: OnceLock<Mutex<HashMap<i64, BlockListState>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+// The static native-call ABI passes a raw object address. State is reached
+// through that ordinary object's class-checked cell, never through an id.
+unsafe fn block_list<'a>(handle: i64) -> &'a mut BlockListState {
+    np::payload_mut(boxed_handle(handle), &BLOCK_LIST).unwrap_or_else(throw_miss)
 }
 
-fn socket_addresses() -> &'static Mutex<HashMap<i64, SocketAddressState>> {
-    static MAP: OnceLock<Mutex<HashMap<i64, SocketAddressState>>> = OnceLock::new();
-    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+fn throw_miss<T>(miss: PayloadMiss) -> T {
+    extern "C" {
+        fn js_typeerror_new(message: *mut StringHeader) -> *mut u8;
+    }
+    // Release transports JS exceptions as raw foreign unwind records. Its
+    // panic=abort C-unwind call guard would abort before the generated catch.
+    #[cfg(panic = "abort")]
+    extern "C" {
+        fn js_throw(value: f64) -> !;
+    }
+    #[cfg(not(panic = "abort"))]
+    extern "C-unwind" {
+        fn js_throw(value: f64) -> !;
+    }
+    let text = match miss {
+        PayloadMiss::Foreign => "Illegal receiver",
+        PayloadMiss::Closed => "Native payload is closed",
+    };
+    let message = alloc_string(text);
+    unsafe {
+        js_throw(f64::from_bits(
+            JsValue::from_object_ptr(js_typeerror_new(message.as_raw())).bits(),
+        ))
+    }
 }
 
 extern "C" {
@@ -63,8 +96,6 @@ fn handle_from_value(value: f64) -> Option<i64> {
     let value = JsValue::from_bits(value.to_bits());
     if value.is_pointer() {
         Some(value.as_pointer::<u8>() as i64)
-    } else if value.is_number() {
-        Some(value.to_number() as i64)
     } else {
         None
     }
@@ -120,21 +151,25 @@ fn rule_to_string(rule: &BlockRule) -> String {
 }
 
 fn rules_array(rules: &[BlockRule]) -> *mut ArrayHeader {
-    let mut arr = unsafe { js_array_alloc(rules.len() as u32) };
+    let scope = TransientRootScope::enter();
+    let mut arr = scope.root_addr(unsafe { js_array_alloc(rules.len() as u32) } as i64);
     for rule in rules.iter().rev() {
         let s = alloc_string(&rule_to_string(rule));
-        arr = unsafe { js_array_push(arr, JsValue::from_string_ptr(s.as_raw())) };
+        let next = unsafe {
+            js_array_push(
+                arr.get() as *mut ArrayHeader,
+                JsValue::from_string_ptr(s.as_raw()),
+            )
+        };
+        arr = scope.root_addr(next as i64);
     }
-    arr
+    arr.get() as *mut ArrayHeader
 }
 
 fn block_list_rules_array(handle: i64) -> *mut ArrayHeader {
-    block_lists()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|list| rules_array(&list.rules))
-        .unwrap_or_else(|| unsafe { js_array_alloc(0) })
+    // Snapshot Rust-only data before allocating; no payload borrow crosses GC.
+    let rules = unsafe { block_list(handle).rules.clone() };
+    rules_array(&rules)
 }
 
 fn addr_to_u128(ip: IpAddr) -> u128 {
@@ -214,28 +249,22 @@ fn string_from_js_value(value: JsValue) -> Option<String> {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_new() -> i64 {
-    crate::ensure_gc_scanner_registered();
-    crate::dispatch::ensure_runtime_dispatch_registered();
-    let id = next_id_or_throw();
-    block_lists()
-        .lock()
-        .unwrap()
-        .insert(id, BlockListState { rules: Vec::new() });
-    id
+    handle_from_value(unsafe { np::alloc_in(&BLOCK_LIST, "net",
+        BlockListState { rules: Vec::new() },
+        0,
+        &[],
+    ) })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_block_list_handle(handle: i64) -> i32 {
-    block_lists().lock().unwrap().contains_key(&handle) as i32
+    np::lifecycle(boxed_handle(handle), &BLOCK_LIST).is_ok() as i32
 }
 
 #[no_mangle]
 pub extern "C" fn js_net_block_list_is_block_list(value: f64) -> f64 {
-    js_bool(
-        JsValue::from_bits(value.to_bits()).is_pointer()
-            && handle_from_value(value)
-                .is_some_and(|h| block_lists().lock().unwrap().contains_key(&h)),
-    )
+    js_bool(np::lifecycle(value, &BLOCK_LIST).is_ok())
 }
 
 #[no_mangle]
@@ -244,10 +273,12 @@ pub unsafe extern "C" fn js_net_block_list_add_address(
     address_ptr: i64,
     family_ptr: i64,
 ) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
-    if let Some(list) = block_lists().lock().unwrap().get_mut(&handle) {
-        list.rules.push(BlockRule::Address(ip));
-    }
+    block_list(owner.get()).rules.push(BlockRule::Address(ip));
+    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
     undefined()
 }
 
@@ -258,14 +289,18 @@ pub unsafe extern "C" fn js_net_block_list_add_range(
     end_ptr: i64,
     family_ptr: i64,
 ) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let start = parse_ip(start_ptr, family_ptr);
     let end = parse_ip(end_ptr, family_ptr);
     if !same_family(start, end) {
         js_net_throw_invalid_address();
     }
-    if let Some(list) = block_lists().lock().unwrap().get_mut(&handle) {
-        list.rules.push(BlockRule::Range(start, end));
-    }
+    block_list(owner.get())
+        .rules
+        .push(BlockRule::Range(start, end));
+    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
     undefined()
 }
 
@@ -276,12 +311,16 @@ pub unsafe extern "C" fn js_net_block_list_add_subnet(
     prefix: f64,
     family_ptr: i64,
 ) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
     let max = if ip.is_ipv4() { 32.0 } else { 128.0 };
     let prefix = js_net_validate_block_list_prefix(prefix, max) as u8;
-    if let Some(list) = block_lists().lock().unwrap().get_mut(&handle) {
-        list.rules.push(BlockRule::Subnet(ip, prefix));
-    }
+    block_list(owner.get())
+        .rules
+        .push(BlockRule::Subnet(ip, prefix));
+    let bytes = block_list(owner.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(owner.get()), &BLOCK_LIST_VTABLE, bytes);
     undefined()
 }
 
@@ -291,12 +330,13 @@ pub unsafe extern "C" fn js_net_block_list_check(
     address_ptr: i64,
     family_ptr: i64,
 ) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
     let ip = parse_ip(address_ptr, family_ptr);
-    let contains = block_lists()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_some_and(|list| list.rules.iter().any(|rule| rule_contains(rule, ip)));
+    let contains = block_list(owner.get())
+        .rules
+        .iter()
+        .any(|rule| rule_contains(rule, ip));
     js_bool(contains)
 }
 
@@ -312,6 +352,8 @@ pub extern "C" fn js_net_block_list_rules(handle: i64) -> *mut ArrayHeader {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let receiver = scope.root_addr(handle);
     let value = JsValue::from_bits(value.to_bits());
     if !value.is_pointer() {
         return undefined();
@@ -320,48 +362,50 @@ pub unsafe extern "C" fn js_net_block_list_from_json(handle: i64, value: f64) ->
     if arr.is_null() {
         return undefined();
     }
+    let arr = scope.root_addr(arr as i64);
     let mut parsed = Vec::new();
-    for i in 0..(*arr).length {
-        if let Some(rule) =
-            string_from_js_value(js_array_get(arr, i)).and_then(|s| parse_rule_string(&s))
+    let length = (*(arr.get() as *mut ArrayHeader)).length;
+    for i in 0..length {
+        if let Some(rule) = string_from_js_value(js_array_get(arr.get() as *mut ArrayHeader, i))
+            .and_then(|s| parse_rule_string(&s))
         {
             parsed.push(rule);
         }
     }
-    if let Some(list) = block_lists().lock().unwrap().get_mut(&handle) {
-        list.rules = parsed;
-    }
+    block_list(receiver.get()).rules = parsed;
+    let bytes = block_list(receiver.get()).rules.capacity() * std::mem::size_of::<BlockRule>();
+    np::set_external_bytes(boxed_handle(receiver.get()), &BLOCK_LIST_VTABLE, bytes);
     undefined()
 }
 
 fn socket_address_new(address: IpAddr, port: u16, flowlabel: u32) -> f64 {
-    crate::dispatch::ensure_runtime_dispatch_registered();
-    let id = next_id_or_throw();
-    socket_addresses().lock().unwrap().insert(
-        id,
+    unsafe { np::alloc_in(&SOCKET_ADDRESS, "net",
         SocketAddressState {
             address,
             port,
             flowlabel,
         },
-    );
-    boxed_handle(id)
+        0,
+        &[],
+    ) }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
-    crate::ensure_gc_scanner_registered();
-    let address = get_object_string_field(options, "address").unwrap_or_else(|| "127.0.0.1".into());
-    let family = get_object_string_field(options, "family").map(|s| s.to_ascii_lowercase());
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let address =
+        get_object_string_field(options.get(), "address").unwrap_or_else(|| "127.0.0.1".into());
+    let family = get_object_string_field(options.get(), "family").map(|s| s.to_ascii_lowercase());
     let Ok(ip) = address.parse::<IpAddr>() else {
         js_net_throw_invalid_address()
     };
     if !family_matches(&ip, family.as_deref()) {
         js_net_throw_invalid_address();
     }
-    let port = get_object_number_field(options, "port").unwrap_or(0.0);
+    let port = get_object_number_field(options.get(), "port").unwrap_or(0.0);
     js_net_validate_listen_port(port);
-    let flowlabel = get_object_number_field(options, "flowlabel")
+    let flowlabel = get_object_number_field(options.get(), "flowlabel")
         .unwrap_or(0.0)
         .max(0.0) as u32;
     handle_from_value(socket_address_new(ip, port as u16, flowlabel)).unwrap_or(0)
@@ -369,7 +413,7 @@ pub unsafe extern "C" fn js_net_socket_address_new(options: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_socket_address_handle(handle: i64) -> i32 {
-    socket_addresses().lock().unwrap().contains_key(&handle) as i32
+    np::lifecycle(boxed_handle(handle), &SOCKET_ADDRESS).is_ok() as i32
 }
 
 #[no_mangle]
@@ -409,13 +453,11 @@ pub unsafe extern "C" fn js_net_socket_address_parse(input_ptr: i64) -> f64 {
     }
 }
 
-fn with_socket_address<T>(handle: i64, default: T, f: impl FnOnce(&SocketAddressState) -> T) -> T {
-    socket_addresses()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(f)
-        .unwrap_or(default)
+fn with_socket_address<T>(handle: i64, _default: T, f: impl FnOnce(&SocketAddressState) -> T) -> T {
+    let state =
+        unsafe { np::payload_mut::<SocketAddressState>(boxed_handle(handle), &SOCKET_ADDRESS) }
+            .unwrap_or_else(throw_miss);
+    f(state)
 }
 
 #[no_mangle]
@@ -454,4 +496,47 @@ pub unsafe extern "C" fn js_net_socket_address_parse_value(input: f64) -> f64 {
         fn js_net_validate_socket_address_parse_input(input: f64) -> i64;
     }
     js_net_socket_address_parse(js_net_validate_socket_address_parse_input(input))
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_socket_address_to_json(handle: i64) -> f64 {
+    let state = with_socket_address(handle, None, |s| Some(s.clone())).unwrap();
+    let scope = TransientRootScope::enter();
+    let address = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(&state.address.to_string()).as_raw()).bits(),
+    ));
+    let family = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(
+            alloc_string(if state.address.is_ipv6() {
+                "ipv6"
+            } else {
+                "ipv4"
+            })
+            .as_raw(),
+        )
+        .bits(),
+    ));
+    let keys = ["address", "port", "family", "flowlabel"];
+    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
+    let object = scope.root_addr(unsafe {
+        perry_ffi::js_object_alloc_with_shape(shape_id, 4, packed.as_ptr(), packed.len() as u32)
+    } as i64);
+    for (i, value) in [
+        address.get(),
+        state.port as f64,
+        family.get(),
+        state.flowlabel as f64,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        unsafe {
+            perry_ffi::js_object_set_field(
+                object.get() as *mut perry_ffi::ObjectHeader,
+                i as u32,
+                JsValue::from_bits(value.to_bits()),
+            );
+        }
+    }
+    boxed_handle(object.get())
 }

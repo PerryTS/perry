@@ -476,6 +476,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // stdlib-only link resolved them without the wrapper. That copy is
     // deleted; perry-ext-net is the only definition, so an emitted call must
     // put its archive on the link line like every other net symbol.
+    ("js_ext_net_socket_alloc",                    OwnerKind::WellKnown("net")),
     ("js_net_socket_alloc",                         OwnerKind::WellKnown("net")),
     ("js_net_socket_connect",                       OwnerKind::WellKnown("net")),
     ("js_net_socket_method_connect",                OwnerKind::WellKnown("net")),

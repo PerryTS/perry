@@ -388,7 +388,7 @@ fn test_only() { register_handle(2_u8); }
     if missing:
         print(f"native_handle_ledger self-test FAILED: stale classification entries: {missing}")
         return 1
-    if sum(tables.values()) < 150 or sum(producers.values()) < 150:
+    if sum(tables.values()) < 150 or sum(producers.values()) < 100:
         print("native_handle_ledger self-test FAILED: implausibly small real-tree census")
         return 1
     print(

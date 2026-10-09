@@ -262,6 +262,12 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
     module.declare_function("js_ext_net_socket_once", I64, &[I64, I64, I64]);
     module.declare_function("js_ext_net_socket_on", VOID, &[I64, I64, I64]);
+    module.declare_function(
+        "js_net_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function("js_ext_net_socket_alloc", I64, &[DOUBLE]);
     module.declare_function("js_ext_tls_connect", I64, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_net_socket_remove_listener", I64, &[I64, I64, I64]);
     module.declare_function("js_net_socket_remove_all_listeners", I64, &[I64, I64]);

@@ -122,6 +122,8 @@ pub(crate) fn attach_external_rooted(
             links_owner,
         )
     };
+    #[cfg(feature = "native-payload-test-census")]
+    super::test_census::created(unsafe { (*cell).type_id });
     let word = crate::value::JSValue::pointer(cell as *const u8).bits();
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         let meta = (*obj).meta;

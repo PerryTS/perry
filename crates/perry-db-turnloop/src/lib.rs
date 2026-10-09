@@ -136,7 +136,8 @@ pub mod subsystem {
     //!
     //! Keep this band contiguous and keep it here: it is the one authority for
     //! the database slots, and `perry-runtime`'s `turnloop_net::sink` carries
-    //! the full map. The ceiling is `MAX_SUBSYSTEMS` (16).
+    //! the full map. The ceiling is `MAX_SUBSYSTEMS` (32); phase A protocol sinks use
+    //! 13, 15 and 18 and leave these reservations intact.
 
     /// Formerly `perry-ext-pg` (removed, #10677: npm `pg` now compiles from
     /// source over `net`). Kept reserved so the database band never renumbers

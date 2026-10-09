@@ -315,6 +315,8 @@ unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> 
     }
     #[cfg(test)]
     PAYLOAD_FINALIZED.fetch_add(1, Ordering::SeqCst);
+    #[cfg(feature = "native-payload-test-census")]
+    crate::native_payload::test_census::finalized((*handle).type_id, (*handle).refs);
     #[cfg(test)]
     let sabotage = crate::native_payload::callback_sabotage("finalized");
     #[cfg(not(test))]
@@ -327,6 +329,8 @@ unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> 
         && !(*handle).resource_ptr.is_null()
         && drop_fn.is_some();
     if let (true, Some(finalizer)) = (should_finalize, drop_fn) {
+        #[cfg(feature = "native-payload-test-census")]
+        crate::native_payload::test_census::dropped((*handle).type_id);
         finalizer((*handle).resource_ptr, ptr::null_mut());
     }
     (*handle).finalized = 1;
@@ -490,6 +494,8 @@ pub(crate) unsafe fn native_handle_release_rust_payload(handle: *mut NativeHandl
     (*handle).flags |= crate::native_payload::CLOSING;
     if (*handle).ownership == OWNERSHIP_OWNED {
         if let Some(finalizer) = cell_drop_fn(handle) {
+            #[cfg(feature = "native-payload-test-census")]
+            crate::native_payload::test_census::dropped((*handle).type_id);
             finalizer((*handle).resource_ptr, ptr::null_mut());
         }
     }

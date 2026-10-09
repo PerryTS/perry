@@ -162,6 +162,41 @@ unsafe fn net_provider_dispatch(ctx: &NmCtx, name: &str) -> f64 {
     dispatch(name.as_ptr(), name.len(), ctx.args_ptr, ctx.args_len)
 }
 
+/// Initialize a proven native net base on its existing derived receiver.
+/// Only constructor export metadata chooses the family; no receiver name or
+/// transport id participates in attachment.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_subclass_init(
+    receiver: f64,
+    options: f64,
+    callback: f64,
+    server: u32,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let options = scope.root_nanbox_f64(options);
+    let callback = scope.root_nanbox_f64(callback);
+    let args = [
+        receiver.get_nanbox_f64(),
+        options.get_nanbox_f64(),
+        callback.get_nanbox_f64(),
+    ];
+    let ctx = NmCtx {
+        obj: std::ptr::null(),
+        args_ptr: args.as_ptr(),
+        args_len: args.len(),
+        assert_skip_prototype: false,
+    };
+    net_provider_dispatch(
+        &ctx,
+        if server != 0 {
+            "Server.init"
+        } else {
+            "Socket.init"
+        },
+    )
+}
+
 /// `new` on a bound node:net class value (`const Sock = net.Socket; new Sock()`,
 /// pg's function-local `new (require('net')).Socket()`). Registered by
 /// `js_nm_install_net`; the classes are provider-owned like the factories.

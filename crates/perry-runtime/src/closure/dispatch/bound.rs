@@ -69,6 +69,42 @@ pub unsafe fn dispatch_bound_method(
     let private_brand = (crate::closure::real_capture_count((*closure).capture_count) >= 4)
         .then(|| js_closure_get_capture_f64(closure, 3));
 
+    // Callable native net constructors initialize an explicit receiver, just
+    // as their proven super() path does. Namespace calls still allocate a new
+    // owner. The constructor's captured export metadata selects the family.
+    let receiver = this.as_f64();
+    let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_object.is_pointer()
+        && receiver.to_bits() != namespace_obj.to_bits()
+        && crate::object::js_object_get_class_id(crate::value::js_nanbox_get_pointer(namespace_obj)
+            as *const crate::object::ObjectHeader)
+            == crate::object::NATIVE_MODULE_CLASS_ID
+    {
+        let address = receiver_object.as_pointer::<u8>() as usize;
+        if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
+            && crate::object::js_object_get_class_id(address as *const crate::object::ObjectHeader)
+                != crate::object::NATIVE_MODULE_CLASS_ID
+        {
+            if let Some((module, export)) =
+                crate::object::native_module::bound_native_callable_module_and_method(
+                    crate::value::js_nanbox_pointer(closure as i64),
+                )
+            {
+                if crate::object::native_module::normalize_native_module_alias(&module) == "net"
+                    && matches!(export.as_str(), "Socket" | "Stream" | "Server")
+                {
+                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return crate::object::js_net_subclass_init(
+                        receiver,
+                        args.first().copied().unwrap_or(undefined),
+                        args.get(1).copied().unwrap_or(undefined),
+                        u32::from(export == "Server"),
+                    );
+                }
+            }
+        }
+    }
+
     // #6173: a SYMBOL-keyed class method read as a value — there is no name to
     // re-resolve; the captures carry the already-resolved func_ptr + arity
     // meta (see `SYMBOL_BOUND_METHOD_NAME` for the layout). Discriminated by

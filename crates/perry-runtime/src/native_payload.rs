@@ -88,6 +88,10 @@ pub struct PayloadPrototype {
 }
 
 impl PayloadPrototype {
+    /// A builder over a prototype handed to a binding's installer.
+    pub(crate) fn from_raw(proto: *mut ObjectHeader) -> Self {
+        Self { proto }
+    }
     /// LazyTransform's inherited state getters (first state read initializes).
     pub fn lazy_stream_state_getters(&mut self) {
         crate::node_stream::native_hooks::install_lazy_state_getters(self.proto);
@@ -291,6 +295,21 @@ pub(crate) fn scan_payload_prototype_roots_mut(visitor: &mut crate::gc::RuntimeR
     });
 }
 
+/// A non-exported family's constructor: a named closure whose `prototype`
+/// becomes the family prototype.
+pub(crate) fn anonymous_constructor(name: &str, length: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(payload_ctor_thunk, 0; with_declared(0)),
+        0,
+    );
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::object::native_module::set_bound_native_closure_name(closure, name);
+    crate::object::native_module::set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     let index = slot_index(family.class_id);
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
@@ -306,22 +325,7 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     // it published instead of building a second.
     let constructor = match family.constructor_export {
         Some((module, export)) => crate::object::bound_native_callable_export_value(module, export),
-        None => {
-            let closure = crate::closure::js_closure_alloc(
-                crate::fn_info!(payload_ctor_thunk, 0; with_declared(0)),
-                0,
-            );
-            if closure.is_null() {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            } else {
-                crate::object::native_module::set_bound_native_closure_name(closure, family.name);
-                crate::object::native_module::set_builtin_closure_length(
-                    closure as usize,
-                    family.constructor_length,
-                );
-                crate::value::js_nanbox_pointer(closure as i64)
-            }
-        }
+        None => anonymous_constructor(family.name, family.constructor_length),
     };
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
     if existing != 0 {
@@ -1638,6 +1642,57 @@ pub fn set_pending_exception(owner: f64, exception: f64) -> Result<(), ()> {
     }
 }
 
+/// Default-off acceptance instrumentation for net.Socket payload cells.
+/// Scalar counts only; no addresses or identities are stored.
+#[cfg(feature = "native-payload-test-census")]
+pub mod test_census {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CREATED: AtomicU64 = AtomicU64::new(0);
+    static FINALIZED: AtomicU64 = AtomicU64::new(0);
+    static DROPS: AtomicU64 = AtomicU64::new(0);
+    static REFS: AtomicU64 = AtomicU64::new(0);
+    fn counted(tag: u64) -> bool {
+        tag as u32 == crate::native_class_ids::NET_SOCKET
+    }
+    /// `[created, finalized, payload drops, outstanding cell refs]`.
+    pub fn snapshot() -> [u64; 4] {
+        [
+            CREATED.load(Ordering::SeqCst),
+            FINALIZED.load(Ordering::SeqCst),
+            DROPS.load(Ordering::SeqCst),
+            REFS.load(Ordering::SeqCst),
+        ]
+    }
+    pub(crate) fn created(tag: u64) {
+        if counted(tag) {
+            CREATED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn finalized(tag: u64, refs: u32) {
+        if counted(tag) {
+            FINALIZED.fetch_add(1, Ordering::SeqCst);
+            // Completions discarded at worker teardown never unref; the heap
+            // retires their remaining refs with the cell.
+            REFS.fetch_sub(refs as u64, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn dropped(tag: u64) {
+        if counted(tag) {
+            DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn reference(tag: u64) {
+        if counted(tag) {
+            REFS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    pub(crate) fn unreference(tag: u64) {
+        if counted(tag) {
+            REFS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
 /// # Safety
 /// Call on the creator thread with a live cell, once per outstanding item.
 pub unsafe fn link_ref(link: OwnerLink) {
@@ -1647,6 +1702,8 @@ pub unsafe fn link_ref(link: OwnerLink) {
         crate::native_handle::current_thread_id()
     );
     (*cell).refs = (*cell).refs.checked_add(1).expect("native refs overflow");
+    #[cfg(feature = "native-payload-test-census")]
+    test_census::reference((*cell).type_id);
     #[cfg(test)]
     if callback_sabotage("pin") {
         return;
@@ -1676,6 +1733,8 @@ pub unsafe fn link_unref(link: OwnerLink) {
     );
     assert_ne!((*cell).refs, 0, "unbalanced native unref");
     (*cell).refs -= 1;
+    #[cfg(feature = "native-payload-test-census")]
+    test_census::unreference((*cell).type_id);
     if (*cell).refs == 0 {
         crate::gc::unpin_object(
             (cell as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
@@ -1817,6 +1876,34 @@ pub fn js_state(value: f64, family: &NativePayloadFamily, create: bool) -> f64 {
     js_state_for_class(value, family.class_id, create)
 }
 
+/// The class id carried by `value`'s attached payload cell (the family's,
+/// also for a source subclass instance), on the cell's creator thread.
+pub(crate) fn attached_family_class_id(value: f64) -> Option<u32> {
+    let obj = any_object(value)?;
+    let meta = unsafe { (*obj).meta };
+    if meta.is_null() {
+        return None;
+    }
+    let cell = payload_cell_of_word(unsafe { (*meta).native_state })?;
+    unsafe {
+        if (*cell).finalized != 0
+            || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+            || (*cell).owner != value.to_bits()
+        {
+            return None;
+        }
+        Some((*cell).type_id as u32)
+    }
+}
+
+/// The JS state of the actual object, whatever its own class id.
+pub(crate) fn js_state_object(value: f64, create: bool) -> f64 {
+    match any_object(value) {
+        Some(obj) => js_state_for_class(value, unsafe { (*obj).class_id }, create),
+        None => undefined(),
+    }
+}
+
 pub(crate) fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
     let undefined = undefined();
     let Some(obj) = instance_of(value, class_id) else {
@@ -1850,6 +1937,8 @@ pub(crate) fn export_class_id(module: &str, export: &str) -> Option<u32> {
     use crate::native_class_ids as ids;
     Some(match (module, export) {
         ("http", "ServerResponse") => ids::HTTP_SERVER_RESPONSE,
+        ("net", "Socket" | "Stream") => ids::NET_SOCKET,
+        ("net", "Server") => ids::NET_SERVER,
         ("crypto", "Hash") => ids::CRYPTO_HASH,
         ("crypto", "Hmac") => ids::CRYPTO_HMAC,
         ("crypto", "Cipheriv") => ids::CRYPTO_CIPHERIV,

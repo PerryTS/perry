@@ -24,7 +24,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     // Factory alias: `net.connect(...)` is the spec'd alias for
     // `net.createConnection(...)`. Pre-issue-#422 only the
@@ -39,7 +39,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     // `net.createServer` and callable `net.Server` are normally rewritten to
     // `Expr::NetCreateServer` so the one-arg listener shorthand is preserved.
@@ -52,7 +52,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "net",
@@ -61,7 +61,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     // Constructor: `new net.Socket()` allocates an unconnected socket
     // handle whose TCP connection is deferred until `sock.connect(port,
@@ -76,9 +76,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "Socket",
         class_filter: None,
-        runtime: "js_net_socket_alloc",
-        args: &[],
-        ret: NR_HANDLE_ID,
+        runtime: "js_ext_net_socket_alloc",
+        args: &[NA_F64],
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "net",
@@ -167,454 +167,38 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // TCP connection on a `new net.Socket()`-allocated handle. Twin of
     // the `createConnection` factory above — both end up in the same
     // tokio task body via `run_socket_task`.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "connect",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_method_connect",
-        // Keep every slot raw so port/host, options, and path overloads reach
-        // the runtime without callback-to-string coercion.
-        args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "write",
-        class_filter: Some("Socket"),
-        runtime: "js_ext_net_socket_write3",
-        // Issue #1131 — pass each full NaN-boxed JS value as an f64 so the
-        // runtime can probe Buffer-vs-string-vs-number and read through the
-        // correct header layout. This must be NA_F64, not NA_JSV: the Rust FFI
-        // receives f64 arguments, while NA_JSV uses the integer ABI for
-        // runtimes whose signatures explicitly take raw i64 bits.
-        args: &[NA_F64, NA_F64, NA_F64],
-        // #11111 — Node's boolean (NaN-boxed), not `undefined`.
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "end",
-        class_filter: Some("Socket"),
-        runtime: "js_ext_net_socket_end3",
-        // Issue #1852 — `socket.end([data])` writes the optional final chunk
-        // before half-closing. NA_F64 preserves the full NaN-boxed value in
-        // the floating-point ABI expected by `js_ext_net_socket_end3`; the
-        // no-arg form pads every missing slot with JS `undefined`.
-        args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "destroy",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_destroy",
-        args: &[],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "on",
-        class_filter: Some("Socket"),
-        // #10442 — was `ret: NR_VOID`. `js_ext_net_socket_on` (the runtime
-        // symbol both this row and `addListener` below call) now returns the
-        // socket handle (see `perry-ext-net/src/handle_exports.rs`), so a
-        // typed `const sock: net.Socket` can chain `sock.on(...).on(...)`
-        // the same way the untyped/`once`/`setNoDelay` paths already did.
-        runtime: "js_ext_net_socket_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
     // #10441 — front-inserting variants of `on`. Absent entirely pre-fix:
     // a typed `net.Socket` receiver fell through to a plain property read
     // for `prependListener`/`prependOnceListener` and got `undefined`,
     // matching the untyped-dispatch gap fixed in `dispatch.rs`'s
     // `socket_method_name`.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "prependListener",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_prepend_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "prependOnceListener",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_prepend_once_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
     // #10444 — `net.Socket` is a `stream.Duplex`; `pipe`/`unpipe` had no
     // typed-receiver row at all (nor an untyped one — see
     // `dispatch.rs`'s `socket_method_name`). `js_net_socket_pipe` returns
     // `dest` (an arbitrary JSValue, NOT a socket handle — hence NR_F64, the
     // same return kind the generic `stream` table's own `pipe` row uses)
     // for chaining, matching Node.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "pipe",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_pipe",
-        args: &[NA_F64, NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "unpipe",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_unpipe",
-        args: &[NA_F64],
-        ret: NR_HANDLE_ID,
-    },
     // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
     // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
     // back-pressure yet, but the methods must exist + be callable (pre-fix
     // they threw "x is not a function" — the radar's "value() missing"
     // cluster). Each returns the socket handle so chained forms keep
     // dispatching. `args: &[]` ignores the option arguments.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setNoDelay",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setKeepAlive",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setTimeout",
-        class_filter: Some("Socket"),
-        // #2013: validate `msecs` (number, non-negative finite); the optional
-        // callback is passed through but ignored. Returns the socket handle.
-        runtime: "js_net_socket_set_timeout",
-        args: &[NA_F64, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setEncoding",
-        class_filter: Some("Socket"),
-        // #4973: real setEncoding — switches 'data' delivery to strings.
-        runtime: "js_net_socket_set_encoding",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "pause",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "resume",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "ref",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_ref",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "unref",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_unref",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "writableCorked",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_get_writable_corked",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "cork",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_cork",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "uncork",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_uncork",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setDefaultEncoding",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
     // Issue #2131 — `socket.address()` returns the local bind address
     // (`{ address, family, port }`). Captured at connect/accept time and
     // emitted as JSON through `NR_OBJ_FROM_JSON_STR` so user code reads
     // a real object whose `.port` is a number — closes the "undefined.address"
     // cluster on the radar.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "address",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_address",
-        args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
     // #2549 — `net.Socket` state / counter / metadata property getters.
     // Socket rows remain generic so they still match in the fallback pass when
     // the HIR preserves a more specific net class filter for nearby accessors
     // such as `Server.listening` and `SocketAddress.address`.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "read",
-        class_filter: None,
-        runtime: "js_net_socket_read",
-        args: &[NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "pending",
-        class_filter: None,
-        runtime: "js_net_socket_get_pending",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "connecting",
-        class_filter: None,
-        runtime: "js_net_socket_get_connecting",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "destroyed",
-        class_filter: None,
-        runtime: "js_net_socket_get_destroyed",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "readyState",
-        class_filter: None,
-        runtime: "js_net_socket_get_ready_state",
-        args: &[],
-        ret: NR_STR,
-    },
     // #10465 — `writable`/`readable`/`writableEnded`/`readableEnded`/
     // `_writableState`/`_readableState` were entirely absent from this
     // table (a typed `net.Socket` read `undefined` for all six; pg's
     // `Connection._send` gates every protocol write on `this.stream.writable`
     // being truthy, so the audit's client silently dropped its startup
     // message and hung until the connection timeout).
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "writable",
-        class_filter: None,
-        runtime: "js_net_socket_get_writable",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "readable",
-        class_filter: None,
-        runtime: "js_net_socket_get_readable",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "writableEnded",
-        class_filter: None,
-        runtime: "js_net_socket_get_writable_ended",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "readableEnded",
-        class_filter: None,
-        runtime: "js_net_socket_get_readable_ended",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "_writableState",
-        class_filter: None,
-        runtime: "js_net_socket_get_writable_state",
-        args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "_readableState",
-        class_filter: None,
-        runtime: "js_net_socket_get_readable_state",
-        args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "bytesRead",
-        class_filter: None,
-        runtime: "js_net_socket_get_bytes_read",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "bytesWritten",
-        class_filter: None,
-        runtime: "js_net_socket_get_bytes_written",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "timeout",
-        class_filter: None,
-        runtime: "js_net_socket_get_timeout",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "localAddress",
-        class_filter: None,
-        runtime: "js_net_socket_get_local_address",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "localPort",
-        class_filter: None,
-        runtime: "js_net_socket_get_local_port",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "localFamily",
-        class_filter: None,
-        runtime: "js_net_socket_get_local_family",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "remoteAddress",
-        class_filter: None,
-        runtime: "js_net_socket_get_remote_address",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "remotePort",
-        class_filter: None,
-        runtime: "js_net_socket_get_remote_port",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "remoteFamily",
-        class_filter: None,
-        runtime: "js_net_socket_get_remote_family",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "bufferSize",
-        class_filter: None,
-        runtime: "js_net_socket_get_buffer_size",
-        args: &[],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "autoSelectFamilyAttemptedAddresses",
-        class_filter: None,
-        runtime: "js_net_socket_get_auto_select_family_attempted_addresses",
-        args: &[],
-        ret: NR_F64,
-    },
     // Issue #2131 — EventEmitter surface beyond `on`/`addListener`.
     // `once` flags the listener in a side-table so the pump removes it
     // after the next event fires. `off`/`removeListener` delete a
@@ -624,74 +208,6 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // pre-#2131 returned "x is not a function" for all of these
     // (radar's "function should not have been called" + "undefined.on"
     // clusters).
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "once",
-        class_filter: Some("Socket"),
-        // Use ext-net's collision-proof symbol. The bundled stdlib exports a
-        // same-named `js_net_socket_once`; in an auto-optimized link the
-        // shared name can resolve to that empty registry and silently drop
-        // listeners on sockets owned by perry-ext-net.
-        runtime: "js_ext_net_socket_once",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "addListener",
-        class_filter: Some("Socket"),
-        // #10442 — same fix as the `on` row above (same runtime symbol).
-        runtime: "js_ext_net_socket_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "off",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_remove_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "removeListener",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_remove_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "removeAllListeners",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_remove_all_listeners",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "listenerCount",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_listener_count",
-        args: &[NA_STR],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "eventNames",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_event_names",
-        args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
     // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`.
     // Returns a real JS array of registered callbacks; consumers do
     // `socket.listeners('timeout').length` etc. Returned as NR_PTR so
@@ -700,51 +216,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // `listeners` and `rawListeners` share an impl — the onceWrapper
     // distinction is unobservable to callers that read the array before
     // any event has fired (which is the shape the radar tests use).
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "listeners",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_listeners",
-        args: &[NA_STR],
-        ret: NR_GCPTR,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "rawListeners",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_raw_listeners",
-        args: &[NA_STR],
-        ret: NR_GCPTR,
-    },
     // Issue #2131 — `socket.resetAndDestroy()` is the "send RST then
     // destroy" variant; we alias to `destroy()` (FIN-then-close) for
     // now since the connected peer treats both as an abrupt close in
     // the cases the parity radar exercises.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "resetAndDestroy",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_reset_and_destroy",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
     // upgradeToTLS returns a Promise (handle pointer) — await it to wait
     // for the TLS handshake before sending anything over the upgraded stream.
     // upgradeToTLS(servername, verify): verify is 0/1 (number, not bool).
     // verify=1 uses the system trust store + hostname check (sslmode=verify-full);
     // verify=0 accepts any cert (sslmode=require, for local self-signed DBs).
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "upgradeToTLS",
-        class_filter: Some("Socket"),
-        runtime: "js_net_socket_upgrade_tls",
-        args: &[NA_STR, NA_F64],
-        ret: NR_PROMISE,
-    },
     // Factory: `tls.connect(...)` opens plain TCP then runs a full TLS
     // handshake before firing 'connect'. Returns a Socket handle that behaves
     // identically to one produced by net.createConnection (same
@@ -761,7 +241,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_tls_connect",
         args: &[NA_F64, NA_F64, NA_F64, NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     // ========== net.Server (issue #1123 followup) ==========
     // Server-side TCP via `net.createServer(...).listen(port, cb)`. The
@@ -771,167 +251,16 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     // `("net", "Server")` in HIR lowering. Shape mirrors
     // `js_node_http_server_*` from perry-ext-http (signatures
     // are deliberately parallel so the codegen side reads the same).
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "listen",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_listen",
-        args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "close",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_close",
-        args: &[NA_PTR],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "address",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_address",
-        args: &[],
-        // Issue #1852 — `js_net_server_address` returns a JSON string
-        // (`{"port":…,"address":…,"family":…}` or `"null"`).
-        // NR_OBJ_FROM_JSON_STR pipes it through `js_json_parse_or_null`
-        // so `server.address().port` reads a real number. Pre-fix the
-        // NR_PTR kind NaN-boxed the StringHeader as a POINTER_TAG object,
-        // so `.port` came back `undefined` (the radar's "undefined.address"
-        // cluster).
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "on",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_VOID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "addListener",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_VOID,
-    },
     // Issue #1852 — chainable no-op `net.Server` option setters
     // (`ref`/`unref`/`setTimeout`). Same rationale as the Socket stubs
     // above: callable + chainable, options ignored.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "ref",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "unref",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "setTimeout",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_noop_self",
-        args: &[],
-        ret: NR_HANDLE_ID,
-    },
     // Issue #2131 — `net.Server` EventEmitter surface beyond
     // `on`/`addListener`. Same shape as the Socket entries above; the
     // FFI implementations share the underlying `statics::listeners()`
     // map and `statics::once_flags()` side-table.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "once",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_once",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "off",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_remove_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "removeListener",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_remove_listener",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "removeAllListeners",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_remove_all_listeners",
-        args: &[NA_STR],
-        ret: NR_HANDLE_ID,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "listenerCount",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_listener_count",
-        args: &[NA_STR],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "eventNames",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_event_names",
-        args: &[],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
     // Issue #2211 — mirror of the Socket listeners/rawListeners surface
     // for net.Server. Same impl since socket and server handles share
     // the `statics::listeners()` map keyed by id.
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "listeners",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_listeners",
-        args: &[NA_STR],
-        ret: NR_GCPTR,
-    },
-    NativeModSig {
-        module: "net",
-        has_receiver: true,
-        method: "rawListeners",
-        class_filter: Some("Server"),
-        runtime: "js_net_server_raw_listeners",
-        args: &[NA_STR],
-        ret: NR_GCPTR,
-    },
     // ========== node:stream — Readable.from / Duplex.from (#631/#1532) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
     // via `lower_builtin_new` so the codegen can carry the closure-fields

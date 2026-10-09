@@ -1194,11 +1194,9 @@ js_ext_http_server_response_dispatch_property_set	i32s	i64,ptr,usize,f64
 js_ext_http_server_response_is_handle	i32s	i64
 js_ext_net_create_server	i64	i64,i64
 js_ext_net_destroy_socket	void	i64
-js_ext_net_drain_pending	i32s	
 js_ext_net_handle_method_dispatch	i32s	i64,ptr,usize,ptr,usize,ptr
 js_ext_net_handle_property_dispatch	i32s	i64,ptr,usize,ptr
 js_ext_net_handle_property_set_dispatch	i32s	i64,ptr,usize,f64
-js_ext_net_has_active_handles	i32s	
 js_ext_net_is_block_list_handle	i32s	i64
 js_ext_net_is_server_handle	i32s	i64
 js_ext_net_is_socket_address_handle	i32s	i64
@@ -1207,6 +1205,7 @@ js_ext_net_nm_install	void
 js_ext_net_register_http_agent_socket_event_hook	void	ptr
 js_ext_net_set_http_agent_phase	void	i64,i32s
 js_ext_net_set_tls_metadata	void	i64,i32s,ptr,usize,ptr,usize,i64,i32s
+js_ext_net_socket_alloc	i64	f64
 js_ext_net_socket_connect	i64	f64,f64,f64
 js_ext_net_socket_emit	f64	i64,i64,ptr,usize
 js_ext_net_socket_emit_abort_error	void	i64
@@ -2113,6 +2112,7 @@ js_net_socket_unpipe	i64	i64,f64
 js_net_socket_unref	i64	i64
 js_net_socket_upgrade_tls	ptr	i64,i64,f64
 js_net_socket_write	void	i64,i64
+js_net_subclass_init	f64	f64,f64,f64,i32
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
 js_net_validate_connect_port	void	f64
@@ -3770,6 +3770,8 @@ js_timer_tick_if_refed	i32s
 js_timer_unref	void	i64
 js_timer_validate_callback	i64	f64,i32s
 js_tls_check_server_identity	f64	f64,f64
+js_tls_client_attach_socket_prototype	void	i64
+js_tls_client_certificate	f64	i64,i32,f64
 js_tls_client_check_identity	f64	i64,f64
 js_tls_client_check_identity_from_metadata	f64	i64
 js_tls_client_is_connected	i32s	i64

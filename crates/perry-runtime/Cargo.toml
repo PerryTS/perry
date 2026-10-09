@@ -16,6 +16,9 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# Phase A acceptance census and fault hooks. Scalar counts only; compiled out
+# of shipped builds. Ext-net's dev dependency enables the binding witnesses.
+native-payload-test-census = []
 # #10868 measurement: `PERRY_SHAPE_MINT_DIAG`, the per-mint cause /
 # key-list-identity / call-site / transition-cache-outcome census.
 #

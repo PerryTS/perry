@@ -5,6 +5,141 @@ use super::{
     try_leave_resource_scope, AsyncResourceIds, RESOURCES,
 };
 
+/// A native provider whose metadata lifetime follows an ordinary GC object.
+/// The binding holds this object in JS state; its Rust payload holds only the
+/// existing async ids. No socket registry or native owner address is created.
+///
+/// # Safety
+/// type_ptr/type_len is UTF-8 valid for this call. MAX selects the current
+/// execution id; every other trigger is passed through unchanged.
+#[no_mangle]
+pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
+    type_ptr: *const u8,
+    type_len: usize,
+    trigger_async_id: u64,
+) -> f64 {
+    if type_ptr.is_null() {
+        return super::TAG_UNDEFINED_F64;
+    }
+    let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
+    let trigger = if trigger_async_id == u64::MAX {
+        super::execution_async_id_u64()
+    } else {
+        trigger_async_id
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Match the existing native-provider resource's observable prototype.
+    let owner = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_null_proto(0, 0) as i64,
+    ));
+    let payload = super::AsyncResourcePayload {
+        ids: AsyncResourceIds {
+            async_id: 0,
+            trigger_async_id: trigger,
+        },
+    };
+    if !crate::native_payload::attach_to_object(
+        owner.get_nanbox_f64(),
+        &super::ASYNC_RESOURCE_FAMILY,
+        payload,
+        std::mem::size_of::<super::AsyncResourcePayload>(),
+    ) {
+        return super::TAG_UNDEFINED_F64;
+    }
+    let ids = super::init_resource_metadata(name, owner.get_nanbox_f64(), true, trigger);
+    let raw = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64());
+    if let Some(payload) = super::resource_payload(raw) {
+        payload.ids = ids;
+    }
+    let _ = super::swap_resource_value(ids.async_id, super::TAG_UNDEFINED_F64);
+    owner.get_nanbox_f64()
+}
+
+/// Emit init after the binding has published the provider as an ordinary JS
+/// edge and copied its ids into native fields. An init hook can then close or
+/// reopen the owner without leaving work that mutates its old native state.
+#[no_mangle]
+pub extern "C" fn js_async_hooks_owned_provider_emit_init(resource: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let resource = scope.root_nanbox_f64(resource);
+    let raw = crate::value::js_nanbox_get_pointer(resource.get_nanbox_f64());
+    let Some(ids) = (unsafe { super::resource_payload(raw) }).map(|payload| payload.ids) else {
+        return;
+    };
+    let name = RESOURCES
+        .lock()
+        .unwrap()
+        .get(&ids.async_id)
+        .map(|meta| meta.type_name.clone());
+    if let Some(name) = name {
+        super::emit_init(
+            ids.async_id,
+            &name,
+            ids.trigger_async_id,
+            resource.get_nanbox_f64(),
+        );
+    }
+}
+
+/// Run a native event in an owned provider's scope, including temporary
+/// executionAsyncResource publication. Restore context and that publication
+/// before returning an exception to the outer native event boundary.
+pub(crate) fn owned_provider_scope(
+    resource: f64,
+    callback: impl FnOnce() -> f64,
+) -> Result<f64, f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(resource);
+    if !crate::value::JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_pointer() {
+        return crate::exception::js_call_catching(callback);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64());
+    let Some(ids) = (unsafe { super::resource_payload(raw) }).map(|payload| payload.ids) else {
+        return crate::exception::js_call_catching(callback);
+    };
+    let previous = scope.root_nanbox_f64(super::swap_resource_value(
+        ids.async_id,
+        owner.get_nanbox_f64(),
+    ));
+    let outcome = super::try_run_resource_scope(ids, callback);
+    // A returned exception/result may itself move while another native cleanup
+    // runs, so keep it in the same handle scope until publication is restored.
+    let (threw, value) = match outcome {
+        Ok(value) => (false, scope.root_nanbox_f64(value)),
+        Err(error) => (true, scope.root_nanbox_f64(error)),
+    };
+    let _ = super::swap_resource_value(ids.async_id, previous.get_nanbox_f64());
+    if threw {
+        Err(value.get_nanbox_f64())
+    } else {
+        Ok(value.get_nanbox_f64())
+    }
+}
+
+/// End a JS-owned native provider after its terminal event. A hook exception
+/// cannot retain its metadata; like other async-hook exceptions it is fatal.
+#[no_mangle]
+pub extern "C" fn js_async_hooks_owned_provider_destroy(resource: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(resource);
+    if !crate::value::JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_pointer() {
+        return;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64());
+    let Some(id) = (unsafe { super::resource_payload(raw) }).map(|payload| payload.ids.async_id)
+    else {
+        return;
+    };
+    let outcome = crate::exception::js_call_catching(|| {
+        destroy(id);
+        super::TAG_UNDEFINED_F64
+    });
+    if let Err(error) = outcome {
+        RESOURCES.lock().unwrap().remove(&id);
+        crate::exception::exit_on_uncaught(error);
+    }
+}
+
 extern "C" fn deferred_destroy_step(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,

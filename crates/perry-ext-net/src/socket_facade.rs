@@ -1,19 +1,18 @@
-//! TLS metadata and event-loop reference state for socket facades.
+//! Ordinary Socket TLS compatibility facts and loop reference state.
 
 use super::*;
 
-#[derive(Clone, Default)]
-pub(crate) struct TlsSocketMetadata {
-    pub(crate) encrypted: bool,
-    pub(crate) authorized: bool,
-    pub(crate) servername: Option<String>,
-    pub(crate) session: Vec<u8>,
-    pub(crate) session_reused: bool,
-    pub(crate) peer_certificate_cn: Option<String>,
+fn owner(handle: i64) -> f64 {
+    crate::payload_transport::boxed_addr(handle)
+}
+fn tls_field(handle: i64, key: &str) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner(handle));
+    let state = scope.root_nanbox(crate::payload_socket::state(owner.get()));
+    crate::payload_transport::own_get(state.get(), key)
 }
 
-/// Attach TLS-observable state to a socket facade owned by another native
-/// extension (notably the reqwest-backed HTTPS client).
+/// TLS compatibility facts are ordinary Socket JS state, never an id record.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
     handle: i64,
@@ -25,135 +24,89 @@ pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
     session_id: u64,
     session_reused: i32,
 ) {
-    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-        socket.tls.encrypted = true;
-        socket.tls.authorized = authorized != 0;
-        socket.tls.servername = if servername_ptr.is_null() {
-            None
-        } else {
-            Some(
-                String::from_utf8_lossy(std::slice::from_raw_parts(servername_ptr, servername_len))
-                    .into_owned(),
-            )
-        };
-        socket.tls.peer_certificate_cn = if peer_certificate_cn_ptr.is_null() {
-            None
-        } else {
-            Some(
-                String::from_utf8_lossy(std::slice::from_raw_parts(
-                    peer_certificate_cn_ptr,
-                    peer_certificate_cn_len,
-                ))
-                .into_owned(),
-            )
-        };
-        socket.tls.session = session_id.to_be_bytes().to_vec();
-        socket.tls.session_reused = session_reused != 0;
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner(handle));
+    if crate::payload_transport::socket_link(owner.get()).is_err() {
+        return;
     }
+    let state = scope.root_nanbox(crate::payload_socket::state(owner.get()));
+    let string = |ptr: *const u8, len: usize| {
+        if ptr.is_null() {
+            crate::payload_transport::undefined()
+        } else {
+            crate::payload_events::string(&String::from_utf8_lossy(std::slice::from_raw_parts(
+                ptr, len,
+            )))
+        }
+    };
+    for (key, value) in [
+        ("encrypted", true),
+        ("authorized", authorized != 0),
+        ("sessionReused", session_reused != 0),
+    ] {
+        crate::payload_transport::own_set(
+            state.get(),
+            key,
+            f64::from_bits(JsValue::from_bool(value).bits()),
+        );
+    }
+    crate::payload_transport::own_set(
+        state.get(),
+        "servername",
+        string(servername_ptr, servername_len),
+    );
+    crate::payload_transport::own_set(
+        state.get(),
+        "peerCertificateCn",
+        string(peer_certificate_cn_ptr, peer_certificate_cn_len),
+    );
+    crate::payload_transport::own_set(
+        state.get(),
+        "session",
+        f64::from_bits(JsValue::from_object_ptr(alloc_buffer(&session_id.to_be_bytes())).bits()),
+    );
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_encrypted(handle: i64) -> f64 {
-    let value = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_some_and(|socket| socket.tls.encrypted);
-    f64::from_bits(JsValue::from_bool(value).bits())
+    tls_field(handle, "encrypted")
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_authorized(handle: i64) -> f64 {
-    let value = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_some_and(|socket| socket.tls.authorized);
-    f64::from_bits(JsValue::from_bool(value).bits())
+    tls_field(handle, "authorized")
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_servername(handle: i64) -> f64 {
-    match statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .and_then(|socket| socket.tls.servername.clone())
-    {
-        Some(value) if !value.is_empty() => {
-            f64::from_bits(JsValue::from_string_ptr(alloc_string(&value).as_raw()).bits())
-        }
-        _ => f64::from_bits(JsValue::from_bool(false).bits()),
-    }
+    tls_field(handle, "servername")
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_session(
     handle: i64,
 ) -> *mut perry_ffi::BufferHeader {
-    let bytes = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|socket| socket.tls.session.clone())
-        .unwrap_or_default();
+    let bytes = crate::jsvalue_to_socket_bytes(tls_field(handle, "session")).unwrap_or_default();
     alloc_buffer(&bytes)
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_tls_session_reused(handle: i64) -> f64 {
-    let value = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_some_and(|socket| socket.tls.session_reused);
-    f64::from_bits(JsValue::from_bool(value).bits())
+    tls_field(handle, "sessionReused")
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_peer_certificate_json(handle: i64) -> *mut StringHeader {
-    let cn = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .and_then(|socket| socket.tls.peer_certificate_cn.clone());
+    let cn = crate::jsvalue_to_owned_string(tls_field(handle, "peerCertificateCn"));
     let value = cn
-        .map(|cn| serde_json::json!({"subject": {"CN": cn}}))
+        .map(|cn| serde_json::json!({"subject":{"CN":cn}}))
         .unwrap_or_else(|| serde_json::json!({}));
     alloc_string(&value.to_string()).as_raw()
 }
-
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
-    let owned = is_net_socket_handle(handle);
-    if owned {
-        1
-    } else {
-        0
-    }
+    crate::payload_transport::socket_link(owner(handle)).is_ok() as i32
 }
-
-/// Update whether a socket participates in event-loop liveness.
 #[no_mangle]
 pub extern "C" fn js_ext_net_socket_set_ref(handle: i64, refed: i32) {
-    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-        socket.refed = refed != 0;
-    }
-    perry_ffi::notify_main_thread();
+    crate::payload_socket::set_ref(owner(handle), refed != 0);
 }
-
-/// Return nonzero when a socket is still referenced by the event loop.
 #[no_mangle]
 pub extern "C" fn js_ext_net_socket_has_ref(handle: i64) -> i32 {
-    statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_none_or(|socket| socket.refed) as i32
-}
-
-/// Auxiliary liveness hook registered with the runtime for mixed stdlib links.
-#[no_mangle]
-pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
-    server_state::has_active_handles() as i32
+    crate::native_transport::has_ref(owner(handle)) as i32
 }

@@ -1,1235 +1,436 @@
-//! Bun TCP socket facades (#9635).
-//!
-//! Several helpers and two `BunSocket` fields are written but not yet read on
-//! this build: they are reachable only from paths the follow-up surface turns
-//! on. Allowed at module scope rather than deleted, since removing them would
-//! also remove the writes that feed them; flagged to the author on landing.
-#![allow(dead_code)]
-
-//! Bun's low-level TCP facade over the existing `node:net` transport.
-//!
-//! The transport, accept loop, and event pump remain shared with `net.Socket`.
-//! This module only owns Bun's handler-table calling convention, per-socket
-//! `.data`, Promise settlement for `connect`, and bounded write admission.
-
-use bytes::Bytes;
-use perry_ffi::{
-    alloc_buffer, alloc_string, JsClosure, JsPromise, JsValue, Promise, RawClosureHeader,
-};
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-
+//! Bun's TCP calling convention on ordinary Socket and Server owners.
+//! Handler tables, data, listeners and promises are traced JS edges.
 use crate::{
-    build_error_object, get_object_number_field, get_object_string_field, get_object_value_field,
-    statics, SocketCommand,
+    payload_events as events, payload_server as server, payload_socket as socket,
+    payload_transport as p,
 };
+use perry_ffi::{JsPromise, JsThis, JsValue, Promise, RawClosureHeader, TransientRootScope};
 
-const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-const WRITE_HIGH_WATER_MARK: usize = 64 * 1024;
-
-#[derive(Clone, Default)]
-struct Handlers {
-    open: i64,
-    data: i64,
-    drain: i64,
-    close: i64,
-    error: i64,
-    connect_error: i64,
-    end: i64,
+const EVENTS: [&str; 7] = [
+    "connect", "data", "drain", "close", "error", "end", "timeout",
+];
+const HANDLERS: [&str; 7] = ["open", "data", "drain", "close", "error", "end", "timeout"];
+fn boolean(value: f64) -> bool {
+    JsValue::from_bits(value.to_bits()).to_bool()
 }
-
-struct BunSocket {
-    handlers: Handlers,
-    data_bits: u64,
-    connect_promise: usize,
-    listener: Option<i64>,
-    opened: bool,
-    paused: bool,
-    paused_data: VecDeque<Bytes>,
-    paused_end: bool,
-    paused_close: bool,
-    shutting_down: bool,
-    needs_drain: bool,
-    last_error: Option<String>,
-}
-
-struct BunServer {
-    handlers: Handlers,
-    data_bits: u64,
-    refed: bool,
-    ready: bool,
-}
-
-#[derive(Clone)]
-enum Endpoint {
-    Tcp { host: String, port: f64 },
-    Unix(String),
-}
-
-struct ParsedOptions {
-    endpoint: Endpoint,
-    handlers: Handlers,
-    data_bits: u64,
-}
-
-fn sockets() -> &'static Mutex<HashMap<i64, BunSocket>> {
-    static SOCKETS: OnceLock<Mutex<HashMap<i64, BunSocket>>> = OnceLock::new();
-    SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn servers() -> &'static Mutex<HashMap<i64, BunServer>> {
-    static SERVERS: OnceLock<Mutex<HashMap<i64, BunServer>>> = OnceLock::new();
-    SERVERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn write_tokens() -> &'static Mutex<HashMap<u64, i64>> {
-    static TOKENS: OnceLock<Mutex<HashMap<u64, i64>>> = OnceLock::new();
-    TOKENS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn undefined() -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
-
-fn handle_value(handle: i64) -> f64 {
-    f64::from_bits(POINTER_TAG | (handle as u64 & POINTER_MASK))
-}
-
-fn callback_pointer(value: f64) -> i64 {
-    extern "C" {
-        fn js_net_callback_ptr(value: f64) -> i64;
-    }
-    unsafe { js_net_callback_ptr(value) }
-}
-
-/// Parse every GC-managed option while transient roots keep the option object,
-/// handler object, callbacks, and initial data current across property-key
-/// allocations. No Perry allocation occurs between this returning and the
-/// caller publishing the resulting pointers in the scanned side tables.
-unsafe fn parse_options(options: f64, listen: bool) -> Option<ParsedOptions> {
-    let roots = perry_ffi::TransientRootScope::enter();
-    let options = roots.root_nanbox(options);
-    let handler_value = get_object_value_field(options.get(), "socket")?;
-    let handler = roots.root_nanbox(handler_value);
-    let names = [
-        "open",
-        "data",
-        "drain",
-        "close",
-        "error",
-        "connectError",
-        "end",
-    ];
-    let callbacks = names
-        .iter()
-        .map(|name| {
-            roots.root_nanbox(get_object_value_field(handler.get(), name).unwrap_or_else(undefined))
-        })
-        .collect::<Vec<_>>();
-    let data =
-        roots.root_nanbox(get_object_value_field(options.get(), "data").unwrap_or_else(undefined));
-
-    let unix = get_object_string_field(options.get(), "unix")
-        .or_else(|| get_object_string_field(options.get(), "path"));
-    let endpoint = if let Some(path) = unix {
-        Endpoint::Unix(path)
+fn bun_state(owner: f64) -> f64 {
+    if p::server_link(owner).is_ok() {
+        server::state(owner)
     } else {
-        let default_host = if listen { "0.0.0.0" } else { "127.0.0.1" };
-        let host = get_object_string_field(options.get(), "hostname")
-            .or_else(|| get_object_string_field(options.get(), "host"))
-            .filter(|host| !host.is_empty())
-            .unwrap_or_else(|| default_host.to_string());
-        let port = get_object_number_field(options.get(), "port")?;
-        Endpoint::Tcp { host, port }
-    };
-
-    let ptr = |index: usize| callback_pointer(callbacks[index].get());
-    Some(ParsedOptions {
-        endpoint,
-        handlers: Handlers {
-            open: ptr(0),
-            data: ptr(1),
-            drain: ptr(2),
-            close: ptr(3),
-            error: ptr(4),
-            connect_error: ptr(5),
-            end: ptr(6),
-        },
-        data_bits: data.get().to_bits(),
-    })
-}
-
-unsafe fn parse_reload_handlers(options: f64) -> Option<Handlers> {
-    let roots = perry_ffi::TransientRootScope::enter();
-    let options = roots.root_nanbox(options);
-    let nested = get_object_value_field(options.get(), "socket").unwrap_or(options.get());
-    let handler = roots.root_nanbox(nested);
-    let names = [
-        "open",
-        "data",
-        "drain",
-        "close",
-        "error",
-        "connectError",
-        "end",
-    ];
-    let callbacks = names
-        .iter()
-        .map(|name| {
-            roots.root_nanbox(get_object_value_field(handler.get(), name).unwrap_or_else(undefined))
-        })
-        .collect::<Vec<_>>();
-    let ptr = |index: usize| callback_pointer(callbacks[index].get());
-    Some(Handlers {
-        open: ptr(0),
-        data: ptr(1),
-        drain: ptr(2),
-        close: ptr(3),
-        error: ptr(4),
-        connect_error: ptr(5),
-        end: ptr(6),
-    })
-}
-
-fn nanbox_string(value: &str) -> f64 {
-    let string = alloc_string(value).as_raw();
-    f64::from_bits(0x7FFF_0000_0000_0000 | (string as u64 & POINTER_MASK))
-}
-
-fn dispatch_one(callback: i64, socket: i64) {
-    if callback == 0 {
-        return;
-    }
-    let frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
-    unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader)
-            .call1(perry_ffi::JsThis::UNDEFINED, handle_value(socket));
+        socket::state(owner)
     }
 }
 
-fn dispatch_two(callback: i64, socket: i64, payload: f64) {
-    if callback == 0 {
-        return;
-    }
-    let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
-    frame.set_payload(payload.to_bits());
-    unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
-            perry_ffi::JsThis::UNDEFINED,
-            handle_value(socket),
-            f64::from_bits(frame.payload_bits()),
-        );
-    }
-}
-
-fn dispatch_error(callback: i64, socket: i64, message: &str) {
-    if callback == 0 {
-        return;
-    }
-    let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
-    frame.set_payload(unsafe { build_error_object(message) }.to_bits());
-    unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
-            perry_ffi::JsThis::UNDEFINED,
-            handle_value(socket),
-            f64::from_bits(frame.payload_bits()),
-        );
-    }
-}
-
-fn settle_connect(handle: i64, error: Option<&str>) {
-    let promise = sockets()
-        .lock()
-        .unwrap()
-        .get_mut(&handle)
-        .map(|socket| std::mem::take(&mut socket.connect_promise))
-        .unwrap_or(0);
-    if promise == 0 {
-        return;
-    }
-    let roots = perry_ffi::TransientRootScope::enter();
-    let promise = roots.root_addr(promise as i64);
-    unsafe {
-        if let Some(message) = error {
-            let reason = roots.root_nanbox(build_error_object(message));
-            JsPromise::from_raw(promise.get() as *mut Promise)
-                .reject(JsValue::from_bits(reason.get().to_bits()));
-        } else {
-            JsPromise::from_raw(promise.get() as *mut Promise)
-                .resolve(JsValue::from_bits(handle_value(handle).to_bits()));
+unsafe extern "C" fn event(closure: *const RawClosureHeader, _: JsThis, arg: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let index = perry_ffi::closure_capture_f64(closure, 1) as usize;
+    let arg = scope.root_nanbox(arg);
+    let state = scope.root_nanbox(bun_state(owner.get()));
+    let handlers = scope.root_nanbox(p::own_get(state.get(), "bunHandlers"));
+    let promise = scope.root_nanbox(p::own_get(state.get(), "bunPromise"));
+    let opened = boolean(p::own_get(state.get(), "bunOpened"));
+    if index == 0 || index == 4 {
+        p::own_set(state.get(), "bunPromise", p::undefined());
+        if JsValue::from_bits(promise.get().to_bits()).is_pointer() {
+            let promise = JsPromise::from_raw(p::raw_owner(promise.get()) as *mut Promise);
+            if index == 0 {
+                promise.resolve(JsValue::from_bits(owner.get().to_bits()));
+            } else {
+                promise.reject(JsValue::from_bits(arg.get().to_bits()));
+            }
         }
     }
+    if index == 0 {
+        p::own_set(
+            state.get(),
+            "bunOpened",
+            f64::from_bits(JsValue::TRUE.bits()),
+        );
+    }
+    let handler = scope.root_nanbox(p::own_get(
+        handlers.get(),
+        if index == 4 && !opened {
+            "connectError"
+        } else {
+            HANDLERS[index]
+        },
+    ));
+    if socket::is_callback(handler.get()) {
+        if index == 1 || index == 4 {
+            events::call(handler.get(), JsThis::UNDEFINED, &[owner.get(), arg.get()]);
+        } else {
+            events::call(handler.get(), JsThis::UNDEFINED, &[owner.get()]);
+        }
+    }
+    p::undefined()
 }
-
-/// Install Bun's runtime dispatch bucket together with the ext-net callback
-/// used by extracted `listen`/`connect` exports. The generated import path
-/// calls this wrapper before it can mint a callable export, so registration
-/// does not depend on the event loop having initialized perry-stdlib yet.
+fn bind_event(owner: f64, index: usize) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let callback_root = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(event, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        2,
+    ) as i64);
+    unsafe {
+        let callback = callback_root.get() as *mut RawClosureHeader;
+        perry_ffi::set_closure_capture_f64(callback, 0, owner.get());
+        perry_ffi::set_closure_capture_f64(callback, 1, index as f64);
+        extern "C" {
+            fn js_node_stream_method_on(owner: i64, event: f64, callback: f64) -> f64;
+        }
+        let name = scope.root_nanbox(events::string(EVENTS[index]));
+        js_node_stream_method_on(
+            p::raw_owner(owner.get()),
+            name.get(),
+            p::boxed_addr(callback_root.get()),
+        );
+    }
+}
+fn install(owner: f64, options: f64) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let options = scope.root_nanbox(options);
+    let state = scope.root_nanbox(bun_state(owner.get()));
+    let handlers = scope.root_nanbox(p::own_get(options.get(), "socket"));
+    p::own_set(state.get(), "bunHandlers", handlers.get());
+    let data = scope.root_nanbox(p::own_get(options.get(), "data"));
+    p::own_set(owner.get(), "data", data.get());
+    p::own_set(
+        state.get(),
+        "bunOpened",
+        f64::from_bits(JsValue::FALSE.bits()),
+    );
+    if p::socket_link(owner.get()).is_ok() {
+        unsafe {
+            if let Ok(payload) = p::socket_ptr(socket::link(owner.get())) {
+                (*payload).ext.bun = true;
+            }
+        }
+        for index in 0..EVENTS.len() {
+            bind_event(owner.get(), index);
+        }
+        method(
+            owner.get(),
+            "write",
+            perry_ffi::js_function_info!(write, 3; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "end",
+            perry_ffi::js_function_info!(end, 3; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "close",
+            perry_ffi::js_function_info!(close, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "terminate",
+            perry_ffi::js_function_info!(terminate, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "shutdown",
+            perry_ffi::js_function_info!(shutdown, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "flush",
+            perry_ffi::js_function_info!(flush, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        method(
+            owner.get(),
+            "timeout",
+            perry_ffi::js_function_info!(timeout, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+        extern "C" {
+            fn js_object_define_getter(owner: f64, key: f64, callback: f64) -> f64;
+        }
+        // The numeric Bun surface is an own accessor; the canonical Socket
+        // prototype remains the shared Node surface.
+        let getter = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(ready, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        unsafe {
+            let name = scope.root_nanbox(events::string("readyState"));
+            js_object_define_getter(owner.get(), name.get(), p::boxed_addr(getter.get()));
+        }
+    } else {
+        method(
+            owner.get(),
+            "stop",
+            perry_ffi::js_function_info!(stop, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        );
+    }
+    method(
+        owner.get(),
+        "reload",
+        perry_ffi::js_function_info!(reload, 1; with_flags(perry_ffi::FN_BUILTIN)),
+    );
+}
+fn method(owner: f64, key: &str, info: &'static perry_ffi::JsFunctionInfo) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let callback = perry_ffi::alloc_closure(info, 0);
+    p::own_set(owner.get(), key, p::boxed_addr(callback as i64));
+}
+unsafe extern "C" fn write(
+    _: *const RawClosureHeader,
+    this: JsThis,
+    chunk: f64,
+    offset: f64,
+    length: f64,
+) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(this.as_f64());
+    let bytes = crate::jsvalue_to_socket_bytes(chunk).unwrap_or_default();
+    let offset = if JsValue::from_bits(offset.to_bits()).is_number() {
+        offset.max(0.0) as usize
+    } else {
+        0
+    }
+    .min(bytes.len());
+    let length = if JsValue::from_bits(length.to_bits()).is_number() {
+        length.max(0.0) as usize
+    } else {
+        bytes.len() - offset
+    }
+    .min(bytes.len() - offset);
+    let queued = socket::get(owner.get(), "writableLength");
+    let count = length.min(socket::HIGH_WATER_MARK.saturating_sub(queued.max(0.0) as usize));
+    if count > 0 {
+        let buffer = perry_ffi::alloc_buffer(&bytes[offset..offset + count]);
+        socket::write(
+            owner.get(),
+            p::boxed_addr(buffer as i64),
+            p::undefined(),
+            p::undefined(),
+        );
+    }
+    if count < length {
+        if let Ok(payload) = p::socket_ptr(socket::link(owner.get())) {
+            (*payload).ext.need_drain = true;
+        }
+    }
+    count as f64
+}
+unsafe extern "C" fn end(
+    c: *const RawClosureHeader,
+    this: JsThis,
+    chunk: f64,
+    offset: f64,
+    length: f64,
+) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(this.as_f64());
+    let n = write(c, this, chunk, offset, length);
+    socket::end(owner.get(), p::undefined(), p::undefined(), p::undefined());
+    n
+}
+unsafe extern "C" fn close(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    socket::end(
+        this.as_f64(),
+        p::undefined(),
+        p::undefined(),
+        p::undefined(),
+    );
+    p::undefined()
+}
+unsafe extern "C" fn terminate(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    socket::destroy(this.as_f64(), p::undefined());
+    p::undefined()
+}
+unsafe extern "C" fn shutdown(c: *const RawClosureHeader, this: JsThis, graceful: f64) -> f64 {
+    if boolean(graceful) {
+        close(c, this)
+    } else {
+        terminate(c, this)
+    }
+}
+unsafe extern "C" fn flush(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    socket::link(this.as_f64());
+    p::undefined()
+}
+unsafe extern "C" fn timeout(_: *const RawClosureHeader, this: JsThis, seconds: f64) -> f64 {
+    socket::set_timeout(this.as_f64(), seconds * 1000.0, p::undefined());
+    p::undefined()
+}
+unsafe extern "C" fn ready(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    let owner = this.as_f64();
+    socket::link(owner);
+    if boolean(socket::get(owner, "destroyed")) || boolean(socket::get(owner, "connecting")) {
+        0.0
+    } else if boolean(socket::get(owner, "writableEnded")) {
+        -2.0
+    } else {
+        1.0
+    }
+}
+unsafe extern "C" fn reload(_: *const RawClosureHeader, this: JsThis, options: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(this.as_f64());
+    let options = scope.root_nanbox(options);
+    let state = scope.root_nanbox(bun_state(owner.get()));
+    let nested = scope.root_nanbox(p::own_get(options.get(), "socket"));
+    let handlers = if JsValue::from_bits(nested.get().to_bits()).is_undefined() {
+        options.get()
+    } else {
+        nested.get()
+    };
+    let handlers = scope.root_nanbox(handlers);
+    p::own_set(state.get(), "bunHandlers", handlers.get());
+    if p::server_link(owner.get()).is_ok() {
+        crate::native_transport::for_each_server_child(owner.get(), |child| {
+            let state = scope.root_nanbox(bun_state(child.value()));
+            p::own_set(state.get(), "bunHandlers", handlers.get());
+        });
+    }
+    p::undefined()
+}
+unsafe extern "C" fn stop(_: *const RawClosureHeader, this: JsThis, active: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(this.as_f64());
+    if boolean(active) {
+        crate::native_transport::for_each_server_child(owner.get(), |child| {
+            socket::destroy(child.value(), p::undefined());
+        });
+    }
+    server::close(owner.get(), p::undefined());
+    p::undefined()
+}
+unsafe extern "C" fn connection(closure: *const RawClosureHeader, _: JsThis, child: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let child = scope.root_nanbox(child);
+    let state = scope.root_nanbox(bun_state(owner.get()));
+    let handlers = scope.root_nanbox(p::own_get(state.get(), "bunHandlers"));
+    let options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    p::own_set(options.get(), "socket", handlers.get());
+    let data = scope.root_nanbox(p::own_get(owner.get(), "data"));
+    p::own_set(options.get(), "data", data.get());
+    install(child.get(), options.get());
+    p::own_set(child.get(), "listener", owner.get());
+    let callback = scope.root_nanbox(p::own_get(handlers.get(), "open"));
+    let state = scope.root_nanbox(bun_state(child.get()));
+    p::own_set(
+        state.get(),
+        "bunOpened",
+        f64::from_bits(JsValue::TRUE.bits()),
+    );
+    if socket::is_callback(callback.get()) {
+        events::call(callback.get(), JsThis::UNDEFINED, &[child.get()]);
+    }
+    p::undefined()
+}
+fn endpoint(options: f64, listen: bool) -> (Option<String>, String, f64) {
+    unsafe {
+        (
+            crate::get_object_string_field(options, "unix")
+                .or_else(|| crate::get_object_string_field(options, "path")),
+            crate::get_object_string_field(options, "hostname")
+                .or_else(|| crate::get_object_string_field(options, "host"))
+                .unwrap_or_else(|| if listen { "0.0.0.0" } else { "127.0.0.1" }.to_owned()),
+            crate::get_object_number_field(options, "port").unwrap_or(0.0),
+        )
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_tcp_nm_install() {
     extern "C" {
         fn js_nm_install_bun();
+        fn js_set_native_bun_tcp_dispatch(
+            f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+        );
     }
-
-    crate::dispatch::ensure_runtime_dispatch_registered();
+    js_set_native_bun_tcp_dispatch(js_bun_tcp_native_dispatch);
     js_nm_install_bun();
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_tcp_listen(options: f64) -> i64 {
-    crate::ensure_gc_scanner_registered();
-    crate::dispatch::ensure_runtime_dispatch_registered();
-    let roots = perry_ffi::TransientRootScope::enter();
-    let options = roots.root_nanbox(options);
-    let handle = crate::js_ext_net_create_server(0, 0);
-    let parsed = match parse_options(options.get(), true) {
-        Some(parsed) => parsed,
-        None => {
-            crate::server_state::remove_server(handle);
-            statics::servers().lock().unwrap().remove(&handle);
-            statics::listeners().lock().unwrap().remove(&handle);
-            return 0;
-        }
-    };
-    servers().lock().unwrap().insert(
-        handle,
-        BunServer {
-            handlers: parsed.handlers,
-            data_bits: parsed.data_bits,
-            refed: true,
-            ready: false,
-        },
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let (path, host, port) = endpoint(options.get(), true);
+    let owner = scope.root_nanbox(server::new_server(
+        crate::payload_io::ROUTE,
+        p::undefined(),
+        p::undefined(),
+    ));
+    install(owner.get(), options.get());
+    let callback = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(connection, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    perry_ffi::set_closure_capture_f64(callback.get() as *mut RawClosureHeader, 0, owner.get());
+    extern "C" {
+        fn js_node_stream_method_on(owner: i64, event: f64, callback: f64) -> f64;
+    }
+    let name = scope.root_nanbox(events::string("connection"));
+    js_node_stream_method_on(
+        p::raw_owner(owner.get()),
+        name.get(),
+        p::boxed_addr(callback.get()),
     );
-
-    match parsed.endpoint {
-        Endpoint::Tcp { host, port } => {
-            crate::js_net_server_listen(handle, port, nanbox_string(&host), undefined());
-        }
-        Endpoint::Unix(path) => {
-            crate::js_net_server_listen(handle, nanbox_string(&path), undefined(), undefined());
-        }
+    if let Some(path) = path {
+        server::listen(
+            owner.get(),
+            events::string(&path),
+            p::undefined(),
+            p::undefined(),
+        );
+        p::own_set(owner.get(), "unix", events::string(&path));
+    } else {
+        server::listen(owner.get(), port, events::string(&host), p::undefined());
     }
-
-    // Bun.listen binds before returning, which makes `listen({ port: 0 }).port`
-    // immediately usable by a client. Perry's node:net bind is asynchronous;
-    // drive that shared task/pump just until its ServerListening event arrives.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if servers()
-            .lock()
-            .unwrap()
-            .get(&handle)
-            .map(|server| server.ready)
-            .unwrap_or(true)
-        {
-            break;
-        }
-        perry_ffi::run_pending(2);
-        crate::js_ext_net_drain_pending();
-    }
-    handle
+    let address = scope.root_nanbox(server::address(owner.get()));
+    let port = p::own_get(address.get(), "port");
+    p::own_set(owner.get(), "port", port);
+    p::own_set(owner.get(), "hostname", events::string(&host));
+    p::raw_owner(owner.get())
 }
-
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_tcp_connect(options: f64) -> *mut Promise {
-    crate::ensure_gc_scanner_registered();
-    crate::dispatch::ensure_runtime_dispatch_registered();
-    let roots = perry_ffi::TransientRootScope::enter();
-    let options = roots.root_nanbox(options);
-    let handle = crate::js_net_socket_alloc();
-    let promise = JsPromise::new();
-    let promise = roots.root_addr(promise.as_raw() as i64);
-    let parsed = match parse_options(options.get(), false) {
-        Some(parsed) => parsed,
-        None => {
-            statics::sockets().lock().unwrap().remove(&handle);
-            statics::listeners().lock().unwrap().remove(&handle);
-            let rooted = JsPromise::from_raw(promise.get() as *mut Promise);
-            rooted.reject_string("Bun.connect requires socket handlers and a TCP or Unix endpoint");
-            return promise.get() as *mut Promise;
-        }
-    };
-    sockets().lock().unwrap().insert(
-        handle,
-        BunSocket {
-            handlers: parsed.handlers,
-            data_bits: parsed.data_bits,
-            connect_promise: promise.get() as usize,
-            listener: None,
-            opened: false,
-            paused: false,
-            paused_data: VecDeque::new(),
-            paused_end: false,
-            paused_close: false,
-            shutting_down: false,
-            needs_drain: false,
-            last_error: None,
-        },
-    );
-    match parsed.endpoint {
-        Endpoint::Tcp { host, port } => {
-            crate::js_net_socket_method_connect(handle, port, nanbox_string(&host), undefined());
-        }
-        Endpoint::Unix(path) => crate::ipc::connect_existing(handle, path),
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let (path, host, port) = endpoint(options.get(), false);
+    let owner = scope.root_nanbox(socket::new_socket(crate::payload_io::ROUTE, options.get()));
+    install(owner.get(), options.get());
+    let promise = scope.root_addr(JsPromise::new().as_raw() as i64);
+    let state = scope.root_nanbox(bun_state(owner.get()));
+    p::own_set(state.get(), "bunPromise", p::boxed_addr(promise.get()));
+    if let Some(path) = path {
+        socket::connect(
+            owner.get(),
+            events::string(&path),
+            p::undefined(),
+            p::undefined(),
+        );
+    } else {
+        socket::connect(owner.get(), port, events::string(&host), p::undefined());
     }
     promise.get() as *mut Promise
 }
-
-/// Indirect runtime bridge for captured `Bun.listen` / `Bun.connect` values.
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_tcp_native_dispatch(
-    method_ptr: *const u8,
-    method_len: usize,
-    args_ptr: *const f64,
-    args_len: usize,
+    name: *const u8,
+    len: usize,
+    args: *const f64,
+    count: usize,
 ) -> f64 {
-    let method = if method_ptr.is_null() {
-        ""
+    if name.is_null() {
+        return p::undefined();
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name, len)).unwrap_or("");
+    let options = if count > 0 && !args.is_null() {
+        *args
     } else {
-        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
+        p::undefined()
     };
-    let options = if args_ptr.is_null() || args_len == 0 {
-        undefined()
-    } else {
-        *args_ptr
-    };
-    match method {
-        "listen" => handle_value(js_bun_tcp_listen(options)),
-        "connect" => handle_value(js_bun_tcp_connect(options) as i64),
-        _ => undefined(),
-    }
-}
-
-pub(crate) fn is_socket(handle: i64) -> bool {
-    sockets().lock().unwrap().contains_key(&handle)
-}
-
-pub(crate) fn is_server(handle: i64) -> bool {
-    servers().lock().unwrap().contains_key(&handle)
-}
-
-pub(crate) fn server_keeps_alive(handle: i64) -> bool {
-    servers()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|server| server.refed)
-        .unwrap_or(true)
-}
-
-pub(crate) fn on_server_listening(handle: i64) {
-    if let Some(server) = servers().lock().unwrap().get_mut(&handle) {
-        server.ready = true;
-    }
-}
-
-pub(crate) fn on_server_close(handle: i64) {
-    servers().lock().unwrap().remove(&handle);
-}
-
-pub(crate) fn on_accept(server_id: i64, socket_id: i64) -> bool {
-    let (handlers, data_bits) = match servers().lock().unwrap().get(&server_id) {
-        Some(server) => (server.handlers.clone(), server.data_bits),
-        None => return false,
-    };
-    let open = handlers.open;
-    sockets().lock().unwrap().insert(
-        socket_id,
-        BunSocket {
-            handlers,
-            data_bits,
-            connect_promise: 0,
-            listener: Some(server_id),
-            opened: true,
-            paused: false,
-            paused_data: VecDeque::new(),
-            paused_end: false,
-            paused_close: false,
-            shutting_down: false,
-            needs_drain: false,
-            last_error: None,
-        },
-    );
-    dispatch_one(open, socket_id);
-    true
-}
-
-pub(crate) fn on_connect(handle: i64) -> bool {
-    let callback = {
-        let mut sockets = sockets().lock().unwrap();
-        let Some(socket) = sockets.get_mut(&handle) else {
-            return false;
-        };
-        socket.opened = true;
-        socket.handlers.open
-    };
-    dispatch_one(callback, handle);
-    settle_connect(handle, None);
-    true
-}
-
-fn dispatch_data(handle: i64, bytes: &Bytes) {
-    let callback = sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|socket| socket.handlers.data)
-        .unwrap_or(0);
-    if callback == 0 {
-        return;
-    }
-    let frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
-    let buffer = alloc_buffer(bytes);
-    if buffer.is_null() {
-        return;
-    }
-    let mut frame = frame;
-    frame.set_payload(POINTER_TAG | (buffer as u64 & POINTER_MASK));
-    unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
-            perry_ffi::JsThis::UNDEFINED,
-            handle_value(handle),
-            f64::from_bits(frame.payload_bits()),
-        );
-    }
-}
-
-pub(crate) fn on_data(handle: i64, bytes: &Bytes) -> bool {
-    {
-        let mut sockets = sockets().lock().unwrap();
-        let Some(socket) = sockets.get_mut(&handle) else {
-            return false;
-        };
-        if socket.paused {
-            socket.paused_data.push_back(bytes.clone());
-            return true;
-        }
-    }
-    dispatch_data(handle, bytes);
-    true
-}
-
-pub(crate) fn on_end(handle: i64) -> bool {
-    let callback = match sockets().lock().unwrap().get_mut(&handle) {
-        Some(socket) if socket.paused => {
-            socket.paused_end = true;
-            return true;
-        }
-        Some(socket) => socket.handlers.end,
-        None => return false,
-    };
-    dispatch_one(callback, handle);
-    true
-}
-
-pub(crate) fn on_error(handle: i64, message: &str) -> bool {
-    let (callback, opened) = {
-        let mut sockets = sockets().lock().unwrap();
-        let Some(socket) = sockets.get_mut(&handle) else {
-            return false;
-        };
-        socket.last_error = Some(message.to_string());
-        let callback = if !socket.opened && socket.handlers.connect_error != 0 {
-            socket.handlers.connect_error
-        } else {
-            socket.handlers.error
-        };
-        (callback, socket.opened)
-    };
-    dispatch_error(callback, handle, message);
-    if !opened {
-        settle_connect(handle, Some(message));
-    }
-    true
-}
-
-pub(crate) fn on_close(handle: i64) -> bool {
-    let (callback, error, opened) = match sockets().lock().unwrap().get_mut(&handle) {
-        Some(socket) if socket.paused => {
-            socket.paused_close = true;
-            return true;
-        }
-        Some(socket) => (
-            socket.handlers.close,
-            socket.last_error.clone(),
-            socket.opened,
-        ),
-        None => return false,
-    };
-    if let Some(message) = error.as_deref() {
-        dispatch_error(callback, handle, message);
-    } else {
-        dispatch_two(callback, handle, undefined());
-    }
-    if !opened {
-        settle_connect(
-            handle,
-            Some(
-                error
-                    .as_deref()
-                    .unwrap_or("Socket closed before connecting"),
-            ),
-        );
-    }
-    write_tokens()
-        .lock()
-        .unwrap()
-        .retain(|_, socket| *socket != handle);
-    // Net handle ids remain reserved for the lifetime of their JS facade.
-    // Keep only the closed socket's user data so late reads still work and
-    // write/end can report -1, while releasing callback and buffer roots.
-    if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-        socket.handlers = Handlers::default();
-        socket.connect_promise = 0;
-        socket.paused = false;
-        socket.paused_data.clear();
-        socket.paused_end = false;
-        socket.paused_close = false;
-        socket.shutting_down = true;
-        socket.needs_drain = false;
-        socket.last_error = None;
-    }
-    true
-}
-
-fn number_arg(value: f64) -> Option<usize> {
-    let value = JsValue::from_bits(value.to_bits());
-    if value.is_number() {
-        let number = value.to_number();
-        if number.is_finite() && number >= 0.0 {
-            return Some(number as usize);
-        }
-    }
-    None
-}
-
-unsafe fn socket_write(handle: i64, value: f64, offset: f64, length: f64) -> f64 {
-    let js_value = JsValue::from_bits(value.to_bits());
-    let is_string = js_value.is_any_string();
-    let Some(mut bytes) = crate::jsvalue_to_socket_bytes(value) else {
-        return -1.0;
-    };
-    if !is_string {
-        let start = number_arg(offset).unwrap_or(0).min(bytes.len());
-        let available = bytes.len().saturating_sub(start);
-        let count = number_arg(length).unwrap_or(available).min(available);
-        bytes = bytes[start..start + count].to_vec();
-    }
-
-    // The submission happens under the registry lock, through
-    // `SocketState::command`, because a turnloop-backed socket has no channel
-    // to send on afterwards — its command channel exists only to keep one
-    // `SocketState` shape across both transports and has no receiver.
-    let (accepted, token, delivered) = {
-        let mut net_sockets = statics::sockets().lock().unwrap();
-        let Some(socket) = net_sockets.get_mut(&handle) else {
-            return -1.0;
-        };
-        if !socket.is_open || socket.destroyed {
-            return -1.0;
-        }
-        if sockets()
-            .lock()
-            .unwrap()
-            .get(&handle)
-            .map(|socket| socket.shutting_down)
-            .unwrap_or(true)
-        {
-            return -1.0;
-        }
-        let capacity = WRITE_HIGH_WATER_MARK.saturating_sub(socket.bytes_queued as usize);
-        let accepted = capacity.min(bytes.len());
-        if accepted == 0 {
-            if let Some(bun) = sockets().lock().unwrap().get_mut(&handle) {
-                bun.needs_drain = true;
-            }
-            return 0.0;
-        }
-        static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1 << 63);
-        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-        write_tokens().lock().unwrap().insert(token, handle);
-        let delivered = socket.command(
-            handle,
-            SocketCommand::Write(bytes[..accepted].to_vec(), token),
-        );
-        (accepted, token, delivered)
-    };
-    if delivered.is_err() {
-        write_tokens().lock().unwrap().remove(&token);
-        return -1.0;
-    }
-    if accepted < bytes.len() {
-        if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-            socket.needs_drain = true;
-        }
-    }
-    accepted as f64
-}
-
-unsafe fn socket_end(handle: i64, value: f64, offset: f64, length: f64) -> f64 {
-    if sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|socket| socket.shutting_down)
-        .unwrap_or(true)
-    {
-        return -1.0;
-    }
-    let has_data = !JsValue::from_bits(value.to_bits()).is_undefined()
-        && !JsValue::from_bits(value.to_bits()).is_null();
-    let result = if has_data {
-        socket_write(handle, value, offset, length)
-    } else {
-        if !is_socket(handle) {
-            return -1.0;
-        }
-        0.0
-    };
-    if result < 0.0 {
-        return result;
-    }
-    if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-        socket.shutting_down = true;
-    }
-    crate::js_ext_net_socket_end(handle, TAG_UNDEFINED as i64);
-    result
-}
-
-pub(crate) fn on_write_complete(handle: i64, token: u64, succeeded: bool) -> bool {
-    if write_tokens().lock().unwrap().remove(&token).is_none() {
-        return false;
-    }
-    if !succeeded {
-        return true;
-    }
-    let queued = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|socket| socket.bytes_queued as usize)
-        .unwrap_or(0);
-    let callback = {
-        let mut sockets = sockets().lock().unwrap();
-        let Some(socket) = sockets.get_mut(&handle) else {
-            return true;
-        };
-        if socket.needs_drain && queued < WRITE_HIGH_WATER_MARK {
-            socket.needs_drain = false;
-            socket.handlers.drain
-        } else {
-            0
-        }
-    };
-    dispatch_one(callback, handle);
-    true
-}
-
-pub(crate) fn method_name(handle: i64, property: &str) -> Option<&'static [u8]> {
-    // Classify the name before touching either ownership map. Ordinary
-    // node:net properties also pass through this facade's dispatch hook.
-    let (name, socket_method, server_method): (&'static [u8], bool, bool) = match property {
-        "write" => (b"write", true, false),
-        "end" => (b"end", true, false),
-        "close" => (b"close", true, false),
-        "terminate" => (b"terminate", true, false),
-        "ref" => (b"ref", true, true),
-        "unref" => (b"unref", true, true),
-        "pause" => (b"pause", true, false),
-        "resume" => (b"resume", true, false),
-        "flush" => (b"flush", true, false),
-        "reload" => (b"reload", true, true),
-        "shutdown" => (b"shutdown", true, false),
-        "stop" => (b"stop", false, true),
-        _ => return None,
-    };
-    let socket = is_socket(handle);
-    let server = !socket && is_server(handle);
-    ((socket && socket_method) || (server && server_method)).then_some(name)
-}
-
-pub(crate) unsafe fn dispatch_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
-    if method_name(handle, method).is_none() {
-        return None;
-    }
-    let arg = |index: usize| args.get(index).copied().unwrap_or_else(undefined);
-    let result = if is_socket(handle) {
-        match method {
-            "write" => socket_write(handle, arg(0), arg(1), arg(2)),
-            "end" => socket_end(handle, arg(0), arg(1), arg(2)),
-            "close" => {
-                let _ = socket_end(handle, undefined(), undefined(), undefined());
-                undefined()
-            }
-            "shutdown" => {
-                if JsValue::from_bits(arg(0).to_bits()).to_bool() {
-                    let _ = socket_end(handle, undefined(), undefined(), undefined());
-                } else {
-                    if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-                        socket.shutting_down = true;
-                    }
-                    crate::js_ext_net_destroy_socket(handle);
-                }
-                undefined()
-            }
-            "terminate" => {
-                if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-                    socket.shutting_down = true;
-                }
-                crate::js_ext_net_destroy_socket(handle);
-                undefined()
-            }
-            "ref" => {
-                crate::js_net_socket_ref(handle);
-                undefined()
-            }
-            "unref" => {
-                crate::js_net_socket_unref(handle);
-                undefined()
-            }
-            "pause" => {
-                if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-                    socket.paused = true;
-                }
-                undefined()
-            }
-            "resume" => {
-                let (pending, ended, closed) = sockets()
-                    .lock()
-                    .unwrap()
-                    .get_mut(&handle)
-                    .map(|socket| {
-                        socket.paused = false;
-                        let pending = socket.paused_data.drain(..).collect::<Vec<_>>();
-                        let ended = std::mem::take(&mut socket.paused_end);
-                        let closed = std::mem::take(&mut socket.paused_close);
-                        (pending, ended, closed)
-                    })
-                    .unwrap_or_default();
-                for bytes in pending {
-                    crate::push_event(crate::PendingNetEvent::Data(handle, bytes));
-                }
-                if ended {
-                    crate::push_event(crate::PendingNetEvent::End(handle));
-                }
-                if closed {
-                    crate::push_event(crate::PendingNetEvent::Close(handle));
-                }
-                undefined()
-            }
-            "reload" => {
-                if let Some(handlers) = parse_reload_handlers(arg(0)) {
-                    if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-                        socket.handlers = handlers;
-                    }
-                }
-                undefined()
-            }
-            "flush" => undefined(),
-            _ => undefined(),
-        }
-    } else {
-        match method {
-            "stop" => {
-                let close_active = JsValue::from_bits(arg(0).to_bits()).to_bool();
-                if close_active {
-                    let active = statics::sockets()
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter_map(|(id, socket)| {
-                            (socket.server_id == Some(handle)).then_some(*id)
-                        })
-                        .collect::<Vec<_>>();
-                    for socket in active {
-                        crate::js_ext_net_destroy_socket(socket);
-                    }
-                }
-                crate::js_net_server_close(handle, 0);
-                undefined()
-            }
-            "ref" | "unref" => {
-                if let Some(server) = servers().lock().unwrap().get_mut(&handle) {
-                    server.refed = method == "ref";
-                }
-                perry_ffi::notify_main_thread();
-                undefined()
-            }
-            "reload" => {
-                if let Some(handlers) = parse_reload_handlers(arg(0)) {
-                    if let Some(server) = servers().lock().unwrap().get_mut(&handle) {
-                        server.handlers = handlers.clone();
-                    }
-                    for socket in sockets().lock().unwrap().values_mut() {
-                        if socket.listener == Some(handle) {
-                            socket.handlers = handlers.clone();
-                        }
-                    }
-                }
-                undefined()
-            }
-            _ => undefined(),
-        }
-    };
-    Some(result)
-}
-
-pub(crate) fn property(handle: i64, property: &str) -> Option<f64> {
-    // Classify once before probing ownership. Unrelated node:net properties
-    // need neither Bun map, while recognized names keep their lookup order.
-    enum Property {
-        Data,
-        Listener,
-        RemoteAddress,
-        RemotePort,
-        RemoteFamily,
-        LocalAddress,
-        LocalPort,
-        LocalFamily,
-        BytesWritten,
-        ReadyState,
-        Port,
-        Hostname,
-        Unix,
-    }
-    let property = match property {
-        "data" => Property::Data,
-        "listener" => Property::Listener,
-        "remoteAddress" => Property::RemoteAddress,
-        "remotePort" => Property::RemotePort,
-        "remoteFamily" => Property::RemoteFamily,
-        "localAddress" => Property::LocalAddress,
-        "localPort" => Property::LocalPort,
-        "localFamily" => Property::LocalFamily,
-        "bytesWritten" => Property::BytesWritten,
-        "readyState" => Property::ReadyState,
-        "port" => Property::Port,
-        "hostname" => Property::Hostname,
-        "unix" => Property::Unix,
-        _ => return None,
-    };
-    if is_socket(handle) {
-        let (data_bits, listener, shutting_down) = {
-            let sockets = sockets().lock().unwrap();
-            let socket = sockets.get(&handle)?;
-            (socket.data_bits, socket.listener, socket.shutting_down)
-        };
-        return Some(match property {
-            Property::Data => f64::from_bits(data_bits),
-            Property::Listener => listener
-                .filter(|server| is_server(*server))
-                .map(handle_value)
-                .unwrap_or_else(undefined),
-            Property::RemoteAddress => unsafe { crate::js_net_socket_get_remote_address(handle) },
-            Property::RemotePort => unsafe { crate::js_net_socket_get_remote_port(handle) },
-            Property::RemoteFamily => unsafe { crate::js_net_socket_get_remote_family(handle) },
-            Property::LocalAddress => unsafe { crate::js_net_socket_get_local_address(handle) },
-            Property::LocalPort => unsafe { crate::js_net_socket_get_local_port(handle) },
-            Property::LocalFamily => unsafe { crate::js_net_socket_get_local_family(handle) },
-            Property::BytesWritten => unsafe { crate::js_net_socket_get_bytes_written(handle) },
-            Property::ReadyState => {
-                let state = statics::sockets()
-                    .lock()
-                    .unwrap()
-                    .get(&handle)
-                    .map(|socket| {
-                        if socket.destroyed || !socket.is_open {
-                            0.0
-                        } else if shutting_down {
-                            -2.0
-                        } else {
-                            1.0
-                        }
-                    })
-                    .unwrap_or(0.0);
-                state
-            }
-            _ => return None,
-        });
-    }
-    if !is_server(handle) {
-        return None;
-    }
-    let data_bits = servers().lock().unwrap().get(&handle)?.data_bits;
-    Some(match property {
-        Property::Data => f64::from_bits(data_bits),
-        Property::Port => statics::servers()
-            .lock()
-            .unwrap()
-            .get(&handle)
-            .map(|server| server.bound_port as f64)
-            .unwrap_or(0.0),
-        Property::Hostname => {
-            let host = statics::servers()
-                .lock()
-                .unwrap()
-                .get(&handle)
-                .map(|server| server.bound_host.clone())
-                .unwrap_or_default();
-            nanbox_string(&host)
-        }
-        Property::Unix => {
-            let path = statics::servers()
-                .lock()
-                .unwrap()
-                .get(&handle)
-                .and_then(|server| server.bound_path.clone());
-            path.as_deref().map(nanbox_string).unwrap_or_else(undefined)
-        }
-        _ => return None,
-    })
-}
-
-pub(crate) fn set_property(handle: i64, property: &str, value: f64) -> bool {
-    if property != "data" {
-        return false;
-    }
-    if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
-        socket.data_bits = value.to_bits();
-        return true;
-    }
-    if let Some(server) = servers().lock().unwrap().get_mut(&handle) {
-        server.data_bits = value.to_bits();
-        return true;
-    }
-    false
-}
-
-fn scan_handlers(handlers: &mut Handlers, visitor: &mut perry_ffi::GcRootVisitor<'_>) {
-    visitor.visit_i64_slot(&mut handlers.open);
-    visitor.visit_i64_slot(&mut handlers.data);
-    visitor.visit_i64_slot(&mut handlers.drain);
-    visitor.visit_i64_slot(&mut handlers.close);
-    visitor.visit_i64_slot(&mut handlers.error);
-    visitor.visit_i64_slot(&mut handlers.connect_error);
-    visitor.visit_i64_slot(&mut handlers.end);
-}
-
-pub(crate) fn scan_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
-    if let Ok(mut sockets) = sockets().lock() {
-        for socket in sockets.values_mut() {
-            scan_handlers(&mut socket.handlers, visitor);
-            visitor.visit_nanbox_u64_slot(&mut socket.data_bits);
-            if socket.connect_promise != 0 {
-                let mut promise = socket.connect_promise as *mut Promise;
-                visitor.visit_raw_mut_ptr_slot(&mut promise);
-                socket.connect_promise = promise as usize;
-            }
-        }
-    }
-    if let Ok(mut servers) = servers().lock() {
-        for server in servers.values_mut() {
-            scan_handlers(&mut server.handlers, visitor);
-            visitor.visit_nanbox_u64_slot(&mut server.data_bits);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn node_flags_preserve_bun_socket_and_server_surfaces() {
-        let _lock = crate::tests::GC_TEST_LOCK.lock().unwrap();
-        const SOCKET: i64 = 900_010;
-        const SERVER: i64 = 900_011;
-        const MISSING: i64 = 900_012;
-        struct Cleanup;
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                sockets().lock().unwrap().remove(&SOCKET);
-                servers().lock().unwrap().remove(&SERVER);
-                statics::sockets().lock().unwrap().remove(&SOCKET);
-            }
-        }
-        let _cleanup = Cleanup;
-        sockets().lock().unwrap().insert(
-            SOCKET,
-            BunSocket {
-                handlers: Handlers::default(),
-                data_bits: 42.0f64.to_bits(),
-                connect_promise: 0,
-                listener: None,
-                opened: false,
-                paused: false,
-                paused_data: VecDeque::new(),
-                paused_end: false,
-                paused_close: false,
-                shutting_down: false,
-                needs_drain: false,
-                last_error: None,
-            },
-        );
-        servers().lock().unwrap().insert(
-            SERVER,
-            BunServer {
-                handlers: Handlers::default(),
-                data_bits: 43.0f64.to_bits(),
-                refed: false,
-                ready: false,
-            },
-        );
-        for name in [
-            "write",
-            "end",
-            "close",
-            "terminate",
-            "ref",
-            "unref",
-            "pause",
-            "resume",
-            "flush",
-            "reload",
-            "shutdown",
-            "stop",
-            "destroyed",
-            "connecting",
-            "writableLength",
-            "",
-            "unknown",
-        ] {
-            assert_eq!(
-                method_name(SOCKET, name),
-                (!matches!(
-                    name,
-                    "stop" | "destroyed" | "connecting" | "writableLength" | "" | "unknown"
-                ))
-                .then_some(name.as_bytes()),
-                "socket method {name}"
-            );
-            assert_eq!(
-                method_name(SERVER, name),
-                matches!(name, "stop" | "ref" | "unref" | "reload").then_some(name.as_bytes()),
-                "server method {name}"
-            );
-            assert_eq!(method_name(MISSING, name), None, "missing method {name}");
-        }
-        for name in [
-            "data",
-            "listener",
-            "remoteAddress",
-            "remotePort",
-            "remoteFamily",
-            "localAddress",
-            "localPort",
-            "localFamily",
-            "bytesWritten",
-            "readyState",
-            "port",
-            "hostname",
-            "unix",
-            "destroyed",
-            "connecting",
-            "writableLength",
-            "",
-            "unknown",
-        ] {
-            assert_eq!(
-                property(SOCKET, name).is_some(),
-                matches!(
-                    name,
-                    "data"
-                        | "listener"
-                        | "remoteAddress"
-                        | "remotePort"
-                        | "remoteFamily"
-                        | "localAddress"
-                        | "localPort"
-                        | "localFamily"
-                        | "bytesWritten"
-                        | "readyState"
-                ),
-                "socket property {name}"
-            );
-            assert_eq!(
-                property(SERVER, name).is_some(),
-                matches!(name, "data" | "port" | "hostname" | "unix"),
-                "server property {name}"
-            );
-            assert!(property(MISSING, name).is_none(), "missing property {name}");
-        }
-        assert_eq!(property(SOCKET, "data"), Some(42.0));
-        assert_eq!(property(SERVER, "data"), Some(43.0));
-        for name in [
-            "listener",
-            "remoteAddress",
-            "remotePort",
-            "remoteFamily",
-            "localAddress",
-            "localPort",
-            "localFamily",
-        ] {
-            assert_eq!(
-                property(SOCKET, name).unwrap().to_bits(),
-                TAG_UNDEFINED,
-                "unset {name}"
-            );
-        }
-        assert_eq!(property(SOCKET, "readyState"), Some(0.0));
-        assert_eq!(property(SERVER, "port"), Some(0.0));
-        assert_eq!(property(SERVER, "unix").unwrap().to_bits(), TAG_UNDEFINED);
-        // Bun's numeric readyState differs from node:net's string property.
-        // The shared name must keep Bun precedence after Node-only flags move.
-        statics::sockets()
-            .lock()
-            .unwrap()
-            .insert(SOCKET, crate::SocketState::for_test(false));
-        for (handle, name, expected) in [
-            (SOCKET, "destroyed", unsafe {
-                crate::js_net_socket_get_destroyed(SOCKET)
-            }),
-            (SOCKET, "connecting", unsafe {
-                crate::js_net_socket_get_connecting(SOCKET)
-            }),
-            (SOCKET, "writableLength", unsafe {
-                crate::js_net_socket_get_writable_length(SOCKET)
-            }),
-            (SOCKET, "data", 42.0),
-            (SERVER, "data", 43.0),
-            (
-                SOCKET,
-                "readyState",
-                property(SOCKET, "readyState").unwrap(),
-            ),
-        ] {
-            let mut actual = undefined();
-            assert_eq!(
-                unsafe {
-                    crate::dispatch::js_ext_net_handle_property_dispatch(
-                        handle,
-                        name.as_ptr(),
-                        name.len(),
-                        &mut actual,
-                    )
-                },
-                1,
-                "whole dispatch {name}"
-            );
-            assert_eq!(
-                actual.to_bits(),
-                expected.to_bits(),
-                "whole dispatch value {name}"
-            );
-        }
-        for (handle, name) in [(SOCKET, "write"), (SERVER, "stop")] {
-            let mut actual = undefined();
-            assert_eq!(
-                unsafe {
-                    crate::dispatch::js_ext_net_handle_property_dispatch(
-                        handle,
-                        name.as_ptr(),
-                        name.len(),
-                        &mut actual,
-                    )
-                },
-                1,
-                "bound method {name}"
-            );
-            assert_ne!(actual.to_bits(), TAG_UNDEFINED, "bound method value {name}");
-        }
+    match name {
+        "listen" => p::boxed_addr(js_bun_tcp_listen(options)),
+        "connect" => p::boxed_addr(js_bun_tcp_connect(options) as i64),
+        _ => p::undefined(),
     }
 }
