@@ -51,14 +51,14 @@ pub use registry::{
     closure_is_bound_method, closure_length, dispatch_rest_bundled, dispatch_with_arity,
     info_arity, info_has, info_length, info_rest, real_capture_count, resolve_strategy,
     DispatchStrategy, JsFunctionInfo, RestDispatchKind, BOUND_FUNCTION_FUNC_PTR,
-    BOUND_FUNCTION_INFO, BOUND_METHOD_FUNC_PTR, BOUND_METHOD_INFO, CAPTURES_THIS_FLAG, FN_ARROW,
-    FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_GENERATOR, FN_HAS_DECLARED, FN_HAS_LENGTH,
-    FN_NON_CONSTRUCTOR, FN_REST_MASK, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
-    FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NO_THIS_REBIND_FLAG,
+    BOUND_FUNCTION_INFO, BOUND_METHOD_FUNC_PTR, BOUND_METHOD_INFO, BOUND_NATIVE_CONSTRUCTOR_INFO,
+    CAPTURES_THIS_FLAG, FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_GENERATOR,
+    FN_HAS_DECLARED, FN_HAS_LENGTH, FN_NON_CONSTRUCTOR, FN_REST_MASK, FN_REST_SYNTHETIC_ARGUMENTS,
+    FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NO_THIS_REBIND_FLAG,
 };
 pub(crate) use registry::{
     closure_body_is_non_constructor, info_receives_primitive_this, info_trusted_direct,
-    info_versioned_loop_direct,
+    info_versioned_loop_direct, native_constructor_class_id,
 };
 
 pub(crate) use dispatch::{

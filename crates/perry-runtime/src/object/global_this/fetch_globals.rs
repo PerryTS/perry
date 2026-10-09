@@ -662,6 +662,35 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             b"Super constructor null is not a constructor",
         );
     }
+    // Resolve native net heritage from the immutable constructor class fact.
+    // Alias/import syntax and mutable constructor properties cannot choose it.
+    let native_class = crate::closure::native_constructor_class_id(parent_val).or_else(|| {
+        let obj = subclass_this_object_ptr(this_box)?;
+        crate::closure::native_constructor_class_id(
+            crate::object::class_registry::js_get_dynamic_parent_value(
+                crate::object::js_object_get_class_id(obj),
+            ),
+        )
+    });
+    if let Some(class) = native_class {
+        let options = if args_len > 0 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            undef
+        };
+        let callback = if args_len > 1 && !args_ptr.is_null() {
+            *args_ptr.add(1)
+        } else {
+            undef
+        };
+        super::super::native_module_dispatch::js_net_subclass_init(
+            this_box,
+            options,
+            callback,
+            u32::from(class == crate::native_class_ids::NET_SERVER),
+        );
+        return undef;
+    }
     // Resolve the parent to a bound native-module export VALUE, independent
     // of how the heritage expression reached it: a bare import, a local
     // alias, a namespace member, and a CJS destructured `require()` all
@@ -678,29 +707,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             crate::object::class_registry::js_get_dynamic_parent_value(cid),
         )
     });
-    if let Some((module, export)) = bound_native_parent.as_ref() {
-        if super::super::native_module::normalize_native_module_alias(module) == "net"
-            && matches!(export.as_str(), "Socket" | "Stream" | "Server")
-        {
-            let options = if args_len > 0 && !args_ptr.is_null() {
-                *args_ptr
-            } else {
-                undef
-            };
-            let callback = if args_len > 1 && !args_ptr.is_null() {
-                *args_ptr.add(1)
-            } else {
-                undef
-            };
-            super::super::native_module_dispatch::js_net_subclass_init(
-                this_box,
-                options,
-                callback,
-                u32::from(export == "Server"),
-            );
-            return undef;
-        }
-    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {

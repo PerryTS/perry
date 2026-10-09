@@ -66,44 +66,39 @@ pub unsafe fn dispatch_bound_method(
     let mut namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
-    let private_brand = (crate::closure::real_capture_count((*closure).capture_count) >= 4)
-        .then(|| js_closure_get_capture_f64(closure, 3));
-
-    // Callable native net constructors initialize an explicit receiver, just
-    // as their proven super() path does. Namespace calls still allocate a new
-    // owner. The constructor's captured export metadata selects the family.
-    let receiver = this.as_f64();
-    let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
-    if receiver_object.is_pointer()
-        && receiver.to_bits() != namespace_obj.to_bits()
-        && crate::object::js_object_get_class_id(crate::value::js_nanbox_get_pointer(namespace_obj)
-            as *const crate::object::ObjectHeader)
-            == crate::object::NATIVE_MODULE_CLASS_ID
-    {
-        let address = receiver_object.as_pointer::<u8>() as usize;
-        if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
-            && crate::object::js_object_get_class_id(address as *const crate::object::ObjectHeader)
-                != crate::object::NATIVE_MODULE_CLASS_ID
-        {
-            if let Some((module, export)) =
-                crate::object::native_module::bound_native_callable_module_and_method(
-                    crate::value::js_nanbox_pointer(closure as i64),
-                )
+    // Only the constructor info has a fourth class-identity capture. Ordinary
+    // bound methods pay one static info comparison, never object validation or
+    // native namespace/name resolution. Function name/prototype mutations do
+    // not alter a constructor's family.
+    let native_constructor = std::ptr::eq(
+        (*closure).info,
+        &crate::closure::BOUND_NATIVE_CONSTRUCTOR_INFO,
+    );
+    if native_constructor {
+        let receiver = this.as_f64();
+        let receiver_object = crate::value::JSValue::from_bits(receiver.to_bits());
+        if receiver_object.is_pointer() && receiver.to_bits() != namespace_obj.to_bits() {
+            let address = receiver_object.as_pointer::<u8>() as usize;
+            if matches!(crate::value::addr_class::try_read_gc_header(address), Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT)
+                && crate::object::js_object_get_class_id(
+                    address as *const crate::object::ObjectHeader,
+                ) != crate::object::NATIVE_MODULE_CLASS_ID
             {
-                if crate::object::native_module::normalize_native_module_alias(&module) == "net"
-                    && matches!(export.as_str(), "Socket" | "Stream" | "Server")
-                {
-                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-                    return crate::object::js_net_subclass_init(
-                        receiver,
-                        args.first().copied().unwrap_or(undefined),
-                        args.get(1).copied().unwrap_or(undefined),
-                        u32::from(export == "Server"),
-                    );
-                }
+                let class = js_closure_get_capture_f64(closure, 3) as u32;
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                return crate::object::js_net_subclass_init(
+                    receiver,
+                    args.first().copied().unwrap_or(undefined),
+                    args.get(1).copied().unwrap_or(undefined),
+                    u32::from(class == crate::native_class_ids::NET_SERVER),
+                );
             }
         }
     }
+    // The constructor capture is a class id, not a private method brand.
+    let private_brand = (!native_constructor
+        && crate::closure::real_capture_count((*closure).capture_count) >= 4)
+        .then(|| js_closure_get_capture_f64(closure, 3));
 
     // #6173: a SYMBOL-keyed class method read as a value — there is no name to
     // re-resolve; the captures carry the already-resolved func_ptr + arity
