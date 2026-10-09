@@ -629,3 +629,98 @@ fn array_record_site_memo_refuses_after_iteration_member_delete() {
         super::super::shaped_symbols::define(addr, symbol, original.to_bits(), 0);
     }
 }
+
+#[test]
+fn array_record_site_memo_publishes_refusal_and_revalidates_both_owners() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (array, proto, sym) = fixture();
+        let site = warm_site(array);
+        let proven = site.load(Ordering::Relaxed);
+        let original = crate::symbol::js_object_get_symbol_property(proto, sym);
+        let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
+        let original_next = super::super::js_object_get_field(next, 0);
+        let wrong = f64::from_bits(original_next.bits());
+        crate::symbol::js_object_set_symbol_property(proto, sym, wrong);
+        assert_eq!(enter_at(array, &site), 1);
+        let refused = site.load(Ordering::Relaxed);
+        assert_ne!(refused, proven, "a patched owner publishes a new verdict");
+        assert_ne!(refused & (1 << 62), 0);
+        assert_eq!(enter_at(array, &site), 1, "warm refusal stays refused");
+        assert_eq!(site.load(Ordering::Relaxed), refused);
+        crate::symbol::js_object_set_symbol_property(proto, sym, original);
+        let bag = crate::object::shaped_symbols::owner(
+            crate::value::js_nanbox_get_pointer(proto) as usize
+        )
+        .unwrap();
+        super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
+        assert_eq!(
+            enter_at(array, &site),
+            0,
+            "restoration revalidates instead of retaining refusal"
+        );
+        let restored = site.load(Ordering::Relaxed);
+        assert_eq!(restored & (1 << 62), 0);
+        assert_ne!(restored, refused);
+        let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+        super::super::js_object_set_field(next, 0, super::super::js_object_get_field(other, 0));
+        assert_eq!(enter_at(array, &site), 1);
+        let refused_next = site.load(Ordering::Relaxed);
+        assert_ne!(refused_next & (1 << 62), 0);
+        assert_eq!(enter_at(array, &site), 1);
+        assert_eq!(site.load(Ordering::Relaxed), refused_next);
+        super::super::js_object_set_field(next, 0, original_next);
+        super::super::shapes::learn_object_constfn_lanes(next, |_, bits| {
+            bits == original_next.bits()
+        });
+        assert_eq!(enter_at(array, &site), 0);
+        assert_eq!(site.load(Ordering::Relaxed) & (1 << 62), 0);
+    }
+}
+
+#[test]
+fn array_record_site_memo_never_caches_a_dictionary_refusal() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (array, _, _) = fixture();
+        let site = warm_site(array);
+        let old = site.load(Ordering::Relaxed);
+        let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
+        assert!(super::super::dictionary::latch_object_to_dictionary(next));
+        assert_eq!(enter_at(array, &site), 1);
+        assert_eq!(
+            site.load(Ordering::Relaxed),
+            old,
+            "dictionary keys are mutable under their ShapeId"
+        );
+        let original = super::super::js_object_get_field(next, 0);
+        super::super::js_object_set_field(next, 0, JSValue::number(3.0));
+        assert_eq!(enter_at(array, &site), 1);
+        assert_eq!(site.load(Ordering::Relaxed), old);
+        super::super::js_object_set_field(next, 0, original);
+    }
+}
+
+#[test]
+fn array_record_shared_finish_preserves_done_and_throw_completion() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (array, _, _) = fixture();
+        let no = f64::from_bits(crate::value::TAG_FALSE);
+        let yes = f64::from_bits(crate::value::TAG_TRUE);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let iter = crate::array::array_values_iter(array);
+        for protocol in [no, yes] {
+            for done in [no, yes] {
+                let normal = crate::array::js_array_record_finish(
+                    protocol, array, 0.0, iter, done, 42.0, no,
+                );
+                assert_eq!(normal.to_bits(), undefined.to_bits());
+                let error = crate::array::js_array_record_finish(
+                    protocol, array, 0.0, iter, done, 42.0, yes,
+                );
+                assert_eq!(error, 42.0);
+            }
+        }
+    }
+}

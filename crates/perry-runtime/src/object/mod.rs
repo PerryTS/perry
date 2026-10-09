@@ -1962,6 +1962,5 @@ pub(crate) use packed_keys::packed_key_names;
 
 pub(crate) use iterator_prototypes::array_record_close_is_absent;
 pub(crate) use iterator_prototypes::{
-    array_iterator_next_is_intrinsic, array_iterator_prototype_addr, array_record_next_is_builtin,
-    shape_member_body_is,
+    array_iterator_next_is_intrinsic, array_iterator_prototype_addr, shape_member_body_is,
 };
