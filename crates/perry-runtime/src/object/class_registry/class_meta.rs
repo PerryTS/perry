@@ -59,6 +59,10 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
         }
         guard.as_mut().unwrap().insert(class_id, name);
     }
+    // A declaration has a prototype surface even when its body is empty.
+    // Publish that fact at registration, including anonymous declarations;
+    // literal-only ids never register a declaration name.
+    super::registration::publish_unbuilt_holder(class_id);
     crate::object::class_value::note_intrinsic_registration(class_id, "name");
 }
 
@@ -72,10 +76,11 @@ pub fn class_name_for_id(class_id: u32) -> Option<String> {
 /// Was `class_id` registered with a user-visible name? [`class_name_for_id`]
 /// without cloning the name, for the identity predicates on read misses.
 pub(crate) fn class_has_name(class_id: u32) -> bool {
-    CLASS_NAMES
-        .read()
-        .ok()
-        .is_some_and(|guard| guard.as_ref().is_some_and(|names| names.contains_key(&class_id)))
+    CLASS_NAMES.read().ok().is_some_and(|guard| {
+        guard
+            .as_ref()
+            .is_some_and(|names| names.contains_key(&class_id))
+    })
 }
 
 /// #9413: `class_id → the class's original source text`. Populated by codegen

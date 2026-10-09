@@ -13,11 +13,10 @@ pub fn is_class_id_registered(class_id: u32) -> bool {
 
 /// An unbuilt holder is a CLASS identity fact. Registration precedes
 /// instances, and publishing its surface makes negative probes decline.
-fn publish_unbuilt_holder(class_id: u32) {
+pub(super) fn publish_unbuilt_holder(class_id: u32) {
     let pid = crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id);
     if crate::object::shapes::identity_prototype_word(pid) == 0
-        && (!super::is_anon_shape_class_id(class_id)
-            || super::class_meta::class_has_name(class_id))
+        && (!super::is_anon_shape_class_id(class_id) || super::class_meta::class_has_name(class_id))
     {
         crate::object::shapes::write_identity_word(pid, crate::value::TAG_UNDEFINED);
     }

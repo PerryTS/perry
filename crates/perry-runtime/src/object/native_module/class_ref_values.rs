@@ -80,8 +80,12 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
             return true;
         }
     }
-    let existing = crate::object::class_holder_prototype(class_id);
-    let start = if existing.is_null() {
+    let word = crate::object::class_holder_word(class_id);
+    if word == 0 {
+        return false;
+    }
+    let existing = crate::JSValue::from_bits(word);
+    let start = if !existing.is_pointer() {
         let proto =
             JSValue::from_bits(crate::object::class_decl_prototype_value(class_id).to_bits());
         if !proto.is_pointer() {
@@ -89,7 +93,7 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         }
         proto.as_pointer::<ObjectHeader>() as *const ObjectHeader
     } else {
-        existing as *const ObjectHeader
+        existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
     let key =
         crate::object::native_call_method::class_holder::MethodKey::bytes(method_name.as_bytes());
@@ -100,8 +104,12 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
 /// A method membership query is a data slot read from the actual chain.
 pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let existing = crate::object::class_holder_prototype(class_id);
-    let start = if existing.is_null() {
+    let word = crate::object::class_holder_word(class_id);
+    if word == 0 {
+        return false;
+    }
+    let existing = crate::JSValue::from_bits(word);
+    let start = if !existing.is_pointer() {
         let proto =
             JSValue::from_bits(crate::object::class_decl_prototype_value(class_id).to_bits());
         if !proto.is_pointer() {
@@ -109,7 +117,7 @@ pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
         }
         proto.as_pointer::<ObjectHeader>() as *const ObjectHeader
     } else {
-        existing as *const ObjectHeader
+        existing.as_pointer::<ObjectHeader>() as *const ObjectHeader
     };
     let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
     !matches!(
