@@ -275,46 +275,42 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
 /// not properties: they live only in the class's private-accessor record, are
 /// never inherited, and are never shadowed by a public string property with
 /// the same spelling.
-fn class_private_accessor_pair(
+pub(super) fn class_private_accessor_pair(
     class_id: u32,
     name: &str,
 ) -> Option<crate::object::accessor_pair::Accessor> {
-    let key = name.to_string();
-    if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|c| {
-        c.borrow()
-            .get(&(
-                class_id,
-                key.clone(),
-                ClassDeclarationValueKind::PrivateAccessor,
-            ))
-            .copied()
-    }) {
-        return unsafe { crate::object::accessor_pair::pair_of_value(bits) };
+    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
+    unsafe {
+        let value = crate::closure::props::state_internal_get(owner, name)?;
+        crate::object::accessor_pair::pair_of_value(value.to_bits())
     }
-    // Immutable declaration input is consumed once to materialize the private
-    // accessor's pair. Private members are not prototype properties.
-    let decl = {
-        let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-        guard
-            .as_ref()?
-            .get(&class_id)?
-            .private_accessors
-            .get(name)
-            .copied()?
-    };
-    let acc = crate::object::accessor_pair::Accessor {
-        raw_get: decl.get,
-        raw_set: decl.set,
-        ..Default::default()
-    };
-    let pair = unsafe { crate::object::accessor_pair::pair_new(acc) };
-    class_declaration_value_root_store(
-        class_id,
-        key,
-        ClassDeclarationValueKind::PrivateAccessor,
-        crate::value::POINTER_TAG | pair as u64,
-    );
-    Some(acc)
+}
+
+/// A private declaration half is installed on the lexical class function's
+/// internal holder at registration. It is a traced slot, never a JS property
+/// and never a lazily materialized registry answer.
+pub(crate) fn register_private_accessor_half(
+    class_id: u32,
+    name: &str,
+    body: usize,
+    setter: bool,
+) {
+    if body == 0 {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
+    let mut pair = class_private_accessor_pair(class_id, name).unwrap_or_default();
+    if setter {
+        pair.raw_set = body;
+    } else {
+        pair.raw_get = body;
+    }
+    unsafe {
+        let value = crate::value::js_nanbox_pointer(
+            crate::object::accessor_pair::pair_new(pair) as i64);
+        crate::closure::props::state_internal_set(owner, name, value);
+    }
 }
 
 /// Invoke an instance-private getter on its lexical declaring class. `None`
