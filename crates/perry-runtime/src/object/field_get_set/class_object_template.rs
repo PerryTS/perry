@@ -1009,9 +1009,13 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
     obj: *const ObjectHeader,
     key: *const crate::string::StringHeader,
 ) -> bool {
-    // Linked through a class evaluation: its shape names a prototype other
-    // than the one its template class implies.
-    if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize) {
+    // An instance names its evaluation's prototype through its shape. The
+    // evaluation prototype itself owns the same template methods even when
+    // its parent is the realm's default; its class object's back-edge proves
+    // that ownership independently of the prototype's own parent identity.
+    if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize)
+        && super::class_evaluation_prototype_class_id(obj as usize).is_none()
+    {
         return false;
     }
     let class_id = (*obj).class_id;
