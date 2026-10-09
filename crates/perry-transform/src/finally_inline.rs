@@ -193,6 +193,17 @@ pub fn inline_finally_into_returns(module: &mut Module) {
     }
 }
 
+// This binding is fresh and this pass writes only Boolean literals to it.
+// Keep that constructor evidence in the condition rather than asking codegen
+// to trust a user binding's erased Boolean annotation.
+fn exited_test(id: LocalId) -> Expr {
+    Expr::Compare {
+        op: perry_hir::CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(id)),
+        right: Box::new(Expr::Bool(true)),
+    }
+}
+
 /// Process a statement list with the given stack of enclosing finally
 /// bodies (innermost last). Each abrupt-completion stmt encountered
 /// (`Stmt::Return`, `Stmt::Break`, `Stmt::Continue`,
@@ -342,7 +353,7 @@ fn process_stmts(
                         finally = Some(vec![Stmt::If {
                             condition: Expr::Unary {
                                 op: perry_hir::UnaryOp::Not,
-                                operand: Box::new(Expr::LocalGet(id)),
+                                operand: Box::new(exited_test(id)),
                             },
                             then_branch: once,
                             else_branch: None,
@@ -394,7 +405,7 @@ fn process_stmts(
                             }
                         };
                         c.body = vec![Stmt::If {
-                            condition: Expr::LocalGet(id),
+                            condition: exited_test(id),
                             then_branch: vec![Stmt::Throw(Expr::LocalGet(err_id))],
                             else_branch: Some(std::mem::take(&mut c.body)),
                         }];
@@ -773,4 +784,68 @@ fn process_expr_closure_bodies(expr: &mut Expr, next_local_id: &mut LocalId) {
     perry_hir::walker::walk_expr_children_mut(expr, &mut |e| {
         process_expr_closure_bodies(e, next_local_id)
     });
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+    #[test]
+    fn generated_exit_guards_keep_boolean_constructor_evidence() {
+        let mut body = vec![Stmt::Try {
+            body: vec![Stmt::If {
+                condition: Expr::LocalGet(1),
+                then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)))],
+                else_branch: None,
+            }],
+            catch: Some(perry_hir::CatchClause {
+                param: Some((2, "error".into())),
+                body: vec![Stmt::Return(Some(Expr::Number(9.0)))],
+            }),
+            finally: Some(vec![Stmt::Expr(Expr::Number(5.0))]),
+        }];
+        let mut fresh = 3;
+        process_stmts(&mut body, &[], 0, 0, &mut HashMap::new(), &mut fresh);
+        let Stmt::Try {
+            body: inner,
+            catch: Some(c),
+            finally: Some(f),
+        } = &body[0]
+        else {
+            panic!("try");
+        };
+        assert!(matches!(
+            &inner[0],
+            Stmt::Let {
+                id: 3,
+                init: Some(Expr::Bool(false)),
+                ..
+            }
+        ));
+        assert!(
+            matches!(
+                &inner[1],
+                Stmt::If {
+                    condition: Expr::LocalGet(1),
+                    ..
+                }
+            ),
+            "user binding truthiness must retain its original condition"
+        );
+        let Stmt::If { condition, .. } = &c.body[0] else {
+            panic!("catch guard");
+        };
+        assert!(matches!(condition, Expr::Compare {
+            op: perry_hir::CompareOp::Eq, left, right
+        } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
+        let Stmt::If {
+            condition: Expr::Unary { operand, .. },
+            ..
+        } = &f[0]
+        else {
+            panic!("finally guard");
+        };
+        assert!(matches!(operand.as_ref(), Expr::Compare {
+            op: perry_hir::CompareOp::Eq, left, right
+        } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
+    }
 }

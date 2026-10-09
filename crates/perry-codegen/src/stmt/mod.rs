@@ -434,6 +434,9 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         && args.len() == 3
                         && matches!(args[1], perry_hir::Expr::LocalGet(output) if output == *id)
                     {
+                        if crate::array_record_stack::has_fused_value(ctx, *id) {
+                            return Ok(());
+                        }
                         return lower_if(
                             ctx,
                             &perry_hir::Expr::Compare {

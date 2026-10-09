@@ -6960,6 +6960,13 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    // The record already merges the indexed and protocol values before one
+    // body. Regional clones here would split that body again and add a
+    // learned receiver guard to a compiler-owned traversal boundary.
+    if crate::array_record_stack::fused_condition(ctx, condition) {
+        return lower_for_after_init(ctx, init, condition, update, body, "for");
+    }
+
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
     // access is a raw boxed-slot load and whose length dispatch is SSO/heap

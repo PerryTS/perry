@@ -1773,3 +1773,15 @@ pub(crate) fn lower_record_index(
 ) -> Result<String> {
     guarded_array::lower_record_index(ctx, array, index, record, payload_slot, index_slot)
 }
+
+pub(crate) fn lower_record_next(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    protocol: &str,
+    record: &str,
+    index_slot: &str,
+    value_slot: &str,
+) -> Result<(String, String)> {
+    guarded_array::lower_record_next(ctx, array, index, protocol, record, index_slot, value_slot)
+}
