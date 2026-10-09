@@ -1037,7 +1037,6 @@ pub(super) unsafe fn dispatch_handle(
                 ) {
                     return Some(result);
                 }
-
             }
         }
     }
