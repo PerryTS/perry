@@ -723,13 +723,13 @@ fn array_record_shared_finish_preserves_done_and_throw_completion() {
         let iter = crate::array::array_values_iter(array);
         for protocol in [no, yes] {
             for done in [no, yes] {
-                let normal = crate::array::js_array_record_finish(
-                    protocol, array, 0.0, iter, done, 42.0, no,
-                );
+                let mode = protocol.to_bits() == crate::value::TAG_TRUE;
+                let receiver = if mode { iter } else { array };
+                let flags =
+                    u32::from(mode) | u32::from(done.to_bits() == crate::value::TAG_TRUE) << 1;
+                let normal = crate::array::js_array_record_finish(receiver, 0.0, 42.0, flags);
                 assert_eq!(normal.to_bits(), undefined.to_bits());
-                let error = crate::array::js_array_record_finish(
-                    protocol, array, 0.0, iter, done, 42.0, yes,
-                );
+                let error = crate::array::js_array_record_finish(receiver, 0.0, 42.0, flags | 4);
                 assert_eq!(error, 42.0);
             }
         }

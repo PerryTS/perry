@@ -487,8 +487,24 @@ pub unsafe extern "C-unwind" fn js_array_record_close(
     error: f64,
     throwing: f64,
 ) -> f64 {
-    let throwing = crate::value::js_is_truthy(throwing) != 0;
-    if crate::value::js_is_truthy(done) != 0
+    array_record_close(
+        value,
+        index,
+        crate::value::js_is_truthy(done) != 0,
+        error,
+        crate::value::js_is_truthy(throwing) != 0,
+    )
+}
+
+#[inline(never)]
+pub(super) unsafe fn array_record_close(
+    value: f64,
+    index: f64,
+    done: bool,
+    error: f64,
+    throwing: bool,
+) -> f64 {
+    if done
         || (crate::object::iterator_prototypes_materialized()
             && crate::array::object_prototype_addr_if_resolved() != 0
             && crate::object::array_record_close_is_absent())
@@ -502,7 +518,7 @@ pub unsafe extern "C-unwind" fn js_array_record_close(
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let error = scope.root_nanbox_f64(error);
-    if crate::value::js_is_truthy(done) != 0 || crate::object::array_record_close_is_absent() {
+    if done || crate::object::array_record_close_is_absent() {
         return if throwing {
             error.get_nanbox_f64()
         } else {
@@ -511,8 +527,12 @@ pub unsafe extern "C-unwind" fn js_array_record_close(
     }
     let iter = js_array_record_iterator_at(value.get_nanbox_f64(), index);
     if throwing {
-        crate::array::js_iterator_close_on_throw(iter, done, error.get_nanbox_f64())
+        crate::array::js_iterator_close_on_throw(
+            iter,
+            f64::from_bits(crate::value::TAG_FALSE),
+            error.get_nanbox_f64(),
+        )
     } else {
-        crate::array::js_iterator_close_if_not_done(iter, done)
+        crate::array::js_iterator_close_if_not_done(iter, f64::from_bits(crate::value::TAG_FALSE))
     }
 }

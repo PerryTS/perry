@@ -104,7 +104,23 @@
                     ctx.block().unreachable();
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
-                let result = ctx.block().call(DOUBLE, "js_array_record_finish", &values);
+                // One payload for either representation; scalar completion
+                // predicates cross the shared boundary in one integer word.
+                let mode_bits = ctx.block().bitcast_double_to_i64(values[0].1);
+                let mode = ctx.block().icmp_eq(I64, &mode_bits, crate::nanbox::TAG_TRUE_I64);
+                let payload = ctx.block().select(crate::types::I1, &mode, DOUBLE, values[3].1, values[1].1);
+                let done_bits = ctx.block().bitcast_double_to_i64(values[4].1);
+                let done = ctx.block().icmp_eq(I64, &done_bits, crate::nanbox::TAG_TRUE_I64);
+                let mode_flag = ctx.block().zext(crate::types::I1, &mode, I32);
+                let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
+                let done_flag = ctx.block().shl(I32, &done_flag, "1");
+                let flags = ctx.block().or(I32, &mode_flag, &done_flag);
+                let flags = if matches!(args[6], Expr::Bool(true)) {
+                    ctx.block().or(I32, &flags, "4")
+                } else { flags };
+                let result = ctx.block().call(DOUBLE, "js_array_record_finish",
+                    &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+
                 roots.release(ctx);
                 return Ok(result);
             }

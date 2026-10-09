@@ -357,7 +357,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function(
         "js_array_record_finish",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
     );
     module.declare_function(
         "js_array_record_abrupt",
