@@ -877,14 +877,11 @@ mod length_handle_band_tests {
             // field, and the destination is this test's own private anonymous
             // mmap page rather than arena-managed memory, so the store creates
             // no heap edge for the collector to trace.
-            std::ptr::write(
-                ptr,
-                crate::typedarray::TypedArrayHeader {
-                    length: 37,
-                    capacity: 37,
-                    link: 0,
-                },
-            );
+            // The header's fields are private to the buffer store; write its
+            // `length: u32, capacity: u32, link: usize` layout directly.
+            ptr.cast::<u32>().write(37);
+            ptr.cast::<u32>().add(1).write(37);
+            ptr.cast::<usize>().add(1).write(0);
 
             assert_eq!(
                 js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),
