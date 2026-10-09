@@ -1037,63 +1037,7 @@ pub(super) unsafe fn dispatch_handle(
                 ) {
                     return Some(result);
                 }
-                // #809: independent prototype-object resolution. A
-                // synthetic class id (`Object.create(objLiteral)`, an ES5
-                // constructor) has no declared prototype for the chain
-                // above to start from. Resolve the method off the synthetic-class-id
-                // prototype chain directly (reuses the same helper as
-                // `js_object_get_field_by_name`), then invoke it with
-                // `this` bound to the receiver.
-                let method_key = crate::string::js_string_from_bytes(
-                    method_name.as_ptr(),
-                    method_name.len() as u32,
-                );
-                // `_with_receiver` binds an inherited ACCESSOR getter's `this`
-                // to the instance (not the prototype it lives on), matching the
-                // ProtoClosure walk above and spec `[[Get]](P, Receiver)`. A
-                // prototype `Object.defineProperty(proto, k, { get })` reached
-                // through the registry-`None` (`Object.create(objLiteral)`) path
-                // would otherwise observe the prototype as `this`.
-                if let Some(field_val) = resolve_proto_chain_field_with_receiver(
-                    class_id,
-                    method_key as *const crate::StringHeader,
-                    f64::from_bits(jsval.bits()),
-                ) {
-                    if !field_val.is_undefined() && !field_val.is_null() {
-                        // #321 (effect Context/Layer/Scope): the closure we
-                        // just resolved is an *inherited* method — by
-                        // construction `resolve_proto_chain_field` only walks
-                        // the prototype chain (the receiver's OWN fields are
-                        // handled by the earlier keys-array scan), so this is
-                        // never an own method. Object-literal methods are
-                        // lowered with `captures_this:true` and have their
-                        // reserved (last) capture slot patched to the literal
-                        // object — i.e. the PROTOTYPE — at construction time
-                        // (see `expr.rs::lower_object_literal` /
-                        // `symbol.rs::js_object_set_symbol_method`). So when
-                        // `o = Object.create(P)` resolves `o.method()`, the
-                        // closure carries `this === P`, not `this === o`, and
-                        // passing `this = o` can't override the
-                        // baked-in slot that the body reads. Rebind the slot
-                        // to the receiver before invoking. This mirrors the
-                        // symbol-keyed fix (#1969) for the string-keyed
-                        // static-member call path. `clone_closure_rebind_this`
-                        // is a no-op for non-`captures_this` closures and for
-                        // non-closure values, so inherited *data* properties
-                        // and arrow/`this`-free function values are untouched.
-                        let bound = crate::closure::clone_closure_rebind_this(
-                            field_val.bits(),
-                            f64::from_bits(jsval.bits()),
-                        );
-                        let result = crate::closure::native_call_value_this(
-                            f64::from_bits(bound),
-                            crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                            args_ptr,
-                            args_len,
-                        );
-                        return Some(result);
-                    }
-                }
+
             }
         }
     }
