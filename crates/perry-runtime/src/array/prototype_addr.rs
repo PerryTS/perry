@@ -366,12 +366,11 @@ pub(crate) fn function_prototype_addr_if_resolved() -> usize {
 }
 
 /// The prototype a primitive's property read starts at (`%String.prototype%`,
-/// `%Number.prototype%`, `%Boolean.prototype%`), memoized on first use, or 0
-/// while this thread has no `globalThis`. `value` is a NaN-boxed primitive;
-/// any other kind (a symbol, a bigint, an object) answers 0. Rows 3–5 are NOT
-/// primed at startup (that would build the three constructors in every
-/// program): the first use resolves `globalThis.<Wrapper>.prototype`, which
-/// is also what the universal dispatcher's primitive arm reads.
+/// `%Number.prototype%`, `%Boolean.prototype%`), or 0 while this thread
+/// has no `globalThis`. `value` is a NaN-boxed primitive; any other kind
+/// (a symbol, a bigint, an object) answers 0. The rows are primed while the
+/// realm still owns its original constructor bindings, so reassignment before
+/// the first primitive read cannot change the intrinsic prototype identity.
 pub(crate) fn primitive_wrapper_prototype_addr(value: f64) -> usize {
     let v = crate::value::JSValue::from_bits(value.to_bits());
     let slot = if v.is_number() {
@@ -410,9 +409,10 @@ pub(crate) fn function_prototype_addr() -> usize {
 /// intrinsic. A row that cannot resolve yet stays unresolved and keeps its
 /// lazy fallback, exactly as before.
 pub(crate) fn prime_prototype_addr_cache() {
-    // The primitive wrappers' rows resolve on first use (see
-    // `primitive_wrapper_prototype_addr`).
-    for slot in 0..STRING_PROTO_CACHE {
+    // Every constructor and its prototype already exists in this realm.
+    // Capture all six intrinsic identities before user code can replace a
+    // global binding, including before its first primitive property read.
+    for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
         if prototype_addrs()[slot].get() == usize::MAX {
             bootstrap_prototype_addr(slot);
         }
