@@ -63,8 +63,7 @@ pub(super) fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
         HashState::Sha1(x) => Sha256Digest::update(x, bytes),
         HashState::Sha224(x) => Sha256Digest::update(x, bytes),
         HashState::Sha256(x) => Sha256Digest::update(x, bytes),
-        HashState::Sha384(x) => Sha256Digest::update(x, bytes),
-        HashState::Sha512(x) => Sha256Digest::update(x, bytes),
+        HashState::Sha2Wide(x) => x.update(bytes),
         HashState::Sha512_256(x) => Sha256Digest::update(x, bytes),
         HashState::Shake128(x) => shake::Update::update(x, bytes),
         HashState::Shake256(x) => shake::Update::update(x, bytes),
@@ -81,8 +80,7 @@ fn finalize_hash_state(
         HashState::Sha1(x) => x.finalize().to_vec(),
         HashState::Sha224(x) => x.finalize().to_vec(),
         HashState::Sha256(x) => x.finalize().to_vec(),
-        HashState::Sha384(x) => x.finalize().to_vec(),
-        HashState::Sha512(x) => x.finalize().to_vec(),
+        HashState::Sha2Wide(x) => x.finish().as_ref().to_vec(),
         HashState::Sha512_256(x) => x.finalize().to_vec(),
         HashState::Shake128(x) => {
             let mut out = vec![0u8; option_len.or(output_len).unwrap_or(16)];
@@ -106,8 +104,7 @@ pub(super) fn update_hmac_state(state: &mut HmacState, bytes: &[u8]) {
         HmacState::Sha1(x) => Mac::update(x, bytes),
         HmacState::Sha224(x) => Mac::update(x, bytes),
         HmacState::Sha256(x) => Mac::update(x, bytes),
-        HmacState::Sha384(x) => Mac::update(x, bytes),
-        HmacState::Sha512(x) => Mac::update(x, bytes),
+        HmacState::Sha2Wide(x) => x.update(bytes),
         HmacState::Sha512_256(x) => Mac::update(x, bytes),
         HmacState::Md5(x) => Mac::update(x, bytes),
     }
@@ -119,8 +116,7 @@ fn finalize_hmac_state(state: Option<HmacState>) -> Vec<u8> {
         Some(HmacState::Sha1(x)) => x.finalize().into_bytes().to_vec(),
         Some(HmacState::Sha224(x)) => x.finalize().into_bytes().to_vec(),
         Some(HmacState::Sha256(x)) => x.finalize().into_bytes().to_vec(),
-        Some(HmacState::Sha384(x)) => x.finalize().into_bytes().to_vec(),
-        Some(HmacState::Sha512(x)) => x.finalize().into_bytes().to_vec(),
+        Some(HmacState::Sha2Wide(x)) => x.sign().as_ref().to_vec(),
         Some(HmacState::Sha512_256(x)) => x.finalize().into_bytes().to_vec(),
         Some(HmacState::Md5(x)) => x.finalize().into_bytes().to_vec(),
         None => Vec::new(),
@@ -155,8 +151,9 @@ pub enum HashState {
     Sha1(Sha1),
     Sha224(Sha224),
     Sha256(Sha256),
-    Sha384(Sha384),
-    Sha512(Sha512),
+    // The context owns the algorithm as well as the words. SHA-384 and
+    // SHA-512 share the provider already used by TLS, with one state shape.
+    Sha2Wide(ring::digest::Context),
     Sha512_256(Sha512_256),
     Shake128(Shake128),
     Shake256(Shake256),
@@ -179,8 +176,12 @@ pub(super) unsafe fn new_hash_state_or_throw(
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
         "sha224" | "sha-224" => HashState::Sha224(Sha224::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
-        "sha384" | "sha-384" => HashState::Sha384(Sha384::new()),
-        "sha512" | "sha-512" => HashState::Sha512(Sha512::new()),
+        "sha384" | "sha-384" => {
+            HashState::Sha2Wide(ring::digest::Context::new(&ring::digest::SHA384))
+        }
+        "sha512" | "sha-512" => {
+            HashState::Sha2Wide(ring::digest::Context::new(&ring::digest::SHA512))
+        }
         "sha512-256" | "sha512_256" | "sha-512-256" => HashState::Sha512_256(Sha512_256::new()),
         "shake128" | "shake-128" => HashState::Shake128(Shake128::default()),
         "shake256" | "shake-256" => HashState::Shake256(Shake256::default()),
@@ -204,10 +205,24 @@ fn throw_plain_error(message: &str) -> ! {
 
 /// Validate and decode the `(data, inputEncoding?)` arguments of
 /// `hash.update` / `hmac.update`. Shared with the chain path (#11516).
-pub(super) unsafe fn hash_update_bytes(args: &[f64]) -> Vec<u8> {
+/// The consumer must not allocate in the JS heap, call JS, or reach a
+/// safepoint. Only strings have an input encoding; byte views use their
+/// visible span directly, just as Node's native update does.
+pub(super) unsafe fn with_hash_update_bytes<R>(
+    args: &[f64],
+    consume: impl FnOnce(&[u8]) -> R,
+) -> R {
     let data = validate_update_data(args);
-    let encoding = arg_string(args, 1);
-    decode_hash_update_value(data, &encoding)
+    if JSValue::from_bits(data.to_bits()).is_any_string() {
+        let encoding = arg_string(args, 1);
+        let bytes = decode_hash_update_value(data, &encoding);
+        consume(&bytes)
+    } else {
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            let bytes = perry_runtime::buffer::bytes::bytes(data, scope).unwrap_or(&[]);
+            consume(bytes)
+        })
+    }
 }
 
 /// `hash.digest(outputEncoding?)` on a taken state. Shared with the chain
@@ -237,8 +252,7 @@ pub enum HmacState {
     Sha1(hmac::Hmac<Sha1>),
     Sha224(hmac::Hmac<Sha224>),
     Sha256(hmac::Hmac<Sha256>),
-    Sha384(hmac::Hmac<Sha384>),
-    Sha512(hmac::Hmac<Sha512>),
+    Sha2Wide(ring::hmac::Context),
     Sha512_256(hmac::Hmac<Sha512_256>),
     Md5(hmac::Hmac<Md5>),
 }
@@ -281,14 +295,12 @@ unsafe fn new_hmac_state(alg_ptr: i64, key_ptr: i64) -> Option<HmacState> {
             Ok(m) => HmacState::Sha256(m),
             Err(_) => return None,
         },
-        "sha384" | "sha-384" => match hmac::Hmac::<Sha384>::new_from_slice(&key) {
-            Ok(m) => HmacState::Sha384(m),
-            Err(_) => return None,
-        },
-        "sha512" | "sha-512" => match hmac::Hmac::<Sha512>::new_from_slice(&key) {
-            Ok(m) => HmacState::Sha512(m),
-            Err(_) => return None,
-        },
+        "sha384" | "sha-384" => HmacState::Sha2Wide(ring::hmac::Context::with_key(
+            &ring::hmac::Key::new(ring::hmac::HMAC_SHA384, &key),
+        )),
+        "sha512" | "sha-512" => HmacState::Sha2Wide(ring::hmac::Context::with_key(
+            &ring::hmac::Key::new(ring::hmac::HMAC_SHA512, &key),
+        )),
         "sha512-256" | "sha512_256" | "sha-512-256" => {
             match hmac::Hmac::<Sha512_256>::new_from_slice(&key) {
                 Ok(m) => HmacState::Sha512_256(m),
@@ -535,10 +547,9 @@ fn digest_update(this: f64, kind: DigestKind, data: f64, enc: f64) -> f64 {
         Ok(()) => {}
     }
     let args = [data, enc];
-    // Decoding validates and may allocate, so it runs before the payload is
-    // borrowed.
-    let bytes = unsafe { hash_update_bytes(passed_args(&args)) };
-    unsafe { feed(this, kind, &bytes) };
+    // Validation and string decoding precede the payload borrow. Feeding a
+    // digest is native work only, so byte inputs stay in a B1 no-GC scope.
+    unsafe { with_hash_update_bytes(passed_args(&args), |bytes| feed(this, kind, bytes)) };
     this
 }
 
@@ -751,9 +762,7 @@ fn digest_write(this: f64, kind: DigestKind, chunk: f64, enc: f64) -> f64 {
     }
     let args = [chunk, enc];
     let args = passed_args(&args);
-    let encoding = unsafe { arg_string(args, 1) };
-    let bytes = unsafe { decode_hash_update_value(chunk, &encoding) };
-    unsafe { feed(this, kind, &bytes) };
+    unsafe { with_hash_update_bytes(args, |bytes| feed(this, kind, bytes)) };
     js_true()
 }
 
@@ -778,9 +787,9 @@ fn digest_end(this: f64, kind: DigestKind, chunk: f64, enc: f64) -> f64 {
     if !v.is_undefined() && !v.is_null() {
         let args = [chunk, enc];
         let args = passed_args(&args);
-        let encoding = unsafe { arg_string(args, 1) };
-        let bytes = unsafe { decode_hash_update_value(chunk, &encoding) };
-        unsafe { feed(this_root.get_nanbox_f64(), kind, &bytes) };
+        unsafe {
+            with_hash_update_bytes(args, |bytes| feed(this_root.get_nanbox_f64(), kind, bytes))
+        };
     }
     let state = scope.root_nanbox_f64(native_payload::js_state(
         this_root.get_nanbox_f64(),

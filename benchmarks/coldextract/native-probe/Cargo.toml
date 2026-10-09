@@ -1,0 +1,11 @@
+[package]
+name="coldextract-native-probe"
+version="0.1.0"
+edition="2021"
+[dependencies]
+sha2="0.11"
+ring="0.17"
+[profile.release]
+opt-level=3
+
+[workspace]
