@@ -57,6 +57,9 @@ pub(crate) use shapes_linked_birth::{
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+#[cfg(all(test, feature = "regex-engine"))]
+#[path = "regex_direct_admission_tests.rs"]
+mod regex_direct_admission_tests;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]

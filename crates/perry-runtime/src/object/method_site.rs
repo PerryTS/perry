@@ -1803,6 +1803,10 @@ pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
     }
 }
 
+#[cfg(all(test, feature = "regex-engine"))]
+#[path = "method_site/regex_split_tests.rs"]
+mod regex_split_tests;
+
 #[cfg(test)]
 mod constfn_tests {
     use super::*;

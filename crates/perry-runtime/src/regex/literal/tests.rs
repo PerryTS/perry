@@ -178,3 +178,125 @@ fn literal_site_publishes_the_inline_birth_header_word() {
         "every birth of the site carries the published header word"
     );
 }
+
+/// A primed site's evaluation is the inline birth (`inline_birth`): the next
+/// 40 bytes of the inline arena, the published header word, the data from
+/// word 0 and lastIndex +0, born white (no seed) when no mark is live.
+#[test]
+fn primed_literal_is_born_in_the_inline_arena() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "primed_literal_is_born_in_the_inline_arena",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    let site = word();
+    let _first = literal(&scope, site, "inline");
+    let header = unsafe { *site.add(1) };
+    assert_ne!(header, 0, "the first evaluation publishes word 1");
+    // The operands first: their allocations move the arena.
+    let source = scope.root_string_ptr(super::super::js_string_from_str("inline"));
+    let flags = scope.root_string_ptr(super::super::js_string_from_str("g"));
+    let state = crate::arena::js_inline_arena_state();
+    let (data, offset) = unsafe { ((*state).data as usize, (*state).offset) };
+    assert!(
+        offset + super::BIRTH_BYTES <= unsafe { (*state).size },
+        "SUBJECT-LIVE CHECK: the open block has room for the birth"
+    );
+    let re = scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
+        flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
+    }));
+    let at = re.with_const_ptr::<RegExpHeader, _>(|p| p as usize);
+    assert_eq!(
+        at,
+        data + offset + crate::gc::GC_HEADER_SIZE,
+        "the next inline cell"
+    );
+    assert_eq!(unsafe { (*state).offset }, offset + super::BIRTH_BYTES);
+    unsafe {
+        let gc = &*((at - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        assert_eq!(gc.obj_type, crate::gc::GC_TYPE_OBJECT);
+        assert_eq!(gc.gc_flags, crate::gc::GC_FLAG_ARENA);
+        assert_eq!(gc._reserved, crate::gc::OBJ_FLAG_PLAIN_ORDINARY);
+        assert_eq!(gc.size as usize, super::BIRTH_BYTES);
+        assert_eq!((at as *const u64).read(), header);
+        assert!((*(at as *const RegExpHeader)).meta.is_null());
+        let slots = (at + std::mem::size_of::<RegExpHeader>()) as *const u64;
+        assert_eq!(slots.read(), *site, "slot 0 is word 0's data");
+        assert_eq!(slots.add(1).read(), 0.0f64.to_bits());
+    }
+    let input = scope.root_string_ptr(super::super::js_string_from_str("an inline birth"));
+    assert_ne!(
+        re.with_const_ptr(|p| input.with_const_ptr(|s| super::super::js_regexp_test(p, s))),
+        0
+    );
+}
+
+/// While a mark is live the inline birth is born black and seeded (after
+/// both slots hold their values), as an emitted `new` is.
+#[test]
+fn primed_literal_born_during_a_mark_is_seeded() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "primed_literal_born_during_a_mark_is_seeded",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    let site = word();
+    let _first = literal(&scope, site, "black");
+    let state = crate::arena::js_inline_arena_state();
+    let seeds = unsafe { &mut *(*state).birth_seeds.cast::<Vec<*mut crate::gc::GcHeader>>() };
+    let queued = seeds.len();
+    let source = scope.root_string_ptr(super::super::js_string_from_str("black"));
+    let regex_flags = scope.root_string_ptr(super::super::js_string_from_str("g"));
+    let birth_flags = crate::gc::gc_birth_flags_address() as *mut u8;
+    // SAFETY: this thread's live birth-flags cell; restored below. Nothing
+    // else allocates while it is set.
+    unsafe { birth_flags.write(crate::gc::GC_FLAG_MARKED) };
+    let born = source.with_const_ptr(|source| {
+        regex_flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
+    });
+    unsafe { birth_flags.write(0) };
+    let header = (born as usize - crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    let seeded = seeds.len() == queued + 1 && seeds.last() == Some(&header);
+    if seeded {
+        seeds.pop();
+    }
+    unsafe { (*header).gc_flags &= !crate::gc::GC_FLAG_MARKED };
+    assert!(seeded, "a black inline birth is seeded");
+}
+
+/// A full block is the runtime birth: the inline birth refuses rather than
+/// bump past the open block. Word 1 is set to a marked image here, so a birth
+/// that stamped it would show.
+#[test]
+fn primed_literal_with_no_room_takes_the_runtime_birth() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "primed_literal_with_no_room_takes_the_runtime_birth",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    let site = word();
+    let _first = literal(&scope, site, "full");
+    let header = unsafe { *site.add(1) };
+    // A class id the birth never carries.
+    unsafe { *site.add(1) = header ^ 0x8000_0000 };
+    // The operands first: their allocations resync the inline limit.
+    let source = scope.root_string_ptr(super::super::js_string_from_str("full"));
+    let flags = scope.root_string_ptr(super::super::js_string_from_str("g"));
+    let state = crate::arena::js_inline_arena_state();
+    unsafe { (*state).size = (*state).offset };
+    let re = scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
+        flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
+    }));
+    unsafe { *site.add(1) = header };
+    assert_eq!(
+        re.with_const_ptr::<RegExpHeader, _>(|p| unsafe { (p as *const u64).read() }),
+        header,
+        "the runtime birth carries the birth shape's own header"
+    );
+}

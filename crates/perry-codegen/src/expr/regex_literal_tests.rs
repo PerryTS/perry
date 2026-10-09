@@ -100,22 +100,11 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
     assert_generic(&ir);
 }
 
-/// The register a `getelementptr i8, ptr <base>, i64 <offset>` line defines.
-fn gep_reg(ir: &str, offset: &str) -> Vec<String> {
-    ir.lines()
-        .filter(|l| {
-            l.contains("getelementptr i8, ptr")
-                && l.trim_end().ends_with(&format!(", i64 {offset}"))
-        })
-        .filter_map(|l| l.trim().split(" = ").next().map(str::to_string))
-        .collect()
-}
-
-/// A literal evaluation is an inline birth: the agent gate and the site's
-/// header word, a bump of the inline arena, every slot initialized, and only
-/// then the birth seed (the runtime call is the slow arm).
+/// A literal evaluation is one call to the shared runtime entry, whose
+/// common path is the inline birth: the site emits no birth sequence (no
+/// inline arena bump, no birth seed) and pays only the call and its operands.
 #[test]
-fn literal_birth_initializes_every_slot_before_the_birth_seed() {
+fn literal_site_is_one_call_to_the_shared_birth_entry() {
     let ir = compile(vec![function(
         1,
         "fresh",
@@ -126,39 +115,31 @@ fn literal_birth_initializes_every_slot_before_the_birth_seed() {
         }))],
         Type::Any,
     )]);
-    let body = &ir[ir.find("define").expect("a function")..];
-    assert!(
-        body.contains("load atomic i8, ptr @PERRY_METHOD_SITE_WORKERS_PRESENT seq_cst"),
+    // The function's own body: the module's init and entry may allocate.
+    let start = ir
+        .lines()
+        .position(|l| l.starts_with("define") && l.contains("fresh"))
+        .expect("the literal's function");
+    let body = ir
+        .lines()
+        .skip(start)
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        body.matches("call i64 @js_regexp_literal(").count(),
+        1,
         "{ir}"
     );
-    assert!(body.contains("call i64 @js_regexp_literal("), "{ir}");
-    let seed = body
-        .find("call void @js_gc_note_black_birth(")
-        .expect("the birth seed");
-    // Slot 0 (matcher data) at +24 and slot 1 (lastIndex) at +32 from the
-    // raw cell: both stores precede the seed.
-    // Only STORE lines count: the arena state's own fields (+24 birth flags,
-    // +32 seed queue) are loaded through geps of the same offsets.
-    let store_at = |reg: &str| {
-        let mut at = 0;
-        body.lines().find_map(|line| {
-            let here = at;
-            at += line.len() + 1;
-            let line = line.trim();
-            (line.starts_with("store i64 ") && line.ends_with(&format!(", ptr {reg}")))
-                .then_some(here)
-        })
-    };
-    for offset in ["24", "32"] {
-        let stored = gep_reg(body, offset)
-            .iter()
-            .filter_map(|reg| store_at(reg))
-            .min()
-            .unwrap_or_else(|| panic!("no store through the +{offset} slot: {ir}"));
-        assert!(
-            stored < seed,
-            "slot +{offset} stored after the birth seed: {ir}"
-        );
+    for inline in [
+        // A function prologue may initialize its arena state independently
+        // of this literal. The allocation itself must stay in the shared
+        // helper, including the object header write and birth seed.
+        "store <2 x i64>",
+        "js_gc_note_black_birth",
+        "PERRY_METHOD_SITE_WORKERS_PRESENT",
+    ] {
+        assert!(!body.contains(inline), "{inline} in a literal site: {ir}");
     }
 }
 

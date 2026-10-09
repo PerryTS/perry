@@ -46,8 +46,9 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
     receiver
 }
 
-/// The object-header word (`class_id | ShapeId << 32`) generated code may
-/// stamp on an inline birth that writes the two slots raw: `re`'s, when `re`
+/// The object-header word (`class_id | ShapeId << 32`) a literal site's
+/// inline birth (`literal::inline_birth`) stamps on a RegExp whose two slots
+/// it writes raw: `re`'s, when `re`
 /// carries this agent's birth shape and both of its lanes are `Any`. That
 /// shape is marked externally carried, so a site holding the word never
 /// names a pruned shape.
