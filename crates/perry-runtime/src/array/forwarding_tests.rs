@@ -212,3 +212,23 @@ fn clean_arr_ptr_rejects_untracked_forwarding_target_without_deref() {
         assert!(resolved.is_null());
     }
 }
+
+#[test]
+fn growth_preserves_the_custom_prototype_record_when_its_header_bit_is_set() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let proto = crate::object::js_object_alloc(0, 0);
+    let initial = js_array_alloc_literal(1);
+    let boxed = |p: usize| crate::value::js_nanbox_pointer(p as i64);
+    crate::object::js_object_set_prototype_of(boxed(initial as usize), boxed(proto as usize));
+    let grown = js_array_grow(initial, 64);
+    assert_ne!(grown, initial, "the fixture must replace the array backing");
+    assert_eq!(
+        crate::object::js_object_get_prototype_of(boxed(grown as usize)).to_bits(),
+        boxed(proto as usize).to_bits(),
+        "the header ownership bit must carry the actual prototype edge"
+    );
+    crate::object::prototype_chain::prune_dead_object_prototype_owners(&|owner| {
+        owner == initial as usize || owner == grown as usize
+    });
+}
