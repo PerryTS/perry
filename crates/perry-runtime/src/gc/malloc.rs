@@ -588,6 +588,26 @@ pub(crate) fn gc_malloc_header_is_tracked(header: *const GcHeader) -> bool {
     })
 }
 
+/// Admit a precise root only when this thread still owns its malloc header.
+///
+/// Keep the copied-minor registry lazy: an active exact set provides constant
+/// expected lookup cost; an inactive registry uses the live object vector
+/// without allocating or activating the set, at O(number of malloc objects).
+#[inline]
+pub(crate) fn gc_malloc_header_is_owned(header: *const GcHeader) -> bool {
+    if header.is_null() {
+        return false;
+    }
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        if s.malloc_registry_available() {
+            s.set.contains(&(header as usize))
+        } else {
+            s.objects.contains(&(header as *mut GcHeader))
+        }
+    })
+}
+
 /// Reallocate a malloc-tracked object, preserving GcHeader.
 /// `old_user_ptr` is the pointer previously returned by gc_malloc.
 /// Returns new user pointer (after header).

@@ -32,6 +32,8 @@ mod message_port;
 mod parent_port;
 mod thread_values;
 mod worker_options;
+#[cfg(test)]
+mod worker_owner_tests;
 mod worker_pump;
 mod worker_surface;
 
@@ -257,6 +259,8 @@ impl WorkerSender {
 }
 
 struct WorkerRecord {
+    /// Agent whose heap owns the handle, callbacks, and async resources.
+    owner_agent: perry_runtime::agent::AgentId,
     sender: WorkerSender,
     /// NaN-boxed Worker handle used as the target for property handlers such
     /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
@@ -436,6 +440,7 @@ pub(crate) mod thread_exit_probe {
             }],
         );
         let mut record = WorkerRecord {
+            owner_agent: perry_runtime::agent::current_agent(),
             sender: WorkerSender::new(tx),
             object_bits,
             listeners,
@@ -466,7 +471,13 @@ fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
         }
     });
     if let Ok(mut workers) = WORKERS.lock() {
+        let owner_agent = perry_runtime::agent::current_agent();
         for worker in workers.values_mut() {
+            // These records are process-global, but their GC objects belong
+            // to the creating agent. Another agent must never trace or move them.
+            if worker.owner_agent != owner_agent {
+                continue;
+            }
             visitor.visit_nanbox_u64_slot(&mut worker.object_bits);
             for listeners in worker.listeners.values_mut() {
                 for listener in listeners {
@@ -1401,6 +1412,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
     let mut record = WorkerRecord {
+        owner_agent: perry_runtime::agent::current_agent(),
         sender: sender.clone(),
         object_bits: object_value(worker_obj).to_bits(),
         listeners: HashMap::new(),

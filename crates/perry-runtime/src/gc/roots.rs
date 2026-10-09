@@ -1687,8 +1687,11 @@ pub(super) fn nanboxed_root_header(
     valid_ptrs: &ValidPointerSet,
 ) -> Option<*mut GcHeader> {
     let _ = valid_ptrs;
-    decode_nanboxed_root_word(value_bits)
-        .map(|word| unsafe { header_from_user_ptr(word.addr() as *const u8) })
+    let word = decode_nanboxed_root_word(value_bits)?;
+    if !super::root_words::owns_precise_root_addr(word.addr()) {
+        return None;
+    }
+    Some(unsafe { header_from_user_ptr(word.addr() as *const u8) })
 }
 
 #[inline]

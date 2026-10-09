@@ -4,8 +4,10 @@
 //! WASI) and ambiguous heap words retain the conservative mixed-word decoder.
 //! A numeric JSValue whose bits happen to equal a heap address is never a root.
 //!
-//! Precise marking trusts the allocation's own GcHeader. Verification builds
-//! check the producer contract; release marking performs no arena/page probe.
+//! Precise roots keep their producer-declared encoding. Before touching a
+//! header, marking checks current-heap ownership using live arena and malloc
+//! metadata; process-global providers can also emit another agent's roots.
+//! This ownership check does not infer a word's type or use a census snapshot.
 
 use super::*;
 
@@ -132,11 +134,25 @@ impl PreciseRoot {
     }
 }
 
+/// A decoded root may belong to another collector when its provider is
+/// process-global. Consult live ownership metadata before any header access,
+/// including for post-census births and generations outside the census.
+#[inline]
+pub(super) fn owns_precise_root_addr(addr: usize) -> bool {
+    if crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown {
+        return true;
+    }
+    // An unowned candidate need not point into an allocation, so compute the
+    // candidate address without in-bounds pointer arithmetic or dereferencing it.
+    let header = addr.wrapping_sub(GC_HEADER_SIZE) as *const GcHeader;
+    super::malloc::gc_malloc_header_is_owned(header)
+}
+
 /// Mark a root whose producer supplied its representation. The object's own
-/// header is authoritative; normal marking never asks the heap classifier.
+/// header is authoritative after confirming that this collector owns it.
 ///
-/// Invalid typed roots are producer bugs. Instrumented verification and unit
-/// tests validate the header contract before changing its color. The evacuation
+/// Invalid local typed roots are producer bugs. Instrumented verification and
+/// unit tests validate the header before changing its color. The evacuation
 /// verifier checks that root slots do not retain moved addresses.
 #[inline]
 pub(crate) fn mark_precise_root(root: PreciseRoot, valid_ptrs: &ValidPointerSet) -> bool {
@@ -160,6 +176,9 @@ pub(super) fn mark_precise_root_in_scope(
         if super::full_trace::handle_trace_active() {
             super::full_trace::observe_handle(root.bits(), valid_ptrs);
         }
+        return false;
+    }
+    if !owns_precise_root_addr(addr) {
         return false;
     }
     unsafe {
