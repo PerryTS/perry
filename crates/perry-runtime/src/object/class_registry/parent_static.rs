@@ -1631,9 +1631,6 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 pub(crate) fn class_method_slot_value(class_id: u32, name: &str) -> Option<u64> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let word = crate::object::class_holder_word(class_id);
-    if word == 0 {
-        return None;
-    }
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
         let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
@@ -1677,9 +1674,6 @@ pub(crate) fn class_method_slot_target(
 pub(crate) fn class_method_slot_owner(class_id: u32, name: &str) -> Option<u32> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let word = crate::object::class_holder_word(class_id);
-    if word == 0 {
-        return None;
-    }
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
         let v = crate::JSValue::from_bits(class_decl_prototype_value(class_id).to_bits());
