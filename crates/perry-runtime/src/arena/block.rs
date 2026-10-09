@@ -49,7 +49,21 @@ fn block_size_for(min_size: usize) -> usize {
 /// Only empty, arena-owned payload pages may be advised while mapped.
 pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
     debug_assert_eq!(block.offset, 0);
-    unsafe { decommit::release(block.data, block.size) }
+    unsafe { release_block_pages(block.data, block.size) }
+}
+
+/// Apple blocks are whole tagged regions released as reusable; they are
+/// reactivated in [`block_pool_take`] and [`Arena::set_current`]. Other
+/// targets advise the interior pages and need no reactivation.
+unsafe fn release_block_pages(data: *mut u8, size: usize) -> usize {
+    #[cfg(target_vendor = "apple")]
+    {
+        super::region::release(data, size)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        decommit::release(data, size)
+    }
 }
 
 struct PooledBlock {
@@ -193,6 +207,9 @@ fn block_pool_cap_bytes() -> usize {
     crate::gc::gc_block_pool_cap_bytes()
 }
 
+// Apple releases whole regions instead; the interior-page helper stays
+// compiled there for its unit tests.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[path = "block/decommit.rs"]
 mod decommit;
 
@@ -224,7 +241,11 @@ fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
-        Some(pool.blocks.swap_remove(idx).data)
+        let block = pool.blocks.swap_remove(idx);
+        // A pooled block may have been released by its reuse window or as an
+        // idle Eden block before it was pooled; reactivate on every handoff.
+        unsafe { super::region::reuse(block.data, block.size) };
+        Some(block.data)
     })?;
     let charge = super::region::backing_len(size);
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(charge)));
@@ -251,7 +272,7 @@ pub(crate) fn advance_block_pool_reuse_window() -> usize {
                 // Only empty owned bytes are eligible; allocator boundary
                 // pages remain intact even after the reuse window expires.
                 released =
-                    released.saturating_add(unsafe { decommit::release(block.data, block.size) });
+                    released.saturating_add(unsafe { release_block_pages(block.data, block.size) });
             }
         }
         released
@@ -474,6 +495,7 @@ pub(crate) struct ArenaBlock {
     /// Empty Eden payload pages were already discarded in this idle interval.
     /// Reuse is detected at reset, after synchronizing the bump pointer. This
     /// avoids an extra store in either inline or runtime allocation paths.
+    /// Apple reactivates the pages in `Arena::set_current`.
     pub(crate) idle_pages_discarded: bool,
 }
 
@@ -487,6 +509,18 @@ impl ArenaBlock {
     #[inline]
     pub(crate) fn object_starts_ptr(&self) -> *mut u64 {
         self.object_starts.as_ptr() as *mut u64
+    }
+
+    /// Reactivate released pages before the block is handed out. Idle discard
+    /// never touches the current block, and every block becomes current
+    /// before any of its bytes are written, so this is off the bump path.
+    #[inline]
+    fn prepare_reuse(&mut self) {
+        #[cfg(target_vendor = "apple")]
+        if self.idle_pages_discarded {
+            unsafe { super::region::reuse(self.data, self.size) };
+            self.idle_pages_discarded = false;
+        }
     }
 
     #[inline]
@@ -693,6 +727,7 @@ impl Arena {
     #[inline]
     pub(crate) fn set_current(&mut self, idx: usize) {
         self.current = idx;
+        self.blocks[idx].prepare_reuse();
         super::from_space::invalidate_sealed_young_bytes();
         // #10698: the trigger watermark bounds the offset of the block that
         // WAS current against the bytes sealed in the others; neither holds

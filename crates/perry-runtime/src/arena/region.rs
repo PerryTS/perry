@@ -1,6 +1,7 @@
 //! Measurement prototype: OS backing beneath the existing per-agent block pool.
 //! Linux uses one reserved range and persistent in-band descriptors.
-//! Other targets retain their existing backing and registry.
+//! Apple maps one tagged region per block; it and the other targets keep the
+//! process-wide registry. Other targets retain allocator backing.
 //! Production in-band descriptors and byte-store ownership are in REGION-DESIGN.
 
 use super::HeapGeneration;
@@ -11,6 +12,10 @@ use std::sync::RwLock;
 
 #[cfg(target_os = "linux")]
 pub(crate) mod reservation;
+
+#[cfg(target_vendor = "apple")]
+#[path = "region/apple.rs"]
+mod apple;
 #[cfg(target_os = "linux")]
 pub(crate) use reservation::contains;
 
@@ -27,7 +32,11 @@ fn extent_len(len: usize) -> usize {
     {
         mapped_len(len).expect("invalid region extent")
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_vendor = "apple")]
+    {
+        apple::extent(len).expect("invalid region extent")
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
     {
         len
     }
@@ -87,7 +96,7 @@ pub(super) fn backing_len(len: usize) -> usize {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        len
+        extent_len(len)
     }
 }
 
@@ -135,12 +144,38 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = kind;
+        #[cfg(target_vendor = "apple")]
+        let data = match apple::extent(len) {
+            Some(extent) => apple::map(extent),
+            None => std::ptr::null_mut(),
+        };
+        #[cfg(not(target_vendor = "apple"))]
         let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, 16).unwrap());
         if !data.is_null() {
             register(data, len);
         }
         data
     }
+}
+
+/// Release the pages of an empty owned region and return the bytes the
+/// kernel accepted. They must pass through [`reuse`] before the next write.
+#[cfg(target_vendor = "apple")]
+pub(super) unsafe fn release(data: *mut u8, len: usize) -> usize {
+    if apple::release(data, len) {
+        len
+    } else {
+        0
+    }
+}
+
+/// Reactivate released pages before they are handed out again.
+#[inline]
+pub(super) unsafe fn reuse(data: *mut u8, len: usize) {
+    #[cfg(target_vendor = "apple")]
+    apple::reuse(data, len);
+    #[cfg(not(target_vendor = "apple"))]
+    let _ = (data, len);
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -162,9 +197,21 @@ pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
         .remove(&(data as usize));
     #[cfg(target_os = "linux")]
     reservation::unmap(data, mapped_len(len).expect("invalid extent"));
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_vendor = "apple")]
+    apple::unmap(data, extent_len(len));
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
     std::alloc::dealloc(data, std::alloc::Layout::from_size_align(len, 16).unwrap());
 }
+
+/// Matching backing for fixtures that seed the real region pool.
+#[cfg(test)]
+pub(crate) unsafe fn new_test_block_backing(size: usize) -> *mut u8 {
+    map(Kind::NurseryBlock, size)
+}
+
+#[cfg(all(test, target_vendor = "apple"))]
+#[path = "region/apple_tests.rs"]
+pub(super) mod apple_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {

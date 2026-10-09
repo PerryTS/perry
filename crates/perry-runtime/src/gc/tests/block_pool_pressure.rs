@@ -2,8 +2,7 @@ use super::super::*;
 use super::support::*;
 
 fn seed_one_pooled_block() {
-    let layout = std::alloc::Layout::from_size_align(crate::arena::BLOCK_SIZE, 16).unwrap();
-    let raw = unsafe { std::alloc::alloc(layout) };
+    let raw = unsafe { crate::arena::new_test_block_backing(crate::arena::BLOCK_SIZE) };
     assert!(!raw.is_null(), "test block allocation must succeed");
     assert!(
         crate::arena::block_pool_put(raw, crate::arena::BLOCK_SIZE),

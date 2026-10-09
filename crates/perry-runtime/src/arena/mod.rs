@@ -197,3 +197,6 @@ pub(crate) use page_meta::{
 
 #[cfg(test)]
 pub(crate) use page_meta::old_arena_block_ranges;
+
+#[cfg(test)]
+pub(crate) use region::new_test_block_backing;
