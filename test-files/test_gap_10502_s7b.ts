@@ -62,7 +62,7 @@ const e1: any = capturedClass('one'), e2: any = capturedClass('two'), e3: any = 
 console.log('eval default', Object.getPrototypeOf(e2.prototype) === Object.prototype,
     new e1().m(), new e2().m(), new e3().m());
 delete e2.prototype.m;
-console.log('eval delete', typeof e2.prototype.m, typeof new e2().m(), new e1().m(), new e3().m());
+console.log('eval delete', typeof e2.prototype.m, typeof (new e2()).m, new e1().m(), new e3().m());
 e2.prototype.m = function () { return 'again'; };
 console.log('eval redefine', new e2().m(), new e1().m(), new e3().m());
 thenProbe();
