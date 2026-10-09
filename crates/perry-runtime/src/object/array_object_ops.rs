@@ -654,49 +654,62 @@ pub(crate) unsafe fn define_array_property(
         let desc_has_set = descriptor.has_named(b"set");
         if desc_has_get || desc_has_set {
             let get_field = descriptor.read_named(b"get");
-            let set_field = descriptor.read_named(b"set");
-            let recv = crate::value::js_nanbox_pointer(obj as i64);
-            let prior = super::get_accessor_descriptor(obj as usize, key_name);
+            let get_field = scope.root_nanbox_u64(get_field.bits());
+            let prior = super::get_accessor_descriptor(current_obj() as usize, key_name);
+            let prior_get = scope.root_nanbox_u64(prior.map(|a| a.get).unwrap_or(0));
+            let prior_set = scope.root_nanbox_u64(prior.map(|a| a.set).unwrap_or(0));
             let get_bits = if desc_has_get {
-                if get_field.is_undefined() {
+                if crate::value::JSValue::from_bits(get_field.get_nanbox_u64()).is_undefined() {
                     0
                 } else {
-                    crate::closure::clone_closure_rebind_this(get_field.bits(), recv)
+                    crate::closure::clone_closure_rebind_this(
+                        get_field.get_nanbox_u64(),
+                        crate::value::js_nanbox_pointer(current_obj() as i64),
+                    )
                 }
             } else {
-                prior.map(|a| a.get).unwrap_or(0)
+                prior_get.get_nanbox_u64()
             };
+            // Rebinding allocates. Retain its returned getter across the setter
+            // clone, and reread the requested setter from the original record.
+            let get_bits = scope.root_nanbox_u64(get_bits);
+            let set_field = descriptor.read_named(b"set");
             let set_bits = if desc_has_set {
                 if set_field.is_undefined() {
                     0
                 } else {
-                    crate::closure::clone_closure_rebind_this(set_field.bits(), recv)
+                    crate::closure::clone_closure_rebind_this(
+                        set_field.bits(),
+                        crate::value::js_nanbox_pointer(current_obj() as i64),
+                    )
                 }
             } else {
-                prior.map(|a| a.set).unwrap_or(0)
+                prior_set.get_nanbox_u64()
             };
+            let set_bits = scope.root_nanbox_u64(set_bits);
             // Retain attrs the descriptor omits when redefining; a new accessor
             // (or one replacing a data property) defaults to
             // non-enumerable/non-configurable. An existing data property with no
             // side-table entry has default all-true attributes, so a
             // data→accessor conversion keeps `enumerable`/`configurable`.
             let existed = prior.is_some()
-                || super::get_property_attrs(obj as usize, key_name).is_some()
-                || crate::array::array_named_property_get_by_name(arr, key_name).is_some();
+                || super::get_property_attrs(current_obj() as usize, key_name).is_some()
+                || crate::array::array_named_property_get_by_name(current_arr(), key_name)
+                    .is_some();
             let cur = if existed {
                 Some(
-                    super::get_property_attrs(obj as usize, key_name)
+                    super::get_property_attrs(current_obj() as usize, key_name)
                         .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
                 )
             } else {
                 None
             };
             set_accessor_descriptor(
-                obj as usize,
+                current_obj() as usize,
                 key_name.to_string(),
                 AccessorDescriptor {
-                    get: get_bits,
-                    set: set_bits,
+                    get: get_bits.get_nanbox_u64(),
+                    set: set_bits.get_nanbox_u64(),
                 },
             );
             let enumerable = read_bool(b"enumerable")
@@ -704,7 +717,7 @@ pub(crate) unsafe fn define_array_property(
             let configurable = read_bool(b"configurable")
                 .unwrap_or_else(|| cur.map(|a| a.configurable()).unwrap_or(false));
             set_property_attrs(
-                obj as usize,
+                current_obj() as usize,
                 key_name.to_string(),
                 PropertyAttrs::new(false, enumerable, configurable),
             );
@@ -720,12 +733,12 @@ pub(crate) unsafe fn define_array_property(
     // every omitted field to false and overwrote the value with `undefined`
     // (dropping `arr.prop = 12` then `defineProperty(arr,"prop",{writable:false})`
     // back to `{value: undefined}`). Mirror the index-path merge here.
-    let cur_accessor = super::get_accessor_descriptor(obj as usize, key_name);
+    let cur_accessor = super::get_accessor_descriptor(current_obj() as usize, key_name);
     let exists = cur_accessor.is_some()
-        || crate::array::array_named_property_get_by_name(arr, key_name).is_some();
+        || crate::array::array_named_property_get_by_name(current_arr(), key_name).is_some();
     let cur_attrs: Option<PropertyAttrs> = if exists {
         Some(
-            super::get_property_attrs(obj as usize, key_name)
+            super::get_property_attrs(current_obj() as usize, key_name)
                 .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
         )
     } else {
@@ -742,7 +755,7 @@ pub(crate) unsafe fn define_array_property(
         let enumerable = read_bool(b"enumerable").unwrap_or_else(|| cur.enumerable());
         let configurable = read_bool(b"configurable").unwrap_or_else(|| cur.configurable());
         set_property_attrs(
-            obj as usize,
+            current_obj() as usize,
             key_name.to_string(),
             PropertyAttrs::new(false, enumerable, configurable),
         );
@@ -753,7 +766,7 @@ pub(crate) unsafe fn define_array_property(
     // Redefining a former accessor back to a data property drops the stale
     // accessor entry (the non-configurable case already threw above).
     if cur_accessor.is_some() {
-        clear_accessor_descriptor(obj as usize, key_name);
+        clear_accessor_descriptor(current_obj() as usize, key_name);
     }
 
     // Write the value: an explicit `value` wins; a NEW property with no value
@@ -762,11 +775,15 @@ pub(crate) unsafe fn define_array_property(
     // receiver. The descriptor-field reads below can collect again, so reload
     // the rooted receiver only after every probe has finished.
     if has_value {
-        crate::array::array_named_property_set(arr, key_str, value);
+        crate::array::array_named_property_set(
+            current_arr(),
+            current_key(),
+            value_handle.get_nanbox_f64(),
+        );
     } else if !exists {
         crate::array::array_named_property_set(
-            arr,
-            key_str,
+            current_arr(),
+            current_key(),
             f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
