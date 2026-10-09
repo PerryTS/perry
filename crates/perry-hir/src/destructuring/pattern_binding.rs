@@ -198,7 +198,7 @@ fn iterator_next_value_stmts(
 pub(crate) fn lower_array_pattern_binding(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
-    source: ArraySource,
+    mut source: ArraySource,
     mutable: bool,
     is_var_decl: bool,
     result: &mut Vec<Stmt>,
@@ -209,7 +209,7 @@ pub(crate) fn lower_array_pattern_binding(
         name: iter_name,
         ty: Type::Any,
         mutable: false,
-        init: Some(source.iter_init()),
+        init: Some(source.iter_init(iter_id)),
     });
     let (next_id, next_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Let {

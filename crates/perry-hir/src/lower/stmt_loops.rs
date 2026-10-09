@@ -1456,7 +1456,7 @@ pub(super) fn lower_stmt_for_of_inner(
             .push((format!("__result_{}", result_id), result_id, Type::Any));
     }
 
-    let record = use_lazy_iter.then(|| {
+    let mut record = use_lazy_iter.then(|| {
         if crate::destructuring::spread_free_array_literal(&for_of_stmt.right).is_some() {
             if let Expr::Array(values) = &arr_expr {
                 return crate::iterator_record::IteratorRecordPlan::literal(
@@ -1478,8 +1478,8 @@ pub(super) fn lower_stmt_for_of_inner(
         )
     });
     let arr_expr = record
-        .as_ref()
-        .map_or(arr_expr, |r| r.guarded_get_iterator());
+        .as_mut()
+        .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
     module.init.push(Stmt::Let {
         id: arr_id,
         name: format!("__arr_{}", arr_id),

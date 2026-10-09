@@ -14,10 +14,10 @@ pub(crate) enum ArraySource {
 
 impl ArraySource {
     /// The initializer for the pattern's iterator local.
-    pub(crate) fn iter_init(&self) -> Expr {
+    pub(crate) fn iter_init(&mut self, iter_id: LocalId) -> Expr {
         match self {
             ArraySource::Iterator(source) => Expr::GetIterator(Box::new(source.clone())),
-            ArraySource::Guarded(plan) => plan.guarded_get_iterator(),
+            ArraySource::Guarded(plan) => plan.guarded_get_iterator(iter_id),
         }
     }
 

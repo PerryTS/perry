@@ -99,7 +99,7 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
 fn lower_array_assignment_from_expr(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
-    source: ArraySource,
+    mut source: ArraySource,
 ) -> Result<Vec<Stmt>> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, "destruct_iter", Type::Any);
     let (next_id, next_name) = fresh_destruct_local(ctx, "destruct_next", Type::Any);
@@ -111,7 +111,7 @@ fn lower_array_assignment_from_expr(
             name: iter_name,
             ty: Type::Any,
             mutable: false,
-            init: Some(source.iter_init()),
+            init: Some(source.iter_init(iter_id)),
         },
         Stmt::Let {
             id: next_id,

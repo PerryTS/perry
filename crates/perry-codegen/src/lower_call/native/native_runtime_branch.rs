@@ -36,6 +36,17 @@
                 roots.release(ctx);
                 return Ok(array);
             }
+            "arrayRecordPayload" => {
+                let (Expr::LocalGet(source), Expr::LocalSet(payload, _)) = (&args[0], &args[1]) else {
+                    anyhow::bail!("record payload requires its private source and destination");
+                };
+                let result = lower_expr(ctx, &args[1])?;
+                let _ = lower_expr(ctx, &args[2])?;
+                if let Some(admission) = ctx.record_packed_admissions.remove(source) {
+                    ctx.record_packed_admissions.insert(*payload, admission);
+                }
+                return Ok(result);
+            }
             "arrayRecordNeedsIterator" if matches!(args.first(), Some(Expr::LocalSet(..))) => {
                 let Expr::LocalSet(source_id, source_expr) = &args[0] else {
                     return Err(anyhow::anyhow!("arrayRecordEnter requires its private source binding"));
@@ -99,19 +110,21 @@
                 // record's locals on the escaping exception path.
                 for release in &args[count..] { let _ = lower_expr(ctx, release)?; }
                 let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
-                if abrupt {
-                    ctx.block().call_void("js_array_record_abrupt", &values);
-                    ctx.block().unreachable();
-                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                }
-                // One payload for either representation; scalar completion
-                // predicates cross the shared boundary in one integer word.
+                // Both completions use the same single payload. Older HIR
+                // shapes remain legal; its strict mode predicate selects the
+                // original receiver before crossing the runtime boundary.
                 let mode_bits = ctx.block().bitcast_double_to_i64(values[0].1);
                 let mode = ctx.block().icmp_eq(I64, &mode_bits, crate::nanbox::TAG_TRUE_I64);
                 let payload = ctx.block().select(crate::types::I1, &mode, DOUBLE, values[3].1, values[1].1);
+                let mode_flag = ctx.block().zext(crate::types::I1, &mode, I32);
+                if abrupt {
+                    ctx.block().call_void("js_array_record_abrupt",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[4].1), (I32, &mode_flag)]);
+                    ctx.block().unreachable();
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
                 let done_bits = ctx.block().bitcast_double_to_i64(values[4].1);
                 let done = ctx.block().icmp_eq(I64, &done_bits, crate::nanbox::TAG_TRUE_I64);
-                let mode_flag = ctx.block().zext(crate::types::I1, &mode, I32);
                 let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
                 let done_flag = ctx.block().shl(I32, &done_flag, "1");
                 let flags = ctx.block().or(I32, &mode_flag, &done_flag);

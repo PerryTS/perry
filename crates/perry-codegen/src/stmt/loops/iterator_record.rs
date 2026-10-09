@@ -247,6 +247,10 @@ mod tests {
         emit_record_bound(ty, None)
     }
     fn emit_record_bound(ty: Type, bound: Option<Expr>) -> String {
+        emit_record_payload(ty, bound, false)
+    }
+    fn emit_record_payload(ty: Type, bound: Option<Expr>, union: bool) -> String {
+        let array_id = if union { 6 } else { 0 };
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_counted");
         let mode = Expr::Compare {
@@ -295,7 +299,7 @@ mod tests {
                         vec![
                             mode.clone(),
                             bound.unwrap_or_else(|| {
-                                rt("arrayRecordLength", vec![Expr::LocalGet(0)])
+                                rt("arrayRecordLength", vec![Expr::LocalGet(array_id)])
                             }),
                             Expr::LocalGet(2),
                             rt(
@@ -320,7 +324,7 @@ mod tests {
                                 mode,
                                 Expr::LocalGet(3),
                                 Expr::IndexGet {
-                                    object: Box::new(Expr::LocalGet(0)),
+                                    object: Box::new(Expr::LocalGet(array_id)),
                                     index: Box::new(rt(
                                         "arrayRecordIndex",
                                         vec![Expr::LocalGet(2)],
@@ -341,6 +345,23 @@ mod tests {
                 ],
             },
         ];
+        if union {
+            m.init.insert(
+                2,
+                local(
+                    6,
+                    Type::Any,
+                    rt(
+                        "arrayRecordPayload",
+                        vec![
+                            Expr::LocalGet(0),
+                            Expr::LocalSet(6, Box::new(Expr::LocalGet(0))),
+                            Expr::LocalSet(0, Box::new(Expr::Undefined)),
+                        ],
+                    ),
+                ),
+            );
+        }
         let ir = String::from_utf8(
             crate::compile_module(
                 &m,
@@ -358,6 +379,26 @@ mod tests {
         let rest = &ir[start..];
         rest[..rest.find("\n}\n").unwrap()].to_owned()
     }
+    #[test]
+    fn unified_record_payload_carries_the_entry_admission_without_reclassification() {
+        let ir = emit_record_payload(Type::Array(Box::new(Type::Number)), None, true);
+        assert!(ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
+        assert_eq!(
+            ir.matches("@js_array_record_enter_counted(").count(),
+            1,
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("@js_typed_feedback_packed_f64_array_loop_guard("),
+            "the single payload must consume its entry admission: {ir}"
+        );
+        assert_eq!(
+            ir.matches("@js_iterator_step(").count(),
+            1,
+            "one protocol arm: {ir}"
+        );
+    }
+
     #[test]
     fn typed_record_uses_counted_admission_and_outlined_protocol() {
         let ir = emit_record(Type::Array(Box::new(Type::Number)));
