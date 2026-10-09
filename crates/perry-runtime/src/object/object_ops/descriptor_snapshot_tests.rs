@@ -236,6 +236,83 @@ fn descriptor_snapshot_proxy_copy_cannot_change_invariant_facts() {
 }
 
 #[test]
+fn descriptor_snapshot_array_rejections_are_boolean_through_forwarding() {
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let index = scope.root_nanbox_f64(key("0"));
+        let named = scope.root_nanbox_f64(key("added"));
+        let symbol = scope.root_nanbox_f64(crate::symbol::js_symbol_new(key("added")));
+        let handler = object(&scope);
+        let desc = data(&scope, 1.0);
+        for forwarded in [false, true] {
+            for saved_key in [&index, &named, &symbol] {
+                let array = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                    crate::array::js_array_alloc(0) as i64,
+                ));
+                super::super::js_object_prevent_extensions(array.get_nanbox_f64());
+                let receiver = scope.root_nanbox_f64(if forwarded {
+                    crate::proxy::js_proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
+                } else {
+                    array.get_nanbox_f64()
+                });
+                let result = crate::exception::catch_js_throw(|| {
+                    crate::proxy::js_reflect_define_property(
+                        receiver.get_nanbox_f64(),
+                        saved_key.get_nanbox_f64(),
+                        desc.get_nanbox_f64(),
+                    )
+                })
+                .expect("Reflect array addition rejection must not throw");
+                assert_eq!(result.to_bits(), crate::value::TAG_FALSE);
+                assert!(
+                    crate::exception::catch_js_throw(|| js_object_define_property(
+                        receiver.get_nanbox_f64(),
+                        saved_key.get_nanbox_f64(),
+                        desc.get_nanbox_f64(),
+                    ))
+                    .is_err(),
+                    "Object must throw for the same array rejection"
+                );
+            }
+            let array = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::array::js_array_alloc(0) as i64,
+            ));
+            let fixed = object(&scope);
+            put(fixed.get_nanbox_f64(), "value", 1.0);
+            js_object_define_property(
+                array.get_nanbox_f64(),
+                symbol.get_nanbox_f64(),
+                fixed.get_nanbox_f64(),
+            );
+            let change = object(&scope);
+            put(change.get_nanbox_f64(), "value", 2.0);
+            let receiver = scope.root_nanbox_f64(if forwarded {
+                crate::proxy::js_proxy_new(array.get_nanbox_f64(), handler.get_nanbox_f64())
+            } else {
+                array.get_nanbox_f64()
+            });
+            let result = crate::exception::catch_js_throw(|| {
+                crate::proxy::js_reflect_define_property(
+                    receiver.get_nanbox_f64(),
+                    symbol.get_nanbox_f64(),
+                    change.get_nanbox_f64(),
+                )
+            })
+            .expect("Reflect incompatible array symbol must not throw");
+            assert_eq!(result.to_bits(), crate::value::TAG_FALSE);
+            assert!(
+                crate::exception::catch_js_throw(|| js_object_define_property(
+                    receiver.get_nanbox_f64(),
+                    symbol.get_nanbox_f64(),
+                    change.get_nanbox_f64(),
+                ))
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn descriptor_snapshot_reflect_rejection_and_present_undefined_flag() {
     unsafe {
         let scope = RuntimeHandleScope::new();

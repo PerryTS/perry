@@ -483,3 +483,159 @@ fn descriptor_snapshot_collection_keeps_heap_value_and_accessor_after_copying() 
         assert_eq!(read_property(target.get_nanbox_f64(), "late"), 2.0);
     }
 }
+
+/// Force the descriptor object's own allocation to copy its saved input fields.
+/// Existing test controls open the supported alloc-point relocation mode; no
+/// production allocation/GC hook is added. The next block allocation belongs
+/// to getOwnPropertyDescriptor, or to the universal current-record precheck.
+#[test]
+fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
+    struct NoConservativeScan(Option<crate::gc::roots::ConservativeStackScanMode>);
+    impl Drop for NoConservativeScan {
+        fn drop(&mut self) {
+            crate::gc::roots::set_conservative_stack_scan_override(self.0);
+        }
+    }
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _scan = NoConservativeScan(crate::gc::roots::set_conservative_stack_scan_override(
+        Some(crate::gc::roots::ConservativeStackScanMode::Disabled),
+    ));
+    let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_handle_scanner();
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
+    unsafe {
+        for arguments in [false, true] {
+            for accessor in [false, true] {
+                for redefine in [false, true] {
+                    let scope = RuntimeHandleScope::new();
+                    let receiver = scope.root_nanbox_f64(if arguments {
+                        let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+                        object_value(crate::object::js_arguments_object_alloc(
+                            crate::value::js_nanbox_pointer(
+                                args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
+                            ),
+                            f64::from_bits(crate::value::TAG_UNDEFINED),
+                            0,
+                        ))
+                    } else {
+                        object_value(crate::object::js_object_alloc(0, 0))
+                    });
+                    let key = scope.root_nanbox_f64(string_value("allocation_window"));
+                    let payload = scope.root_nanbox_f64(if accessor {
+                        crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+                            crate::fn_info!(snapshot_accessor_body, 0),
+                            0,
+                        ) as i64)
+                    } else {
+                        object_value(crate::object::js_object_alloc(0, 0))
+                    });
+                    let setter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                        crate::closure::js_closure_alloc(
+                            crate::fn_info!(snapshot_accessor_body, 0),
+                            0,
+                        ) as i64,
+                    ));
+                    let initial =
+                        scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+                    crate::object::js_object_set_property_key(
+                        initial.get_nanbox_f64(),
+                        string_value(if accessor { "get" } else { "value" }),
+                        payload.get_nanbox_f64(),
+                    );
+                    if accessor {
+                        crate::object::js_object_set_property_key(
+                            initial.get_nanbox_f64(),
+                            string_value("set"),
+                            setter.get_nanbox_f64(),
+                        );
+                    }
+                    crate::object::js_object_set_property_key(
+                        initial.get_nanbox_f64(),
+                        string_value("configurable"),
+                        f64::from_bits(crate::value::TAG_TRUE),
+                    );
+                    crate::object::js_object_define_property(
+                        receiver.get_nanbox_f64(),
+                        key.get_nanbox_f64(),
+                        initial.get_nanbox_f64(),
+                    );
+                    let generic =
+                        scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+                    crate::object::js_object_set_property_key(
+                        generic.get_nanbox_f64(),
+                        string_value("enumerable"),
+                        f64::from_bits(crate::value::TAG_TRUE),
+                    );
+                    // Warm reflection shapes and intrinsics before arming. No
+                    // user callbacks or numeric/key conversions allocate here.
+                    crate::object::js_object_get_own_property_descriptor(
+                        receiver.get_nanbox_f64(),
+                        key.get_nanbox_f64(),
+                    );
+                    let before = addr_of(payload.get_nanbox_f64());
+                    let setter_before = addr_of(setter.get_nanbox_f64());
+                    let cycles = copying_minor_cycles();
+                    let moved = moved_objects_total();
+                    super::runtime_roots::force_next_general_arena_alloc_slow();
+                    trigger.make_arena_trigger_due();
+                    let result = if redefine {
+                        crate::object::js_object_define_property(
+                            receiver.get_nanbox_f64(),
+                            key.get_nanbox_f64(),
+                            generic.get_nanbox_f64(),
+                        );
+                        crate::object::js_object_get_own_property_descriptor(
+                            receiver.get_nanbox_f64(),
+                            key.get_nanbox_f64(),
+                        )
+                    } else {
+                        crate::object::js_object_get_own_property_descriptor(
+                            receiver.get_nanbox_f64(),
+                            key.get_nanbox_f64(),
+                        )
+                    };
+                    let result = scope.root_nanbox_f64(result);
+                    assert!(
+                        copying_minor_cycles() > cycles,
+                        "descriptor allocation must run a copying minor"
+                    );
+                    assert!(
+                        moved_objects_total() > moved,
+                        "descriptor allocation must relocate live objects"
+                    );
+                    assert_ne!(
+                        addr_of(payload.get_nanbox_f64()),
+                        before,
+                        "saved descriptor field must move in the allocation window"
+                    );
+                    assert_eq!(
+                        read_property(
+                            result.get_nanbox_f64(),
+                            if accessor { "get" } else { "value" }
+                        )
+                        .to_bits(),
+                        payload.get_nanbox_u64()
+                    );
+                    if accessor {
+                        assert_ne!(addr_of(setter.get_nanbox_f64()), setter_before);
+                        assert_eq!(
+                            read_property(result.get_nanbox_f64(), "set").to_bits(),
+                            setter.get_nanbox_u64()
+                        );
+                        assert_eq!(
+                            read_property(receiver.get_nanbox_f64(), "allocation_window"),
+                            42.0
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
