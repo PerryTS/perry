@@ -477,7 +477,7 @@ pub fn queued_bytes(owner: f64) -> usize {
     }
 }
 /// Callback-free physical transport facts; wrappers keep their own JS state.
-unsafe fn transport_window(
+pub(crate) unsafe fn transport_window(
     owner: f64,
 ) -> Result<perry_ffi::native_payload::PayloadWindow<p::SocketPayload>, PayloadMiss> {
     let own = perry_ffi::native_payload::project::<p::SocketPayload>(owner, &p::SOCKET)?;

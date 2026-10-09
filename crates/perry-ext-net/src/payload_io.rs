@@ -29,6 +29,8 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn snapshot(socket: OwnerLink) -> Option<tl::HandleSnapshot> {
+    // SAFETY: The caller retains this link on its owning agent; projection validates family/open
+    // lifecycle and the snapshot/core read is callback-free.
     unsafe {
         p::socket_core(socket)
             .ok()
@@ -36,6 +38,8 @@ pub(crate) fn snapshot(socket: OwnerLink) -> Option<tl::HandleSnapshot> {
     }
 }
 pub(crate) fn matches(socket: OwnerLink, snapshot: &tl::HandleSnapshot) -> bool {
+    // SAFETY: The caller retains this link on its owning agent; projection validates family/open
+    // lifecycle and the snapshot/core read is callback-free.
     unsafe {
         p::socket_core(socket)
             .ok()
@@ -47,16 +51,23 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     if completion.is_null() {
         return;
     }
+    // SAFETY: The runtime keeps the completion and its spans valid until this sink returns; these
+    // reads do not retain the borrowed metadata.
     let event = unsafe { &*completion };
     let Some(link) = event.link() else {
         return;
     };
+    // SAFETY: The retained link is validated on this agent; its returned JS owner is rooted
+    // immediately, before allocation.
     let Some(owner) = (unsafe { np::link_event_owner(link) }) else {
         return;
     };
     let scope = TransientRootScope::enter();
     let original = scope.root_nanbox(owner);
     if event.kind == tl::NET_DATA && event.flags & tl::NET_FLAG_STALE == 0 {
+        // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
+        // these reads do not retain the borrowed metadata. Payload projection validates
+        // family/lifecycle, and its borrow ends before event callbacks.
         unsafe {
             if let Ok(window) = np::project::<p::SocketPayload>(original.get(), &p::SOCKET) {
                 let payload = &mut *window.payload;
@@ -76,6 +87,8 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     // Plain write acknowledgements carry no JS values. The completion's link
     // pins its owner, and this one projection proves the callback-free window.
     if event.kind == tl::NET_WROTE && event.user == 0 && event.flags & tl::NET_FLAG_STALE == 0 {
+        // SAFETY: The receiver is rooted and projection validates its agent, family and open
+        // lifecycle; the pointer is consumed before allocation/JS or freshly projected afterward.
         unsafe {
             if let Ok(window) = np::project::<p::SocketPayload>(original.get(), &p::SOCKET) {
                 let payload = &mut *window.payload;
@@ -100,8 +113,12 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
         if p::socket_link(original.get()).is_ok()
             && (event.kind == tl::NET_CLOSED || super::payload_tls::installed(link))
         {
+            // SAFETY: The owner/link is family-checked on this agent; state comes from its traced
+            // cell and is rooted before any later allocation.
             let state = scope.root_nanbox(unsafe { p::socket_state(link, false) });
             let pending = scope.root_nanbox(
+                // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                // returns; these reads do not retain the borrowed metadata.
                 unsafe { event.closed_handle_parts() }
                     .map(|parts| closed::peek(state.get(), parts))
                     .unwrap_or_else(p::undefined),
@@ -115,6 +132,8 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             {
                 let current = scope.root_nanbox(p::record_get(state.get(), "tlsWrapper"));
                 if p::socket_link(current.get())
+                    // SAFETY: The retained link belongs to this agent; projection checks
+                    // family/open lifecycle, and field/core access ends before allocation or JS.
                     .is_ok_and(|own| unsafe { p::socket_ptr(own) }.is_ok())
                 {
                     current.get()
@@ -138,16 +157,22 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
             tl::NET_ACCEPT => server::accepted(owner.get(), completion),
             tl::NET_CLOSED => server::listener_closed(owner.get(), event),
             tl::NET_ERROR => {
+                // SAFETY: The retained link belongs to this agent; projection checks family/open
+                // lifecycle, and field/core access ends before allocation or JS.
                 let snapshot = unsafe {
                     p::server_core(link)
                         .ok()
                         .and_then(|core| tl::link_snapshot_handle(&mut *core, link))
                 };
                 let error = socket::error(
+                    // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                    // returns; these reads do not retain the borrowed metadata.
                     unsafe { event.code() }.unwrap_or("EIO"),
                     &error_message(event),
                 );
                 events::emit(owner.get(), "error", &[error]);
+                // SAFETY: The retained link belongs to this agent; projection checks family/open
+                // lifecycle, and field/core access ends before allocation or JS.
                 if snapshot.as_ref().is_some_and(|snapshot| unsafe {
                     p::server_core(link)
                         .ok()
@@ -167,11 +192,15 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     match event.kind {
         tl::NET_CONNECT => connected(owner.get()),
         tl::NET_DATA => {
+            // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
+            // these reads do not retain the borrowed metadata.
             let bytes = unsafe { event.bytes() };
             if event.flags & tl::NET_FLAG_PLAINTEXT == 0 && super::payload_tls::installed(link) {
                 super::payload_tls::receive(owner.get(), bytes);
                 return;
             }
+            // SAFETY: The retained link belongs to this agent; projection checks family/open
+            // lifecycle, and field/core access ends before allocation or JS.
             unsafe {
                 if let Ok(payload) = p::socket_ptr(link) {
                     (*payload).ext.bytes_read =
@@ -210,6 +239,8 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
         }
         tl::NET_ERROR => {
             let error = socket::error(
+                // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                // returns; these reads do not retain the borrowed metadata.
                 unsafe { event.code() }.unwrap_or("EIO"),
                 &error_message(event),
             );
@@ -225,7 +256,11 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
 fn error_message(event: &tl::NetCompletion) -> String {
     format!(
         "{} {}",
+        // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
+        // these reads do not retain the borrowed metadata.
         unsafe { event.syscall() }.unwrap_or("read"),
+        // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
+        // these reads do not retain the borrowed metadata.
         unsafe { event.code() }.unwrap_or("EIO")
     )
 }
@@ -237,6 +272,8 @@ pub(crate) fn connected(owner: f64) {
     let Some(snapshot) = snapshot(link) else {
         return;
     };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     unsafe {
         if let Ok(payload) = p::socket_ptr(link) {
             (*payload).ext.connecting = false;
@@ -270,6 +307,8 @@ pub(crate) fn eof(owner: f64) {
     let Some(snapshot) = snapshot(link) else {
         return;
     };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let emit = unsafe {
         p::socket_ptr(link).ok().is_some_and(|payload| {
             let fields = &mut (*payload).ext;
@@ -288,6 +327,8 @@ pub(crate) fn eof(owner: f64) {
     if !matches(link, &snapshot) {
         return;
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let action = unsafe {
         p::socket_ptr(link).ok().map(|payload| {
             let fields = &(*payload).ext;
@@ -310,6 +351,8 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     let owner = scope.root_nanbox(owner);
     // Most writes have no JS acknowledgement. Keep this callback-free window
     // on the proven payload: no user Vec, callback roots or provider lookup.
+    // SAFETY: The receiver is rooted and projection validates its agent, family and open lifecycle;
+    // the pointer is consumed before allocation/JS or freshly projected afterward.
     unsafe {
         if let Ok(window) = np::project::<p::SocketPayload>(owner.get(), &p::SOCKET) {
             let payload = &mut *window.payload;
@@ -328,6 +371,8 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     if snapshot(link).is_none() {
         return;
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let users = unsafe {
         p::socket_ptr(link).ok().map(|payload| {
             let fields = &mut (*payload).ext;
@@ -338,7 +383,12 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
                 .front()
                 .is_some_and(|group| group.0 == user)
             {
-                fields.coalesced_users.pop_front().unwrap().1
+                // The front predicate and pop share this exclusive, callback-free borrow.
+                fields
+                    .coalesced_users
+                    .pop_front()
+                    .expect("observed coalesced front")
+                    .1
             } else {
                 vec![user]
             }
@@ -354,6 +404,8 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
         .map(|user| scope.root_nanbox(socket::take_callback(owner.get(), user)))
         .collect::<Vec<_>>();
     let resource = scope.root_nanbox(provider::resource(owner.get()));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let drain = unsafe {
         p::socket_ptr(link).ok().is_some_and(|payload| {
             let fields = &mut (*payload).ext;
@@ -387,6 +439,8 @@ pub(crate) fn shutdown(owner: f64, user: u64) {
     };
     let state = scope.root_nanbox(socket::state(owner.get()));
     let resource = scope.root_nanbox(p::record_get(state.get(), provider::SHUTDOWN));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let users = unsafe {
         p::socket_ptr(link).ok().map(|payload| {
             let fields = &mut (*payload).ext;
@@ -413,6 +467,8 @@ pub(crate) fn shutdown(owner: f64, user: u64) {
     if !matches(link, &snapshot) {
         return;
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let read_ended = unsafe {
         p::socket_ptr(link)
             .ok()
@@ -434,17 +490,27 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
-    let own = p::socket_link(owner.get()).unwrap();
+    let Ok(own) = p::socket_link(owner.get()) else {
+        return p::undefined();
+    };
+    // SAFETY: The retained link is validated on this agent; its returned JS owner is rooted
+    // immediately, before allocation.
     let parent = scope.root_nanbox(unsafe { np::link_event_owner(link) }.unwrap_or(owner.get()));
     let state = scope.root_nanbox(socket::state(owner.get()));
     let mut record = scope.root_nanbox(
+        // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
+        // these reads do not retain the borrowed metadata.
         unsafe { event.closed_handle_parts() }
             .map(|parts| closed::take(state.get(), parts))
             .unwrap_or_else(p::undefined),
     );
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     if event.flags & tl::NET_FLAG_STALE == 0 && unsafe { p::socket_ptr(link) }.is_ok() {
         if !JsValue::from_bits(record.get().to_bits()).is_pointer() {
             record = scope.root_nanbox(closed::record(
+                // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                // returns; these reads do not retain the borrowed metadata.
                 unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
             ));
             let group = scope.root_nanbox(p::record_get(state.get(), "serverGroup"));
@@ -455,6 +521,8 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
             socket::cache_before_release(parent.get(), link);
             let parent_state = scope.root_nanbox(socket::state(parent.get()));
             let parent_record = scope.root_nanbox(closed::record(
+                // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                // returns; these reads do not retain the borrowed metadata.
                 unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
             ));
             let group = scope.root_nanbox(p::record_get(parent_state.get(), "serverGroup"));
@@ -467,14 +535,20 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
         provider::capture_socket(state.get(), record.get());
         super::native_transport::release_codec(owner.get());
         // The driver already retired this handle. No close is submitted here.
+        // SAFETY: The rooted owner retains these family-checked links; memory-only release follows
+        // the native borrow, and owed completions retain their own cell references.
         unsafe {
             np::close_link(link, &p::SOCKET);
         }
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     if own != link && event.flags & tl::NET_FLAG_STALE == 0 && unsafe { p::socket_ptr(own) }.is_ok()
     {
         if !JsValue::from_bits(record.get().to_bits()).is_pointer() {
             record = scope.root_nanbox(closed::record(
+                // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                // returns; these reads do not retain the borrowed metadata.
                 unsafe { event.closed_handle_parts() }.unwrap_or([0; 4]),
             ));
             socket::cache_before_release(owner.get(), link);
@@ -485,6 +559,8 @@ fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
         }
         // The driver resource belongs to the parent. Dispose the wrapper's
         // idle payload as well, while its ordinary event object remains.
+        // SAFETY: The rooted owner retains these family-checked links; memory-only release follows
+        // the native borrow, and owed completions retain their own cell references.
         unsafe {
             np::close_link(own, &p::SOCKET);
         }
@@ -546,8 +622,10 @@ unsafe extern "C" fn closed_wrapper_tick(closure: *const RawClosureHeader, _: Js
     let state = scope.root_nanbox(socket::state(owner.get()));
     // Only the wrapper's idle payload is ours. Its parent may already have
     // reopened by this tick; never project or close that replacement core.
-    let own = p::socket_link(owner.get()).unwrap();
-    if np::link_lifecycle(own, &p::SOCKET) == Ok(np::Lifecycle::Closed) {
+    let Ok(own) = p::socket_link(owner.get()) else {
+        return p::undefined();
+    };
+    if !p::socket_ptr(own).is_ok_and(|payload| (*payload).ext.tls_parent) {
         return p::undefined();
     }
     p::record_set(state.get(), "tlsParent", p::undefined());
@@ -590,6 +668,8 @@ fn queue_close_job(owner: f64, record: f64, info: &'static perry_ffi::JsFunction
     let owner = scope.root_nanbox(owner);
     let record = scope.root_nanbox(record);
     let job = scope.root_addr(perry_ffi::alloc_closure(info, 2) as i64);
+    // SAFETY: The rooted closure was allocated with these capture slots; every JS capture is rooted
+    // until the scheduled job owns its traced edge.
     unsafe {
         let ptr = job.get() as *mut RawClosureHeader;
         perry_ffi::set_closure_capture_f64(ptr, 0, owner.get());

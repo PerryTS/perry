@@ -557,7 +557,10 @@ fn on_upgrade(conn: &mut Conn, fx: &mut Vec<Effect>) {
     let Some(ex) = take_exchange(conn, fx) else {
         return;
     };
-    let head = ex.head.unwrap();
+    // `requested` proved this exchange has a 101 head. take_exchange only
+    // moves that same exchange and queues owned effects; no JS runs or head
+    // mutation occurs between the proof and this extraction.
+    let head = ex.head.expect("requested upgrade has its proven 101 head");
     // TLS remains on the Socket. Parser disposal cannot discard the session.
     fx.push(Effect::Upgrade {
         request: ex.out.request_handle,
