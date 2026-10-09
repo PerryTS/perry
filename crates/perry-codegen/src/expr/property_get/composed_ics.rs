@@ -225,7 +225,7 @@ pub(super) fn emit_array_subclass_length_ic(
         let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
         let done = ctx.new_block("return");
         let done_label = ctx.block_label(done);
-        let (value, _) = emit_array_subclass_length_body(
+        let value = emit_nonintrinsic_length_body(
             ctx,
             "%receiver",
             &bits,
@@ -246,6 +246,155 @@ pub(super) fn emit_array_subclass_length_ic(
     let end = ctx.block().label.clone();
     ctx.block().br(outer_merge_label);
     (length, end)
+}
+
+fn emit_nonintrinsic_length_body(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    recv_bits: &str,
+    recv_handle: &str,
+    slot_ref: &str,
+    done_label: &str,
+) -> String {
+    let header_idx = ctx.new_block("plen.typed_array");
+    let slow_idx = ctx.new_block("plen.typed_slow");
+    let fast_idx = ctx.new_block("plen.typed_fast");
+    let header_label = ctx.block_label(header_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let fast_label = ctx.block_label(fast_idx);
+    let tag = ctx.block().lshr(I64, recv_bits, "48");
+    let tag = ctx.block().and(I64, &tag, "65533");
+    let valid_tag = ctx.block().icmp_eq(I64, &tag, "32765");
+    let above_band = ctx.block().icmp_ugt(I64, recv_handle, "1048575");
+    let valid = ctx.block().and(I1, &valid_tag, &above_band);
+    ctx.block().cond_br(&valid, &header_label, &slow_label);
+    ctx.current_block = header_idx;
+    let header = ctx.block().sub(I64, recv_handle, "8");
+    let header = ctx.block().inttoptr(I64, &header);
+    let gc_type = ctx.block().load(I8, &header);
+    let flags = ctx.block().sub(I64, recv_handle, "7");
+    let flags = ctx.block().inttoptr(I64, &flags);
+    let flags = ctx.block().load(I8, &flags);
+    let forwarded = ctx.block().and(I8, &flags, "128");
+    let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
+    // Byte views and typed arrays keep a live length at payload +0,
+    // including shared storage: detach/resize update that word. Admit
+    // only these proven type bytes, not native-arena views. Own named
+    // metadata or prototype edits withdraw the accessor proof before
+    // publication; the cold edge uses its pooled literal key.
+
+    emit_typed_length_guard(
+        ctx,
+        recv_handle,
+        &gc_type,
+        &not_forwarded,
+        &fast_label,
+        &slow_label,
+    );
+    ctx.current_block = fast_idx;
+    let ptr = ctx.block().inttoptr(I64, recv_handle);
+    let length = ctx.block().load(I32, &ptr);
+    let fast = ctx.block().uitofp(I32, &length, DOUBLE);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(done_label);
+    ctx.current_block = slow_idx;
+    let (slow, slow_end) = emit_array_subclass_length_body(
+        ctx,
+        recv_box,
+        recv_bits,
+        recv_handle,
+        slot_ref,
+        done_label,
+    );
+    // Both tiers join in the caller-provided helper return block.
+    let return_idx = ctx
+        .func
+        .blocks()
+        .iter()
+        .position(|b| b.label == done_label)
+        .unwrap();
+    ctx.current_block = return_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)])
+}
+
+pub(super) fn emit_typed_length_guard(
+    ctx: &mut FnCtx<'_>,
+    recv_handle: &str,
+    gc_type: &str,
+    not_forwarded: &str,
+    fast_label: &str,
+    slow_label: &str,
+) {
+    let owning_byte = ctx.block().icmp_uge(I8, &gc_type, "64");
+    let indexed_byte = ctx.block().icmp_ule(I8, &gc_type, "76");
+    let is_typed_array = ctx.block().and(I1, &owning_byte, &indexed_byte);
+    let byte_header_idx = ctx.new_block("plen.byte_header");
+    let byte_header_label = ctx.block_label(byte_header_idx);
+    let view_check_idx = ctx.new_block("plen.view_check");
+    let view_check_label = ctx.block_label(view_check_idx);
+    ctx.block()
+        .cond_br(&is_typed_array, &byte_header_label, &view_check_label);
+
+    // An indexed view keeps its fixed length at payload +0. It is the
+    // live length while the view is not length-tracking and its link
+    // is a plain owner (no bag, so no own `length`) that is neither
+    // RESIZABLE nor DETACHED: only those change an owner's extent.
+    ctx.current_block = view_check_idx;
+    let view_lo = crate::runtime_abi::BYTES_TYPE_BASE | crate::runtime_abi::BYTES_TYPE_VIEW;
+    let view_hi = view_lo | 12;
+    let is_view_lo = ctx.block().icmp_uge(I8, &gc_type, &view_lo.to_string());
+    let is_view_hi = ctx.block().icmp_ule(I8, &gc_type, &view_hi.to_string());
+    let is_view = ctx.block().and(I1, &is_view_lo, &is_view_hi);
+    let view_header_idx = ctx.new_block("plen.view_header");
+    let view_header_label = ctx.block_label(view_header_idx);
+    ctx.block()
+        .cond_br(&is_view, &view_header_label, &slow_label);
+    ctx.current_block = view_header_idx;
+    let h = crate::expr::byte_cell::header_word(ctx.block(), &recv_handle);
+    let tracking = ctx.block().and(I64, &h, &(1u64 << 23).to_string());
+    let fixed = ctx.block().icmp_eq(I64, &tracking, "0");
+    let link_addr = ctx.block().add(
+        I64,
+        &recv_handle,
+        &crate::runtime_abi::BYTES_LINK.to_string(),
+    );
+    let link_ptr = ctx.block().inttoptr(I64, &link_addr);
+    let link = ctx.block().load(PTR, &link_ptr);
+    let link = ctx.block().ptrtoint(&link, I64);
+    let ho = crate::expr::byte_cell::header_word(ctx.block(), &link);
+    let mask = 0xe0u64 | (1 << 24) | (1 << 30);
+    let state = ctx.block().and(I64, &ho, &mask.to_string());
+    let plain_owner = ctx.block().icmp_eq(
+        I64,
+        &state,
+        &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
+    );
+    let view_ok = ctx.block().and(I1, &fixed, &plain_owner);
+    let view_ok = ctx.block().and(I1, &view_ok, &not_forwarded);
+    let named_invalidated =
+        ctx.block()
+            .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+    let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+    let view_ok = ctx.block().and(I1, &view_ok, &named_pristine);
+    ctx.block().cond_br(&view_ok, &fast_label, &slow_label);
+
+    ctx.current_block = byte_header_idx;
+    let link_addr = ctx.block().add(
+        I64,
+        &recv_handle,
+        &crate::runtime_abi::BYTES_LINK.to_string(),
+    );
+    let link_ptr = ctx.block().inttoptr(I64, &link_addr);
+    let link = ctx.block().load(PTR, &link_ptr);
+    let empty = ctx.block().icmp_eq(PTR, &link, "null");
+    let ta_header_ok = ctx.block().and(I1, &empty, &not_forwarded);
+    let named_invalidated =
+        ctx.block()
+            .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+    let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+    let ta_ok = ctx.block().and(I1, &ta_header_ok, &named_pristine);
+    ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 }
 
 fn emit_array_subclass_length_body(
