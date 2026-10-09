@@ -678,6 +678,29 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             crate::object::class_registry::js_get_dynamic_parent_value(cid),
         )
     });
+    if let Some((module, export)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module) == "net"
+            && matches!(export.as_str(), "Socket" | "Stream" | "Server")
+        {
+            let options = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let callback = if args_len > 1 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            super::super::native_module_dispatch::js_net_subclass_init(
+                this_box,
+                options,
+                callback,
+                u32::from(export == "Server"),
+            );
+            return undef;
+        }
+    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {

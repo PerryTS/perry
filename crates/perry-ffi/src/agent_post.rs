@@ -47,6 +47,19 @@ extern "C" {
     fn js_perry_agent_post(run: Option<extern "C" fn(*mut c_void)>, ctx: *mut c_void) -> i32;
     fn js_perry_agent_post_dispatched() -> u64;
     fn js_perry_agent_current() -> u64;
+    fn js_perry_agent_register_retire_hook(hook: extern "C" fn(u64));
+}
+
+/// Release a binding's logical ownership edges when an agent retires. This
+/// uses the runtime's existing hook list, not a connection registry.
+/// The hook must neither run JS nor touch the dying agent's driver.
+pub fn register_retire_hook(hook: extern "C" fn(u64)) {
+    #[cfg(any(not(test), feature = "runtime-link"))]
+    unsafe {
+        js_perry_agent_register_retire_hook(hook)
+    }
+    #[cfg(all(test, not(feature = "runtime-link")))]
+    let _ = hook;
 }
 
 /// The agent the calling thread acts for: its own id on a `worker_threads`

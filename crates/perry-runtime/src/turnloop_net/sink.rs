@@ -56,7 +56,11 @@ use super::NodeError;
 /// (`perry-db-turnloop::subsystem`, which is the one authority for that band),
 /// and [`register_sink`] refuses a slot already held by a *different* sink, so
 /// a future collision declines loudly instead of silently misrouting.
-pub const MAX_SUBSYSTEMS: usize = 16;
+pub const MAX_SUBSYSTEMS: usize = 32;
+
+/// Link routes travel in a link token's 4-bit route field, so only the first
+/// 16 slots can hold a link sink; id-routed sinks may use any slot.
+pub const MAX_LINK_ROUTES: usize = 16;
 
 /// A completion sink: called on the loop-owning thread, once per completion.
 pub type SinkFn = extern "C" fn(*const NetCompletion);
@@ -87,6 +91,14 @@ pub const NET_ERROR: i32 = 8;
 /// `NetCompletion::flags`: the completion comes from a link route, so `id` is
 /// the payload's owner link and an accept's `conn` is its install slot.
 pub const NET_FLAG_LINK: i32 = 1;
+/// A link `Closed` for an earlier handle of a reopened, OPEN cell: only the
+/// terminal event; the new transport is not marked closed.
+pub const NET_FLAG_STALE: i32 = 2;
+/// A link `Closed` lends four u32s (`data`/`len`) naming its generational
+/// driver handle, for callback context the owner keeps in its JS state.
+pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
+/// TLS plaintext, already decoded, delivered on the socket's current route.
+pub const NET_FLAG_PLAINTEXT: i32 = 8;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
@@ -319,7 +331,7 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
 /// holds, and for a slot already registered without `links`.
 pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
     let slot = subsystem as usize;
-    if slot >= MAX_SUBSYSTEMS {
+    if slot >= MAX_LINK_ROUTES {
         return false;
     }
     let held = SINKS[slot].load(Ordering::Acquire);

@@ -141,6 +141,23 @@ pub struct TlsSession {
 }
 
 impl TlsSession {
+    /// Native allocations directly retained by the sans-I/O session. Shared
+    /// rustls configuration belongs to its configuration owner, not each link.
+    pub fn retained_bytes(&self) -> usize {
+        let buffers = &self.buffers;
+        let connection = match &self.session {
+            Session::Client(conn) => std::mem::size_of_val(&**conn),
+            Session::Server(conn) => std::mem::size_of_val(&**conn),
+        };
+        connection
+            + buffers.input.capacity()
+            + buffers.scratch.capacity()
+            + buffers.out.capacity()
+            + buffers.plain.capacity()
+            + buffers.deferred.capacity()
+            + buffers.failed.as_ref().map_or(0, String::capacity)
+    }
+
     /// A client session for `socket.upgradeToTLS` / `tls.connect`.
     pub fn client(
         config: Arc<rustls::ClientConfig>,
@@ -213,6 +230,26 @@ impl TlsSession {
             Some(rustls::ProtocolVersion::TLSv1_3) => "TLSv1.3",
             _ => "",
         }
+    }
+
+    /// Negotiated suite names used by the ordinary Socket inspection surface.
+    pub fn cipher_names(&self) -> Option<(String, String)> {
+        let suite = match &self.session {
+            Session::Client(c) => c.negotiated_cipher_suite(),
+            Session::Server(s) => s.negotiated_cipher_suite(),
+        }?;
+        let standard = format!("{:?}", suite.suite()).replace("TLS13_", "TLS_");
+        let openssl = match standard.as_str() {
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" => "ECDHE-RSA-AES128-GCM-SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384" => "ECDHE-RSA-AES256-GCM-SHA384",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" => "ECDHE-ECDSA-AES128-GCM-SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384" => "ECDHE-ECDSA-AES256-GCM-SHA384",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256" => "ECDHE-RSA-CHACHA20-POLY1305",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256" => "ECDHE-ECDSA-CHACHA20-POLY1305",
+            other => other,
+        }
+        .to_owned();
+        Some((openssl, standard))
     }
 
     pub fn peer_closed(&self) -> bool {
@@ -472,4 +509,18 @@ pub fn server_name(name: &str) -> Result<rustls::pki_types::ServerName<'static>,
 /// Node's cause code alone, for `err.code`.
 pub fn node_code(error: &rustls::Error) -> &'static str {
     turnloop_tls::node_error_code(error)
+}
+
+/// Construct a pure client codec for an independently owned phase-C transport.
+/// The caller stores this session in its existing connection record and owns
+/// all driver submissions; this function has no transport or JS side effects.
+pub fn open_client_session(
+    servername: &str,
+    verify: bool,
+    alpn: Vec<Vec<u8>>,
+    ca: Vec<Vec<u8>>,
+) -> Result<TlsSession, String> {
+    let config = crate::tls::TlsClientConfigData::for_alpn(alpn, ca);
+    let config = crate::tls::build_client_config(verify, Some(&config))?;
+    TlsSession::client(config, server_name(servername)?)
 }

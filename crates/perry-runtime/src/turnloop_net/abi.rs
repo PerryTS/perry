@@ -689,7 +689,7 @@ use crate::native_payload::OwnerLink;
 /// installs accepted connections itself). Returns nonzero on success.
 #[no_mangle]
 pub extern "C" fn js_perry_net_register_link_sink(subsystem: i32, sink: SinkFn) -> i32 {
-    if subsystem < 0 || subsystem as usize >= super::MAX_SUBSYSTEMS {
+    if subsystem < 0 || subsystem as usize >= super::MAX_LINK_ROUTES {
         return 0;
     }
     i32::from(super::register_link_sink(subsystem as u8, sink))
@@ -703,7 +703,7 @@ pub extern "C" fn js_perry_net_register_link_sink(subsystem: i32, sink: SinkFn) 
 /// `core` is writable for `TRANSPORT_CORE_WORDS` words and 8-aligned.
 #[no_mangle]
 pub unsafe extern "C" fn js_perry_net_core_init(core: *mut c_void, route: i32) -> i32 {
-    if core.is_null() || route < 0 || route as usize >= super::MAX_SUBSYSTEMS {
+    if core.is_null() || route < 0 || route as usize >= super::MAX_LINK_ROUTES {
         return PERRY_NET_ERR;
     }
     // SAFETY: forwarded contract.
@@ -1159,11 +1159,101 @@ pub unsafe extern "C" fn js_perry_net_link_set_route(
     route: i32,
     err: *mut PerryNetError,
 ) -> i32 {
-    if !(0..super::MAX_SUBSYSTEMS as i32).contains(&route) {
+    if !(0..super::MAX_LINK_ROUTES as i32).contains(&route) {
         return finish(Err(super::transport::bad("route")), err);
     }
     finish(
         super::transport::set_route(core.cast(), link_arg(link), route as u8),
+        err,
+    )
+}
+
+/// The installed handle as four u32s; 0 when the core holds none.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `out` names four writable u32s.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_handle_parts(
+    core: *mut c_void,
+    link: usize,
+    out: *mut u32,
+) -> i32 {
+    match unsafe { transport::snapshot_handle_parts(core.cast(), link_arg(link)) } {
+        Some(parts) if !out.is_null() => {
+            unsafe { std::ptr::copy_nonoverlapping(parts.as_ptr(), out, 4) };
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Copy the core's current capability (handle or pending resolve) into the
+/// caller's opaque [`transport::HANDLE_SNAPSHOT_WORDS`]-word block.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `out` names the opaque block.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_snapshot_handle(
+    core: *mut c_void,
+    link: usize,
+    out: *mut c_void,
+) -> i32 {
+    match unsafe { transport::snapshot_handle(core.cast(), link_arg(link)) } {
+        Some(snapshot) if !out.is_null() => {
+            unsafe { std::ptr::write(out.cast::<transport::HandleSnapshot>(), snapshot) };
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Whether the core still holds the snapshot's handle or resolve.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `snapshot` came from
+/// [`js_perry_net_link_snapshot_handle`] returning 1.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_handle_matches(
+    core: *mut c_void,
+    link: usize,
+    snapshot: *const c_void,
+) -> i32 {
+    if snapshot.is_null() {
+        return 0;
+    }
+    let snapshot = unsafe { std::ptr::read(snapshot.cast::<transport::HandleSnapshot>()) };
+    i32::from(unsafe { transport::handle_matches(core.cast(), link_arg(link), snapshot) })
+}
+
+/// Heap bytes the core owns (backlog, write records, plan, pipe path).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_retained_bytes(core: *mut c_void, link: usize) -> usize {
+    unsafe { transport::retained_bytes(core.cast(), link_arg(link)) }
+}
+
+/// Deliver decoded TLS plaintext (or its EOF) on the core's current route.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `bytes` is readable for `len`.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_dispatch_plaintext(
+    core: *mut c_void,
+    link: usize,
+    bytes: *const u8,
+    len: usize,
+    eof: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    let bytes = if bytes.is_null() || len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(bytes, len) }
+    };
+    finish(
+        unsafe { transport::dispatch_plaintext(core.cast(), link_arg(link), bytes, eof != 0) },
         err,
     )
 }

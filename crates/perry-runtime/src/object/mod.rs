@@ -217,7 +217,7 @@ pub(crate) use native_module_registry::nm_ctor_lookup;
 // (`fs/promises` → `fs.constants`, `sys` → `util`).
 pub(crate) use native_module_registry::{
     js_install_global_value_surfaces, js_nm_install_events, js_nm_install_fs, js_nm_install_module,
-    js_nm_install_perf, js_nm_install_readline, js_nm_install_util,
+    js_nm_install_perf, js_nm_install_readline, js_nm_install_tls, js_nm_install_util,
 };
 mod literal_constructor;
 mod native_module_stream;

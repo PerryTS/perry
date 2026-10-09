@@ -7,8 +7,6 @@
 0 1 crates/perry-ext-http/src/agent.rs
 0 1 crates/perry-ext-http/src/agent/tls_compat.rs
 0 3 crates/perry-ext-http/src/client_events.rs
-1 0 crates/perry-ext-http/src/client_request_surface.rs
-0 1 crates/perry-ext-http/src/client_turnloop/mod.rs
 1 1 crates/perry-ext-http/src/lib.rs
 1 1 crates/perry-ext-http/src/server/bun_server.rs
 0 2 crates/perry-ext-http/src/server/http2_server.rs
@@ -24,17 +22,6 @@
 2 0 crates/perry-ext-http/src/server/turnloop_h2/mod.rs
 2 0 crates/perry-ext-http/src/server/turnloop_serve/conn.rs
 1 1 crates/perry-ext-http/src/server/turnloop_serve/mod.rs
-0 1 crates/perry-ext-net/src/adopt.rs
-3 0 crates/perry-ext-net/src/bun_tcp.rs
-2 2 crates/perry-ext-net/src/classes.rs
-0 1 crates/perry-ext-net/src/handle_ids.rs
-0 1 crates/perry-ext-net/src/ipc.rs
-7 3 crates/perry-ext-net/src/lib.rs
-1 0 crates/perry-ext-net/src/lifecycle.rs
-1 0 crates/perry-ext-net/src/pipe.rs
-1 0 crates/perry-ext-net/src/tls.rs
-3 2 crates/perry-ext-net/src/turnloop_io.rs
-1 0 crates/perry-ext-net/src/turnloop_tls_io.rs
 0 1 crates/perry-ext-nodemailer/src/lib.rs
 1 0 crates/perry-ext-nodemailer/src/turnloop_bridge.rs
 1 2 crates/perry-ext-parcel-watcher/src/lib.rs
@@ -93,7 +80,6 @@
 1 0 crates/perry-runtime/src/shared_sab.rs
 4 0 crates/perry-runtime/src/symbol.rs
 1 0 crates/perry-runtime/src/symbol/accessors.rs
-1 0 crates/perry-runtime/src/tls.rs
 1 0 crates/perry-runtime/src/tui/hooks.rs
 1 0 crates/perry-runtime/src/tui/state.rs
 1 0 crates/perry-runtime/src/tui/tree.rs

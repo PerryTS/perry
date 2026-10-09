@@ -3,7 +3,7 @@
 //! the 2000-line gate. The handshake itself runs over the socket's turnloop
 //! handle (`turnloop_tls_io`).
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use perry_ffi::{js_array_get, js_array_length, ArrayHeader, JsValue};
 // `rustls` is this crate's own direct dependency — the same rustls 0.23
@@ -22,6 +22,24 @@ pub(crate) struct TlsClientConfigData {
 }
 
 impl TlsClientConfigData {
+    pub(crate) fn for_cached_config(ca: Option<Vec<Vec<u8>>>, certificate_pem: Vec<u8>) -> Self {
+        Self {
+            ca,
+            cert: certificate_pem,
+            ..Self::default()
+        }
+    }
+    pub(crate) fn retained_bytes(&self) -> usize {
+        fn vectors(values: &Vec<Vec<u8>>) -> usize {
+            values.capacity() * std::mem::size_of::<Vec<u8>>()
+                + values.iter().map(Vec::capacity).sum::<usize>()
+        }
+        self.ca.as_ref().map_or(0, vectors)
+            + self.cert.capacity()
+            + self.key.capacity()
+            + vectors(&self.alpn_protocols)
+    }
+
     /// The configuration an **in-process** caller needs: an ALPN list, and
     /// everything else left at the platform default.
     ///
@@ -40,87 +58,6 @@ impl TlsClientConfigData {
             ca: (!ca.is_empty()).then_some(ca),
             ..Self::default()
         }
-    }
-}
-
-fn pending_tls_aborts() -> &'static Mutex<std::collections::HashSet<i64>> {
-    static ABORTS: OnceLock<Mutex<std::collections::HashSet<i64>>> = OnceLock::new();
-    ABORTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
-}
-
-pub(crate) fn fire_pending_tls_abort(handle: i64) {
-    if pending_tls_aborts().lock().unwrap().remove(&handle) {
-        crate::push_event(crate::PendingNetEvent::AbortError(handle));
-        crate::push_event(crate::PendingNetEvent::Close(handle));
-    }
-}
-
-/// Node reports an already-aborted connect asynchronously, after callers have
-/// had a chance to attach `error` and `close` listeners to the returned socket.
-unsafe fn schedule_tls_abort(handle: i64) {
-    // An alloc-only SocketState is `awaiting_connect` and is not considered
-    // live by ext-net until connect() runs. This TLS fast path never starts
-    // connect(), so mark the synthetic socket live until its deferred Close
-    // event removes it from the registry.
-    if let Some(socket) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
-        socket.is_open = true;
-    }
-    pending_tls_aborts().lock().unwrap().insert(handle);
-    // A deadline on the loop, not a timer task: registering a `'close'`
-    // listener fires the abort early (`js_net_socket_on`), and whichever comes
-    // first wins because `fire_pending_tls_abort` removes the entry.
-    crate::turnloop_io::arm_deadline(
-        25,
-        crate::turnloop_io::Deadline::TlsAbort { socket_id: handle },
-    );
-}
-
-pub(crate) fn begin_tls_upgrade(
-    handle: i64,
-    servername: String,
-    verify: bool,
-    config: TlsClientConfigData,
-) -> Result<(), String> {
-    let (turnloop, awaiting_connect) = {
-        let sockets = crate::statics::sockets().lock().unwrap();
-        let socket = sockets
-            .get(&handle)
-            .ok_or_else(|| "socket is closed".to_string())?;
-        (socket.turnloop, socket.awaiting_connect)
-    };
-    if !turnloop {
-        // A `new net.Socket()` that has not been asked to connect accepts the
-        // request and drops it, as every command it is given before connecting
-        // is dropped (`SocketState::awaiting_connect`); one whose connect was
-        // refused has nothing to put a session on.
-        return if awaiting_connect {
-            Ok(())
-        } else {
-            Err("socket task is gone".to_string())
-        };
-    }
-    // The session is installed above the same turnloop handle. No reply
-    // channel: JS learns the outcome from `'secureConnect'` / `'error'`, which
-    // is what this caller (`tls.connect` after a plain connect) already
-    // listened for. It runs on the loop's owner; a failure there is reported
-    // the way the caller reports one it gets back from here.
-    if crate::turnloop_io::enabled() {
-        return crate::turnloop_tls_io::begin_client_upgrade(
-            handle, servername, verify, config, None,
-        );
-    }
-    let posted = crate::turnloop_io::post_to_owner(Box::new(move || {
-        if let Err(error) =
-            crate::turnloop_tls_io::begin_client_upgrade(handle, servername, verify, config, None)
-        {
-            crate::push_event(crate::PendingNetEvent::Error(handle, error));
-            crate::push_event(crate::PendingNetEvent::Close(handle));
-        }
-    }));
-    if posted {
-        Ok(())
-    } else {
-        Err(crate::turnloop_io::NO_LOOP_CODE.to_string())
     }
 }
 
@@ -575,12 +512,13 @@ fn build_client_config_insecure(
 /// path's unbuffered session: what `socket.authorized` / `getProtocol()` /
 /// `getPeerCertificate()` report.
 pub(crate) struct HandshakeFacts {
-    protocol: &'static str,
-    alpn: Vec<u8>,
-    peer: Vec<u8>,
-    own_certificate: Vec<u8>,
-    authorized: bool,
-    servername: String,
+    pub(crate) protocol: &'static str,
+    pub(crate) cipher: Option<(String, String)>,
+    pub(crate) alpn: Vec<u8>,
+    pub(crate) peer: Vec<u8>,
+    pub(crate) own_certificate: Vec<u8>,
+    pub(crate) authorized: bool,
+    pub(crate) servername: String,
 }
 
 impl HandshakeFacts {
@@ -596,60 +534,12 @@ impl HandshakeFacts {
             .unwrap_or_default();
         Self {
             protocol: session.protocol_version(),
+            cipher: session.cipher_names(),
             alpn: session.alpn_protocol().unwrap_or_default(),
             authorized: verify || trusted_by_configured_ca(data, &peer),
             peer,
             own_certificate: own_certificate(data),
             servername: servername.to_string(),
-        }
-    }
-
-    /// Write the facts onto the socket and tell JS through the runtime's
-    /// `js_tls_client_record_connected` extern.
-    pub(crate) fn publish(&self, handle: i64) {
-        let authorization_error = if self.authorized {
-            ""
-        } else {
-            "DEPTH_ZERO_SELF_SIGNED_CERT"
-        };
-        if let Some(socket) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
-            socket.tls.encrypted = true;
-            socket.tls.authorized = self.authorized;
-            socket.tls.servername = Some(self.servername.clone());
-        }
-        extern "C" {
-            fn js_tls_client_record_connected(
-                handle: i64,
-                authorized: i32,
-                authorization_error_ptr: *const u8,
-                authorization_error_len: usize,
-                protocol_ptr: *const u8,
-                protocol_len: usize,
-                alpn_ptr: *const u8,
-                alpn_len: usize,
-                peer_cert_ptr: *const u8,
-                peer_cert_len: usize,
-                own_cert_ptr: *const u8,
-                own_cert_len: usize,
-            );
-        }
-        // SAFETY: every pointer/length pair below borrows a live local for the
-        // duration of the call; the runtime copies what it keeps.
-        unsafe {
-            js_tls_client_record_connected(
-                handle,
-                self.authorized as i32,
-                authorization_error.as_ptr(),
-                authorization_error.len(),
-                self.protocol.as_ptr(),
-                self.protocol.len(),
-                self.alpn.as_ptr(),
-                self.alpn.len(),
-                self.peer.as_ptr(),
-                self.peer.len(),
-                self.own_certificate.as_ptr(),
-                self.own_certificate.len(),
-            );
         }
     }
 }
@@ -724,11 +614,12 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         fn js_tls_prepare_connect();
     }
     js_tls_prepare_connect();
-    use crate::option_setters::js_net_validate_connect_port;
+    extern "C" {
+        fn js_net_validate_connect_port(value: f64);
+    }
     use crate::{
         get_object_bool_field, get_object_number_field, get_object_string_field,
-        is_nanboxed_pointer, jsvalue_to_owned_string, spawn_socket_task_initialized, statics,
-        unbox_pointer,
+        is_nanboxed_pointer, jsvalue_to_owned_string,
     };
     use perry_ffi::JsValue;
 
@@ -822,61 +713,36 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         }
         js_tls_validate_connect_options(rooted_args[0].get());
         if let Some(socket_value) = crate::get_object_value_field(rooted_args[0].get(), "socket") {
-            let socket_js = JsValue::from_bits(socket_value.to_bits());
-            let handle = if socket_js.is_pointer() {
-                crate::unbox_pointer(socket_value) as i64
-            } else {
-                0
-            };
-            if handle != 0 {
-                host = get_object_string_field(rooted_args[0].get(), "host")
+            if !JsValue::from_bits(socket_value.to_bits()).is_undefined() {
+                let parent = root_scope.root_nanbox(socket_value);
+                crate::payload_socket::link(parent.get());
+                let owner =
+                    root_scope.root_nanbox(crate::payload_socket::new_tls_wrapper(parent.get()));
+                let host = get_object_string_field(rooted_args[0].get(), "host")
                     .or_else(|| get_object_string_field(rooted_args[0].get(), "hostname"))
-                    .unwrap_or_else(|| "localhost".to_string());
-                servername = get_object_string_field(rooted_args[0].get(), "servername")
-                    .unwrap_or_else(|| host.clone());
-                verify = get_object_bool_field(rooted_args[0].get(), "rejectUnauthorized")
+                    .unwrap_or_else(|| "localhost".to_owned());
+                let servername =
+                    get_object_string_field(rooted_args[0].get(), "servername").unwrap_or(host);
+                let verify = get_object_bool_field(rooted_args[0].get(), "rejectUnauthorized")
                     .unwrap_or(true);
-                callback_arg = is_closure(rooted_args[1].get()).then_some(1);
                 let config = tls_client_config_data(rooted_args[0].get());
-                extern "C" {
-                    fn js_tls_client_record_start(
-                        handle: i64,
-                        options: f64,
-                        servername_ptr: *const u8,
-                        servername_len: usize,
-                    );
-                }
-                js_tls_client_record_start(
-                    handle,
-                    rooted_args[0].get(),
-                    servername.as_ptr(),
-                    servername.len(),
-                );
-                if let Some(index) = callback_arg {
-                    let cb_ptr = unbox_pointer(rooted_args[index].get()) as i64;
-                    if cb_ptr != 0 {
-                        statics::listeners()
-                            .lock()
-                            .unwrap()
-                            .entry(handle)
-                            .or_default()
-                            .entry("secureConnect".to_string())
-                            .or_default()
-                            .push(cb_ptr);
-                    }
+                record_start(owner.get(), rooted_args[0].get(), &servername);
+                crate::payload_socket::once(owner.get(), "secureConnect", rooted_args[1].get());
+                if crate::payload_transport::socket_ptr(crate::payload_socket::link(parent.get()))
+                    .is_err()
+                {
+                    crate::payload_io::queue_closed_wrapper(owner.get());
+                    return crate::payload_transport::raw_owner(owner.get());
                 }
                 let preflight = tls_preflight(0, &servername, rooted_args[0].get());
                 if preflight != 0 {
-                    crate::push_event(crate::PendingNetEvent::Error(
-                        handle,
-                        preflight_error(preflight).to_string(),
-                    ));
-                    crate::push_event(crate::PendingNetEvent::Close(handle));
-                } else if let Err(error) = begin_tls_upgrade(handle, servername, verify, config) {
-                    crate::push_event(crate::PendingNetEvent::Error(handle, error));
-                    crate::push_event(crate::PendingNetEvent::Close(handle));
+                    defer_failure(owner.get(), preflight_error(preflight));
+                } else if let Err(message) =
+                    crate::payload_tls::install_client(owner.get(), servername, verify, config)
+                {
+                    defer_failure(owner.get(), &message);
                 }
-                return handle;
+                return crate::payload_transport::raw_owner(owner.get());
             }
         }
         port = match get_object_number_field(rooted_args[0].get(), "port") {
@@ -907,83 +773,36 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
             .unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001))
     };
     let config = tls_client_config_data(metadata_options());
+    let owner = root_scope.root_nanbox(crate::payload_socket::new_socket(
+        crate::payload_io::ROUTE,
+        metadata_options(),
+    ));
+    record_start(owner.get(), metadata_options(), &servername);
+    if let Some(index) = callback_arg {
+        crate::payload_socket::once(owner.get(), "secureConnect", rooted_args[index].get());
+    }
     if signal_is_pre_aborted(metadata_options()) {
-        let handle = crate::js_net_socket_alloc();
-        extern "C" {
-            fn js_tls_client_record_start(
-                handle: i64,
-                options: f64,
-                servername_ptr: *const u8,
-                servername_len: usize,
-            );
-        }
-        js_tls_client_record_start(
-            handle,
-            metadata_options(),
-            servername.as_ptr(),
-            servername.len(),
-        );
-        schedule_tls_abort(handle);
-        return handle;
+        defer_failure(owner.get(), "ABORT_ERR:The operation was aborted");
+        return crate::payload_transport::raw_owner(owner.get());
     }
     let preflight = tls_preflight(port, &servername, metadata_options());
     if preflight != 0 {
-        let handle = crate::js_net_socket_alloc();
-        extern "C" {
-            fn js_tls_client_record_start(
-                handle: i64,
-                options: f64,
-                servername_ptr: *const u8,
-                servername_len: usize,
-            );
-        }
-        js_tls_client_record_start(
-            handle,
-            metadata_options(),
-            servername.as_ptr(),
-            servername.len(),
-        );
-        crate::push_event(crate::PendingNetEvent::Error(
-            handle,
-            preflight_error(preflight).to_string(),
-        ));
-        crate::push_event(crate::PendingNetEvent::Close(handle));
-        return handle;
+        defer_failure(owner.get(), preflight_error(preflight));
+        return crate::payload_transport::raw_owner(owner.get());
     }
-    let metadata_servername = servername.clone();
-    let handle =
-        spawn_socket_task_initialized(host, port, Some((servername, verify, config)), |handle| {
-            extern "C" {
-                fn js_tls_client_record_start(
-                    handle: i64,
-                    options: f64,
-                    servername_ptr: *const u8,
-                    servername_len: usize,
-                );
-            }
-            js_tls_client_record_start(
-                handle,
-                metadata_options(),
-                metadata_servername.as_ptr(),
-                metadata_servername.len(),
-            );
-        });
-    if let Some(index) = callback_arg {
-        if handle != 0 {
-            let cb_ptr = unbox_pointer(rooted_args[index].get()) as i64;
-            if cb_ptr != 0 {
-                statics::listeners()
-                    .lock()
-                    .unwrap()
-                    .entry(handle)
-                    .or_default()
-                    .entry("secureConnect".to_string())
-                    .or_default()
-                    .push(cb_ptr);
-            }
-        }
+    let host_value = root_scope.root_nanbox(crate::payload_events::string(&host));
+    crate::payload_socket::connect(
+        owner.get(),
+        port as f64,
+        host_value.get(),
+        crate::payload_transport::undefined(),
+    );
+    if let Ok(payload) =
+        crate::payload_transport::socket_ptr(crate::payload_socket::link(owner.get()))
+    {
+        (*payload).ext.direct_tls = Some((servername, verify, config));
     }
-    handle
+    crate::payload_transport::raw_owner(owner.get())
 }
 
 /// Collision-proof entry point for AOT calls. Both bundled stdlib net and
@@ -993,4 +812,40 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
     js_tls_connect(arg1, arg2, arg3, arg4)
+}
+
+unsafe fn record_start(owner: f64, options: f64, servername: &str) {
+    extern "C" {
+        fn js_tls_client_record_start(handle: i64, options: f64, name: *const u8, len: usize);
+        fn js_tls_client_attach_socket_prototype(handle: i64);
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let options = scope.root_nanbox(options);
+    js_tls_client_attach_socket_prototype(crate::payload_transport::raw_owner(owner.get()));
+    js_tls_client_record_start(
+        crate::payload_transport::raw_owner(owner.get()),
+        options.get(),
+        servername.as_ptr(),
+        servername.len(),
+    );
+}
+
+pub(crate) fn defer_failure(owner: f64, message: &str) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let (code, message) = message
+        .split_once(':')
+        .unwrap_or(("ERR_TLS_HANDSHAKE_FAILED", message));
+    let error = scope.root_nanbox(crate::payload_socket::error(code, message));
+    if code == "ABORT_ERR" {
+        crate::payload_transport::own_set(
+            error.get(),
+            "name",
+            crate::payload_events::string("AbortError"),
+        );
+    }
+    // Explicit release happens now; the ordinary terminal job or the driver's
+    // Closed completion delivers error/close after callers attach listeners.
+    crate::payload_socket::destroy(owner.get(), error.get());
 }

@@ -863,6 +863,14 @@ pub(crate) mod stdlib_pump {
     /// async ops, etc.). Returns 0 if perry-stdlib is not linked.
     #[no_mangle]
     pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
+        // Payload transports have no extension handle registry. Their driver
+        // already accounts for ref'd sockets and owed completions, including
+        // Closed after destroy. Query the existing agent loop without creating
+        // one, so a net-only program stays alive to deliver those completions.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::event_pump::agent_loop_has_outstanding_work() {
+            return 1;
+        }
         #[cfg(feature = "node-api-host")]
         if crate::node_api_host::has_active_work() {
             return 1;
@@ -1120,6 +1128,35 @@ pub(crate) mod stdlib_pump {
         }
 
         static HAS_ACTIVE_FLAG: AtomicI32 = AtomicI32::new(0);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        fn agent_driver_reference_keeps_the_generated_loop_alive_without_an_extension_map() {
+            std::thread::spawn(|| {
+                let agent = crate::agent::enter_worker_agent();
+                assert_eq!(js_stdlib_has_active_handles(), 0);
+                let handle = crate::event_pump::with_net_driver(|driver| {
+                    driver
+                        .tcp_listen("127.0.0.1:0".parse().unwrap(), &Default::default())
+                        .unwrap()
+                })
+                .expect("a JS agent must own its driver");
+                assert_eq!(
+                    js_stdlib_has_active_handles(),
+                    1,
+                    "a referenced driver handle must keep the generated loop alive"
+                );
+                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, false).unwrap());
+                assert_eq!(js_stdlib_has_active_handles(), 0);
+                crate::event_pump::with_net_driver(|driver| driver.set_ref(handle, true).unwrap());
+                assert_eq!(js_stdlib_has_active_handles(), 1);
+                crate::agent::retire_agent(agent);
+                assert_eq!(js_stdlib_has_active_handles(), 0);
+            })
+            .join()
+            .unwrap();
+        }
+
         extern "C" fn flag_has_active() -> i32 {
             HAS_ACTIVE_FLAG.load(AtomicOrdering::SeqCst)
         }

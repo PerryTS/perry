@@ -61,7 +61,7 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bun_tcp_listen",
         args: &[NA_F64],
-        ret: NR_HANDLE_ID,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun",

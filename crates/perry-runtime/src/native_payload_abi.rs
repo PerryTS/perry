@@ -562,9 +562,14 @@ pub unsafe extern "C" fn js_perry_payload_prototype(
         return bytes_undefined();
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        module, name,
-    ));
+    // An empty module names an internal family (a codec or parser object)
+    // with no export: its prototype hangs off an anonymous constructor.
+    let ctor = scope.root_nanbox_f64(if module.is_empty() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        crate::native_payload::anonymous_constructor(name, family.constructor_length)
+    } else {
+        crate::object::bound_native_callable_export_value(module, name)
+    });
     let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
         ctor.get_nanbox_f64(),
     ));
@@ -573,6 +578,9 @@ pub unsafe extern "C" fn js_perry_payload_prototype(
     };
     let ptr = crate::native_payload::adopt_prototype_with(family.class_id, ptr, |proto| {
         if let Some(install) = family.install_prototype {
+            // The installer allocates closures against a raw prototype
+            // pointer; keep the heap fixed until it returns.
+            let _no_move = crate::gc::GcSuppressScope::new();
             install(proto.cast());
         }
     });
@@ -677,3 +685,6 @@ pub unsafe extern "C" fn js_perry_payload_external_bytes(
 #[path = "native_payload_transport_abi.rs"]
 mod transport;
 pub use transport::*;
+#[path = "native_payload_event_abi.rs"]
+mod event;
+pub use event::*;

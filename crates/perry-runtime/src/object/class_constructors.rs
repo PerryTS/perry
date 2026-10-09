@@ -660,6 +660,28 @@ pub unsafe extern "C" fn js_super_construct_apply(
     let mut cur = crate::object::get_parent_class_id(child_cid).unwrap_or(0);
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
+        if matches!(
+            cur,
+            crate::native_class_ids::NET_SOCKET | crate::native_class_ids::NET_SERVER
+        ) {
+            let options = if arr.is_null() {
+                undef
+            } else {
+                crate::array::js_array_get_f64(arr, 0)
+            };
+            let callback = if arr.is_null() {
+                undef
+            } else {
+                crate::array::js_array_get_f64(arr, 1)
+            };
+            crate::object::native_module_dispatch::js_net_subclass_init(
+                crate::value::js_nanbox_pointer(this_raw),
+                options,
+                callback,
+                u32::from(cur == crate::native_class_ids::NET_SERVER),
+            );
+            return undef;
+        }
         if let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(cur) {
             if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
                 eprintln!(

@@ -82,7 +82,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = HTTP_SERVER_RESPONSE;
+const NATIVE_BACKED_LAST: u32 = HTTP_CLIENT_PARSER;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -156,6 +156,14 @@ const ALL: &[u32] = &[
     ZSTD_DECOMPRESS,
     ZLIB_BASE,
     HTTP_SERVER_RESPONSE,
+    NET_BLOCK_LIST,
+    NET_SOCKET_ADDRESS,
+    NET_SOCKET,
+    NET_SERVER,
+    HTTP_PARSER,
+    WS_CODEC,
+    HTTP2_CODEC,
+    HTTP_CLIENT_PARSER,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -236,6 +244,14 @@ mod tests {
             ZSTD_DECOMPRESS,
             ZLIB_BASE,
             HTTP_SERVER_RESPONSE,
+            NET_BLOCK_LIST,
+            NET_SOCKET_ADDRESS,
+            NET_SOCKET,
+            NET_SERVER,
+            HTTP_PARSER,
+            WS_CODEC,
+            HTTP2_CODEC,
+            HTTP_CLIENT_PARSER,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {

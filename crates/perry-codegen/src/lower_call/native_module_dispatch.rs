@@ -498,14 +498,26 @@ mod ffi_return_type_tests {
     }
 
     #[test]
-    fn net_socket_write_and_end_match_their_float_ffi_abi() {
-        for method in ["write", "end"] {
-            let sig = super::native_module_lookup("net", true, method, Some("Socket"))
-                .unwrap_or_else(|| panic!("net.Socket.{method} must resolve"));
+    fn net_socket_methods_keep_their_external_float_abi_without_id_lowering() {
+        let abi = include_str!("../wasm32/runtime_abi.tsv");
+        for (method, symbol) in [
+            ("write", "js_ext_net_socket_write3"),
+            ("end", "js_ext_net_socket_end3"),
+        ] {
+            assert!(
+                super::native_module_lookup("net", true, method, Some("Socket")).is_none(),
+                "net.Socket.{method} must use its ordinary prototype method"
+            );
+            let signature = abi
+                .lines()
+                .find_map(|line| {
+                    let columns: Vec<_> = line.split('\t').collect();
+                    (columns.first() == Some(&symbol)).then_some(columns)
+                })
+                .unwrap_or_else(|| panic!("{symbol} must remain available to linked archives"));
             assert_eq!(
-                sig.args,
-                [super::NativeArgKind::F64; 3],
-                "net.Socket.{method} takes three NaN-boxed f64 arguments"
+                signature[2], "i64,f64,f64,f64",
+                "{symbol} takes an ordinary owner address and three NaN-boxed arguments"
             );
         }
     }

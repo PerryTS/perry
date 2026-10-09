@@ -122,6 +122,12 @@ impl TransportCore {
 
     #[cfg(test)]
     pub(crate) fn read_operation(&self) -> Option<OpId> {
+        self.read_op()
+    }
+
+    /// The armed read operation, for transport identity witnesses. Submits
+    /// no work and takes no ref.
+    pub fn read_op(&self) -> Option<OpId> {
         self.entry.as_ref().and_then(|e| e.read_op)
     }
 
@@ -136,6 +142,132 @@ impl TransportCore {
     pub fn set_route(&mut self, route: u8) {
         self.route = route;
     }
+
+    /// Heap capacity owned by this core, excluding the inline core and the
+    /// driver's buffers. This query submits no work and takes no ref.
+    fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let mut bytes = self.backlog.bytes.capacity()
+            + self.backlog.writes.capacity() * size_of::<PendingWrite>();
+        if let Some(entry) = &self.entry {
+            bytes += entry.writes.capacity() * size_of::<PendingWrite>();
+            if let Some(path) = &entry.path {
+                bytes += path.capacity();
+            }
+        }
+        if let Some(plan) = &self.plan {
+            bytes += size_of::<ConnectPlan>() + plan.remaining.capacity() * size_of::<SocketAddr>();
+        }
+        bytes
+    }
+}
+
+/// Deliver TLS plaintext to this cell's current route. No driver operation:
+/// no token, multishot read or ref changes. The core borrow ends before the
+/// sink runs, which may close or reopen the rooted owner.
+///
+/// # Safety
+/// core/link name an OPEN payload whose owner is rooted; bytes outlives the
+/// sink call. The caller re-projects before any later core use.
+pub(super) unsafe fn dispatch_plaintext(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    bytes: &[u8],
+    eof: bool,
+) -> NetResult<()> {
+    let route = {
+        let (core, _) = bind(core, link, "plaintext")?;
+        core.route
+    };
+    let mut event = if eof {
+        NetCompletion::eof(link.0 as i64)
+    } else {
+        NetCompletion::data(link.0 as i64, bytes)
+    }
+    .linked();
+    if !sabotage("plaintext_flag") {
+        event.flags |= sink::NET_FLAG_PLAINTEXT;
+    }
+    sink::emit(route, event);
+    Ok(())
+}
+
+/// # Safety
+/// As bind.
+pub(super) unsafe fn retained_bytes(core: *mut TransportCore, link: OwnerLink) -> usize {
+    bind(core, link, "retained_bytes")
+        .map(|(core, _)| core.retained_bytes())
+        .unwrap_or(0)
+}
+
+/// An ephemeral copy of the driver's capability for checking the incarnation
+/// after JS re-entry. A hostname connect may hold only its resolve OpId.
+/// Neither variant mints an identity or holds a ref.
+#[derive(Clone, Copy)]
+pub(super) enum HandleSnapshot {
+    Handle(Handle),
+    Resolve(OpId),
+}
+
+pub(super) const HANDLE_SNAPSHOT_WORDS: usize = 4;
+const _: () = assert!(
+    std::mem::size_of::<HandleSnapshot>() <= HANDLE_SNAPSHOT_WORDS * 8
+        && std::mem::align_of::<HandleSnapshot>() <= 8
+);
+
+/// The driver's generational handle as four u32s (each exact as a JS
+/// number). No identity is minted.
+fn handle_parts(handle: Handle) -> [u32; 4] {
+    let owner = handle.owner();
+    let key = handle.key();
+    [
+        owner as u32,
+        (owner >> 32) as u32,
+        key as u32,
+        (key >> 32) as u32,
+    ]
+}
+
+/// # Safety
+/// As bind.
+pub(super) unsafe fn snapshot_handle_parts(
+    core: *mut TransportCore,
+    link: OwnerLink,
+) -> Option<[u32; 4]> {
+    let (core, _) = bind(core, link, "handle").ok()?;
+    core.handle().map(handle_parts)
+}
+
+/// # Safety
+/// As bind; the caller roots the owner across the JS call that follows.
+pub(super) unsafe fn snapshot_handle(
+    core: *mut TransportCore,
+    link: OwnerLink,
+) -> Option<HandleSnapshot> {
+    let (core, _) = bind(core, link, "handle").ok()?;
+    core.handle().map(HandleSnapshot::Handle).or_else(|| {
+        core.plan
+            .as_ref()
+            .and_then(|plan| plan.op)
+            .map(HandleSnapshot::Resolve)
+    })
+}
+
+/// # Safety
+/// As bind. Compare against the newly projected core, never an address saved
+/// from an earlier payload.
+pub(super) unsafe fn handle_matches(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    snapshot: HandleSnapshot,
+) -> bool {
+    if sabotage("continuation_handle") {
+        return true;
+    }
+    bind(core, link, "handle").is_ok_and(|(core, _)| match snapshot {
+        HandleSnapshot::Handle(handle) => core.handle() == Some(handle),
+        HandleSnapshot::Resolve(op) => core.plan.as_ref().and_then(|plan| plan.op) == Some(op),
+    })
 }
 
 /// A family payload that owns a transport: the core first, so the runtime
@@ -1196,6 +1328,25 @@ unsafe fn dispatch_resolve(link: OwnerLink, op_id: Option<OpId>, terminal: bool,
     }
 }
 
+/// Inspect a resolve incarnation in acceptance tests.
+///
+/// # Safety
+/// `cell` is a live transport payload cell on this thread.
+#[cfg(any(test, feature = "native-payload-test-census"))]
+pub unsafe fn pending_resolve_for_test(cell: usize) -> Option<OpId> {
+    core_of(OwnerLink(cell)).and_then(|core| core.plan.as_ref().and_then(|plan| plan.op))
+}
+
+/// Replay a resolve completion in acceptance tests. Nonterminal: the real
+/// driver completion still owns its ref.
+///
+/// # Safety
+/// As [`pending_resolve_for_test`].
+#[cfg(any(test, feature = "native-payload-test-census"))]
+pub unsafe fn replay_resolve_for_test(cell: usize, op: OpId, addresses: Vec<SocketAddr>) {
+    dispatch_resolve(OwnerLink(cell), Some(op), false, OpResult::Resolved(addresses));
+}
+
 /// Start the plan's next address, or report its final failure.
 unsafe fn attempt_next_address(link: OwnerLink) {
     loop {
@@ -1290,6 +1441,7 @@ unsafe fn dispatch_stream(
         OpResult::Closed => {
             let mut route = route;
             let mut retry = false;
+            let mut stale = false;
             if let Some(c) = current(link, handle) {
                 route = c.route;
                 c.entry = None;
@@ -1305,12 +1457,26 @@ unsafe fn dispatch_stream(
                 }
             } else if let Some(c) = core_of(link) {
                 route = c.route;
+                stale = true;
             }
             if retry {
                 // A failed attempt's handle, not the socket the caller sees.
                 attempt_next_address(link);
             } else {
-                sink::emit(route, NetCompletion::closed(id).linked());
+                let mut event = NetCompletion::closed(id).linked();
+                // Callback context belongs to the closing incarnation even if
+                // the owner already has a new payload. Lend the handle's
+                // parts for the sink call only.
+                let parts = handle.map(handle_parts);
+                if let Some(parts) = parts.as_ref() {
+                    event.flags |= sink::NET_FLAG_HANDLE_PARTS;
+                    event.data = parts.as_ptr().cast();
+                    event.len = std::mem::size_of_val(parts);
+                }
+                if stale && !sabotage("stale_closed_flag") {
+                    event.flags |= sink::NET_FLAG_STALE;
+                }
+                sink::emit(route, event);
             }
             // The handle's ref, taken at install. Last: the sink ran with the
             // cell pinned.

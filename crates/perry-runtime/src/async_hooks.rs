@@ -25,6 +25,7 @@ use arg_values::{
     throw_apply_not_function, trigger_id_from_options, validate_bind_callback,
 };
 mod provider_ffi;
+pub(crate) use provider_ffi::owned_provider_scope;
 pub use provider_ffi::{
     defer_destroy_after_check_turns, js_async_hooks_provider_defer_destroy,
     js_async_hooks_provider_destroy, js_async_hooks_provider_enter, js_async_hooks_provider_init,

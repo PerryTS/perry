@@ -76,7 +76,8 @@ mod tests;
 
 pub use errors::{map_error, NodeError};
 pub use sink::{
-    register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_SUBSYSTEMS,
+    register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_LINK_ROUTES,
+    MAX_SUBSYSTEMS,
 };
 pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 // P6: the completion kinds, for an in-tree subsystem. A separately linked
@@ -84,8 +85,8 @@ pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 // own copy; perry-stdlib has a Cargo edge to this crate and must not need a
 // second declaration to keep in step with.
 pub use sink::{
-    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_LINK, NET_SHUTDOWN,
-    NET_TIMER, NET_WROTE,
+    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
+    NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
 };
 
 // ── Operation classes, carried in the top 8 bits of every submission token ──

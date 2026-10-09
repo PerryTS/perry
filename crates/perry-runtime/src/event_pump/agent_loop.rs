@@ -1171,6 +1171,10 @@ pub fn loop_statistics() -> Option<LoopStats> {
 /// those completions. Skipping it on a worker would strand every promise those
 /// engines owe — which presents as a hang, not an error.
 pub fn shutdown_current_thread() {
+    #[cfg(any(test, feature = "native-payload-test-census"))]
+    if std::env::var("PERRY_TEST_NET_SABOTAGE").as_deref() == Ok("teardown_driver") {
+        return;
+    }
     if STATE.with(Cell::get) == LoopState::Owner {
         // Close P1's sockets while the loop is still here, then run one
         // nonblocking turn so their `Closed` completions reach the binding
