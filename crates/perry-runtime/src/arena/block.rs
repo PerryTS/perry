@@ -580,6 +580,20 @@ pub(crate) struct Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
+        // Runtime-owned payloads can now be in the last unsynchronized Eden
+        // burst. Materialize its high-water before the finalizer walks. This
+        // POD const TLS has no destructor; do not resolve ARENA or the hot TLS
+        // cache from inside ARENA's own destructor.
+        if self.space == HeapSpace::NurseryEden {
+            let _ = INLINE_STATE.try_with(|cell| unsafe {
+                let state = &*cell.get();
+                if let Some(block) = self.blocks.get_mut(self.current) {
+                    if !state.data.is_null() && state.data == block.data {
+                        block.offset = state.offset;
+                    }
+                }
+            });
+        }
         // #11319: entries of the process-global closure side tables keyed by
         // an owner in these blocks would outlive the memory they describe.
         // Test builds keep the blocks mapped (#4665 below) and make those

@@ -1,7 +1,8 @@
 Unify small runtime allocations with the existing generated Eden bump state.
 Keep refills, collections, free-list reuse and large births out of line, and
 flush collector bumps before leaving the existing allocation-accounting guard.
-No pacing decisions, root rules or region descriptors change.
+The Eden thread-exit walk also materializes its pending bump before finalizing
+owned payloads. No pacing decisions, root rules or region descriptors change.
 
 Object.create carries its resolved birth shape through a successful
 no-collect allocation, avoiding redundant shape validation, a temporary zero
