@@ -331,6 +331,8 @@ pub(in crate::codegen) fn compile_static_method(
         interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
+        pending_helpers: Vec::new(),
+        array_record_length_local: None,
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),

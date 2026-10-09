@@ -200,8 +200,8 @@ pub(super) fn lower_symbol_then_named_property_ic(
 pub(super) fn emit_array_subclass_length_ic(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
-    recv_bits: &str,
-    recv_handle: &str,
+    _recv_bits: &str,
+    _recv_handle: &str,
     outer_merge_label: &str,
 ) -> (String, String) {
     let site_id = ctx.ic_site_counter;
@@ -209,6 +209,53 @@ pub(super) fn emit_array_subclass_length_ic(
     let cache_name = super::super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
 
+    let helper_name = format!("perry_length_cold_{}", ctx.module_slug);
+    if !ctx.pending_helpers.iter().any(|f| f.name == helper_name) {
+        let mut helper = crate::function::LlFunction::new(
+            &helper_name,
+            DOUBLE,
+            vec![(DOUBLE, "%receiver".into()), (PTR, "%cache_slot".into())],
+        );
+        helper.linkage = "internal".into();
+        helper.no_inline = true;
+        let saved_func = std::mem::replace(ctx.func, helper);
+        let saved_block = ctx.current_block;
+        ctx.current_block = ctx.new_block("entry");
+        let bits = ctx.block().bitcast_double_to_i64("%receiver");
+        let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+        let done = ctx.new_block("return");
+        let done_label = ctx.block_label(done);
+        let (value, _) = emit_array_subclass_length_body(
+            ctx,
+            "%receiver",
+            &bits,
+            &handle,
+            "%cache_slot",
+            &done_label,
+        );
+        ctx.current_block = done;
+        ctx.block().ret(DOUBLE, &value);
+        let helper = std::mem::replace(ctx.func, saved_func);
+        ctx.current_block = saved_block;
+        ctx.pending_helpers.push(helper);
+    }
+    let slot = format!("@{cache_name}");
+    let length = ctx
+        .block()
+        .call(DOUBLE, &helper_name, &[(DOUBLE, recv_box), (PTR, &slot)]);
+    let end = ctx.block().label.clone();
+    ctx.block().br(outer_merge_label);
+    (length, end)
+}
+
+fn emit_array_subclass_length_body(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    recv_bits: &str,
+    recv_handle: &str,
+    slot_ref: &str,
+    outer_merge_label: &str,
+) -> (String, String) {
     let header_idx = ctx.new_block("plen.ic.header");
     let shape_idx = ctx.new_block("plen.ic.shape");
     let shape_probe_idx = ctx.new_block("plen.ic.shape.probe");
@@ -259,7 +306,13 @@ pub(super) fn emit_array_subclass_length_ic(
     // header guard, because the elements-backed arm between them serves
     // `length` without ever publishing a cache, and a site whose receivers
     // are all elements-backed must keep that arm with a slot that stays null.
-    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache = ctx.block().load(PTR, slot_ref);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    let ic_slot = crate::expr::InlineCacheSlot {
+        slot_ref: slot_ref.into(),
+        cache,
+        present,
+    };
     let cache_ref = ic_slot.cache.clone();
     ctx.block().cond_br(&in_heap, &header_label, &miss_label);
 

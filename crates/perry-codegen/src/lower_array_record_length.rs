@@ -1,7 +1,6 @@
-//! The entry proof owns the ordinary-array length fact. Keep its live
-//! header read in line; forwarding and source-root repair share the runtime.
+//! Record entry supplies a real array proof to the existing indexed length
+//! lowering. The private binding still has its actual Any hint.
 use crate::expr::{lower_expr, FnCtx};
-use crate::types::{DOUBLE, I16, I32, I64};
 use anyhow::Result;
 use perry_hir::Expr;
 
@@ -9,46 +8,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, source: &Expr) -> Result<String> {
     let Expr::LocalGet(source_id) = source else {
         anyhow::bail!("arrayRecordLength requires its compiler-owned source binding");
     };
-    let boxed = lower_expr(ctx, source)?;
-    let bits = ctx.block().bitcast_double_to_i64(&boxed);
-    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    // ArrayRecordEnter has proved an ordinary array. Its own nonconfigurable
-    // length stays in the header, even with a changed prototype/descriptors.
-    // Growth/evacuation may leave a forwarding stub since the entry proof.
-    let header = ctx.block().sub(I64, &handle, "8");
-    let header = ctx.block().inttoptr(I64, &header);
-    let word = ctx.block().load(I16, &header);
-    let type_and_forwarding = ctx.block().and(I16, &word, "33023");
-    let live = ctx.block().icmp_eq(I16, &type_and_forwarding, "1");
-    let range = ctx.new_block("array_record_length.fast");
-    let cold = ctx.new_block("array_record_length.forward");
-    let range_label = ctx.block_label(range);
-    let cold_label = ctx.block_label(cold);
-    let direct_end = ctx.block().label.clone();
-    ctx.block().cond_br(&live, &range_label, &cold_label);
-    ctx.current_block = cold;
-    let fresh = ctx
-        .block()
-        .call(DOUBLE, "js_array_refresh_local_head", &[(DOUBLE, &boxed)]);
-    crate::expr::invalidate_local_write_facts(ctx, *source_id);
-    crate::expr::bind_lowered_value_to_local(ctx, *source_id, &fresh, source)?;
-    let bits = ctx.block().bitcast_double_to_i64(&fresh);
-    let fresh_handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let cold_end = ctx.block().label.clone();
-    ctx.block().br(&range_label);
-    ctx.current_block = range;
-    let handle = ctx
-        .block()
-        .phi(I64, &[(&handle, &direct_end), (&fresh_handle, &cold_end)]);
-    let ptr = ctx.block().inttoptr(I64, &handle);
-    let length = ctx.block().load(I32, &ptr);
-    Ok(ctx.block().uitofp(I32, &length, DOUBLE))
+    let previous = ctx.array_record_length_local.replace(*source_id);
+    let result = lower_expr(
+        ctx,
+        &Expr::PropertyGet {
+            object: Box::new(source.clone()),
+            property: "length".into(),
+            byte_offset: 0,
+        },
+    );
+    ctx.array_record_length_local = previous;
+    result
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn record_length_reads_the_live_header_and_repairs_the_existing_source() {
+    fn record_length_uses_the_shared_guarded_property_lowering() {
         crate::temp_root_coverage::under_both_lowerings(|_mode| {
             let mut m = perry_hir::Module::new("record_length");
             m.functions.push(perry_hir::Function {
@@ -83,6 +59,10 @@ mod tests {
                 was_plain_async: false,
                 was_unrolled: false,
             });
+            let mut second = m.functions[0].clone();
+            second.id = 2;
+            second.name = "length_again".into();
+            m.functions.push(second);
             let ir = String::from_utf8(
                 crate::compile_module(
                     &m,
@@ -94,15 +74,27 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert!(ir.contains("array_record_length.fast"));
-            assert!(ir.contains("array_record_length.forward"));
-            assert!(ir.contains("call double @js_array_refresh_local_head"));
-            assert!(!ir.contains("call double @js_object_get_field_ic"));
-            let cold = ir.split_once("array_record_length.forward").unwrap().1;
-            assert!(
-                cold.contains("store "),
-                "the live head must repair the existing source root"
+            assert!(ir.contains("plen."));
+            assert_eq!(
+                ir.lines()
+                    .filter(|line| line.starts_with("define internal double @perry_length_cold_"))
+                    .count(),
+                1,
+                "all sites must share one real cold body"
             );
+            assert_eq!(
+                ir.lines()
+                    .filter(|line| line.contains("call double @perry_length_cold_"))
+                    .count(),
+                2,
+                "each site reaches the shared property fallback"
+            );
+            assert!(
+                ir.contains("call double @js_value_length_property_key_ic_f64("),
+                "ordinary override and getter semantics remain in the shared body"
+            );
+            assert!(ir.contains("uitofp i32"));
+            assert!(!ir.contains("call double @js_object_get_field_ic"));
             #[cfg(feature = "llvm-inprocess")]
             crate::testing::verify_ir(&ir, "record_live_length").unwrap();
         });

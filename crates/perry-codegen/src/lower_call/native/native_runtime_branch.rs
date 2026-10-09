@@ -121,7 +121,7 @@
             }
             "arrayRecordLength" => {
                 // The entry proof owns the ordinary-array length fact.
-                // Read its live header; forwarding repairs the source cold.
+                // Use the existing guarded property lowering and its shared cold body.
 return crate::lower_array_record_length::lower(ctx, &args[0]);
             }
             "arrayRecordIndex" => return lower_expr(ctx, &args[0]),
