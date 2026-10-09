@@ -48,12 +48,13 @@ pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     match bits >> 48 {
         // The legacy immediates: constructor or `C.prototype` reference.
-        0x7FFE => super::class_value::class_value_id_bits(bits)
-            .or_else(|| class_prototype_ref_id(value)),
+        0x7FFE => {
+            super::class_value::class_value_id_bits(bits).or_else(|| class_prototype_ref_id(value))
+        }
         // A class function object (one pre-filter for any other pointer).
-        0x7FFD => super::class_value::class_closure_id(
-            (bits & crate::value::POINTER_MASK) as usize,
-        ),
+        0x7FFD => {
+            super::class_value::class_closure_id((bits & crate::value::POINTER_MASK) as usize)
+        }
         _ => None,
     }
 }

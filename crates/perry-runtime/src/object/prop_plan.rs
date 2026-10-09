@@ -403,10 +403,7 @@ mod zeroed_cache_tests {
                 let cache = unsafe { &*c.get() };
                 assert_eq!(cache.len(), PLAN_CACHE_SIZE);
                 for e in cache.iter() {
-                    assert_eq!(
-                        (e.key_ptr, e.epoch, e.proto_bits, e.class_id),
-                        (0, 0, 0, 0)
-                    );
+                    assert_eq!((e.key_ptr, e.epoch, e.proto_bits, e.class_id), (0, 0, 0, 0));
                 }
             });
             READ_PLAN_CACHE.with(|c| {

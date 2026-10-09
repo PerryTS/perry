@@ -675,8 +675,7 @@ unsafe fn relinked_decl_prototype_field(
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> RelinkedRead {
-    if key.is_null() || !decl_prototype_relinked(cid, decl_proto)
-    {
+    if key.is_null() || !decl_prototype_relinked(cid, decl_proto) {
         return RelinkedRead::NotRelinked;
     }
     // A link recorded as the class default (or never recorded) keeps the

@@ -2454,32 +2454,6 @@ pub(crate) unsafe fn native_call_method_tower(
     // surfaces far downstream as a stray `{}` — hiding the real call site. Print
     // a located report first so `PERRY_DISPATCH_DIAG=1` names the missing
     // method+receiver before the throw is caught.
-    // `class X extends Request/Response`: the body methods (`text`/`json`/
-    // `arrayBuffer`/`blob`/`bytes`/`formData`/`clone`) live on the underlying
-    // native fetch handle, not the JS prototype chain. All user-defined
-    // dispatch (own fields, vtable, prototype walk) has missed by here, so a
-    // subclass that overrides one of these still wins; only genuinely
-    // inherited body methods reach this forward. Refs Hono `c.req.text()`.
-    if matches!(
-        method_name,
-        "text" | "json" | "arrayBuffer" | "blob" | "bytes" | "formData" | "clone"
-    ) && jsval().is_pointer()
-    {
-        let raw = crate::value::js_nanbox_get_pointer(object()) as usize;
-        if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
-            if let Some(dispatch) = handle_method_dispatch() {
-                let args = refreshed_args();
-                return dispatch(
-                    id,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                    args.as_ptr(),
-                    args.len(),
-                );
-            }
-        }
-    }
-
     // `class X extends Promise`: inherited `then`/`catch`/`finally` dispatch
     // against the hidden backing Promise cell. A subclass override (own field /
     // vtable / prototype method) has already been consulted above, so only a
@@ -2501,48 +2475,16 @@ pub(crate) unsafe fn native_call_method_tower(
         }
     }
 
-    // `class X extends Temporal.<Type>`: the prototype methods (`add`/`abs`/
-    // `toString`/…) dispatch via the Temporal brand on the underlying cell, not
-    // the JS prototype chain. All user-defined dispatch (own fields, vtable,
-    // prototype walk) has missed by here, so a subclass override still wins;
-    // only genuinely inherited Temporal methods reach this forward. Route them
-    // to the stashed cell (`temporal_subclass_cell`). (#5587)
-    if jsval().is_pointer() {
-        let raw = crate::value::js_nanbox_get_pointer(object()) as usize;
-        if let Some(cell) = crate::temporal::hooked::subclass_cell(raw) {
-            let args = refreshed_args();
-            return crate::temporal::hooked::call_method(cell, method_name, &args);
-        }
-    }
-
-    // #4973: inherits-pattern instances (`http.Server.call(this, …)`) forward
-    // method calls that missed every user-defined dispatch layer (own fields,
-    // vtable, prototype walk) to their aliased native handle, so
-    // `server.listen(...)` / `server.on(...)` on the plain-object `this`
-    // behave as calls on the underlying server. See native_this_alias.rs.
-    if let Some((handle_val, composite)) =
-        super::native_this_alias::alias_handle_for_object(object())
+    // A native-base subclass instance (`class X extends Response`, a Temporal
+    // subclass, an inherits-pattern alias): every user-defined layer (own
+    // fields, vtable, prototype walk) has missed, so only an inherited
+    // built-in reaches here, and it runs on the instance's native backing.
+    // The same forward serves the built-in prototype method VALUE the
+    // instance's holder chain answers (`try_dispatch_value_called_proto_method`).
     {
-        // Server aliases dispatch through the PRIMARY handle dispatcher
-        // only: the composite's extension dispatchers (ext-net) may own
-        // an id-colliding socket that would claim shared names like
-        // `address`/`on` first. A `ServerResponse` alias (#10454) needs
-        // the composite, whose http extension owns that handle.
-        let dispatch = if composite {
-            super::class_handles::handle_method_dispatch()
-        } else {
-            super::class_handles::handle_method_dispatch_primary()
-        };
-        if let Some(dispatch) = dispatch {
-            let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
-            let args = refreshed_args();
-            return dispatch(
-                handle,
-                method_name_ptr as *const u8,
-                method_name_len,
-                args.as_ptr(),
-                args.len(),
-            );
+        let args = refreshed_args();
+        if let Some(result) = proto_dispatch::call_on_native_backing(object(), method_name, &args) {
+            return result;
         }
     }
 

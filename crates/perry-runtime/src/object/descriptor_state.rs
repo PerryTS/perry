@@ -50,9 +50,9 @@ mod holder_edit;
 use super::accessor_pair::{descriptor_from, own_accessor, pair_from, store_own_accessor};
 pub(crate) use holder_edit::HolderEdit;
 #[cfg(test)]
-mod native_owner_tests;
-#[cfg(test)]
 mod holder_route_tests;
+#[cfg(test)]
+mod native_owner_tests;
 #[cfg(test)]
 mod tests;
 
