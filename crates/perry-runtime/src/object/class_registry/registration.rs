@@ -457,7 +457,11 @@ pub unsafe extern "C" fn js_register_class_getter(
     };
     if name.starts_with('#') {
         super::parent_static::register_private_accessor_half(
-            class_id as u32, &name, func_ptr as usize, false);
+            class_id as u32,
+            &name,
+            func_ptr as usize,
+            false,
+        );
         return;
     }
     let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
@@ -511,7 +515,11 @@ pub unsafe extern "C" fn js_register_class_setter(
     };
     if name.starts_with('#') {
         super::parent_static::register_private_accessor_half(
-            class_id as u32, &name, func_ptr as usize, true);
+            class_id as u32,
+            &name,
+            func_ptr as usize,
+            true,
+        );
         return;
     }
     let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
