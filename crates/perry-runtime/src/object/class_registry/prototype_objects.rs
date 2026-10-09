@@ -442,6 +442,25 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
     new_cid
 }
 
+/// The prototype holder an instance of class `class_id` reads through next:
+/// the declared `class X {}` prototype when this agent built it, otherwise the
+/// synthetic-class prototype object, otherwise null (not built yet).
+///
+/// One precedence for every consumer: the read walk
+/// (`prototype_chain::class_link_prototype`), the prototype-method
+/// registration that writes the holder (`class_prototype_set`), and the
+/// typed-feedback direct-call guard that proves the holder unchanged. A
+/// writer and a guard that each picked their own registry could disagree
+/// about which object holds `C.prototype.m`.
+#[inline]
+pub(crate) fn class_holder_prototype(class_id: u32) -> *mut ObjectHeader {
+    let declared = crate::object::class_decl_prototype_object(class_id);
+    if !declared.is_null() {
+        return declared;
+    }
+    class_prototype_object(class_id)
+}
+
 /// Lookup helper for the dispatch chain walk: returns the prototype
 /// object pointer for a synthetic class id, or null if none.
 #[inline]

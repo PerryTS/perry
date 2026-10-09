@@ -820,11 +820,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
     if class_id == 0 {
         return 0;
     }
-    let declared = super::class_decl_prototype_object(class_id);
-    if !declared.is_null() {
-        return declared as usize;
-    }
-    super::class_prototype_object(class_id) as usize
+    super::class_registry::class_holder_prototype(class_id) as usize
 }
 
 /// Was this cell allocated with no prototype (`Object.create(null)`,

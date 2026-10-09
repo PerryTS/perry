@@ -109,11 +109,11 @@ pub use state::{
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
-    class_decl_prototype_relinked, class_prototype_object, ensure_function_prototype_object,
-    function_class_id, function_value_for_class_id, object_proto_chain_symbol_slot,
-    resolve_proto_chain_field, resolve_proto_chain_field_noting_miss,
-    resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
-    synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
+    class_decl_prototype_relinked, class_holder_prototype, class_prototype_object,
+    ensure_function_prototype_object, function_class_id, function_value_for_class_id,
+    object_proto_chain_symbol_slot, resolve_proto_chain_field,
+    resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
+    resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
 pub use prototype_objects::{
     js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
@@ -200,7 +200,8 @@ pub(crate) use registration::{
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,
     js_register_class_method_bind_length, js_register_class_method_entry,
-    js_register_class_method_with_entry, js_register_class_setter, js_register_class_static_getter,
+    js_register_class_method_with_entry, js_register_class_prototype_shape,
+    js_register_class_setter, js_register_class_static_getter,
     js_register_class_static_method_bind_length, js_register_class_static_setter,
     js_register_class_string_member_order,
 };

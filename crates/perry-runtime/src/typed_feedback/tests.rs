@@ -2328,7 +2328,7 @@ fn typed_feedback_method_direct_guard_fails_for_own_method_replacement() {
 }
 
 #[test]
-fn typed_feedback_method_direct_guard_fails_after_method_invalidation() {
+fn typed_feedback_method_direct_guard_fails_after_holder_method_delete() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(
@@ -2354,16 +2354,28 @@ fn typed_feedback_method_direct_guard_fails_after_method_invalidation() {
             test_direct_method_ptr(),
         )
     };
-    assert_eq!(guard(), 1);
+    assert_eq!(guard(), 1, "an unbuilt holder is pristine");
 
-    // A delete has no replacement value for the contract to discover. The
-    // sticky per-name latch is the authoritative evidence that the declared
-    // vtable method may no longer be callable.
-    crate::object::invalidate_class_prototype_fast_guards_for_method("deleted_9123");
-    assert_eq!(guard(), 0);
+    // Build the declared prototype and publish its birth shape P, as module
+    // init does for a compiled class: a holder carrying P still proves the
+    // declared body.
+    let proto = unsafe {
+        crate::object::js_register_class_name(class_id, b"Deleted9123".as_ptr(), 11);
+        let proto = crate::object::class_decl_prototype_value(class_id);
+        crate::value::js_nanbox_get_pointer(proto) as *mut crate::object::ObjectHeader
+    };
+    assert!(!proto.is_null());
+    crate::object::js_register_class_prototype_shape(class_id, shape_id(proto));
+    assert_eq!(guard(), 1, "a holder with its birth shape proves the body");
+
+    // A delete has no replacement value for the contract to discover; it
+    // moves the holder off P, and that is the evidence.
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    crate::object::js_object_delete_field(proto, key);
+    assert_eq!(guard(), 0, "a holder off its birth shape declines");
 
     let site = &typed_feedback_snapshot().sites[0];
-    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_passes, 2);
     assert_eq!(site.guard_failures, 1);
 }
 
