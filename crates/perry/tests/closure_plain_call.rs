@@ -62,6 +62,22 @@ function arityCalls(): string {
 }
 console.log("arity", arityCalls());
 
+// Erased immutable captured targets retain their proven body and captures.
+// Reassigned and short captured calls retain dynamic dispatch and padding.
+function erasedCaptured(): string {
+  const state = { value: 7 };
+  const target: any = (x: number) => state.value + x;
+  const call = () => target(5);
+  const short: any = (x: any, y: any) => String(x) + ":" + String(y);
+  const shortCall = () => short("a");
+  let replaced: any = () => "first";
+  const replacedCall = () => replaced();
+  const before = replacedCall();
+  replaced = () => "second";
+  return [call(), shortCall(), before, replacedCall()].join(",");
+}
+console.log("captured", erasedCaptured());
+
 // Rest and `arguments` bodies take the bundling arm.
 function bundling(): string {
   const rest: any = (a: any, ...r: any[]) => a + ":" + r.length + ":" + r.join("|");
@@ -189,6 +205,7 @@ builders[1](21).then((v) => console.log("async", v));
 
 /// node v26 on the fixture.
 const EXPECTED: &str = "arity z,1,3,6,36,45,abcdefghijklmnop,7,3,z,z,0,NaN,NaN\n\
+captured 12,a:undefined,first,second\n\
 bundling 1:0:,1:2:2|3,0:,2:4|5,6:0:1,6:2:3\n\
 bound b:1:2,c:1:3,c:1:undefined,o!,c:1:2,c:1:2\n\
 this 1,2,1\n\
