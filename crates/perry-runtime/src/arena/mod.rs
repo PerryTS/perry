@@ -173,7 +173,7 @@ pub(crate) use page_meta::{
     arena_header_is_object_start, classify_heap_generation, classify_heap_space,
     classify_heap_space_in_range, generation_page_for_addr,
     materialize_promoted_page_runs_for_object, old_arena_block_range_index,
-    old_arena_movable_block_ranges, old_arena_page_index_remove_object,
+    old_arena_headers_on_pages, old_arena_movable_block_ranges, old_arena_page_index_remove_object,
     old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
     old_object_single_page, old_page_account_dirty_slot, old_page_account_dirty_slots,
     old_page_account_promoted_object, old_page_account_swept_object, old_page_account_swept_tally,

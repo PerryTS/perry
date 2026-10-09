@@ -18,6 +18,18 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
         dirty_pages_scanned: snapshot.dirty_pages.len(),
         ..RememberedSetTraceStats::default()
     };
+    let old_headers = crate::arena::old_arena_headers_on_pages(&snapshot.dirty_old_pages);
+    if let Some(covered) = covered.as_deref_mut() {
+        // Every entry comes from one of these snapshot inputs. Reserve their
+        // current bound once, rather than guessing from the previous minor.
+        covered.reserve(
+            old_headers.len()
+                + snapshot.external_dirty_entries.len()
+                + snapshot.fallback_headers.len(),
+        );
+    }
+    #[cfg(any(test, debug_assertions))]
+    let covered_capacity = covered.as_deref().map(|set| set.capacity());
     let mut seen_headers = crate::fast_hash::new_ptr_hash_set_with_capacity(
         snapshot.external_dirty_entries.len() + snapshot.fallback_headers.len(),
     );
@@ -75,10 +87,8 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
             }
         };
 
-    if !snapshot.dirty_old_pages.is_empty() {
-        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |header| {
-            scan_header(header as *mut GcHeader, true, &mut stats);
-        });
+    for header in old_headers {
+        scan_header(header as *mut GcHeader, true, &mut stats);
     }
     for &(_, header_addr) in &snapshot.external_dirty_entries {
         scan_header(header_addr as *mut GcHeader, false, &mut stats);
@@ -86,6 +96,12 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
     for header_addr in snapshot.fallback_headers.iter().copied() {
         scan_header(header_addr as *mut GcHeader, false, &mut stats);
     }
+    #[cfg(any(test, debug_assertions))]
+    assert_eq!(
+        covered.as_deref().map(|set| set.capacity()),
+        covered_capacity,
+        "dirty scan exceeded the current owner snapshot's reserved bound"
+    );
 
     stats.dirty_pages_after = remembered_dirty_page_count();
     stats
