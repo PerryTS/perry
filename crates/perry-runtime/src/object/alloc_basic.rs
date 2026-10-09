@@ -78,10 +78,11 @@ pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
 pub(crate) fn object_alloc_created(
     proto: &crate::gc::RuntimeHandle<'_>,
     proto_id: u64,
-    width: u32,
+    birth: shapes::KeylessBirth,
 ) -> *mut ObjectHeader {
     use crate::object::shapes;
-    let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), width);
+    let width = birth.width();
+    let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth);
     let mut obj = object_alloc_unpublished(0, width);
     unsafe {
         shapes::store_kind::premark_plain_ordinary(obj);
@@ -96,7 +97,7 @@ pub(crate) fn object_alloc_created(
             let scope = crate::gc::RuntimeHandleScope::new();
             let owner = scope.root_raw_mut_ptr(obj);
             (shape, obj) = owner.across_mut::<ObjectHeader, _>(|| {
-                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), width)
+                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), &birth)
             });
         }
         if crate::arena::pointer_in_nursery(obj as usize) {
