@@ -1599,14 +1599,18 @@ pub(crate) fn current_request_socket(
     if owner == 0 {
         return None;
     }
-    let socket = perry_ext_net::native_transport::RootedSocket::new(f64::from_bits(
-        JsValue::from_object_ptr(owner as *mut u8).bits(),
-    ));
-    let current = incarnation.as_ref().map_or_else(
-        || perry_ext_net::native_transport::snapshot(socket.value()).is_none(),
-        |snapshot| perry_ext_net::native_transport::matches(socket.value(), snapshot),
-    );
-    current.then_some(socket)
+    let owner = f64::from_bits(JsValue::from_object_ptr(owner as *mut u8).bits());
+    let socket = if let Some(incarnation) = incarnation {
+        perry_ext_net::native_transport::RootedSocket::with_snapshot(owner, incarnation)
+    } else {
+        // An unstarted request must still refuse a subsequently opened cell.
+        let socket = perry_ext_net::native_transport::RootedSocket::new(owner);
+        if perry_ext_net::native_transport::snapshot(socket.value()).is_some() {
+            return None;
+        }
+        socket
+    };
+    socket.is_current().then_some(socket)
 }
 
 /// Move a completed request out of its Agent's active pool and resume the

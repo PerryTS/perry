@@ -1016,10 +1016,13 @@ fn finish_and_close(conn_id: &RootedSocket) {
 }
 
 fn write_raw(conn_id: &RootedSocket, bytes: &[u8]) {
-    if bytes.is_empty() || !conn_id.is_current() {
+    if bytes.is_empty() {
         return;
     }
-    if net::write(conn_id.value(), bytes, 0).is_err() {
+    if conn_id
+        .write(bytes, 0)
+        .is_some_and(|result| result.is_err())
+    {
         destroy_connection(conn_id)
     }
 }
