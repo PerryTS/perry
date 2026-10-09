@@ -13,13 +13,17 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
         let mut captures = vec![crate::value::TAG_UNDEFINED; LARGE_OBJECT_THRESHOLD_BYTES / 8 + 64];
         captures[1] = string_bits(child);
         let closure = crate::closure::js_closure_alloc_init(
-            std::ptr::null(), captures.len() as u32, captures.as_ptr(),
+            std::ptr::null(),
+            captures.len() as u32,
+            captures.as_ptr(),
         );
         let header = header_from_user_ptr(closure as *const u8) as usize;
         let slot = crate::closure::closure_capture_slots_mut(closure).add(1);
         let page = crate::arena::generation_page_for_addr(slot as usize);
         activate_malloc_registry_for_tests();
-        assert!(super::super::malloc::gc_malloc_header_is_owned(header as *const GcHeader));
+        assert!(super::super::malloc::gc_malloc_header_is_owned(
+            header as *const GcHeader
+        ));
         assert_eq!((*(header as *const GcHeader)).gc_flags & GC_FLAG_MARKED, 0);
         // A scan can miss an owner's other pages. Repair must retain their
         // young edges even when the malloc parent was not marked this minor.
@@ -31,9 +35,14 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
         };
         remembered_set_clear();
         restore_surviving_dirty_coverage(&snapshot, &Default::default(), "malloc_uncovered");
-        assert!(EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
-            s.borrow().get(&page).is_some_and(|owners| owners.contains(&header))
-        }), "repair must restore the young capture's page for an unmarked malloc owner");
+        assert!(
+            EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+                s.borrow()
+                    .get(&page)
+                    .is_some_and(|owners| owners.contains(&header))
+            }),
+            "repair must restore the young capture's page for an unmarked malloc owner"
+        );
         remembered_set_clear();
     }
 }
