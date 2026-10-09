@@ -180,7 +180,7 @@ function churn(): number {
 }
 console.log("churn", churn());
 
-later(21).then((v) => console.log("async", v));
+builders[1](21).then((v) => console.log("async", v));
 "#;
 
 /// node v26 on the fixture.
@@ -217,10 +217,16 @@ fn compile(dir: &Path) -> PathBuf {
     let compile = Command::new(perry_bin())
         .current_dir(dir)
         .arg("compile")
+        .arg("--no-auto-optimize")
         .arg(&entry)
         .arg("-o")
         .arg(&bin)
         .env("PERRY_NO_CACHE", "1")
+        .env("PERRY_GC_INSTRUMENTS", "1")
+        .env(
+            "PERRY_RUNTIME_DIR",
+            perry_bin().parent().expect("runtime directory"),
+        )
         .output()
         .expect("run perry compile");
     assert_success("perry compile", &compile);
@@ -235,6 +241,17 @@ fn run(bin: &Path, dir: &Path, env: &[(&str, &str)]) -> String {
     }
     let out = cmd.output().expect("run compiled fixture");
     assert_success(&format!("compiled fixture {env:?}"), &out);
+    if env.iter().any(|(key, _)| *key == "PERRY_GC_FORCE_EVACUATE") {
+        let diagnostics = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            diagnostics.split_whitespace().any(|word| {
+                word.strip_prefix("copied_objects=")
+                    .and_then(|count| count.parse::<u64>().ok())
+                    .is_some_and(|count| count > 0)
+            }),
+            "forced evacuation must actually move objects:\n{diagnostics}"
+        );
+    }
     String::from_utf8(out.stdout).expect("utf-8")
 }
 
@@ -250,6 +267,7 @@ fn plain_closure_calls_match_node_on_every_call_shape() {
             &[
                 ("PERRY_GC_FORCE_EVACUATE", "1"),
                 ("PERRY_GC_VERIFY_EVACUATION", "1"),
+                ("PERRY_GC_DIAG", "1"),
             ],
         ),
         EXPECTED,
