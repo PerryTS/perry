@@ -196,7 +196,22 @@ pub(crate) fn lower_try(
 
     // --- catch (reached only through the landing pad) ---
     ctx.current_block = catch_idx;
-    if let Some(clause) = catch {
+    let outlined = catch
+        .zip(finally)
+        .filter(|_| !registered)
+        .and_then(|(c, f)| crate::lower_conditional::array_record::abrupt_args(c, f));
+    if let Some(args) = outlined {
+        lower_expr(
+            ctx,
+            &perry_hir::Expr::NativeMethodCall {
+                module: "__perry_runtime".into(),
+                class_name: None,
+                object: None,
+                method: "arrayRecordAbrupt".into(),
+                args,
+            },
+        )?;
+    } else if let Some(clause) = catch {
         let exc = if registered {
             ctx.block().call(DOUBLE, "js_catch_enter", &[])
         } else {

@@ -3,6 +3,8 @@
 //! Contains `lower_conditional` (ternary), `lower_logical` (&&/||/??),
 //! and `lower_truthy` (truthiness test).
 
+#[path = "lower_conditional_array_record.rs"]
+pub(crate) mod array_record;
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 

@@ -170,13 +170,19 @@ pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i3
 }
 
 /// One entry site's memo of the intrinsic owners' shapes its last full proof
-/// validated: the Array prototype bag's ShapeId in the low half and
+/// validated, plus its verdict: the Array prototype bag's ShapeId in the low half and
 /// %ArrayIteratorPrototype%'s in the high half. Its only authority is the
 /// compare against both owners' current ShapeIds at every entry; ShapeIds are
 /// minted from one process-wide sequence and never reused, so a word written
 /// by another realm or agent can only match an owner whose shape carries the
 /// same validated facts. Zero never matches (it names no shape).
 pub type ArrayRecordSite = std::sync::atomic::AtomicU64;
+
+// ShapeIds occupy [0x8000_0000, 0xc000_0000), so bit 30 is
+// always zero. Bit 62 of their pair records refusal without losing either
+// identity. Dictionary ids are never memoized: their keys can change in place.
+pub(crate) const ARRAY_RECORD_SITE_REFUSED: u64 = 1 << 62;
+const _: () = assert!(crate::object::shapes::SHAPE_ID_END <= 0xc000_0000);
 
 /// Capture the actual source and its shape verdict together. The output is
 /// published only after intrinsic materialization has finished allocating.
@@ -310,7 +316,7 @@ pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator(
 
 /// The prototype facts at one entry site: a hit is the two owners' current
 /// ShapeIds equal to the site's validated pair; anything else is the full
-/// shape proof, whose success re-publishes the pair. Every edit that can
+/// shape proof, which publishes the pair with either verdict. Every edit that can
 /// change a checked fact (a store, define or delete on either member, a
 /// dictionary conversion) moves its owner to another ShapeId.
 #[inline(always)]
@@ -323,22 +329,51 @@ unsafe fn array_record_prototypes_proven_at(
     if bag.is_null() {
         return false;
     }
-    let pair = u64::from(crate::object::shapes::object_shape_stamp(bag))
-        | u64::from(crate::object::shapes::object_shape_stamp(
-            next_owner as *const ObjectHeader,
-        )) << 32;
-    let complete = pair as u32 != 0 && (pair >> 32) as u32 != 0;
-    if !site.is_null() && complete && (*site).load(std::sync::atomic::Ordering::Relaxed) == pair {
-        return true;
+    let array_shape = crate::object::shapes::object_shape_stamp(bag);
+    let next_shape = crate::object::shapes::object_shape_stamp(next_owner as *const ObjectHeader);
+    let pair = u64::from(array_shape) | u64::from(next_shape) << 32;
+    let complete = array_shape != 0 && next_shape != 0;
+    if !site.is_null() && complete {
+        let memo = (*site).load(std::sync::atomic::Ordering::Relaxed);
+        if memo == pair {
+            return true;
+        }
     }
-    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-    if array_record_prototypes_need_iterator(proto_addr, next_owner, symbol) != 0 {
+    array_record_prototypes_miss(site, proto_addr, next_owner, pair)
+}
+
+// Key scans and ConstFn body checks live in one cold callee; a hit only
+// reads the two owners' ShapeIds and the site's last verdict.
+#[cold]
+#[inline(never)]
+unsafe fn array_record_prototypes_miss(
+    site: *const ArrayRecordSite,
+    proto_addr: usize,
+    next_owner: usize,
+    pair: u64,
+) -> bool {
+    let complete = pair as u32 != 0 && (pair >> 32) as u32 != 0;
+    if !site.is_null()
+        && complete
+        && (*site).load(std::sync::atomic::Ordering::Relaxed) == pair | ARRAY_RECORD_SITE_REFUSED
+    {
         return false;
     }
-    if !site.is_null() && complete {
-        (*site).store(pair, std::sync::atomic::Ordering::Relaxed);
+    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
+    let proven = array_record_prototypes_need_iterator(proto_addr, next_owner, symbol) == 0;
+    if !site.is_null()
+        && complete
+        && crate::object::shapes::is_site_matchable_shape_id(pair as u32)
+        && crate::object::shapes::is_site_matchable_shape_id((pair >> 32) as u32)
+    {
+        let verdict = if proven {
+            pair
+        } else {
+            pair | ARRAY_RECORD_SITE_REFUSED
+        };
+        (*site).store(verdict, std::sync::atomic::Ordering::Relaxed);
     }
-    true
+    proven
 }
 
 /// Both intrinsic members, read from their owners' current shapes: the

@@ -980,6 +980,7 @@ pub(crate) unsafe fn array_iterator_next_is_intrinsic(owner: *const ObjectHeader
     )
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn array_record_next_is_builtin() -> bool {
     ensure_iterator_prototypes();
     array_iterator_next_is_intrinsic(array_iterator_prototype_addr() as *const ObjectHeader)

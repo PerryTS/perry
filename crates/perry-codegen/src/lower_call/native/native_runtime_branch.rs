@@ -91,6 +91,23 @@
                     else_expr: Box::new(args[1].clone()),
                 }]));
             }
+            "arrayRecordFinish" | "arrayRecordAbrupt" => {
+                let abrupt = method == "arrayRecordAbrupt";
+                let count = if abrupt { 5 } else { 7 };
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..count])?;
+                // Save the operands in native roots before releasing the
+                // record's locals on the escaping exception path.
+                for release in &args[count..] { let _ = lower_expr(ctx, release)?; }
+                let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
+                if abrupt {
+                    ctx.block().call_void("js_array_record_abrupt", &values);
+                    ctx.block().unreachable();
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
+                let result = ctx.block().call(DOUBLE, "js_array_record_finish", &values);
+                roots.release(ctx);
+                return Ok(result);
+            }
             "arrayRecordCloseAbsent" => {
                 let needs = ctx.block().call(I32, "js_array_record_close_absent", &[]);
                 return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
@@ -103,14 +120,9 @@
                 return Ok(result);
             }
             "arrayRecordLength" => {
-                // The record proves an ordinary array; use precisely the
-                // indexed spelling's property lowering, including live length
-                // and forwarding. The contract supplies its numeric result.
-                return lower_expr(ctx, &Expr::PropertyGet {
-                    object: Box::new(args[0].clone()),
-                    property: "length".into(),
-                    byte_offset: 0,
-                });
+                // The entry proof owns the ordinary-array length fact.
+                // Read its live header; forwarding repairs the source cold.
+return crate::lower_array_record_length::lower(ctx, &args[0]);
             }
             "arrayRecordIndex" => return lower_expr(ctx, &args[0]),
             "iteratorRestAppend" => {
