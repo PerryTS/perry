@@ -425,13 +425,7 @@ pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
     let subclass_read = hook(b"_read");
     let subclass_write = hook(b"_write");
     let subclass_writev = hook(b"_writev");
-    let custom_sink = || {
-        set_hidden_value(
-            t(),
-            Slot::WritableCustomSink,
-            f64::from_bits(TAG_TRUE),
-        )
-    };
+    let custom_sink = || set_hidden_value(t(), Slot::WritableCustomSink, f64::from_bits(TAG_TRUE));
     if let Some(read) = read_callback_from_options(o()) {
         let bound = rebind_callback_this(read, t());
         set_hidden_value(t(), hidden_read_key(), bound);
@@ -623,11 +617,8 @@ pub(crate) fn ensure_lazy_stream(stream: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let opts = scope.root_nanbox_f64(
-        get_hidden_value(
-            stream.get_nanbox_f64(),
-            Slot::NativeStreamOptions,
-        )
-        .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+        get_hidden_value(stream.get_nanbox_f64(), Slot::NativeStreamOptions)
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     init_transform_kind(
         stream.get_nanbox_f64(),

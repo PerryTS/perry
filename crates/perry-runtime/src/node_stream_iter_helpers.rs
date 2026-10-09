@@ -1212,10 +1212,9 @@ pub(super) extern "C" fn ns_take_source_next(
         return take_source_done_result();
     };
     let source = scope.root_nanbox_f64(source);
-    let Some(source_iterator) = get_hidden_value(
-        source.get_nanbox_f64(),
-        READABLE_SOURCE_ITERATOR_KEY,
-    ) else {
+    let Some(source_iterator) =
+        get_hidden_value(source.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY)
+    else {
         finish_take_source(iterator.get_nanbox_f64(), None, false);
         return take_source_done_result();
     };
@@ -1335,12 +1334,7 @@ pub(super) extern "C" fn ns_iter_take(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this_value(closure, this));
     if !readable_chunks_nonempty(this.get_nanbox_f64()) {
-        if get_hidden_value(
-            this.get_nanbox_f64(),
-            READABLE_SOURCE_ITERATOR_KEY,
-        )
-        .is_some()
-        {
+        if get_hidden_value(this.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY).is_some() {
             let result = readable_from_chunks(crate::array::js_array_alloc(0));
             let result = scope.root_nanbox_f64(result);
             propagate_stream_state(

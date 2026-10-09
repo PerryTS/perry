@@ -158,8 +158,11 @@ fn unregistered_writes_and_intrinsics_resolve_per_access() {
                     let lines: Vec<_> = text.lines().map(str::trim).collect();
                     assert!(
                         lines.iter().enumerate().any(|(i, line)| {
-                            (line.contains("call double %") || line.contains("call double @js_closure_call0"))
-                                && lines[..i].iter().rev()
+                            (line.contains("call double %")
+                                || line.contains("call double @js_closure_call0"))
+                                && lines[..i]
+                                    .iter()
+                                    .rev()
                                     .take_while(|l| l.starts_with("store i8 0, ptr "))
                                     .any(|l| *l == dirty)
                         }),
@@ -177,7 +180,6 @@ fn unregistered_writes_and_intrinsics_resolve_per_access() {
     });
 }
 
-
 #[test]
 fn loop_writes_register_before_local_initializers_and_callbacks() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
@@ -190,28 +192,50 @@ fn loop_writes_register_before_local_initializers_and_callbacks() {
             let mut loop_stmts = vec![];
             if local {
                 loop_stmts.push(Stmt::Let {
-                    id: 1, name: "view".into(), ty: Type::Named("Uint8Array".into()),
+                    id: 1,
+                    name: "view".into(),
+                    ty: Type::Named("Uint8Array".into()),
                     mutable: false,
                     init: Some(Expr::Call {
                         callee: Box::new(Expr::LocalGet(2)),
-                        args: vec![], type_args: vec![], byte_offset: 0,
+                        args: vec![],
+                        type_args: vec![],
+                        byte_offset: 0,
                     }),
                 });
             }
             loop_stmts.extend([call_callback(), write]);
             let mut params = vec![param(2, Type::Any), param(3, Type::Number)];
-            if !local { params.push(param(1, Type::Named("Uint8Array".into()))); }
+            if !local {
+                params.push(param(1, Type::Named("Uint8Array".into())));
+            }
             let mut module = Module::new("registered_writes.ts");
-            module.functions.push(function(vec![loop_body(loop_stmts)], params));
+            module
+                .functions
+                .push(function(vec![loop_body(loop_stmts)], params));
             let text = ir(module);
-            let marker = text.lines().find(|l| l.contains("; bytes.hoist.roots "))
-                .unwrap_or_else(|| panic!("{mode}/{local}: loop writes must register in the pre-pass"));
-            let state = marker.split("state=").nth(1).unwrap()
-                .split_whitespace().next().unwrap();
+            let marker = text
+                .lines()
+                .find(|l| l.contains("; bytes.hoist.roots "))
+                .unwrap_or_else(|| {
+                    panic!("{mode}/{local}: loop writes must register in the pre-pass")
+                });
+            let state = marker
+                .split("state=")
+                .nth(1)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap();
             let dirty = format!("store i8 0, ptr %{state}");
             let lines: Vec<_> = text.lines().map(str::trim).collect();
-            let callbacks: Vec<_> = lines.iter().enumerate()
-                .filter(|(_, l)| l.contains("call double %") || l.contains("call double @js_closure_call0")).collect();
+            let callbacks: Vec<_> = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| {
+                    l.contains("call double %") || l.contains("call double @js_closure_call0")
+                })
+                .collect();
             assert!(!callbacks.is_empty(), "callback lowering must be exercised");
             for (i, _) in callbacks {
                 assert!(lines[..i].iter().rev()
