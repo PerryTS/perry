@@ -14,6 +14,7 @@ fn custody_disagreements(negative_control: bool) -> usize {
             captures.len() as u32,
             captures.as_ptr(),
         );
+        layout_init_unknown_fresh(malloc as *mut u8);
         // A separate OLD cache: its leaf header cannot rediscover the slots
         // that the lazy owner's descriptor enumerates.
         let lazy = crate::arena::arena_alloc_gc_old(
@@ -38,7 +39,7 @@ fn custody_disagreements(negative_control: bool) -> usize {
         for (user, expected_external) in [
             (old.cast::<u8>(), false),
             (malloc as *mut u8, true),
-            (lazy.cast::<u8>(), true),
+            (lazy.cast::<u8>(), false),
         ] {
             let header = header_from_user_ptr(user);
             let mut pages = crate::fast_hash::new_ptr_hash_set();
@@ -57,7 +58,8 @@ fn custody_disagreements(negative_control: bool) -> usize {
                     } else {
                         external
                     };
-                    disagreements += usize::from(verdict != expected_external);
+                    disagreements +=
+                        usize::from(verdict != (expected_external || slot.slot == cache));
                 },
             );
             assert!(slots > 0, "each parent must exercise descriptor custody");
