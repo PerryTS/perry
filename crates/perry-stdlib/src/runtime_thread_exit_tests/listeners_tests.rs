@@ -217,10 +217,32 @@ fn thread_exit_clears_the_global_this_root_slot_it_wrote() {
 }
 
 #[test]
-fn thread_exit_releases_the_threads_tls_client_records() {
-    const HANDLE: i64 = 0x1147_1002;
-    let live = std::thread::spawn(|| {
+fn thread_exit_drops_the_socket_owned_tls_state() {
+    struct Probe(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    static SOCKET: perry_runtime::native_payload::NativePayloadFamily =
+        perry_runtime::native_payload::NativePayloadFamily {
+            class_id: perry_runtime::native_class_ids::NET_SOCKET,
+            links_owner: true,
+            name: "Socket",
+            constructor_export: Some(("net", "Socket")),
+            constructor_length: 1,
+            install_prototype: |_| {},
+        };
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let worker_drops = drops.clone();
+    std::thread::spawn(move || {
         let scope = RuntimeHandleScope::new();
+        let socket = scope.root_nanbox_f64(perry_runtime::native_payload::alloc(
+            &SOCKET,
+            Probe(worker_drops),
+            0,
+            &[],
+        ));
         let closure = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
             perry_runtime::fn_info!(thunk2, 2),
             0,
@@ -231,25 +253,33 @@ fn thread_exit_releases_the_threads_tls_client_records() {
             "checkServerIdentity",
             pointer_value(closure.get_raw_mut_ptr::<ClosureHeader>() as *const u8),
         );
+        let raw = || (socket.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
         unsafe {
             perry_runtime::tls::js_tls_client_record_start(
-                HANDLE,
+                raw(),
                 pointer_value(options.get_raw_mut_ptr::<ObjectHeader>() as *const u8),
                 std::ptr::null(),
                 0,
             );
         }
-        perry_runtime::tls::tls_client_metadata(HANDLE)
-            .is_some_and(|metadata| metadata.check_server_identity != 0)
+        assert!(
+            perry_runtime::tls::tls_client_metadata(raw()).is_some(),
+            "TLS facts must be owned by the live Socket"
+        );
+        assert_eq!(
+            perry_runtime::tls::js_tls_client_check_identity(
+                raw(),
+                f64::from_bits(JSValue::undefined().bits())
+            )
+            .to_bits(),
+            JSValue::undefined().bits()
+        );
     })
     .join()
     .unwrap();
-    assert!(
-        live,
-        "the record must hold the thread's checkServerIdentity while it lives"
-    );
-    assert!(
-        perry_runtime::tls::tls_client_metadata(HANDLE).is_none(),
-        "a dead thread's checkServerIdentity record outlived its heap"
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "thread exit must drop the Socket rather than retain a TLS client registry"
     );
 }

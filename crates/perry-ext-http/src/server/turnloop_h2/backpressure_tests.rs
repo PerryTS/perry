@@ -7,6 +7,8 @@ use perry_ffi::{get_handle, get_handle_mut, register_handle};
 
 fn connection(id: i64) -> H2Conn {
     H2Conn {
+        wire: Vec::new(),
+        deadline: None,
         id,
         role: Role::Server,
         server_handle: 0,
@@ -20,6 +22,7 @@ fn connection(id: i64) -> H2Conn {
         handshaking: false,
         connecting: false,
         client_tls: None,
+        tls_session: None,
         alpn: None,
         peer_address: String::new(),
         peer_port: 0,
@@ -45,6 +48,7 @@ fn connection(id: i64) -> H2Conn {
 struct Fixture {
     conn: i64,
     response: i64,
+    session: i64,
 }
 impl Fixture {
     fn new() -> Self {
@@ -71,12 +75,27 @@ impl Fixture {
             unreleased: 0,
             withheld: 0,
         });
-        insert(connection, 0);
+        insert(connection);
         let mut response = response::ServerResponse::new();
-        response.turnloop = Some((conn, 1));
+        let session = crate::server::http2_server::register_turnloop_server_session(
+            0,
+            f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
+            0,
+            false,
+            "h2c",
+            Http2SettingsState::default(),
+        );
+        get_handle_mut::<crate::server::http2_server::Http2SessionHandle>(session)
+            .unwrap()
+            .turnloop_conn = conn;
+        response.turnloop = Some((
+            crate::server::turnloop_route::ResponseConnection::H2Session(session),
+            1,
+        ));
         response.turnloop_streaming = true;
         Self {
             conn,
+            session,
             response: register_handle(response),
         }
     }
@@ -86,6 +105,7 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
+        perry_ffi::drop_handle(self.session);
         forget(self.conn);
         perry_ffi::free_handle_id(self.conn);
         perry_ffi::drop_handle(self.response);

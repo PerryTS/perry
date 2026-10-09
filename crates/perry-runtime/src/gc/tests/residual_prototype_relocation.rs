@@ -285,6 +285,13 @@ fn test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor(
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_key_table_scanners();
+    // RegExp resolves its intrinsic from the lazy realm after the preceding
+    // copying minors. The isolation guard removed the normal realm scanner;
+    // restore it so that cache is marked and rewritten instead of naming a
+    // prototype freed by an earlier iteration. The custom prototypes below
+    // remain unrooted and are retained only through their tested owner edge.
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    register_runtime_handle_root_scanner_for_tests();
 
     type Alloc = Box<dyn Fn() -> usize>;
     let mut owners: Vec<(&str, Alloc)> = vec![

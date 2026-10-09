@@ -72,19 +72,100 @@ unsafe extern "C" fn js_bun_http_response_snapshot_json(
     std::ptr::null_mut()
 }
 
-/// `ClientRequestHandle` ids that are deliberately not in the handle registry.
-/// Nothing in the transport dereferences them — they are the addresses events
-/// are queued against — and `js_ext_http_client_inflight` treats an unknown
-/// handle as having no socket facade, which is the counted case.
-const GET_307: i64 = 0x5eed_c11e;
-const POST_BODY: i64 = GET_307 + 1;
-const POOLED_A: i64 = GET_307 + 2;
-const POOLED_B: i64 = GET_307 + 3;
-const DEADLINE: i64 = GET_307 + 4;
-const TRAILERS: i64 = GET_307 + 5;
-const SECURE: i64 = GET_307 + 6;
-const OVER_SOCKET: i64 = GET_307 + 7;
-const DEFERRED: i64 = GET_307 + 8;
+// All requests and Agents below use their actual public app records.
+extern "C" {
+    fn js_http_agent_new(options: f64) -> i64;
+}
+fn undefined() -> f64 {
+    f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits())
+}
+fn json_object(value: &serde_json::Value) -> f64 {
+    let text = perry_ffi::alloc_string(&value.to_string());
+    unsafe { f64::from_bits(perry_runtime::json::js_json_parse(text.as_raw().cast()).bits()) }
+}
+fn request_options(
+    method: &str,
+    address: &str,
+    headers: &HashMap<String, String>,
+    timeout: Option<u64>,
+    agent: i64,
+    ca: Vec<Vec<u8>>,
+) -> f64 {
+    let url = url::Url::parse(address).unwrap();
+    let path = format!(
+        "{}{}",
+        url.path(),
+        url.query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default()
+    );
+    let mut options = serde_json::json!({ "method": method, "protocol": format!("{}:", url.scheme()), "hostname": url.host_str().unwrap(), "port": url.port_or_known_default().unwrap(), "path": path, "headers": headers });
+    if let Some(timeout) = timeout {
+        options["timeout"] = timeout.into();
+    }
+    if !ca.is_empty() {
+        options["ca"] = ca
+            .iter()
+            .map(|pem| String::from_utf8(pem.clone()).unwrap())
+            .collect::<Vec<_>>()
+            .into();
+    }
+    let owner = json_object(&options);
+    if agent != 0 {
+        perry_ext_net::native_transport::own_set(
+            owner,
+            "agent",
+            f64::from_bits(perry_ffi::JsValue::from_object_ptr(agent as *mut u8).bits()),
+        );
+    }
+    owner
+}
+fn dispatch(
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+    timeout: Option<u64>,
+    agent: i64,
+) -> bool {
+    dispatch_tls(method, url, headers, body, timeout, agent, Vec::new())
+}
+fn dispatch_tls(
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+    timeout: Option<u64>,
+    agent: i64,
+    ca: Vec<Vec<u8>>,
+) -> bool {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let options = scope.root_nanbox(request_options(method, url, headers, timeout, agent, ca));
+    let accepted = client_turnloop::accepted_total();
+    let request = unsafe {
+        if url.starts_with("https:") {
+            perry_ext_http::js_https_request(options.get(), 0)
+        } else {
+            perry_ext_http::js_http_request(options.get(), 0)
+        }
+    };
+    let body = if body.is_empty() {
+        undefined()
+    } else {
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(perry_ffi::alloc_buffer(body)).bits())
+    };
+    unsafe {
+        perry_ext_http::js_http_client_request_end(request, body);
+    }
+    client_turnloop::accepted_total() == accepted + 1
+}
+unsafe extern "C" fn supplied_connection(
+    closure: *const perry_ffi::RawClosureHeader,
+    _: perry_ffi::JsThis,
+    _: f64,
+) -> f64 {
+    perry_ffi::closure_capture_f64(closure, 0)
+}
 
 const CERT_PEM: &[u8] =
     include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
@@ -101,7 +182,13 @@ const KEY_PEM: &[u8] =
 /// completion. (The single-exchange version of this test never noticed: its
 /// only events were pushed after its last turn.)
 fn turn() {
+    perry_runtime::timer::js_event_loop_timers_phase();
     perry_runtime::event_pump::js_loop_turn_bounded(0);
+    perry_runtime::timer::js_event_loop_poll_callbacks();
+    perry_runtime::timer::js_event_loop_check_phase();
+    unsafe {
+        perry_ext_http::js_http_process_pending();
+    }
     std::thread::sleep(Duration::from_millis(1));
 }
 
@@ -229,7 +316,7 @@ fn a_cleartext_get_is_carried_and_a_307_is_not_followed() {
     let completed_before = client_turnloop::completed_total();
     let url = format!("http://127.0.0.1:{port}/start");
     assert!(
-        client_turnloop::try_dispatch(GET_307, "GET", &url, &no_headers(), &[], None, 0),
+        dispatch("GET", &url, &no_headers(), &[], None, 0),
         "a cleartext GET must be carried"
     );
     drive("GET 307");
@@ -281,9 +368,7 @@ fn a_post_body_and_an_explicit_host_reach_the_wire() {
     ]
     .into();
     let url = format!("http://127.0.0.1:{port}/upload");
-    assert!(client_turnloop::try_dispatch(
-        POST_BODY, "POST", &url, &headers, b"hello", None, 0
-    ));
+    assert!(dispatch("POST", &url, &headers, b"hello", None, 0));
     drive("POST body");
     assert_eq!(client_turnloop::completed_total(), completed_before + 1);
 
@@ -338,29 +423,13 @@ fn an_agent_with_keep_alive_reuses_one_connection() {
     let reused_before = client_turnloop::reused_total();
     let completed_before = client_turnloop::completed_total();
     let url = format!("http://127.0.0.1:{port}/pooled");
-    // Agent key 0x7a is not a registered AgentHandle; the pool keys by it all
-    // the same, which is all this needs.
-    assert!(client_turnloop::try_dispatch_pooled(
-        POOLED_A,
-        "GET",
-        &url,
-        &no_headers(),
-        &[],
-        0x7a,
-        4,
-        5_000
-    ));
+    let options = json_object(
+        &serde_json::json!({ "keepAlive": true, "maxFreeSockets": 4, "keepAliveMsecs": 5000 }),
+    );
+    let agent = unsafe { js_http_agent_new(options) };
+    assert!(dispatch("GET", &url, &no_headers(), &[], None, agent));
     drive("pooled A");
-    assert!(client_turnloop::try_dispatch_pooled(
-        POOLED_B,
-        "GET",
-        &url,
-        &no_headers(),
-        &[],
-        0x7a,
-        4,
-        5_000
-    ));
+    assert!(dispatch("GET", &url, &no_headers(), &[], None, agent));
     drive("pooled B");
     assert_eq!(client_turnloop::completed_total(), completed_before + 2);
     assert_eq!(
@@ -383,7 +452,7 @@ fn an_agent_with_keep_alive_reuses_one_connection() {
         .iter()
         .all(|h| h.starts_with("GET /pooled HTTP/1.1\r\n")));
     // Close the parked connection so the binary exits with no open handle.
-    client_turnloop::purge_agent(0x7a);
+    client_turnloop::purge_agent(agent);
     settle();
 }
 
@@ -402,15 +471,7 @@ fn a_deadline_tears_down_an_exchange_the_server_never_answers() {
     let completed_before = client_turnloop::completed_total();
     let url = format!("http://127.0.0.1:{port}/silent");
     let started = Instant::now();
-    assert!(client_turnloop::try_dispatch(
-        DEADLINE,
-        "GET",
-        &url,
-        &no_headers(),
-        &[],
-        Some(150),
-        0
-    ));
+    assert!(dispatch("GET", &url, &no_headers(), &[], Some(150), 0));
     drive("deadline");
     assert_eq!(
         client_turnloop::timed_out_total(),
@@ -444,15 +505,7 @@ fn a_te_trailers_response_is_decoded_to_its_end() {
     let completed_before = client_turnloop::completed_total();
     let headers: HashMap<String, String> = [("TE".to_string(), "trailers".to_string())].into();
     let url = format!("http://127.0.0.1:{port}/trailers");
-    assert!(client_turnloop::try_dispatch(
-        TRAILERS,
-        "GET",
-        &url,
-        &headers,
-        &[],
-        None,
-        0
-    ));
+    assert!(dispatch("GET", &url, &headers, &[], None, 0));
     drive("trailers");
     assert_eq!(client_turnloop::completed_total(), completed_before + 1);
     let head = received
@@ -508,8 +561,7 @@ fn an_https_request_handshakes_with_the_callers_ca() {
     let handshakes_before = client_turnloop::tls_handshakes_total();
     let completed_before = client_turnloop::completed_total();
     let url = format!("https://127.0.0.1:{port}/secure");
-    assert!(client_turnloop::try_dispatch_tls(
-        SECURE,
+    assert!(dispatch_tls(
         "GET",
         &url,
         &no_headers(),
@@ -566,30 +618,51 @@ fn a_create_connection_socket_is_read_when_net_says_it_is_ready() {
     });
 
     let stream = TcpStream::connect(("127.0.0.1", port)).expect("the client side connects");
-    let socket = perry_ext_net::adopt_upgraded_tcp_stream(stream);
-    assert_ne!(
-        socket,
-        perry_ffi::INVALID_HANDLE,
-        "ext-net adopted the socket"
-    );
-    // Publish the raw-net vtable (the adoption itself already ran, here).
-    perry_ext_net::ensure_adopted_socket_dispatch();
-    assert!(
-        perry_ffi::raw_net().is_some(),
-        "perry-ext-net's raw-net vtable must be published, or this shape tests nothing"
-    );
-
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(perry_ext_net::native_transport::new_socket(
+        perry_ext_net::native_transport::ROUTE,
+        undefined(),
+    ));
+    unsafe {
+        let link = perry_ext_net::native_transport::socket_link(socket.get()).unwrap();
+        perry_ffi::turnloop_net::link_adopt_stream(
+            &mut *perry_ext_net::native_transport::core(socket.get()).unwrap(),
+            link,
+            stream.into(),
+        )
+        .unwrap();
+    }
+    perry_ext_net::native_transport::adopted(socket.get());
+    let create = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(supplied_connection, 1; with_flags(perry_ffi::FN_BUILTIN)),
+        1,
+    ) as i64);
+    unsafe {
+        perry_ffi::set_closure_capture_f64(
+            create.get() as *mut perry_ffi::RawClosureHeader,
+            0,
+            socket.get(),
+        );
+    }
     let completed_before = client_turnloop::raw_completed_total();
     let url = format!("http://127.0.0.1:{port}/over-socket");
-    client_turnloop::try_dispatch_over_socket(
-        OVER_SOCKET,
+    let options = scope.root_nanbox(request_options(
         "GET",
         &url,
         &no_headers(),
-        &[],
         None,
-        socket,
+        0,
+        Vec::new(),
+    ));
+    perry_ext_net::native_transport::own_set(
+        options.get(),
+        "createConnection",
+        f64::from_bits(perry_ffi::JsValue::from_object_ptr(create.get() as *mut u8).bits()),
     );
+    let request = unsafe { perry_ext_http::js_http_request(options.get(), 0) };
+    unsafe {
+        perry_ext_http::js_http_client_request_end(request, undefined());
+    }
     drive("createConnection");
     assert_eq!(
         client_turnloop::raw_completed_total(),
@@ -605,12 +678,21 @@ fn a_create_connection_socket_is_read_when_net_says_it_is_ready() {
     assert!(head.contains("Connection: close\r\n"), "{head}");
 }
 
-/// The Agent facade's idle expiry and `req.setTimeout`'s early `'timeout'` are
-/// deadlines on the loop now (they were tokio sleeps).
+/// An unended request's timeout is an ordinary JS Timeout. Drive the same
+/// timers phase as the compiled event loop, in addition to transport I/O.
 fn a_deferred_event_fires_from_a_loop_deadline() {
     let fired_before = client_turnloop::deferred_fired_total();
     let started = Instant::now();
-    client_turnloop::schedule_timeout_for_test(DEFERRED, 40);
+    let options = request_options(
+        "GET",
+        "http://127.0.0.1:9/unended",
+        &no_headers(),
+        None,
+        0,
+        Vec::new(),
+    );
+    let request = unsafe { perry_ext_http::js_http_request(options, 0) };
+    client_turnloop::schedule_timeout_for_test(request, 40);
     let deadline = Instant::now() + Duration::from_secs(10);
     while client_turnloop::deferred_fired_total() == fired_before {
         turn();
