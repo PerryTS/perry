@@ -223,9 +223,7 @@ pub(crate) fn ensure_capture_cells(ctx: &mut FnCtx<'_>, captures: &[u32]) {
             continue;
         };
         let word = ctx.block().load(I64, &root);
-        let missing = ctx
-            .block()
-            .icmp_eq(I64, &word, "0");
+        let missing = ctx.block().icmp_eq(I64, &word, "0");
         let mint_idx = ctx.new_block("capture_cell.mint");
         let ready_idx = ctx.new_block("capture_cell.ready");
         let mint_label = ctx.block_label(mint_idx);
@@ -325,7 +323,9 @@ impl BirthWords {
                     .expect("a rooted mint has a group")
                     .reread_emitted(ctx, *handle),
             };
-            words[*slot] = ctx.block().or(I64, &raw, &crate::nanbox::POINTER_TAG.to_string());
+            words[*slot] = ctx
+                .block()
+                .or(I64, &raw, &crate::nanbox::POINTER_TAG.to_string());
         }
         words
     }
