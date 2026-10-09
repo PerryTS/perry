@@ -1001,4 +1001,71 @@ mod tests {
         );
         assert!(!ir.contains("ArrayIterationPatched"), "{ir}");
     }
+    #[test]
+    fn destructure_completion_reifies_its_constructed_boolean() {
+        let parsed = perry_parser::parse_typescript(
+            "declare function iter(): any; const [x = 1, ...rest] = iter();",
+            "completion_done.ts",
+        )
+        .unwrap();
+        let mut hir =
+            crate::lower_module(&parsed, "completion_done", "completion_done.ts").unwrap();
+        fn visit(expr: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
+            f(expr);
+            crate::walker::walk_expr_children_mut(expr, &mut |child| visit(child, f));
+        }
+        let mut done_ids = std::collections::HashSet::new();
+        for stmt in &mut hir.init {
+            walk_stmt(stmt, &mut |expr| {
+                visit(expr, &mut |expr| {
+                    if let Expr::NativeMethodCall {
+                        module,
+                        method,
+                        args,
+                        ..
+                    } = expr
+                    {
+                        if module == "__perry_runtime"
+                            && matches!(
+                                method.as_str(),
+                                "iteratorCloseIfNotDone" | "iteratorCloseOnThrow"
+                            )
+                        {
+                            let Expr::Compare {
+                                op: CompareOp::Eq,
+                                left,
+                                right,
+                            } = &args[1]
+                            else {
+                                panic!("mutable private done must become a constructed predicate");
+                            };
+                            let Expr::LocalGet(id) = left.as_ref() else {
+                                panic!("private done local");
+                            };
+                            assert!(matches!(right.as_ref(), Expr::Bool(true)));
+                            done_ids.insert(*id);
+                        }
+                    }
+                })
+            });
+        }
+        assert!(!done_ids.is_empty(), "must reach an actual generated close");
+        let mut writes = 0;
+        for stmt in &mut hir.init {
+            walk_stmt(stmt, &mut |expr| {
+                visit(expr, &mut |expr| {
+                    if let Expr::LocalSet(id, value) = expr {
+                        if done_ids.contains(id) {
+                            assert!(
+                                matches!(value.as_ref(), Expr::Bool(_)),
+                                "only a constructed Boolean permits strict completion: {value:?}"
+                            );
+                            writes += 1;
+                        }
+                    }
+                })
+            });
+        }
+        assert!(writes > 0, "must inspect mutable Boolean writes");
+    }
 }

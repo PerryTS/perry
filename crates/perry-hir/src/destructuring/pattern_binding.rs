@@ -346,9 +346,17 @@ pub(crate) fn lower_array_pattern_binding(
     // Close the iterator: on any abrupt completion from the body (default
     // initializer / nested pattern throwing), and again on normal completion
     // when the iterator was not exhausted.
+    // Every write to this private bit constructs a Boolean. Reify that
+    // predicate at the completion boundary, rather than asking codegen to
+    // infer a stable initializer type for a deliberately mutable local.
+    let completion_done = Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(done_id)),
+        right: Box::new(Expr::Bool(true)),
+    };
     let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
-        vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+        vec![Expr::LocalGet(iter_id), completion_done.clone()],
     )));
     if !track_step_failure {
         // Every element is a hole or a plain binding identifier (possibly as
@@ -374,7 +382,7 @@ pub(crate) fn lower_array_pattern_binding(
                     "iteratorCloseOnThrow",
                     vec![
                         Expr::LocalGet(iter_id),
-                        Expr::LocalGet(done_id),
+                        completion_done,
                         Expr::LocalGet(exc_id),
                     ],
                 ))),
