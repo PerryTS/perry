@@ -4,6 +4,7 @@
 //! connection that decoded the request encodes and writes it
 //! (`turnloop_route`).
 
+use super::response_payload::Key as ResponseKey;
 use std::collections::HashMap;
 
 use perry_ffi::{
@@ -52,7 +53,9 @@ fn http_is_valid_token(s: &str) -> bool {
 fn response_headers_sent(handle: i64) -> bool {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "headersSent") {
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::HeadersSent)
+    {
         return v.to_bits() == TAG_TRUE;
     }
     response_state(response_root.get())
@@ -345,7 +348,9 @@ pub extern "C" fn js_node_http_res_set_status(handle: i64, code: f64) {
 pub extern "C" fn js_node_http_res_get_status(handle: i64) -> f64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "statusCode") {
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::StatusCode)
+    {
         return v;
     }
     response_state(response_root.get())
@@ -749,7 +754,8 @@ fn apply_headers_entries(sr: &mut ResponseState, json: &str) {
 pub extern "C" fn js_node_http_res_get_status_message(handle: i64) -> f64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "statusMessage")
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::StatusMessage)
     {
         return v;
     }
@@ -767,7 +773,9 @@ pub extern "C" fn js_node_http_res_get_status_message(handle: i64) -> f64 {
 pub extern "C" fn js_node_http_res_finished(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "finished") {
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::Finished)
+    {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
     response_state(response_root.get())
@@ -780,7 +788,9 @@ pub extern "C" fn js_node_http_res_finished(handle: i64) -> i32 {
 pub extern "C" fn js_node_http_res_send_date(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "sendDate") {
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::SendDate)
+    {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
     response_state(response_root.get())
@@ -803,9 +813,10 @@ pub extern "C" fn js_node_http_res_set_send_date(handle: i64, value: f64) {
 pub extern "C" fn js_node_http_res_strict_content_length(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) =
-        super::response_payload::closed_property(response_root.get(), "strictContentLength")
-    {
+    if let Some(v) = super::response_payload::closed_property(
+        response_root.get(),
+        ResponseKey::StrictContentLength,
+    ) {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
     response_state(response_root.get())
@@ -838,7 +849,9 @@ pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
 pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "headersSent") {
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::HeadersSent)
+    {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
     response_state(response_root.get())
@@ -851,7 +864,8 @@ pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
 pub extern "C" fn js_node_http_res_writable_ended(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if let Some(v) = super::response_payload::closed_property(response_root.get(), "writableEnded")
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), ResponseKey::WritableEnded)
     {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
@@ -866,7 +880,7 @@ pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     if let Some(v) =
-        super::response_payload::closed_property(response_root.get(), "writableFinished")
+        super::response_payload::closed_property(response_root.get(), ResponseKey::WritableFinished)
     {
         return i32::from(v.to_bits() == TAG_TRUE);
     }
@@ -1480,7 +1494,7 @@ pub unsafe extern "C" fn js_node_http_res_on(
     let response_root = response_scope.root_addr(handle);
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::push(
+        super::response_payload::push_event(
             response_root.get(),
             &format!("on:{event}"),
             callback_root.get(),
@@ -1539,7 +1553,7 @@ pub unsafe extern "C" fn js_node_http_res_once(
     let response_root = response_scope.root_addr(handle);
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::push(
+        super::response_payload::push_event(
             response_root.get(),
             &format!("once:{event}"),
             callback_root.get(),
@@ -1807,7 +1821,7 @@ pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseSta
 pub(crate) fn response_destroyed(handle: i64) -> bool {
     response_state(handle).map_or_else(
         || {
-            super::response_payload::closed_property(handle, "destroyed")
+            super::response_payload::closed_property(handle, ResponseKey::Destroyed)
                 .is_some_and(|v| v.to_bits() == TAG_TRUE)
         },
         |s| s.destroyed,
@@ -1818,7 +1832,7 @@ pub(crate) fn response_socket(handle: i64) -> f64 {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::get(response_root.get(), "socket")
+        super::response_payload::get(response_root.get(), ResponseKey::Socket)
     } else {
         get_handle::<ServerResponse>(response_root.get())
             .map_or(f64::from_bits(TAG_UNDEFINED), |r| r.standalone_socket)
@@ -1828,7 +1842,7 @@ pub(crate) fn set_response_socket(handle: i64, socket: f64) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::set(response_root.get(), "socket", socket);
+        super::response_payload::set(response_root.get(), ResponseKey::Socket, socket);
     } else if let Some(r) = get_handle_mut::<ServerResponse>(response_root.get()) {
         r.standalone_socket = socket;
     }
@@ -1837,7 +1851,7 @@ pub(crate) fn push_write_callback(handle: i64, cb: i64) {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::push(response_root.get(), "writeCallbacks", cb);
+        super::response_payload::push(response_root.get(), ResponseKey::WriteCallbacks, cb);
     } else if let Some(r) = get_handle_mut::<ServerResponse>(response_root.get()) {
         r.pending_write_callbacks.push(cb);
     }
@@ -1846,7 +1860,7 @@ pub(crate) fn take_write_callbacks(handle: i64) -> Vec<i64> {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     if super::response_payload::is_response(response_root.get()) {
-        super::response_payload::callbacks(response_root.get(), "writeCallbacks", true)
+        super::response_payload::callbacks(response_root.get(), ResponseKey::WriteCallbacks, true)
     } else {
         get_handle_mut::<ServerResponse>(response_root.get())
             .map(|r| std::mem::take(&mut r.pending_write_callbacks))

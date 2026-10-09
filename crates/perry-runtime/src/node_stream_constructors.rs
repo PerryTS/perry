@@ -62,22 +62,6 @@ pub(super) fn default_hwm(object_mode: bool) -> f64 {
     }
 }
 
-/// Resolve an effective highWaterMark: the direction-specific option
-/// (`readableHighWaterMark` / `writableHighWaterMark`) falls back to the
-/// generic `highWaterMark`, then to the platform default for the stream's
-/// mode (#1537: 65536 for byte streams, 16 for objectMode).
-pub(super) fn resolve_hwm(
-    opts: f64,
-    specific: &'static [u8],
-    specific_object_mode: &'static [u8],
-) -> f64 {
-    if let Some(v) = opt_number(opts, specific).or_else(|| opt_number(opts, b"highWaterMark")) {
-        return v;
-    }
-    let object_mode = resolve_object_mode(opts, specific_object_mode);
-    default_hwm(object_mode)
-}
-
 /// Initialize visible lifecycle flags shared by all stream sides.
 pub(super) fn init_lifecycle_state(stream: f64, opts: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
@@ -212,7 +196,24 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
             TAG_FALSE
         }),
     );
-    let r_hwm = resolve_hwm(opts, b"readableHighWaterMark", b"readableObjectMode");
+    set_hidden_value(
+        stream,
+        Slot::ReadableObjectMode,
+        f64::from_bits(if readable_object_mode {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
+    );
+    let r_hwm = opt_number(opts, b"readableHighWaterMark")
+        .or_else(|| opt_number(opts, b"highWaterMark"))
+        .unwrap_or_else(|| {
+            #[cfg(test)]
+            if std::env::var_os("PERRY_TEST_STREAM_MODE_REREAD").is_some() {
+                return default_hwm(resolve_object_mode(opts, b"readableObjectMode"));
+            }
+            default_hwm(readable_object_mode)
+        });
     set_hidden_value(stream, hidden_hwm_key(), r_hwm);
     set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
     set_hidden_value(stream, readable_flowing_key(), f64::from_bits(TAG_NULL));
@@ -249,7 +250,9 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
             TAG_FALSE
         }),
     );
-    let w_hwm = resolve_hwm(opts, b"writableHighWaterMark", b"writableObjectMode");
+    let w_hwm = opt_number(opts, b"writableHighWaterMark")
+        .or_else(|| opt_number(opts, b"highWaterMark"))
+        .unwrap_or_else(|| default_hwm(writable_object_mode));
     set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
     set_hidden_value(
         stream,

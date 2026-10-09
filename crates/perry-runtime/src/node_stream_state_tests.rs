@@ -285,3 +285,104 @@ fn writable_state_view_reads_live_stream_state() {
             == TAG_UNDEFINED
     );
 }
+
+#[test]
+fn object_mode_reads_the_record() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    js_object_set_field_by_name(
+        opts.get_raw_mut_ptr(),
+        hidden_key(b"objectMode"),
+        f64::from_bits(TAG_TRUE),
+    );
+    let stream = scope.root_nanbox_f64(js_node_stream_duplex_new(
+        opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+    ));
+    for key in [
+        b"readableObjectMode".as_slice(),
+        b"writableObjectMode".as_slice(),
+    ] {
+        js_object_set_field_by_name(
+            raw_ptr_from_value(stream.get_nanbox_f64()) as *mut ObjectHeader,
+            hidden_key(key),
+            f64::from_bits(TAG_FALSE),
+        );
+    }
+    let handle = raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
+    assert_eq!(
+        js_node_stream_method_readable_object_mode(handle).to_bits(),
+        TAG_TRUE,
+        "readable mode must come from record"
+    );
+    assert_eq!(
+        js_node_stream_method_writable_object_mode(handle).to_bits(),
+        TAG_TRUE,
+        "writable mode must come from record"
+    );
+}
+#[test]
+fn by_name_mode_sabotage_reddens_record_witness() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "node_stream::state_tests::object_mode_reads_the_record",
+            "--nocapture",
+        ])
+        .env("PERRY_TEST_STREAM_MODE_BY_NAME", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "by-name mode sabotage must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("readable mode must come from record"));
+}
+
+extern "C" fn counted_object_mode(c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+    let calls = js_closure_get_capture_f64(c, 0);
+    js_closure_set_capture_f64(c as *mut ClosureHeader, 0, calls + 1.0);
+    f64::from_bits(TAG_TRUE)
+}
+#[test]
+fn default_high_water_mark_uses_the_resolved_mode() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let getter =
+        scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(counted_object_mode, 0), 1));
+    js_closure_set_capture_f64(getter.get_raw_mut_ptr(), 0, 0.0);
+    let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let get_key = hidden_key(b"get");
+    js_object_set_field_by_name(
+        descriptor.get_raw_mut_ptr(),
+        get_key,
+        getter.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+    );
+    crate::object::js_object_define_property(
+        opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+        f64::from_bits(JSValue::string_ptr(hidden_key(b"objectMode")).bits()),
+        descriptor.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+    );
+    let stream = scope.root_nanbox_f64(js_node_stream_readable_new(
+        opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+    ));
+    assert_eq!(
+        getter.with_const_ptr(|p| js_closure_get_capture_f64(p, 0)),
+        1.0,
+        "mode option must be read once"
+    );
+    assert_eq!(
+        read_slot(stream.get_nanbox_f64(), Slot::ReadableHwm),
+        Some(16.0)
+    );
+}
+#[test]
+fn mode_reread_sabotage_reddens_resolved_mode_witness() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "node_stream::state_tests::default_high_water_mark_uses_the_resolved_mode",
+            "--nocapture",
+        ])
+        .env("PERRY_TEST_STREAM_MODE_REREAD", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "mode reread sabotage must fail");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("mode option must be read once"));
+}

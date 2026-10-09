@@ -48,80 +48,24 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
     None
 }
 
-crate::perry_thread_local! {
-    /// This thread's string for each hidden-key literal, by the literal's address.
-    ///
-    /// The values are raw heap addresses, so this table is a GC root: the
-    /// longlived arena is swept like any other (an unmarked longlived string
-    /// is reclaimed by a full mark-sweep), and only a registered scanner keeps
-    /// these strings marked and the addresses current. `hidden_key_root_scanner`
-    /// is that scanner, registered with the first entry on each thread.
-    static HIDDEN_KEYS: std::cell::RefCell<std::collections::HashMap<(usize, usize), usize>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-    static HIDDEN_KEYS_SCANNER_REGISTERED: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-pub(crate) fn hidden_key_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    HIDDEN_KEYS.with(|keys| {
-        for key in keys.borrow_mut().values_mut() {
-            visitor.visit_tagged_usize_slot(key, crate::value::STRING_TAG);
-        }
-    });
-}
-
-fn ensure_hidden_key_scanner() {
-    HIDDEN_KEYS_SCANNER_REGISTERED.with(|registered| {
-        if !registered.get() {
-            crate::gc::gc_register_mutable_root_scanner_named(
-                "node_stream_hidden_keys",
-                hidden_key_root_scanner,
-            );
-            registered.set(true);
-        }
-    });
-}
-
-/// The string for a hidden-field name. Callers read the stream before they take
-/// the key (`set_hidden_value(stream, hidden_key(K), v)`), so taking a key must
-/// never collect (#11828). Each literal gets one longlived string per thread,
-/// made with collection held off and kept alive (and current) by
-/// `hidden_key_root_scanner`.
+/// Canonical trie keys share the runtime's existing atom and GC machinery.
+/// Taking a key cannot collect: callers may already hold an unrooted receiver.
 pub(super) fn hidden_key(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
-    let id = (bytes.as_ptr() as usize, bytes.len());
-    if let Some(key) = HIDDEN_KEYS.with(|keys| keys.borrow().get(&id).copied()) {
-        return key as *mut crate::string::StringHeader;
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    #[cfg(test)]
+    if std::env::var_os("PERRY_TEST_STREAM_LITERAL_KEY").is_some() {
+        return crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     }
-    ensure_hidden_key_scanner();
-    let key = {
-        let _no_gc = crate::gc::GcSuppressScope::new();
-        crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32)
-    };
-    HIDDEN_KEYS.with(|keys| keys.borrow_mut().insert(id, key as usize));
-    key
+    // The canonical-keys trie adopts these same atoms (Appended::atomized).
+    // Resolve text identity at its source; traversing a singleton trie list
+    // here would add the trie's edge HashMap probe to every construction.
+    crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0)
 }
 
-/// Test hooks for `gc/tests/runtime_roots/hidden_keys.rs`.
 #[cfg(test)]
 pub(crate) fn hidden_key_for_test(bytes: &'static [u8]) -> *mut crate::string::StringHeader {
     hidden_key(bytes)
-}
-
-#[cfg(test)]
-pub(crate) fn hidden_key_peek_for_test(bytes: &'static [u8]) -> Option<usize> {
-    let id = (bytes.as_ptr() as usize, bytes.len());
-    HIDDEN_KEYS.with(|keys| keys.borrow().get(&id).copied())
-}
-
-#[cfg(test)]
-pub(crate) fn hidden_key_set_for_test(bytes: &'static [u8], addr: usize) {
-    let id = (bytes.as_ptr() as usize, bytes.len());
-    HIDDEN_KEYS.with(|keys| keys.borrow_mut().insert(id, addr));
-}
-
-#[cfg(test)]
-pub(crate) fn hidden_key_scanner_for_test() -> crate::gc::MutableRootScanner {
-    hidden_key_root_scanner
 }
 
 pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
@@ -185,6 +129,18 @@ pub(super) trait StateKey: Copy {
 impl StateKey for Slot {
     #[inline]
     fn read(self, value: f64) -> Option<f64> {
+        #[cfg(test)]
+        if std::env::var_os("PERRY_TEST_STREAM_MODE_BY_NAME").is_some() {
+            match self {
+                Slot::ReadableObjectMode => {
+                    return StateKey::read(hidden_key(b"readableObjectMode"), value)
+                }
+                Slot::WritableObjectMode => {
+                    return StateKey::read(hidden_key(b"writableObjectMode"), value)
+                }
+                _ => {}
+            }
+        }
         read_slot(value, self)
     }
     #[inline]
@@ -1000,7 +956,7 @@ pub(super) fn readable_hidden_chunks(value: f64) -> Option<f64> {
 }
 
 pub(super) fn readable_object_mode(value: f64) -> bool {
-    has_truthy_hidden(value, hidden_key(b"readableObjectMode"))
+    has_truthy_hidden(value, Slot::ReadableObjectMode)
 }
 
 pub(super) fn readable_chunks_nonempty(stream: f64) -> bool {

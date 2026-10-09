@@ -1506,8 +1506,7 @@ pub extern "C" fn js_node_stream_method_readable_length(stream_handle: i64) -> f
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_object_mode(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, hidden_key(b"readableObjectMode"))
-        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
+    get_hidden_value(stream, Slot::ReadableObjectMode).unwrap_or_else(|| f64::from_bits(TAG_FALSE))
 }
 
 /// `stream.readable` property getter on a typed readable-side instance.
@@ -1567,8 +1566,7 @@ pub extern "C" fn js_node_stream_method_writable_need_drain(stream_handle: i64) 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_object_mode(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, hidden_key(b"writableObjectMode"))
-        .unwrap_or_else(|| f64::from_bits(TAG_FALSE))
+    get_hidden_value(stream, Slot::WritableObjectMode).unwrap_or_else(|| f64::from_bits(TAG_FALSE))
 }
 
 /// `stream.readableAborted` property getter on a typed readable-side instance.
@@ -1840,14 +1838,14 @@ mod destroy_state;
 pub(crate) mod native_hooks;
 mod proto_methods;
 mod state_record;
-#[cfg(test)]
-pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+use state_record::*;
 pub(crate) use state_record::{
     is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
     store_record_payload_cell,
 };
-use state_record::*;
-pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+#[cfg(test)]
+pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;

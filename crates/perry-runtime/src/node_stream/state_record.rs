@@ -66,6 +66,9 @@ stream_slots! {
     /// #1539: bytes currently buffered (`push()`'s highWaterMark answer).
     ReadableBuffered,
     ReadableHwm,
+    ReadableObjectMode,
+    /// HTTP response JS state, traced with the payload and native alias.
+    HttpResponseState,
     ReadablePending,
     ReadableResumeScheduled,
     ReadableBase64Remainder,
@@ -371,4 +374,14 @@ pub(crate) fn test_write_inert_slot(stream: f64, value: f64) {
 pub(crate) fn test_read_inert_slot(stream: f64) -> f64 {
     read_slot(stream, Slot::ComposePendingError)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// Binding access to HTTP response state through the existing traced record.
+#[no_mangle]
+pub extern "C" fn js_node_http_response_state_get(owner: f64) -> f64 {
+    read_slot(owner, Slot::HttpResponseState).unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+#[no_mangle]
+pub extern "C" fn js_node_http_response_state_set(owner: f64, state: f64) {
+    write_slot(owner, Slot::HttpResponseState, state);
 }
