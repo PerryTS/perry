@@ -403,7 +403,16 @@ fn s7b_evaluation_chain_miss_does_not_build_a_canonical_holder() {
             0,
             crate::fn_info!(body, 0) as *const crate::closure::JsFunctionInfo as usize as i64,
         );
-        let class = js_class_evaluation_object(cid, 6, 0, cell(64)) as *mut ObjectHeader;
+        // Use the production entry with already evaluated heritage, so this
+        // evaluation has no reason to materialize a canonical parent holder.
+        let class = js_class_evaluation_object_with_prototype(
+            cid,
+            6,
+            0,
+            cell(64),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        ) as *mut ObjectHeader;
         let proto = super::class_object_props::class_object_prototype_value(class)
             .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         let method_key = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);

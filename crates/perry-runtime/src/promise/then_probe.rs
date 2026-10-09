@@ -691,6 +691,9 @@ mod tests {
         }
         assert!(class_id_admissible(cid), "the negative memo must be live");
         unsafe {
+            // A real anonymous declaration can acquire an id previously used
+            // by a literal. Literal methods alone have no CLASS surface.
+            crate::object::js_register_class_name(cid, b"".as_ptr(), 0);
             crate::object::js_register_class_method(
                 cid as i64,
                 b"then".as_ptr(),

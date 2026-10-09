@@ -1,5 +1,5 @@
 //! Miss-path retirement rules, independently sabotaged by the lane checks.
-use super::tests::{pinned_shape, receiver_shape, shaped};
+use super::tests::{pinned_shape, publish, receiver_shape, shaped};
 use super::*;
 
 fn owned_receiver_shape(class_id: u32, generation: u64) -> (u32, usize) {
