@@ -193,11 +193,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // acquire the same old->young forwarding edge.
         let old_header =
             (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let source_generation = crate::arena::classify_heap_generation(arr as usize);
         let source_requires_old_target = (*old_header).gc_flags & crate::gc::GC_FLAG_TENURED != 0
-            || !matches!(
-                crate::arena::classify_heap_generation(arr as usize),
-                crate::arena::HeapGeneration::Nursery
-            );
+            || !matches!(source_generation, crate::arena::HeapGeneration::Nursery);
         let young = if source_requires_old_target {
             ptr::null_mut()
         } else {
@@ -305,10 +303,16 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // handles, synthetic pointers, and unrelated allocations are rejected
         // before a header dereference.
         let installed =
-            install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |_| {
-                // clean_arr_ptr_mut resolved this live source, and any
-                // collecting allocation refreshed it through its handle.
-                std::ptr::NonNull::new(old_header)
+            install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
+                if matches!(source_generation, crate::arena::HeapGeneration::Unknown) {
+                    // The resolver has a native-storage exception; keep the
+                    // ownership classifier when no R2 region proved this head.
+                    crate::value::addr_class::try_read_tracked_gc_header(addr)
+                } else {
+                    // R2 proved ownership, and any collecting allocation
+                    // refreshed the source through its handle.
+                    std::ptr::NonNull::new(old_header)
+                }
             });
         assert!(
             installed,
