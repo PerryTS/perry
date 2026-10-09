@@ -211,7 +211,7 @@ pub(super) fn on_connect(conn: &mut Conn) -> Vec<Effect> {
     let tunnel = conn.exchange.as_ref().and_then(|ex| {
         let out = &ex.out;
         (out.key.https)
-            .then(|| out.proxy.as_ref())
+            .then_some(out.proxy.as_ref())
             .flatten()
             .map(|proxy| wire::connect_head(&out.key.host, out.key.port, proxy))
     });

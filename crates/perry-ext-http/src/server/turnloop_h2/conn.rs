@@ -384,30 +384,26 @@ pub(crate) fn peek<R>(id: impl Into<Target>, f: impl FnOnce(&H2Conn) -> R) -> Op
 
 /// Called first from P5's sink. Returns true when this completion was HTTP/2's.
 pub(crate) fn intercept(c: &tl::NetCompletion) -> bool {
-    match c.kind {
-        _ => {
-            if !owns(c.id) {
-                return false;
-            }
-            match c.kind {
-                tl::NET_CONNECT => on_connect(c.id),
-                // SAFETY: valid for the duration of this sink call.
-                tl::NET_DATA => on_data(c.id, unsafe { c.bytes() }),
-                tl::NET_EOF => on_eof(c.id),
-                tl::NET_WROTE => {}
-                tl::NET_SHUTDOWN => on_shutdown(c.id),
-                tl::NET_CLOSED => on_closed(c.id),
-                tl::NET_TIMER => on_timer(c.id),
-                tl::NET_ERROR => {
-                    // SAFETY: same call; both point at `'static` string data.
-                    let code = unsafe { c.code() };
-                    on_error(c.id, code);
-                }
-                _ => {}
-            }
-            true
-        }
+    if !owns(c.id) {
+        return false;
     }
+    match c.kind {
+        tl::NET_CONNECT => on_connect(c.id),
+        // SAFETY: valid for the duration of this sink call.
+        tl::NET_DATA => on_data(c.id, unsafe { c.bytes() }),
+        tl::NET_EOF => on_eof(c.id),
+        tl::NET_WROTE => {}
+        tl::NET_SHUTDOWN => on_shutdown(c.id),
+        tl::NET_CLOSED => on_closed(c.id),
+        tl::NET_TIMER => on_timer(c.id),
+        tl::NET_ERROR => {
+            // SAFETY: same call; both point at `'static` string data.
+            let code = unsafe { c.code() };
+            on_error(c.id, code);
+        }
+        _ => {}
+    }
+    true
 }
 
 /// A listener error. P5's sink owns listener ids it knows; this answers for

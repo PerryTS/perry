@@ -493,8 +493,7 @@ pub(crate) fn settle_upgrade(owner: f64, failure: Option<&str>) {
     p::own_set(state.get(), "upgradePromise", p::undefined());
     let promise = unsafe {
         perry_ffi::JsPromise::from_raw(
-            JsValue::from_bits(promise.get().to_bits()).as_pointer::<perry_ffi::Promise>()
-                as *mut perry_ffi::Promise,
+            JsValue::from_bits(promise.get().to_bits()).as_pointer::<perry_ffi::Promise>(),
         )
     };
     match failure {

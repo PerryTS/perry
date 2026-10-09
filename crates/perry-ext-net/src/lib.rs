@@ -36,6 +36,9 @@ pub use socket_facade::*;
 mod payload_abi;
 pub use payload_abi::*;
 pub const TURNLOOP_SUBSYSTEM: u8 = 0;
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_connect(
     arg1_f64: f64,
@@ -45,6 +48,9 @@ pub unsafe extern "C" fn js_ext_net_socket_connect(
     js_net_socket_connect(arg1_f64, arg2_f64, arg3_f64)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
     let scope = TransientRootScope::enter();
@@ -56,6 +62,9 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
     payload_transport::raw_owner(owner.get())
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     payload_transport::raw_owner(payload_socket::new_socket(
@@ -64,11 +73,17 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     ))
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_alloc(options: f64) -> i64 {
     payload_transport::raw_owner(payload_socket::new_socket(payload_io::ROUTE, options))
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_create_server(
     _options_i64: i64,
@@ -92,6 +107,9 @@ pub unsafe extern "C" fn js_net_create_server(
     ))
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_create_server(
     options_i64: i64,
@@ -100,11 +118,17 @@ pub unsafe extern "C" fn js_ext_net_create_server(
     js_net_create_server(options_i64, connection_listener_i64)
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64, arg3: f64) {
     payload_server::listen(payload_transport::boxed_addr(handle), port, arg2, arg3);
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
     payload_server::close(
@@ -119,6 +143,9 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
 
 /// `server.address()` as a JSON string, for the stdlib's untyped method
 /// dispatch (`handle` is the server object's address).
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader {
     alloc_string(&payload_server::address_json(
@@ -127,6 +154,9 @@ pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader
     .as_raw()
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_method_connect(
     handle: i64,
@@ -137,6 +167,9 @@ pub unsafe extern "C" fn js_ext_net_socket_method_connect(
     js_net_socket_method_connect(handle, arg1, arg2, arg3);
 }
 
+/// # Safety
+/// Call on the owning runtime thread. Heap-address carriers must name live,
+/// rooted allocations in that realm; NaN-boxed arguments must be valid JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_method_connect(
     handle: i64,
