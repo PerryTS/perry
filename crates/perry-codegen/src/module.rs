@@ -371,6 +371,18 @@ impl LlModule {
         self.functions.last_mut().unwrap()
     }
 
+    /// Publish one shared cold lowering per module, keeping the caller's
+    /// existing per-site cache as an explicit argument.
+    pub(crate) fn add_outlined_helper(&mut self, func: LlFunction) {
+        if !self.defined_names.insert(func.name.clone()) {
+            return;
+        }
+        func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
+        func.set_fn_infos(Rc::clone(&self.fn_infos));
+        func.set_null_guard_global(&self.null_guard_global());
+        self.functions.push(func);
+    }
+
     /// Record a fact about `body`, a JS body this module defines, in its
     /// `JsFunctionInfo` (`crate::fn_info`).
     pub(crate) fn note_fn_info(

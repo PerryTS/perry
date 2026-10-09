@@ -953,6 +953,9 @@ pub(crate) struct FnCtx<'a> {
     /// cross-module call. Lazy emission tracks declares at the actual
     /// emission point so any path the lowering reaches automatically gets
     /// its declare — no walker to keep in sync.
+    pub pending_helpers: Vec<LlFunction>,
+    /// Entry-proved source, scoped to the existing length-property lowering.
+    pub array_record_length_local: Option<u32>,
     pub pending_declares: Vec<(String, crate::types::LlvmType, Vec<crate::types::LlvmType>)>,
 
     /// LocalIds that are provably integer-valued — i.e., initialized from
