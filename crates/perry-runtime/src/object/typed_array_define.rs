@@ -18,8 +18,6 @@
 //! here never observes a detached backing store; the detached-buffer test262
 //! cases remain out of scope.
 
-use super::*;
-
 /// Outcome of the TypedArray exotic `[[DefineOwnProperty]]` check.
 pub(crate) enum TypedArrayDefineOutcome {
     /// Receiver isn't a TypedArray, or the key isn't a canonical numeric index
@@ -111,33 +109,6 @@ fn is_valid_integer_index(index: f64, length: u32) -> bool {
     index >= 0.0 && index < length as f64
 }
 
-/// Is the descriptor's `name` field present and falsy (`{ name: false }`)?
-unsafe fn field_present_and_false(desc: *mut ObjectHeader, name: &[u8]) -> bool {
-    // #8507: allocating the field-name string can evacuate the descriptor
-    // before the following keys-array walk. Re-read it from a root after the
-    // allocation rather than dereferencing the incoming raw pointer.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let desc_handle = scope.root_raw_mut_ptr(desc);
-    let (key, desc) = desc_handle.across_mut::<ObjectHeader, _>(|| {
-        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-    });
-    if !own_key_present(desc, key) {
-        return false;
-    }
-    let v = js_object_get_field_by_name(desc as *const ObjectHeader, key);
-    crate::value::js_is_truthy(f64::from_bits(v.bits())) == 0
-}
-
-/// Is the descriptor's `name` field present (regardless of value)?
-unsafe fn field_present(desc: *mut ObjectHeader, name: &[u8]) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let desc_handle = scope.root_raw_mut_ptr(desc);
-    let (key, desc) = desc_handle.across_mut::<ObjectHeader, _>(|| {
-        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-    });
-    own_key_present(desc, key)
-}
-
 /// If `key_value` is a String key that is a CanonicalNumericIndexString, return
 /// its numeric value. Returns `None` for symbols, non-string keys, and strings
 /// that aren't canonical numeric indices (those go through ordinary semantics).
@@ -213,7 +184,7 @@ pub(crate) unsafe fn typed_array_own_index(obj_value: f64, key_value: f64) -> Ty
 pub(crate) unsafe fn typed_array_define_own_property(
     obj_value: f64,
     key_value: f64,
-    descriptor_value: f64,
+    descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> TypedArrayDefineOutcome {
     let Some((addr, is_buf, length)) = typed_array_view_info(obj_value) else {
         return TypedArrayDefineOutcome::NotTypedArray;
@@ -221,11 +192,10 @@ pub(crate) unsafe fn typed_array_define_own_property(
 
     // #6943: same GC-capable coercion as `typed_array_own_index` above. Here
     // BOTH the view address `addr` (written through at the element store) and
-    // `descriptor_value` (whose `value` field is the payload being stored) were
+    // `descriptor` (whose `value` field is the payload being stored) were
     // raw Rust locals across it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
-    let desc_handle = scope.root_nanbox_f64(descriptor_value);
     let Some(numeric_index) = canonical_index_for_key(key_value) else {
         // Symbol / non-string / non-canonical key → ordinary define handles it.
         return TypedArrayDefineOutcome::NotTypedArray;
@@ -236,37 +206,25 @@ pub(crate) unsafe fn typed_array_define_own_property(
         return TypedArrayDefineOutcome::Rejected;
     }
 
-    // Every descriptor-field probe below allocates, so derive the raw pointer
-    // from the existing descriptor root at each use. The helper-local roots
-    // keep an individual probe safe; this outer root carries the updated
-    // address from one probe to the next (#8507).
-    let desc = || extract_obj_ptr(desc_handle.get_nanbox_f64());
-    if desc().is_null() {
-        // Descriptor isn't ObjectHeader-backed; nothing constrains the index, so
-        // accept with no element write (matches an all-default data descriptor).
-        return TypedArrayDefineOutcome::Defined;
-    }
-
     // A valid integer index requires a configurable, enumerable, writable data
     // descriptor. Any field that contradicts that rejects the definition.
-    if field_present_and_false(desc(), b"configurable") {
+    if descriptor.flag(b"configurable") == Some(false) {
         return TypedArrayDefineOutcome::Rejected;
     }
-    if field_present_and_false(desc(), b"enumerable") {
+    if descriptor.flag(b"enumerable") == Some(false) {
         return TypedArrayDefineOutcome::Rejected;
     }
-    if field_present(desc(), b"get") || field_present(desc(), b"set") {
+    if descriptor.has_named(b"get") || descriptor.has_named(b"set") {
         return TypedArrayDefineOutcome::Rejected; // accessor descriptor
     }
-    if field_present_and_false(desc(), b"writable") {
+    if descriptor.flag(b"writable") == Some(false) {
         return TypedArrayDefineOutcome::Rejected;
     }
 
     // If the descriptor carries a value, perform IntegerIndexedElementSet. The
     // ToNumber coercion may run user `valueOf` (and throw) before the write.
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    if own_key_present(desc(), value_key) {
-        let value_field = js_object_get_field_by_name(desc() as *const ObjectHeader, value_key);
+    if descriptor.has_named(b"value") {
+        let value_field = descriptor.read_named(b"value");
         let value = f64::from_bits(value_field.bits());
         // Object values coerce via OrdinaryToPrimitive(number) first, running a
         // user `valueOf`/`toString` (which may throw). The resulting primitive is

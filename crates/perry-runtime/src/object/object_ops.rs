@@ -16,6 +16,8 @@ mod define_properties;
 mod define_property;
 mod define_symbol_property;
 mod descriptor_helpers;
+#[cfg(test)]
+mod descriptor_snapshot_tests;
 mod from_entries;
 pub(crate) mod has_own;
 mod keys_array;
@@ -30,6 +32,10 @@ pub use accessors::{
 pub use define_get_accessor::js_object_define_get_accessor;
 pub use define_properties::{js_object_define_properties, js_object_set_prototype_of};
 pub use define_property::js_object_define_property;
+pub(crate) use define_property::{
+    apply_property_descriptor, define_own_property_decoded, definition_target_is_object,
+    throw_definition_rejected,
+};
 pub use from_entries::js_object_from_entries;
 pub use has_own::{js_object_has_own, js_object_is, js_object_property_is_enumerable};
 pub use prototype::{
@@ -38,13 +44,14 @@ pub use prototype::{
 
 // Internal `pub(crate)` helpers shared between siblings / the rest of the crate.
 pub(crate) use descriptor_helpers::{
-    define_property_force_store_value, desc_has_field, desc_read_field,
-    describe_value_for_type_error, descriptor_enumerable, descriptor_writable,
-    enforce_define_property_invariants, reflect_nonconfigurable_define_allowed,
-    registered_buffer_index_own_property_present, throw_object_type_error,
-    throw_object_type_error_with_suffix, try_decode_descriptor, validate_nonconfigurable_redefine,
-    validate_property_descriptor, validate_property_descriptor_view, value_is_object_like,
-    DescView, DESC_CONFIGURABLE, DESC_ENUMERABLE, DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
+    decode_own_descriptor_result, decode_property_descriptor, define_property_force_store_value,
+    desc_has_field, desc_read_field, describe_value_for_type_error,
+    descriptor_compatible_with_current, descriptor_object_from_view,
+    enforce_define_property_invariants, nonconfigurable_redefine_allowed,
+    normalize_descriptor_operand, registered_buffer_index_own_property_present,
+    throw_object_type_error, throw_object_type_error_with_suffix,
+    validate_nonconfigurable_redefine, value_is_object_like, DescView, DESC_CONFIGURABLE,
+    DESC_ENUMERABLE, DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
 };
 pub(crate) use prototype::get_prototype_of_resolved;
 // Module-private `unsafe fn value_is_callable` (descriptor_helpers): used by the

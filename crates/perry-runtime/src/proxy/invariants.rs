@@ -7,7 +7,7 @@
 //! invariant parts of its target — they are what the bulk of the
 //! `built-ins/Proxy/*/...throws` tests exercise.
 
-use super::{extract_pointer, throw_type_error, TAG_NULL, TAG_UNDEFINED};
+use super::{extract_pointer, throw_type_error, TAG_UNDEFINED};
 
 /// A target's own-property descriptor, reduced to the fields the invariant
 /// checks need. Built from `[[GetOwnProperty]]` (FromPropertyDescriptor), so a
@@ -159,109 +159,52 @@ pub(super) fn enforce_delete_invariant(target: f64, property_key: f64) {
 ///  * defining a new property on a non-extensible target,
 ///  * adding a non-configurable property the target doesn't have,
 ///  * redefining a non-configurable target property in an incompatible way.
-pub(super) fn enforce_define_property_invariant(target: f64, property_key: f64, descriptor: f64) {
-    let extensible = target_is_extensible(target);
-    let setting_config_false = desc_has(descriptor, b"configurable")
-        && !truthy({
-            let ptr = extract_pointer(descriptor.to_bits()) as *const crate::ObjectHeader;
-            desc_field(ptr, b"configurable")
-        });
-
-    match target_own_prop(target, property_key) {
-        None => {
+pub(super) fn enforce_define_property_invariant(
+    target: f64,
+    property_key: f64,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_heap_word_u64(target.to_bits());
+        let key = scope.root_nanbox_f64(property_key);
+        let current = scope.root_nanbox_f64(crate::object::js_object_get_own_property_descriptor(
+            f64::from_bits(target.get_heap_word_u64()),
+            key.get_nanbox_f64(),
+        ));
+        let extensible = crate::value::js_is_truthy(crate::object::js_object_is_extensible(
+            f64::from_bits(target.get_heap_word_u64()),
+        )) != 0;
+        let setting_config_false = descriptor.flag(b"configurable") == Some(false);
+        if current.get_nanbox_u64() == TAG_UNDEFINED {
             if !extensible {
                 throw_type_error(
                     "proxy defineProperty trap added a property to a non-extensible target",
                 );
             }
             if setting_config_false {
-                throw_type_error(
-                    "proxy defineProperty trap added a non-configurable property absent from the target",
-                );
+                throw_type_error("proxy defineProperty trap added a non-configurable property absent from the target");
             }
+            return;
         }
-        Some(prop) => {
-            if !is_compatible_descriptor(&prop, descriptor) {
-                throw_type_error(
-                    "proxy defineProperty trap reported an incompatible descriptor for the target",
-                );
-            }
-            if setting_config_false && prop.configurable {
-                throw_type_error(
-                    "proxy defineProperty trap made a configurable target property non-configurable",
-                );
-            }
+        let current = crate::object::object_ops::decode_own_descriptor_result(&scope, &current);
+        if !crate::object::object_ops::descriptor_compatible_with_current(&current, descriptor) {
+            throw_type_error(
+                "proxy defineProperty trap reported an incompatible descriptor for the target",
+            );
         }
-    }
-}
-
-/// A conservative IsCompatiblePropertyDescriptor check against a
-/// non-configurable existing target property. For a configurable target
-/// property any redefinition is compatible.
-fn is_compatible_descriptor(current: &TargetProp, descriptor: f64) -> bool {
-    if current.configurable {
-        return true;
-    }
-    let ptr = extract_pointer(descriptor.to_bits()) as *const crate::ObjectHeader;
-    let desc_is_accessor = desc_has(descriptor, b"get") || desc_has(descriptor, b"set");
-    let desc_is_data = desc_has(descriptor, b"value") || desc_has(descriptor, b"writable");
-
-    // ECMA-262 §10.5.6 step 7.a.i: a descriptor that attempts to set
-    // `configurable:true` on a non-configurable own property is always invalid,
-    // regardless of whether it is generic, data, or accessor.
-    if desc_has(descriptor, b"configurable") && truthy(desc_field(ptr, b"configurable")) {
-        return false;
-    }
-
-    // A generic descriptor — only `configurable`/`enumerable`, with no
-    // type-defining field (get/set or value/writable) — is compatible with
-    // any non-configurable current property. Per ValidateAndApplyProperty-
-    // Descriptor, IsGenericDescriptor short-circuits the data/accessor-type
-    // and value/writable checks. `Object.freeze`/`Object.seal` of a Proxy
-    // drives exactly such a descriptor (`{configurable:false}`) onto every
-    // own key, including an accessor key, so treating it as a data descriptor
-    // here wrongly aborted with "incompatible descriptor" (test262
-    // freeze/seal proxy-with-defineProperty-handler).
-    if !desc_is_accessor && !desc_is_data {
-        return true;
-    }
-
-    // A non-configurable property cannot switch between data and accessor.
-    if desc_is_accessor != current.is_accessor {
-        return false;
-    }
-    if current.is_accessor {
-        // Accessor: a specified get/set must SameValue the current one.
-        if desc_has(descriptor, b"get") {
-            let g = desc_field(ptr, b"get");
-            let cur_undef = current.getter_undefined;
-            if (g.to_bits() == TAG_UNDEFINED) != cur_undef {
-                return false;
-            }
+        if setting_config_false && current.flag(b"configurable") == Some(true) {
+            throw_type_error(
+                "proxy defineProperty trap made a configurable target property non-configurable",
+            );
         }
-        if desc_has(descriptor, b"set") {
-            let s = desc_field(ptr, b"set");
-            if (s.to_bits() == TAG_UNDEFINED) != current.setter_undefined {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    // Data: a non-writable property cannot become writable, and its value
-    // cannot change (unless made writable, which is itself forbidden above).
-    if desc_has(descriptor, b"writable") {
-        let w = truthy(desc_field(ptr, b"writable"));
-        if w && !current.writable {
-            return false;
+        if current.flag(b"configurable") == Some(false)
+            && current.flag(b"writable") == Some(true)
+            && descriptor.flag(b"writable") == Some(false)
+        {
+            throw_type_error(
+                "proxy defineProperty trap made a writable target property non-writable",
+            );
         }
     }
-    if !current.writable && desc_has(descriptor, b"value") {
-        let v = desc_field(ptr, b"value");
-        if !same_value(v, current.value) {
-            return false;
-        }
-    }
-    let _ = TAG_NULL;
-    true
 }

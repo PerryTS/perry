@@ -5,7 +5,7 @@
 
 use super::*;
 
-unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
+pub(crate) unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
     if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return false;
     }
@@ -164,7 +164,7 @@ fn to_uint32(number: f64) -> u32 {
 /// throws a `RangeError`, which propagates through both callers.
 pub(crate) unsafe fn array_set_length_from_descriptor(
     obj: *mut ObjectHeader,
-    descriptor_value: f64,
+    descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> bool {
     // #8507: every descriptor-field name below is allocated in the GC heap,
     // and the value's ToNumber hooks may run user JS. Keep both the array and
@@ -172,11 +172,6 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // refresh raw copies held by this caller between field probes.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    let desc_handle = scope.root_nanbox_f64(descriptor_value);
-    let current_desc = || extract_obj_ptr(desc_handle.get_nanbox_f64());
-    if current_desc().is_null() {
-        return true;
-    }
     // A customized `length` (e.g. writable:false) gates the raw numeric
     // fast paths — see OBJ_FLAG_ARRAY_DESCRIPTORS in define_array_property.
     // Set here too so the `Reflect.defineProperty` entry point is covered.
@@ -187,15 +182,8 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
         });
     }
 
-    let read_present = |name: &[u8]| -> bool {
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        own_key_present(current_desc(), k)
-    };
-    let read_bool = |name: &[u8]| -> bool {
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = js_object_get_field_by_name(current_desc() as *const ObjectHeader, k);
-        crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0
-    };
+    let read_present = |name: &[u8]| descriptor.has_named(name);
+    let read_bool = |name: &[u8]| descriptor.flag(name).unwrap_or(false);
 
     let has_get = read_present(b"get");
     let has_set = read_present(b"set");
@@ -214,9 +202,7 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // Read the current `length` descriptor AFTER both coercions so such a
     // mutation (e.g. flipping `writable` to false) is honored.
     let new_len: Option<u32> = if has_value {
-        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-        let value_field =
-            js_object_get_field_by_name(current_desc() as *const ObjectHeader, value_key);
+        let value_field = descriptor.read_named(b"value");
         let value = f64::from_bits(value_field.bits());
         // ArraySetLength coerces the same value twice. The first conversion can
         // evacuate an object-valued operand, so the second must re-read it.
@@ -327,50 +313,12 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     !rejected
 }
 
-/// `Reflect.defineProperty` hook for the array `length` property. Returns
-/// `Some(ok)` only when `obj_value` is an array and `key_value` is `"length"`,
-/// so non-length array defines keep flowing through the ordinary path.
-pub(crate) unsafe fn array_length_reflect_define(
-    obj_value: f64,
-    key_value: f64,
-    descriptor_value: f64,
-) -> Option<bool> {
-    let obj = extract_obj_ptr(obj_value);
-    if obj.is_null() || !is_array_object(obj) {
-        return None;
-    }
-    // #6943: `js_string_coerce` allocates for every non-heap-string key and can
-    // run a user `toString` / `valueOf` for an object key, so it can trigger a
-    // GC that **evacuates**. `obj` (the array header that
-    // `array_set_length_from_descriptor` truncates through) and
-    // `descriptor_value` were raw Rust locals across the call.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let desc_handle = scope.root_nanbox_f64(descriptor_value);
-    // `js_string_coerce` allocates (and can run a user `toString`), so the
-    // receiver's address is only valid after it. `across_mut` is that pair as
-    // one combinator (#7341).
-    let (key_str, obj) =
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::builtins::js_string_coerce(key_value));
-    let descriptor_value = desc_handle.get_nanbox_f64();
-    if key_str.is_null() {
-        return None;
-    }
-    let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let name_len = (*key_str).byte_len as usize;
-    let key_name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
-    if key_name != "length" {
-        return None;
-    }
-    Some(array_set_length_from_descriptor(obj, descriptor_value))
-}
-
 pub(crate) unsafe fn define_array_property(
     obj: *mut ObjectHeader,
     obj_value: f64,
     key_str: *const crate::StringHeader,
     key_name: Option<&str>,
-    descriptor_value: f64,
+    descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> Option<bool> {
     let Some(key_name) = key_name else {
         return is_array_object(obj).then_some(true);
@@ -398,11 +346,9 @@ pub(crate) unsafe fn define_array_property(
     // alias retains GC_TYPE_ARRAY but is no longer the descriptor-table key.
     let obj = array_header_mut(obj).cast::<ObjectHeader>();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    let descriptor_handle = scope.root_nanbox_f64(descriptor_value);
     let key_handle = scope.root_string_ptr(key_str);
     let current_obj = || obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let current_descriptor = || descriptor_handle.get_nanbox_f64();
-    let current_descriptor_ptr = || extract_obj_ptr(current_descriptor());
+
     let current_key = || key_handle.get_raw_const_ptr::<crate::StringHeader>();
     let current_arr = || array_header_mut(current_obj());
 
@@ -419,20 +365,12 @@ pub(crate) unsafe fn define_array_property(
     }
 
     if key_name == "length" {
-        return Some(array_set_length_from_descriptor(obj, descriptor_value));
+        return Some(array_set_length_from_descriptor(obj, descriptor));
     }
 
-    let desc_ptr = current_descriptor_ptr();
-    if desc_ptr.is_null() {
-        return Some(true);
-    }
-    let value_key =
-        scope.root_string_ptr(crate::string::js_string_from_bytes(b"value".as_ptr(), 5));
     // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
-    let has_value = super::desc_has_field(current_descriptor(), b"value");
-    let value_field = value_key.with_const_ptr(|key| {
-        js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
-    });
+    let has_value = descriptor.has_named(b"value");
+    let value_field = descriptor.read_named(b"value");
     let value = if has_value {
         f64::from_bits(value_field.bits())
     } else {
@@ -446,14 +384,7 @@ pub(crate) unsafe fn define_array_property(
     // below and every element read/extend need the array's current home.
     let arr = current_arr();
 
-    let read_bool = |name: &[u8]| -> Option<bool> {
-        if !super::desc_has_field(current_descriptor(), name) {
-            return None;
-        }
-        let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, k);
-        Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
-    };
+    let read_bool = |name: &[u8]| descriptor.flag(name);
 
     // A NEW own property on a non-extensible array is forbidden (ECMA-262
     // OrdinaryDefineOwnProperty: `extensible` false + no current property ⇒
@@ -505,12 +436,9 @@ pub(crate) unsafe fn define_array_property(
         // (the dense element store can't hold a getter/setter). Routing this
         // through the generic object path would deref the array as an
         // ObjectHeader and corrupt it, so handle it here.
-        let get_key =
-            scope.root_string_ptr(crate::string::js_string_from_bytes(b"get".as_ptr(), 3));
-        let set_key =
-            scope.root_string_ptr(crate::string::js_string_from_bytes(b"set".as_ptr(), 3));
-        let desc_has_get = super::desc_has_field(current_descriptor(), b"get");
-        let desc_has_set = super::desc_has_field(current_descriptor(), b"set");
+
+        let desc_has_get = descriptor.has_named(b"get");
+        let desc_has_set = descriptor.has_named(b"set");
         let cur_attrs = if exists {
             Some(
                 super::get_property_attrs(current_arr() as usize, key_name)
@@ -527,24 +455,20 @@ pub(crate) unsafe fn define_array_property(
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                super::validate_nonconfigurable_redefine(
-                    key_name,
+                if !super::object_ops::nonconfigurable_redefine_allowed(
                     cur,
                     cur_accessor,
                     cur_value,
-                    current_descriptor(),
-                    None,
-                );
+                    descriptor,
+                ) {
+                    return Some(false);
+                }
             }
         }
         if desc_has_get || desc_has_set {
-            let get_field = get_key.with_const_ptr(|key| {
-                js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
-            });
+            let get_field = descriptor.read_named(b"get");
             let get_field = scope.root_nanbox_u64(get_field.bits());
-            let set_field = set_key.with_const_ptr(|key| {
-                js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, key)
-            });
+            let set_field = descriptor.read_named(b"set");
             let set_field = scope.root_nanbox_u64(set_field.bits());
             let prior = super::get_accessor_descriptor(current_arr() as usize, key_name);
             let prior_get = scope.root_nanbox_u64(prior.map(|a| a.get).unwrap_or(0));
@@ -632,7 +556,7 @@ pub(crate) unsafe fn define_array_property(
         // NOT convert the accessor back to data (spec ValidateAndApply step:
         // IsGenericDescriptor → no [[Get]]/[[Set]]/[[Value]] changes).
         if !has_value
-            && !super::desc_has_field(current_descriptor(), b"writable")
+            && !descriptor.has_named(b"writable")
             && super::get_accessor_descriptor(current_arr() as usize, key_name).is_some()
         {
             let cur = cur_attrs.unwrap_or(PropertyAttrs::new(false, false, false));
@@ -709,14 +633,14 @@ pub(crate) unsafe fn define_array_property(
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                super::validate_nonconfigurable_redefine(
-                    key_name,
+                if !super::object_ops::nonconfigurable_redefine_allowed(
                     attrs,
                     cur_accessor,
                     cur_value,
-                    descriptor_value,
-                    None,
-                );
+                    descriptor,
+                ) {
+                    return Some(false);
+                }
             }
         }
     }
@@ -726,13 +650,11 @@ pub(crate) unsafe fn define_array_property(
     // `defineProperty(arr, "prop", {get,set})` silently stored `undefined`
     // as a data property and dropped the accessors.
     {
-        let desc_has_get = super::desc_has_field(descriptor_value, b"get");
-        let desc_has_set = super::desc_has_field(descriptor_value, b"set");
+        let desc_has_get = descriptor.has_named(b"get");
+        let desc_has_set = descriptor.has_named(b"set");
         if desc_has_get || desc_has_set {
-            let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
-            let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
-            let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
-            let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
+            let get_field = descriptor.read_named(b"get");
+            let set_field = descriptor.read_named(b"set");
             let recv = crate::value::js_nanbox_pointer(obj as i64);
             let prior = super::get_accessor_descriptor(obj as usize, key_name);
             let get_bits = if desc_has_get {
@@ -815,8 +737,7 @@ pub(crate) unsafe fn define_array_property(
     // ACCESSOR property must only update the attributes; it must NOT convert the
     // accessor back to a data property (spec ValidateAndApplyPropertyDescriptor:
     // IsGenericDescriptor leaves [[Get]]/[[Set]] intact). Mirrors the index path.
-    if cur_accessor.is_some() && !has_value && !super::desc_has_field(descriptor_value, b"writable")
-    {
+    if cur_accessor.is_some() && !has_value && !descriptor.has_named(b"writable") {
         let cur = cur_attrs.unwrap_or_else(|| PropertyAttrs::new(false, false, false));
         let enumerable = read_bool(b"enumerable").unwrap_or_else(|| cur.enumerable());
         let configurable = read_bool(b"configurable").unwrap_or_else(|| cur.configurable());

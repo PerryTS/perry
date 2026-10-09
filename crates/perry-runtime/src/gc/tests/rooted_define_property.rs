@@ -233,8 +233,7 @@ fn desc_view_field_values_are_rooted() {
             payload,
         );
 
-        let view = crate::object::try_decode_descriptor(&scope, descriptor.get_nanbox_f64())
-            .expect("a plain object literal descriptor must take the fast decode path");
+        let view = crate::object::object_ops::decode_property_descriptor(&scope, &descriptor);
         assert!(view.has(crate::object::DESC_VALUE));
         let before = addr_of(f64::from_bits(view.read(crate::object::DESC_VALUE).bits()));
 
@@ -297,6 +296,7 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
         );
         // Keep only an observation address across the move; never dereference it.
         let before = target.with_mut_ptr(|ptr: *mut crate::array::ArrayHeader| ptr as usize);
+        let descriptor = crate::object::object_ops::decode_property_descriptor(&scope, &bag);
         let applied = target.with_mut_ptr(|ptr: *mut crate::array::ArrayHeader| {
             // This runtime entry roots its receiver before probing the descriptor.
             crate::object::define_array_property(
@@ -304,7 +304,7 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
                 f64::from_bits(ptr_bits(ptr as usize)),
                 string_ptr_of(key.get_nanbox_f64()),
                 Some("tag"),
-                bag.get_nanbox_f64(),
+                &descriptor,
             )
         });
         assert_eq!(applied, Some(true));
@@ -332,5 +332,154 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
             crate::object::handle_expando::handle_property_bag(before as i64).is_null(),
             "the attributes must not be filed under the evacuated address"
         );
+    }
+}
+
+extern "C" fn snapshot_accessor_body(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    42.0
+}
+extern "C" fn snapshot_late_moving_getter(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let first = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+        let accessor =
+            scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
+        let result = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
+        crate::object::js_object_set_property_key(
+            first.get_nanbox_f64(),
+            string_value("value"),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        crate::object::js_object_set_property_key(
+            accessor.get_nanbox_f64(),
+            string_value("get"),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        GETTER_COPIED_OBJECTS
+            .with(|count| count.set(count.get() + trace.copying_nursery.copied_objects));
+        result.get_nanbox_f64()
+    }
+}
+
+#[test]
+fn descriptor_snapshot_collection_keeps_heap_value_and_accessor_after_copying() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_handle_scanner();
+    GETTER_COPIED_OBJECTS.with(|count| count.set(0));
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let properties = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let first = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let accessor = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        let payload = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        crate::object::js_object_set_property_key(
+            payload.get_nanbox_f64(),
+            string_value("token"),
+            string_value("saved"),
+        );
+        crate::object::js_object_set_property_key(
+            first.get_nanbox_f64(),
+            string_value("value"),
+            payload.get_nanbox_f64(),
+        );
+        payload.set_nanbox_u64(crate::value::TAG_UNDEFINED);
+        let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(snapshot_accessor_body, 0), 0) as i64,
+        ));
+        crate::object::js_object_set_property_key(
+            accessor.get_nanbox_f64(),
+            string_value("get"),
+            getter.get_nanbox_f64(),
+        );
+        getter.set_nanbox_u64(crate::value::TAG_UNDEFINED);
+        crate::object::js_object_set_property_key(
+            properties.get_nanbox_f64(),
+            string_value("saved_snapshot_value"),
+            first.get_nanbox_f64(),
+        );
+        crate::object::js_object_set_property_key(
+            properties.get_nanbox_f64(),
+            string_value("saved_snapshot_accessor"),
+            accessor.get_nanbox_f64(),
+        );
+        let second = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        crate::object::js_object_set_property_key(
+            second.get_nanbox_f64(),
+            string_value("value"),
+            2.0,
+        );
+        let late = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(snapshot_late_moving_getter, 0),
+            3,
+        ));
+        crate::closure::js_closure_set_capture_f64(
+            late.get_raw_mut_ptr(),
+            0,
+            first.get_nanbox_f64(),
+        );
+        crate::closure::js_closure_set_capture_f64(
+            late.get_raw_mut_ptr(),
+            1,
+            accessor.get_nanbox_f64(),
+        );
+        crate::closure::js_closure_set_capture_f64(
+            late.get_raw_mut_ptr(),
+            2,
+            second.get_nanbox_f64(),
+        );
+        let late_bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+        crate::object::js_object_set_property_key(
+            late_bag.get_nanbox_f64(),
+            string_value("get"),
+            crate::value::js_nanbox_pointer(
+                late.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+            ),
+        );
+        crate::object::js_object_set_property_key(
+            late_bag.get_nanbox_f64(),
+            string_value("enumerable"),
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+        crate::object::js_object_define_property(
+            properties.get_nanbox_f64(),
+            string_value("late"),
+            late_bag.get_nanbox_f64(),
+        );
+        let before = addr_of(target.get_nanbox_f64());
+        crate::object::js_object_define_properties(
+            target.get_nanbox_f64(),
+            properties.get_nanbox_f64(),
+        );
+        assert!(
+            GETTER_COPIED_OBJECTS.with(|count| count.get()) > 0,
+            "the fixture must actually copy nursery objects"
+        );
+        assert_ne!(
+            addr_of(target.get_nanbox_f64()),
+            before,
+            "the target must actually move"
+        );
+        let saved = scope.root_nanbox_f64(read_property(
+            target.get_nanbox_f64(),
+            "saved_snapshot_value",
+        ));
+        assert_string_bytes(
+            string_ptr_of(read_property(saved.get_nanbox_f64(), "token")),
+            b"saved",
+        );
+        assert_eq!(
+            read_property(target.get_nanbox_f64(), "saved_snapshot_accessor"),
+            42.0
+        );
+        assert_eq!(read_property(target.get_nanbox_f64(), "late"), 2.0);
     }
 }

@@ -1,0 +1,1 @@
+Use one rooted, validated descriptor record for Object and Reflect definitions. Object.defineProperties snapshots all string and symbol keys, collects descriptors before applying, and preserves original proxy invariant facts when traps mutate their fresh descriptor copies.

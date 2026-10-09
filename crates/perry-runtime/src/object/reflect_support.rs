@@ -277,86 +277,66 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
     }
 }
 
-#[inline]
-fn reflect_bool(b: bool) -> f64 {
-    f64::from_bits(crate::value::JSValue::bool(b).bits())
-}
-
 /// Ordinary (non-proxy) `Reflect.defineProperty` `[[DefineOwnProperty]]`,
 /// reporting success as a NaN-boxed boolean. Shared by `crate::proxy`'s
 /// `Reflect.defineProperty` entry point (both the no-trap and direct paths).
-pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
-    // #8507: each exotic probe below may coerce `key`, which can run user JS
-    // and evacuate all three operands. A helper's private handle scope keeps
-    // its arguments current only for that helper; when it returns
-    // `NotTypedArray` / `None`, the copies in this caller would still name
-    // from-space. Keep one caller-owned set of roots and re-read it before
-    // every subsequent operation.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_nanbox_u64(obj.to_bits());
-    let key_handle = scope.root_nanbox_f64(key);
-    let descriptor_handle = scope.root_nanbox_f64(descriptor);
-
-    // TypedArrays are Integer-Indexed exotic objects: a canonical numeric index
-    // key returns true/false here rather than going through the ordinary object
-    // machinery (which would mishandle in-bounds element writes and treats the
-    // view as non-extensible).
-    match unsafe {
-        super::typed_array_define_own_property(
-            f64::from_bits(obj_handle.get_nanbox_u64()),
-            key_handle.get_nanbox_f64(),
-            descriptor_handle.get_nanbox_f64(),
-        )
-    } {
-        super::TypedArrayDefineOutcome::Defined => return reflect_bool(true),
-        super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
+pub(crate) unsafe fn reflect_define_property_decoded(
+    scope: &crate::gc::RuntimeHandleScope,
+    obj_handle: &crate::gc::RuntimeHandle<'_>,
+    key_handle: &crate::gc::RuntimeHandle<'_>,
+    descriptor: &super::object_ops::DescView<'_>,
+) -> bool {
+    match super::typed_array_define_own_property(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
+        key_handle.get_nanbox_f64(),
+        descriptor,
+    ) {
+        super::TypedArrayDefineOutcome::Defined => return true,
+        super::TypedArrayDefineOutcome::Rejected => return false,
         super::TypedArrayDefineOutcome::NotTypedArray => {}
     }
-    // The array exotic `[[DefineOwnProperty]]` for `length` (ArraySetLength)
-    // reports success/failure as a boolean here rather than throwing — bypass
-    // the generic non-configurable pre-check below, which would mishandle the
-    // (non-configurable but writable) `length` property.
-    if let Some(ok) = unsafe {
-        super::array_length_reflect_define(
-            f64::from_bits(obj_handle.get_nanbox_u64()),
+    // ArraySetLength coerces value before rejecting flags and can leave a
+    // partial shrink on failure. Preserve the exotic's own ordering/verdict.
+    let value = f64::from_bits(obj_handle.get_heap_word_u64());
+    let array =
+        crate::value::addr_class::try_read_tracked_gc_header(extract_obj_ptr(value) as usize)
+            .is_some_and(|header| {
+                matches!(
+                    (*header.as_ptr()).obj_type,
+                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                )
+            });
+    if array {
+        return super::object_ops::apply_property_descriptor(
+            scope,
+            value,
             key_handle.get_nanbox_f64(),
-            descriptor_handle.get_nanbox_f64(),
-        )
-    } {
-        return reflect_bool(ok);
+            descriptor,
+        );
     }
-    let has_own = obj_value_has_own_key(
-        f64::from_bits(obj_handle.get_nanbox_u64()),
+    let current = scope.root_nanbox_f64(super::js_object_get_own_property_descriptor(
+        f64::from_bits(obj_handle.get_heap_word_u64()),
         key_handle.get_nanbox_f64(),
-    );
-    // Redefining a non-configurable existing property fails.
-    if has_own {
-        if let Some((_writable, configurable)) = obj_value_attrs(
-            f64::from_bits(obj_handle.get_nanbox_u64()),
-            key_handle.get_nanbox_f64(),
-        ) {
-            if !configurable
-                && !unsafe {
-                    super::object_ops::reflect_nonconfigurable_define_allowed(
-                        f64::from_bits(obj_handle.get_nanbox_u64()),
-                        key_handle.get_nanbox_f64(),
-                        descriptor_handle.get_nanbox_f64(),
-                    )
-                }
-            {
-                return reflect_bool(false);
-            }
+    ));
+    if current.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+        if crate::value::js_is_truthy(super::js_object_is_extensible(f64::from_bits(
+            obj_handle.get_heap_word_u64(),
+        ))) == 0
+        {
+            return false;
         }
-    } else if obj_value_no_extend(f64::from_bits(obj_handle.get_nanbox_u64())) {
-        // Defining a brand-new property on a non-extensible object fails.
-        return reflect_bool(false);
+    } else {
+        let current = super::object_ops::decode_own_descriptor_result(scope, &current);
+        if !super::object_ops::descriptor_compatible_with_current(&current, descriptor) {
+            return false;
+        }
     }
-    super::js_object_define_property(
-        f64::from_bits(obj_handle.get_nanbox_u64()),
+    super::object_ops::apply_property_descriptor(
+        scope,
+        f64::from_bits(obj_handle.get_heap_word_u64()),
         key_handle.get_nanbox_f64(),
-        descriptor_handle.get_nanbox_f64(),
-    );
-    reflect_bool(true)
+        descriptor,
+    )
 }
 
 pub(crate) unsafe fn key_to_rust_string(value: f64) -> Option<String> {

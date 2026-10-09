@@ -411,7 +411,7 @@ pub(crate) unsafe fn exotic_define_own_property(
     addr: usize,
     kind: ExoticKind,
     name: &str,
-    descriptor_value: f64,
+    descriptor: &crate::object::object_ops::DescView<'_>,
 ) {
     // Error instances expose `message`/`stack` as builtin own properties
     // (writable, non-enumerable, configurable) even before any user write.
@@ -432,14 +432,14 @@ pub(crate) unsafe fn exotic_define_own_property(
         None
     };
 
-    let has_get = super::desc_has_field(descriptor_value, b"get");
-    let has_set = super::desc_has_field(descriptor_value, b"set");
-    let has_value = super::desc_has_field(descriptor_value, b"value");
-    let has_writable = super::desc_has_field(descriptor_value, b"writable");
-    let has_enumerable = super::desc_has_field(descriptor_value, b"enumerable");
-    let has_configurable = super::desc_has_field(descriptor_value, b"configurable");
+    let has_get = descriptor.has_named(b"get");
+    let has_set = descriptor.has_named(b"set");
+    let has_value = descriptor.has_named(b"value");
+    let has_writable = descriptor.has_named(b"writable");
+    let has_enumerable = descriptor.has_named(b"enumerable");
+    let has_configurable = descriptor.has_named(b"configurable");
     let read_bool = |field: &[u8]| -> bool {
-        let v = super::desc_read_field(descriptor_value, field);
+        let v = descriptor.read_named(field);
         crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0
     };
 
@@ -453,8 +453,7 @@ pub(crate) unsafe fn exotic_define_own_property(
                 cur,
                 existing_accessor,
                 cur_value,
-                descriptor_value,
-                None,
+                descriptor,
             );
         }
     } else {
@@ -486,8 +485,8 @@ pub(crate) unsafe fn exotic_define_own_property(
     };
 
     if has_get || has_set {
-        let get_field = super::desc_read_field(descriptor_value, b"get");
-        let set_field = super::desc_read_field(descriptor_value, b"set");
+        let get_field = descriptor.read_named(b"get");
+        let set_field = descriptor.read_named(b"set");
         let merged = super::AccessorDescriptor {
             get: if has_get {
                 if get_field.is_undefined() {
@@ -523,7 +522,7 @@ pub(crate) unsafe fn exotic_define_own_property(
         super::clear_accessor_descriptor(addr, name);
     }
     if has_value {
-        let v = super::desc_read_field(descriptor_value, b"value");
+        let v = descriptor.read_named(b"value");
         value_store(kind, addr, name, v.bits());
     } else if !exists {
         // New property with absent [[Value]] reads as undefined.
