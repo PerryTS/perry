@@ -20,7 +20,7 @@
 pub use super::class_handles::{
     fetch_handle_kind_probe, handle_method_dispatch, handle_own_property_names_dispatch,
     handle_property_dispatch, handle_property_set_dispatch, handle_prototype_dispatch,
-    http_agent_handle_probe, js_register_fetch_handle_kind_probe,
+    handle_receiver_value, http_agent_handle_probe, js_register_fetch_handle_kind_probe,
     js_register_handle_method_dispatch, js_register_handle_own_property_names_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
     js_register_handle_prototype_dispatch, js_register_http_agent_handle_probe,

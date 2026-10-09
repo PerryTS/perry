@@ -20,17 +20,10 @@ static ARM_HTTP_CLIENT_PAUSE_RESUME: Hook<MethodArm> = Hook::empty();
 static ARM_EXTERNAL_NET: Hook<MethodArm> = Hook::empty();
 static ARM_FETCH: Hook<MethodArm> = Hook::empty();
 
+/// Stream ids use the numeric ABI; the runtime's one handle-to-value
+/// conversion keeps them numeric (registry-confirmed, not range-guessed).
 fn receiver_root_value(handle: i64) -> f64 {
-    // Stream ids use the numeric ABI, above the pointer-tagged handle band.
-    // Confirm registry membership: the address range alone is not a type proof.
-    if perry_runtime::value::addr_class::is_stream_id_band(handle as usize)
-        && perry_runtime::object::stream_handle_probe()
-            .is_some_and(|probe| unsafe { probe(handle as usize) })
-    {
-        handle as f64
-    } else {
-        perry_runtime::value::js_nanbox_pointer(handle)
-    }
+    perry_runtime::object::handle_receiver_value(handle)
 }
 
 #[cfg(all(test, feature = "bundled-streams"))]

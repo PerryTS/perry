@@ -114,13 +114,39 @@ pub fn is_proxy_id_band(addr: usize) -> bool {
     (PROXY_ID_BAND_START..HANDLE_BAND_MAX).contains(&addr)
 }
 
-/// True when `id` is in the raw-numeric Web Streams id band. Only meaningful
-/// for values that arrived as plain finite numbers (never for `POINTER_TAG`
-/// payloads — heap pointers live in this range too).
+/// True when `id` is in the raw-numeric Web Streams id band. A stream id is
+/// only ever a STREAM when it arrived as a plain finite number; a
+/// `POINTER_TAG` payload in this band is a stream id that some path boxed (a
+/// handle dispatcher re-boxing the `i64` handle it was given), never a heap
+/// object. See [`is_id_band`].
 #[inline(always)]
 pub fn is_stream_id_band(id: usize) -> bool {
     (STREAM_ID_BAND_START..STREAM_ID_BAND_END).contains(&id)
 }
+
+/// True when `addr` lies in ANY id band: the pointer-tagged handle band
+/// `[0, HANDLE_BAND_MAX)` (registry handles, fetch, Proxy ids, null) or the
+/// numeric Web Streams band `[STREAM_ID_BAND_START, STREAM_ID_BAND_END)`.
+/// No GC allocation lives in either band on any supported target (the
+/// native heaps start far above 2 MiB; the WASI link puts an 8 MiB stack
+/// first), so an address in an id band must never be dereferenced, whatever
+/// tag it arrived with. Every "may I read this header" gate in this module
+/// ([`is_plausible_heap_addr`], [`try_read_gc_header`],
+/// [`try_read_tracked_gc_header`]) rejects it first, so a caller that boxes
+/// a dispatcher's `i64` handle as a pointer cannot turn a stream id into a
+/// header read (the OpenCode TUI crash: `"x" in readableStream` reached the
+/// TLS arm, which read a header at `0x100000 - 8`).
+///
+/// The two bands are contiguous (asserted below), so this is ONE compare
+/// against [`STREAM_ID_BAND_END`] — the same cost as the old
+/// `addr < HANDLE_BAND_MAX` floor. The two-range spelling
+/// (`is_handle_band(addr) || is_stream_id_band(addr)`) measured +0.39%
+/// instructions on tsc through these gates.
+#[inline(always)]
+pub fn is_id_band(addr: usize) -> bool {
+    addr < STREAM_ID_BAND_END
+}
+const _: () = assert!(HANDLE_BAND_MAX == STREAM_ID_BAND_START);
 
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
 /// Values below 0x100000 (1MB) are likely INT32_TAG extracts, small handles,
@@ -211,12 +237,12 @@ pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     (HEAP_MIN..HEAP_MAX).contains(&addr)
 }
 
-/// True when `addr` is outside every handle band AND inside the platform
-/// heap range — i.e. plausible to dereference as a GC allocation. This is the
-/// canonical `addr >= 0x100000 && is_valid_obj_ptr(addr)` pairing.
+/// True when `addr` is outside every id band ([`is_id_band`]: the handle band
+/// AND the Web Streams band) and inside the platform heap range — i.e.
+/// plausible to dereference as a GC allocation.
 #[inline(always)]
 pub(crate) fn is_plausible_heap_addr(addr: usize) -> bool {
-    is_above_handle_band(addr) && is_valid_obj_ptr(addr as *const u8)
+    !is_id_band(addr) && is_valid_obj_ptr(addr as *const u8)
 }
 
 /// Validated GcHeader read: magnitude-classify FIRST (reject the handle band
@@ -350,7 +376,7 @@ fn classify_tracked_gc_header_with(
     arena_range_base: impl FnOnce(usize) -> Option<usize>,
     malloc_header_is_tracked: impl FnOnce(*const GcHeader) -> bool,
 ) -> Option<(usize, TrackedGcStorage)> {
-    if is_handle_band(addr) {
+    if is_id_band(addr) {
         return None;
     }
     let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
@@ -613,6 +639,44 @@ mod tests {
         let heap_synthetic = Box::new(make_synthetic());
         let heap_user = &heap_synthetic.payload as *const u64 as usize;
         assert!(unsafe { try_read_tracked_gc_header(heap_user) }.is_none());
+    }
+
+    /// Every id of every band, at both edges and in the middle.
+    fn id_band_samples() -> Vec<usize> {
+        let mut ids = vec![0, 1, 8, 0x1000, 0x1008];
+        for (start, end) in [
+            (1, COMMON_HANDLE_BAND_END),
+            (FETCH_HANDLE_BAND_START, FETCH_HANDLE_BAND_END),
+            (PROXY_ID_BAND_START, HANDLE_BAND_MAX),
+            (STREAM_ID_BAND_START, STREAM_ID_BAND_END),
+        ] {
+            ids.extend([start, start + 8, ((start + end) / 2) & !7, end - 8, end - 1]);
+        }
+        ids
+    }
+
+    #[test]
+    fn pointer_gates_reject_every_id_band() {
+        for id in id_band_samples() {
+            assert!(is_id_band(id), "{id:#x} must classify as an id");
+            assert!(!is_plausible_heap_addr(id), "{id:#x} passed the heap gate");
+            assert!(
+                unsafe { try_read_gc_header(id) }.is_none(),
+                "{id:#x} reached a header read"
+            );
+            assert_eq!(
+                classify_tracked_gc_header_with(
+                    id,
+                    |_| panic!("id {id:#x} reached the arena classifier"),
+                    |_| panic!("id {id:#x} reached the malloc registry"),
+                ),
+                None
+            );
+            assert!(unsafe { try_read_tracked_gc_header(id) }.is_none());
+        }
+        // The first address past the stream band is a candidate again.
+        assert!(!is_id_band(STREAM_ID_BAND_END));
+        assert!(is_plausible_heap_addr(STREAM_ID_BAND_END));
     }
 
     #[test]
