@@ -238,16 +238,29 @@ fn alloc_instance_keeping_keys_collecting(
     })
 }
 
-/// Build a fresh longlived keys array: `prefix[0..prefix_len]` (the dynamic
-/// parent's keys, or nothing) followed by one longlived string per `keys`.
+/// Build the SOURCE list a class keys cache entry is canonicalized from:
+/// `prefix[0..prefix_len]` (the dynamic parent's keys, or nothing) followed
+/// by one string per `keys`.
 ///
-/// Every allocation here can collect — the longlived arena reaches
-/// `gc_check_trigger` when its block is full — so the array under
-/// construction and `prefix` are both held in handles and reloaded after each
-/// allocation, and the prefix is copied last, after the final allocation. The
-/// slots are cleared right after the array is born so a collection that
-/// traces the unfinished array never reads uninitialized words. Callers own
-/// the layout policy (`js_build_class_keys_array` adds its immortal scope).
+/// The array is a nursery temporary. Every caller hands it straight to
+/// `shape_cache_insert`, whose `canonical_keys::canonicalize` returns the
+/// trie's array for the list (a copy holding the atoms, or the one already
+/// published), never this one. It used to be born in the Longlived arena
+/// (#179, when it WAS the cached array), which turned every build into an
+/// immortal garbage array — and a Longlived object is neither barriered nor
+/// swept (`barrier_parent_needs_remembering`), so the prefix's words, the
+/// parent list's young atoms, sat in it unrewritten after the first minor
+/// moved them: a Longlived object holding a nursery pointer that no minor
+/// maintains, the shape the evacuation verifier reports as a stale forwarded
+/// pointer. In the nursery the temporary dies at the next minor, and while it
+/// lives it is traced and rewritten like any young array.
+///
+/// Every allocation here can collect, so the array under construction and
+/// `prefix` are both held in handles and reloaded after each allocation, and
+/// the prefix is copied last, after the final allocation. The slots are
+/// cleared right after the array is born so a collection that traces the
+/// unfinished array never reads uninitialized words. Callers own the layout
+/// policy (`js_build_class_keys_array` adds its immortal scope).
 ///
 /// Every caller passes key names from program text: the key literals the
 /// modules' string pools mint as ATOMS (`js_string_pool_atom`), the one
@@ -263,7 +276,7 @@ fn alloc_instance_keeping_keys_collecting(
 /// # Safety
 /// `prefix` is a live keys array with at least `prefix_len` slots, or null
 /// with `prefix_len == 0`, and was read with no allocation since.
-pub(crate) unsafe fn build_longlived_keys_array(
+pub(crate) unsafe fn build_keys_source_array(
     prefix: *mut ArrayHeader,
     prefix_len: u32,
     keys: &[&[u8]],
@@ -275,7 +288,7 @@ pub(crate) unsafe fn build_longlived_keys_array(
         for key_bytes in keys {
             mint_pool_atom(key_bytes);
         }
-        crate::array::js_array_alloc_with_length_longlived(total as u32)
+        crate::array::js_array_alloc_with_length(total as u32)
     });
     let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
     for i in 0..total {
@@ -286,10 +299,7 @@ pub(crate) unsafe fn build_longlived_keys_array(
     let mut arr = arr;
     for (j, key_bytes) in keys.iter().enumerate() {
         let (str_ptr, reloaded) = arr_handle.across_mut::<ArrayHeader, _>(|| {
-            crate::string::js_string_from_bytes_longlived(
-                key_bytes.as_ptr(),
-                key_bytes.len() as u32,
-            )
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32)
         });
         arr = reloaded;
         let bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
@@ -550,11 +560,9 @@ pub extern "C" fn js_build_class_keys_array(
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
     let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
-    // Issue #179: route the array and its key strings through the longlived
-    // arena so general-arena block 0 doesn't get pinned by the first
-    // `new C()` in a loop, which cascaded via block-persistence into every
-    // subsequent iteration's allocations.
-    let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
+    // A nursery temporary: `shape_cache_insert` below caches the canonical
+    // copy, never this array (see `build_keys_source_array`).
+    let arr = unsafe { build_keys_source_array(ptr::null_mut(), 0, &keys) };
     // #7510: every slot in `0..length` now holds an interned key string, and a
     // canonical keys array is immutable for the rest of the program (growing a
     // shape builds a NEW array — `shape_keys_grown`). Say that in the header
@@ -631,9 +639,8 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
         };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
-        // Issue #179: shape-cache keys_array lives in the longlived arena
-        // (see `js_build_class_keys_array` for the rationale).
-        let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
+        // A nursery temporary; the cache keeps the canonical copy.
+        let arr = unsafe { build_keys_source_array(ptr::null_mut(), 0, &keys) };
         let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
@@ -743,7 +750,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         let merged_len = parent_len as usize + own_keys.len();
         // `parent_arr` was read from the memo with no allocation since; the
         // builder roots it across its own allocations and copies it last.
-        let arr = unsafe { build_longlived_keys_array(parent_arr, parent_len, &own_keys) };
+        let arr = unsafe { build_keys_source_array(parent_arr, parent_len, &own_keys) };
         // No object exists yet, so nothing unrooted crosses this call.
         let (_, merged) = shape_cache_insert(
             shape_id,
@@ -846,10 +853,10 @@ pub extern "C" fn js_object_alloc_with_shape(
             unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
         };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
-        // Issue #179: shape-cache keys_array lives in the longlived arena.
-        // The builder roots the unfinished array across its key allocations;
+        // A nursery temporary; the cache keeps the canonical copy. The
+        // builder roots the unfinished array across its key allocations;
         // the object is already held in `obj_scope`.
-        let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
+        let arr = unsafe { build_keys_source_array(ptr::null_mut(), 0, &keys) };
         // No unrooted receiver crosses this call: the object is held in
         // `obj_scope` and reloaded below.
         let (_, keys) = shape_cache_insert(

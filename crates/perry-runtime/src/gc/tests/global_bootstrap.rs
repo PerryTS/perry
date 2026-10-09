@@ -93,6 +93,22 @@ fn ordinary_allocation_services_the_armed_collection(collections_before: u64) ->
     false
 }
 
+/// Placement changes can make the bootstrap fit inside the current block.
+/// Start it at a nearly full block so its first allocation window must reach
+/// the slow allocation path, independently of the bootstrap's total footprint.
+fn prime_current_block_for_bootstrap() {
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    for _ in 0..100_000 {
+        let _ = young_leaf();
+        let state = crate::arena::js_inline_arena_state();
+        let remaining = unsafe { (*state).size.saturating_sub((*state).offset) };
+        if remaining < 256 {
+            return;
+        }
+    }
+    panic!("bootstrap fixture could not position the current block near its end");
+}
+
 #[test]
 fn global_this_bootstrap_runs_in_a_no_move_window() {
     on_a_fresh_thread(|| {
@@ -102,6 +118,7 @@ fn global_this_bootstrap_runs_in_a_no_move_window() {
         let _pacing = crate::gc::policy::force_legacy_gc_pacing();
         crate::gc::ensure_gc_initialized();
         clear_pending_collection();
+        prime_current_block_for_bootstrap();
 
         arm_one_pending_collection();
         let arena_before = crate::arena::arena_total_bytes();
