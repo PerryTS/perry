@@ -20,6 +20,48 @@ static ARM_HTTP_CLIENT_PAUSE_RESUME: Hook<MethodArm> = Hook::empty();
 static ARM_EXTERNAL_NET: Hook<MethodArm> = Hook::empty();
 static ARM_FETCH: Hook<MethodArm> = Hook::empty();
 
+fn receiver_root_value(handle: i64) -> f64 {
+    // Stream ids use the numeric ABI, above the pointer-tagged handle band.
+    // Confirm registry membership: the address range alone is not a type proof.
+    if perry_runtime::value::addr_class::is_stream_id_band(handle as usize)
+        && perry_runtime::object::stream_handle_probe()
+            .is_some_and(|probe| unsafe { probe(handle as usize) })
+    {
+        handle as f64
+    } else {
+        perry_runtime::value::js_nanbox_pointer(handle)
+    }
+}
+
+#[cfg(all(test, feature = "bundled-streams"))]
+mod receiver_root_tests {
+    #[test]
+    fn stream_receiver_root_survives_a_precise_full_collection() {
+        // Exercise the actual root scanner, rather than only checking tag bits.
+        std::thread::spawn(|| unsafe {
+            perry_runtime::gc::gc_init();
+            crate::common::dispatch::install_streams();
+            let stream = crate::streams::alloc_readable_from_bytes(vec![1, 2, 3]);
+            let reader = crate::streams::js_readable_stream_get_reader(stream as f64);
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let receiver = scope.root_nanbox_f64(super::receiver_root_value(reader as i64));
+
+            assert_eq!(perry_runtime::gc::js_gc_memory_pressure(2), 2);
+            assert_eq!(receiver.get_nanbox_f64(), reader);
+            assert!(crate::streams::js_stream_handle_is_registered(
+                reader as usize
+            ));
+            assert_eq!(
+                crate::streams::js_readable_stream_locked(stream as f64).to_bits(),
+                perry_runtime::value::JSValue::bool(true).bits()
+            );
+            crate::streams::js_reader_release_lock(reader);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
 /// Route external `Agent` and client-side `IncomingMessage`
 /// methods before this dispatcher creates owned copies of the method name and
 /// arguments. Well-known wrapper archives carry a private allocator shim;
@@ -177,8 +219,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // GC-reclaimable common handle (#11453) is released at a full trace that
     // finds no word naming it, and a chained temporary receiver
     // (`createHash(a).update(b)`) lives in no JS slot.
-    let _receiver =
-        scope.root_nanbox_u64(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF));
+    let _receiver = scope.root_nanbox_f64(receiver_root_value(handle));
     let arg_handles = {
         // Root registration does not run Perry GC. Borrow the caller's buffer
         // only while registering roots, then refresh into owned arguments
