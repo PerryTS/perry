@@ -272,14 +272,8 @@ pub(crate) fn try_lower<'f, 'e>(
         .map(|candidate| load_candidate_shape(ctx, candidate))
         .collect();
     let key_idx = ctx.strings.intern(property);
-    let entry = ctx.strings.entry(key_idx);
-    let method_guard_slot = (entry.dispatch_hash & 0xffff).to_string();
     let (live_class, live_shape) =
-        crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-            ctx,
-            &fast_recv,
-            &method_guard_slot,
-        );
+        crate::lower_call::method_override::emit_inline_direct_method_shape_probe(ctx, &fast_recv);
 
     let candidate_test_idxs: Vec<usize> = (0..candidates.len())
         .map(|index| ctx.new_block(&format!("short_spread.target_test{index}")))
@@ -454,10 +448,8 @@ pub(crate) fn try_lower<'f, 'e>(
             format!("method={property}"),
             format!("direct_targets={targets}"),
             "spread_guard=exact_ordinary_packed_array,no_holes,max_length_4".to_string(),
-            "iterator_guard=builtin_array_iterator,no_own_iterator,no_custom_prototype"
-                .to_string(),
-            "method_identity_guard=js_method_direct_shape_class(class_id,shape_id,invalidation_slot)"
-                .to_string(),
+            "iterator_guard=builtin_array_iterator,no_own_iterator,no_custom_prototype".to_string(),
+            "method_identity_guard=js_method_direct_shape_class(class_id,shape_id)".to_string(),
             "candidate_scope=whole_program_producer_capabilities".to_string(),
             "operand_roots=collecting_evaluation_suffix_only;fallback_roots=guard_miss_only"
                 .to_string(),

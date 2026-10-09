@@ -369,12 +369,9 @@ pub(crate) fn try_lower_instance_method_call(
             let pre_lookup = if split {
                 let recv = roots.reread(ctx, recv_idx)?;
                 let key_idx = ctx.strings.intern(property);
-                let guard_slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
                 let (cid, shape_id) =
                     crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-                        ctx,
-                        &recv,
-                        &guard_slot,
+                        ctx, &recv,
                     );
                 let cid = gate_named_classes(ctx, &cid, property, &impl_class);
                 pre_probe = Some((cid.clone(), shape_id));
@@ -488,7 +485,6 @@ pub(crate) fn try_lower_instance_method_call(
             let probe_entry = ctx.strings.entry(key_idx_probe);
             let probe_bytes_global = format!("@{}", probe_entry.bytes_global);
             let probe_name_len_str = probe_entry.byte_len.to_string();
-            let method_guard_slot_str = (probe_entry.dispatch_hash & 0xffff).to_string();
             let probe_override_idx = ctx.new_block("idisp.override");
             let probe_dispatch_idx = ctx.new_block("idisp.dispatch");
             let probe_outer_merge_idx = ctx.new_block("idisp.outer_merge");
@@ -541,9 +537,7 @@ pub(crate) fn try_lower_instance_method_call(
                     Some(read) => read,
                     None => {
                         crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-                            ctx,
-                            &recv_box,
-                            &method_guard_slot_str,
+                            ctx, &recv_box,
                         )
                     }
                 };
