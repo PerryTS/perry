@@ -19,7 +19,10 @@ for (let epoch = 0; epoch < 24; epoch++) {
     object.cell = new Cell(i);
     object.text = "odd-" + epoch + "-" + i;
     values.push(object);
-    if (i % 7 === 0) floorValues.push(Object.create(floorProto));
+    if (i % 7 === 0) {
+      const floor = Object.create(floorProto);
+      floorValues.push(floor);
+    }
     if (i % 350 === 349) gc();
   }
   gc();
