@@ -416,86 +416,27 @@ unsafe fn object_proto_may_have_to_json_recompute() -> bool {
     computed == PROTO_TOJSON_PRESENT
 }
 
-/// Could `class_id`'s prototype chain resolve a `toJSON`? Consults every
-/// store the generic chain walk reads:
-///
-/// - the class vtable registry (methods/getters/setters; deletion-aware,
-///   parent-chain walk) — `class_instance_has_member`;
-/// - the two prototype-object tables: synthetic `Object.create(proto)` /
-///   `Function.prototype = obj` prototypes (`CLASS_PROTOTYPE_OBJECTS`) and
-///   reflective `ClassName.prototype` decl objects
-///   (`CLASS_DECL_PROTOTYPE_OBJECTS`). A materialized prototype object can
-///   carry arbitrary runtime-added properties, so ANY entry anywhere on the
-///   parent chain defers to the slow path. Both tables are lazily populated
-///   (only a reflective `C.prototype` read or an `Object.create` materializes
-///   an entry), so plain literals' anonymous shape classes never hit this.
+/// A published holder (including an unbuilt declared surface) may supply
+/// toJSON. Empty CLASS identities are the negative shape fact.
 fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
-    if crate::object::class_instance_has_member(class_id, "toJSON") {
-        return true;
-    }
-
-    let mut cid = class_id;
-    let mut depth = 0u32;
-    while cid != 0 && depth < 32 {
-        if !crate::object::class_prototype_object(cid).is_null()
-            || !crate::object::class_decl_prototype_object(cid).is_null()
-        {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
+    crate::object::shapes::identity_prototype_word(crate::object::shapes::class_identity_proto_id(
+        class_id,
+    )) != 0
+        || crate::object::get_parent_class_id(class_id).is_some()
 }
 
 // ─── per-`class_id` chain verdict memo (#10696) ──────────────────────────────
 
-/// A memoized [`class_chain_may_have_to_json_uncached`] answer.
-///
-/// The walk it replaces costs **448 instructions per object visited** — five
-/// by-name/by-id lookups across five separate registries — and its only input
-/// is the class id, which is a property of the SHAPE, not of the instance.
-/// (Witness, #10696: allocating a fresh `{a:{b:1}}` every iteration costs a
-/// byte-identical probe to a hoisted one.)
-///
-/// The dangerous staleness direction is a cached `false` — "nothing on this
-/// chain can produce a `toJSON`" — that should have become `true`; a stale
-/// `true` only costs the slow path, which is the correct answer path. Every
-/// route that can flip the answer that way is covered by one of the two
-/// generations keyed on here:
-///
-/// | route to a newly reachable `toJSON` | caught by |
-/// |---|---|
-/// | `class C { toJSON() {} }`, a getter or a setter registered for this class or any ancestor (`CLASS_VTABLE_REGISTRY`) | nothing needed: registration adds a class's members before any instance of it exists (a later evaluation of a class expression stands on its own prototype object, which the surface generation covers) |
-/// | a NEW parent edge splicing in an ancestor that carries any of the above | the SEMANTIC property epoch — `class_registry::parent_static::register_class` is the only writer of the parent map and calls `prop_plan_epoch_bump` before publishing |
-/// | `Object.setPrototypeOf`, a descriptor install, or a `delete` anywhere | the SEMANTIC property epoch |
-/// | a prototype OBJECT materializing for this class or an ancestor — the very thing the walk looks for, since such an object can carry arbitrary later-added properties | `CLASS_LOOKUP_SURFACE_GEN`, bumped inside `class_prototype_object_root_store` and `class_decl_prototype_object_root_store` |
-/// | `js_register_class_generic_origin`, which redirects both prototype-object readers through the prototype link | `CLASS_LOOKUP_SURFACE_GEN` |
-///
-/// Garbage collection is deliberately NOT an input. The class side-table
-/// scanners only rewrite EXISTING slots, so no collection can add a registry
-/// key; the dead-owner prune only removes entries, which can make a cached
-/// `true` conservative but never a cached `false` wrong. Keying a per-object
-/// cache on a GC-bumped counter is a measured performance CLIFF rather than
-/// mere waste — `object::prop_plan`'s module docs record +35 % from exactly
-/// that mistake (#7910).
-///
-/// Thread-local, like `promise::then_probe`'s `ADMISSIBLE_MEMO`: two of the
-/// four tables summarized here are themselves `perry_thread_local!`, so a
-/// process-global table would be unsound against another thread's stores.
+/// A negative class verdict is valid while its identity word and the
+/// semantic property epoch are unchanged. A nonempty word declines to Get.
 #[derive(Clone, Copy)]
 struct ClassChainToJsonEntry {
     class_id: u32,
     semantic_epoch: u64,
-    surface_gen: u64,
+    identity_word: u64,
     may_have: bool,
     /// [`class_is_plain_record_uncached`]'s answer, filled under the same
-    /// generations (#10529). Implies `!may_have`.
+    /// shape and epoch facts (#10529). Implies `!may_have`.
     plain_record: bool,
 }
 
@@ -512,7 +453,7 @@ const EMPTY_CLASS_CHAIN_TOJSON: ClassChainToJsonEntry = ClassChainToJsonEntry {
     // is a safe "empty" tag.
     class_id: 0,
     semantic_epoch: 0,
-    surface_gen: 0,
+    identity_word: 0,
     may_have: false,
     plain_record: false,
 };
@@ -543,21 +484,23 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
     class_chain_to_json_entry(class_id).may_have
 }
 
-/// The memo entry for `class_id`, refilled when any keyed generation moved.
+/// The memo entry for `class_id`, refilled when its shape word or epoch changes.
 #[inline]
 fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
     debug_assert_ne!(class_id, 0, "class id 0 is answered by the caller");
     let semantic_epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
-    let surface_gen = crate::object::class_lookup_surface_generation();
+    let identity_word = crate::object::shapes::identity_prototype_word(
+        crate::object::shapes::class_identity_proto_id(class_id),
+    );
     let slot = class_chain_tojson_slot(class_id);
     let entry = CLASS_CHAIN_TOJSON_MEMO.with(|table| table[slot].get());
     if entry.class_id == class_id
         && entry.semantic_epoch == semantic_epoch
-        && entry.surface_gen == surface_gen
+        && entry.identity_word == identity_word
     {
         return entry;
     }
-    class_chain_to_json_memo_fill(class_id, semantic_epoch, surface_gen, slot)
+    class_chain_to_json_memo_fill(class_id, semantic_epoch, identity_word, slot)
 }
 
 /// Is an instance of `class_id` serialized by `JSON.stringify` exactly like a
@@ -596,8 +539,8 @@ pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> 
 }
 
 /// A registered anon shape whose class surface is empty — the same proof the
-/// thenable probe uses (`promise::then_probe::class_registry_inert`: no
-/// vtable, no prototype object of either flavour, no parent edge) — plus no
+/// thenable probe uses (`promise::then_probe::class_identity_empty`: no
+/// published holder surface or parent edge) — plus no
 /// registered class name, which a declared class whose per-module id collides
 /// with an anon-shape id carries (`declared_class_outranks_anon_shape`). Anon
 /// shapes carry no private elements or runtime-internal keys; those only come
@@ -611,7 +554,7 @@ fn class_is_plain_record_uncached(class_id: u32, may_have: bool) -> bool {
     !may_have
         && class_id != crate::object::NATIVE_MODULE_CLASS_ID
         && crate::object::is_anon_shape_class_id(class_id)
-        && crate::promise::then_probe::class_registry_inert(class_id)
+        && crate::promise::then_probe::class_identity_empty(class_id)
         && crate::object::class_name_for_id(class_id).is_none()
 }
 
@@ -620,7 +563,7 @@ fn class_is_plain_record_uncached(class_id: u32, may_have: bool) -> bool {
 fn class_chain_to_json_memo_fill(
     class_id: u32,
     semantic_epoch: u64,
-    surface_gen: u64,
+    identity_word: u64,
     slot: usize,
 ) -> ClassChainToJsonEntry {
     #[cfg(test)]
@@ -629,7 +572,7 @@ fn class_chain_to_json_memo_fill(
     let entry = ClassChainToJsonEntry {
         class_id,
         semantic_epoch,
-        surface_gen,
+        identity_word,
         may_have,
         plain_record: class_is_plain_record_uncached(class_id, may_have),
     };

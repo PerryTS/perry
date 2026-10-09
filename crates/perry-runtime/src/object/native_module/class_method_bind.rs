@@ -7,8 +7,7 @@ use super::*;
 /// Build a "bound method" closure for `obj.method` PropertyGet on a known class
 /// instance. The captures (instance, method_name_ptr, method_name_len) drive
 /// `dispatch_bound_method` (closure.rs), which calls `js_native_call_method`
-/// — that resolves the method through `CLASS_VTABLE_REGISTRY` for any class
-/// registered by `js_register_class_method` at module init.
+/// — that resolves the method through the actual holder chain.
 ///
 /// Issue #446: previously a class method reference (`let f = obj.method`,
 /// `typeof obj.method`, `arr.map(obj.method)`) silently lowered to the
@@ -110,8 +109,22 @@ pub extern "C" fn js_class_method_bind(
                     class_id_from_method_receiver_known(instance, receiver_class_ref)
                 {
                     let private_owner = super::take_private_method_owner_hint(name);
+                    if private_owner.is_none()
+                        && !crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(name.as_bytes()) {
+                        if let Some(own) = unsafe { own_property_shadow(instance, name.as_bytes()) } { return own; }
+                        if super::class_prototype_ref_id(instance).is_some() {
+                            if let Some(value) = crate::object::class_method_slot_value(class_id, name) { return f64::from_bits(value); }
+                        } else {
+                            let scope = crate::gc::RuntimeHandleScope::new();
+                            let recv = scope.root_nanbox_f64(instance);
+                            let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+                            if let Some(value) = unsafe { crate::object::native_call_method::class_holder::class_instance_property_value(&recv, &key) } {
+                                return f64::from_bits(value);
+                            }
+                        }
+                    }
                     if let Some(owner) = private_owner
-                        .or_else(|| super::class_registry::method_owner_class_id(class_id, name))
+                        .or_else(|| super::class_registry::class_method_slot_owner(class_id, name))
                     {
                         // [[Get]] order: an OWN property of this name shadows
                         // the prototype method — a data value as stored (an own

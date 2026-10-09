@@ -718,3 +718,59 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
     js_shadow_slot_set(0, 0);
     js_shadow_frame_pop(frame);
 }
+
+#[test]
+fn test_s7b_class_identity_word_rewrites_a_young_holder_of_an_old_carrier() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _force = ForcedEvacuationTestGuard::on();
+    let _age = crate::gc::tenuring::set_survivals_for_test(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
+    let cid = 190_708;
+    let owner = crate::object::js_object_alloc(cid, 0);
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+    gc_collect_minor();
+    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert!(
+        !crate::arena::pointer_in_nursery(owner),
+        "the carrier must be old before publication"
+    );
+    let proto = crate::object::js_object_alloc(0, 1);
+    crate::object::js_object_set_field(proto, 0, crate::JSValue::number(42.0));
+    let old_proto = proto as usize;
+    assert!(
+        crate::arena::pointer_in_nursery(old_proto),
+        "the holder must start young"
+    );
+    let pid = crate::object::shapes::class_identity_proto_id(cid);
+    crate::object::shapes::write_identity_word(pid, ptr_bits(old_proto));
+    let stamp = unsafe {
+        crate::object::shapes::object_shape_stamp(owner as *const crate::object::ObjectHeader)
+    };
+    assert_eq!(
+        crate::object::shapes::shape_prototype_word(stamp),
+        ptr_bits(old_proto)
+    );
+    // No class constructor or prototype registration roots the holder, and
+    // a minor does not scan the old carrier. The existing word young log
+    // must retain the new holder and rewrite its CLASS word.
+    gc_collect_minor();
+    assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, owner);
+    let word = crate::object::shapes::identity_prototype_word(pid);
+    let new_proto = (word & POINTER_MASK) as usize;
+    assert_ne!(
+        new_proto, old_proto,
+        "the shared CLASS word must be rewritten"
+    );
+    assert_eq!(
+        unsafe {
+            *((new_proto + std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64)
+        },
+        42.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::class_holder_prototype(cid) as usize,
+        new_proto
+    );
+    js_shadow_slot_set(0, 0);
+}

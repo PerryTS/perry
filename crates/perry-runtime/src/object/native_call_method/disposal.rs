@@ -87,16 +87,8 @@ pub(super) unsafe fn object_has_dispose_method(
                 return true;
             }
         }
-        if class_id != 0 {
-            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                if let Some(ref reg) = *registry {
-                    if let Some(vtable) = reg.get(&class_id) {
-                        if vtable.methods.contains_key(*name) {
-                            return true;
-                        }
-                    }
-                }
-            }
+        if class_id != 0 && crate::object::class_method_slot_value(class_id, name).is_some() {
+            return true;
         }
     }
     false

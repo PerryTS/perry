@@ -73,7 +73,7 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
 /// populated at module init, long before any `new`, so the vtable is always
 /// live by the time a constructor runs `super()`.
 fn class_chain_overrides(class_id: u32, name: &str) -> bool {
-    class_id != 0 && crate::object::method_owner_class_id(class_id, name).is_some()
+    class_id != 0 && crate::object::class_method_slot_owner(class_id, name).is_some()
 }
 
 pub(crate) fn install_methods_on_existing_object(

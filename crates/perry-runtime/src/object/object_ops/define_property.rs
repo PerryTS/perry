@@ -567,7 +567,11 @@ pub extern "C" fn js_object_define_property(
         // reflective C.prototype read. Define the descriptor on that holder.
         if let Some(cid) = super::super::class_prototype_ref_id(obj_value) {
             let proto = super::super::class_registry::class_decl_prototype_value(cid);
-            js_object_define_property(proto, key_handle.get_nanbox_f64(), desc_handle.get_nanbox_f64());
+            js_object_define_property(
+                proto,
+                key_handle.get_nanbox_f64(),
+                desc_handle.get_nanbox_f64(),
+            );
             return f64::from_bits(obj_value_handle.get_heap_word_u64());
         }
         // Constructor refs use their static property storage.

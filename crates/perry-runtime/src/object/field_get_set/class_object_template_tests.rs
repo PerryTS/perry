@@ -384,3 +384,40 @@ fn a_wider_learned_width_re_records_the_instance_link() {
         );
     }
 }
+
+#[test]
+fn s7b_evaluation_chain_miss_does_not_build_a_canonical_holder() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6E39;
+    register(cid);
+    unsafe {
+        crate::object::js_register_class_name(cid, b"LazyTemplate".as_ptr(), 12);
+        crate::object::js_register_class_length(cid, 0);
+        super::super::class_registry::js_register_class_method_with_entry(
+            cid as i64,
+            b"m".as_ptr(),
+            1,
+            method as *const () as usize as i64,
+            0,
+            0,
+            0,
+            crate::fn_info!(body, 0) as *const crate::closure::JsFunctionInfo as usize as i64,
+        );
+        let class = js_class_evaluation_object(cid, 6, 0, cell(64)) as *mut ObjectHeader;
+        let proto = super::class_object_props::class_object_prototype_value(class)
+            .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        let method_key = crate::string::js_string_from_bytes(b"m".as_ptr(), 1);
+        crate::object::js_object_delete_field(proto, method_key);
+        assert!(crate::object::class_holder_prototype(cid).is_null());
+        let missing = crate::string::js_string_from_bytes(b"missing".as_ptr(), 7);
+        assert!(!evaluation_chain_lost_method(proto, missing));
+        assert!(
+            crate::object::class_holder_prototype(cid).is_null(),
+            "a read miss must not build another declaration prototype"
+        );
+        assert!(
+            evaluation_chain_lost_method(proto, method_key),
+            "the recorded template shape still proves the lost method"
+        );
+    }
+}

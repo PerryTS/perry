@@ -37,7 +37,7 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
     let receiver = js_closure_get_capture_f64(closure, 0);
 
     if let Some(class_id) = crate::object::class_prototype_ref_id(receiver) {
-        return crate::object::lookup_class_method_in_chain(class_id, name)
+        return crate::object::class_method_slot_target(class_id, name)
             .map(|(func_ptr, ..)| func_ptr);
     }
 
@@ -97,7 +97,7 @@ pub unsafe fn dispatch_bound_method(
             if name.starts_with('#') {
                 if let Some(owner_id) = crate::object::class_prototype_ref_id(namespace_obj) {
                     if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
-                        crate::object::lookup_class_method_in_chain(owner_id, name)
+                        crate::object::class_method_slot_target(owner_id, name)
                     {
                         // The call-time `this` is the receiver the private
                         // method body runs against — for `f.call(o)` it is
@@ -180,7 +180,7 @@ pub unsafe fn dispatch_bound_method(
                 method_name_len,
             )) {
                 if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
-                    crate::object::lookup_class_method_in_chain(owner_id, name)
+                    crate::object::class_method_slot_target(owner_id, name)
                 {
                     return crate::object::call_vtable_method_value(
                         func_ptr,

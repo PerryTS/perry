@@ -98,7 +98,11 @@ pub(crate) fn class_private_static_method_value_for_name(
     if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         cache
             .borrow()
-            .get(&(owner_class_id, cache_name.clone()))
+            .get(&(
+                owner_class_id,
+                cache_name.clone(),
+                ClassDeclarationValueKind::Method,
+            ))
             .copied()
     }) {
         return f64::from_bits(bits);
@@ -154,7 +158,6 @@ pub(crate) fn build_bound_method_closure(
 /// prototype's own `name` is still the declaration's entry-backed function at
 /// home in `brand`. `None` for a template without method entries.
 fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64) -> Option<f64> {
-    let code = class_registry::class_method_entry(owner_class_id, name)?;
     if !class_registry::is_class_object_value(brand) {
         return None;
     }
@@ -162,15 +165,19 @@ fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64
     if class.is_null() || crate::object::js_object_get_class_id(class) != owner_class_id {
         return None;
     }
-    let proto = unsafe { crate::object::field_get_set::class_object_prototype_value(class) };
-    if !proto.is_pointer() {
+    // This also runs while the prototype's members are being filled. Read
+    // an existing holder only; asking to build it here would recurse for a
+    // declaration without a closure-convention entry.
+    let proto = crate::object::field_get_set::class_object_materialized_prototype(class)?;
+    let value = class_registry::class_object_own_field_bytes(proto, name.as_bytes())?;
+    let closure = JSValue::from_bits(value.to_bits());
+    if !closure.is_pointer() {
         return None;
     }
-    let class = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
-    let value = class_registry::class_object_own_field_bytes(
-        proto.as_pointer::<ObjectHeader>(),
-        name.as_bytes(),
-    )?;
-    unsafe { crate::object::field_get_set::static_method_value_runs(value.to_bits(), code, class) }
+    let closure = closure.as_pointer::<crate::closure::ClosureHeader>();
+    unsafe {
+        (crate::object::native_module::class_method_value_target(value.to_bits()).is_some()
+            && crate::closure::js_closure_get_capture_bits(closure, 0) == brand.to_bits())
         .then_some(value)
+    }
 }

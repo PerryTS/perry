@@ -1075,7 +1075,7 @@ unsafe fn format_object_as_json(
         let class_id = (*obj_ptr).class_id;
         if class_id != 0 {
             if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                crate::object::lookup_class_method_in_chain(class_id, "__perry_inspect_custom__")
+                crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
             {
                 let _guard = InspectCustomInspectGuard::new(false);
                 let remaining = inspect_depth_limit().saturating_sub(depth) as f64;

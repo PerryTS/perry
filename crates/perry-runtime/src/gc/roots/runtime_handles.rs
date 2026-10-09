@@ -430,7 +430,7 @@ impl<'scope> RuntimeHandle<'scope> {
     ///
     /// ```ignore
     /// let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();
-    /// let found = class_instance_has_member(class_id, "size");  // ALLOCATES
+    /// let found = class_instance_has_method(class_id, "size");  // ALLOCATES
     /// crate::object::object_live_slot_count(obj)                                        // from-space
     /// ```
     ///
@@ -440,7 +440,7 @@ impl<'scope> RuntimeHandle<'scope> {
     ///
     /// ```ignore
     /// let (found, obj) = obj_h.across_mut::<ObjectHeader, _>(
-    ///     || class_instance_has_member(class_id, "size"),
+    ///     || class_instance_has_method(class_id, "size"),
     /// );
     /// crate::object::object_live_slot_count(obj)                                        // post-collection
     /// ```

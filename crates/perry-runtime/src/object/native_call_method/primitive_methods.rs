@@ -73,7 +73,7 @@ unsafe fn class_receiver_arm(
     let _ = (root_scope, &refreshed_args);
     if crate::object::class_prototype_ref_id(object).is_some() {
         if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-            crate::object::class_registry::lookup_class_method_in_chain(class_id, method_name)
+            crate::object::class_registry::class_method_slot_target(class_id, method_name)
         {
             return Some(crate::object::class_registry::call_vtable_method(
                 func_ptr,

@@ -1067,3 +1067,32 @@ fn a_promoting_minor_releases_eden_blocks_two_collections_found_idle() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn s7b_class_identity_word_survives_a_speculative_promotion_rollback() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
+    let rollbacks = first_cycle_promotion_rollbacks();
+    let proto = crate::object::js_object_alloc(0, 1);
+    crate::object::js_object_set_field(proto, 0, crate::JSValue::number(42.0));
+    let pid = crate::object::shapes::class_identity_proto_id(190_709);
+    crate::object::shapes::write_identity_word(pid, ptr_bits(proto as usize));
+    for _ in 0..64 {
+        let _ = young_leaf();
+    }
+    // No carrier or constructor roots this holder. A speculative retag to
+    // PromotedYoung must keep the word logged for the evacuation retry.
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(first_cycle_promotion_rollbacks() - rollbacks, 1);
+    let moved = (crate::object::shapes::identity_prototype_word(pid) & POINTER_MASK) as usize;
+    assert_ne!(moved, proto as usize);
+    assert_eq!(
+        crate::object::js_object_get_field(moved as *const _, 0).bits(),
+        42.0f64.to_bits()
+    );
+    js_shadow_slot_set(0, 0);
+}

@@ -83,8 +83,8 @@ pub(crate) use state::class_decl_prototype_object_root_store;
 pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{
-    builtin_parent_ctor_in_chain, class_decl_prototype_method_names, class_decl_prototype_object,
-    class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
+    builtin_parent_ctor_in_chain, class_decl_prototype_object, class_decl_prototype_value,
+    class_decl_prototype_value_for_instance_class, class_declaration_value_root_store,
     class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
     class_id_for_decl_prototype_object, class_method_entry, class_object_value_for_cid,
     class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
@@ -98,8 +98,8 @@ pub(crate) use state::{
     class_static_prototype_root_clear, class_static_prototype_root_store,
     class_static_set_defined_attrs, decl_prototype_identity_id, global_object_prototype_bits,
     is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, template_has_class_objects, throw_non_constructable_builtin_function,
-    CLASS_OBJECT_EVER,
+    parent_closure_in_chain, proto_member_has_no_string_key, template_has_class_objects,
+    throw_non_constructable_builtin_function, ClassDeclarationValueKind, CLASS_OBJECT_EVER,
 };
 pub use state::{
     AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DYNAMIC_PARENT_VALUE,
@@ -111,11 +111,11 @@ pub use state::{
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
-    class_decl_prototype_relinked, class_holder_prototype, class_prototype_object,
-    ensure_function_prototype_object, function_class_id, function_value_for_class_id,
-    object_proto_chain_symbol_slot, resolve_proto_chain_field,
-    resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
-    resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
+    class_holder_prototype, class_prototype_object, ensure_function_prototype_object,
+    function_class_id, function_value_for_class_id, object_proto_chain_symbol_slot,
+    resolve_proto_chain_field, resolve_proto_chain_field_noting_miss,
+    resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
+    synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
 pub use prototype_objects::{
     js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
@@ -202,7 +202,7 @@ pub use registration::{
 // ── dispatch.rs ─────────────────────────────────────────────────────────────
 pub(crate) use dispatch::{
     call_vtable_method, call_vtable_method_value, call_vtable_method_with_private_brand,
-    class_lookup_surface_gen_bump, class_lookup_surface_generation, fetch_parent_kind_in_chain,
+    fetch_parent_kind_in_chain,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
@@ -210,21 +210,21 @@ pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method,
     class_dynamic_static_accessor_descriptor, class_has_own_static_method,
     class_has_own_symbol_member, class_has_symbol_member_in_chain, class_method_bind_length,
+    class_method_slot_owner, class_method_slot_target, class_method_slot_value,
     class_object_own_field_bytes, class_object_owns_key_bytes, class_object_pinned_parent,
     class_own_static_method_code, class_own_static_method_entry, class_own_symbol_accessor_ptrs,
     class_own_symbol_member_keys, class_own_symbol_method, class_private_instance_getter_value,
     class_private_instance_setter_apply, class_static_accessor_getter_value,
     class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
-    dynamic_value_class_id, get_parent_class_id, instance_chain_parent_class_id,
-    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, lookup_static_method_owner,
-    register_class, register_class_dynamic_static_accessor, static_accessor_in_chain,
+    dynamic_value_class_id, get_parent_class_id, lookup_class_symbol_method_in_chain,
+    lookup_static_method_in_chain, lookup_static_method_owner, register_class,
+    register_class_dynamic_static_accessor, static_accessor_in_chain,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,
     js_class_static_method_call, js_get_dynamic_parent_value, js_object_mark_class,
     js_register_class_computed_accessor, js_register_class_computed_method,
     js_register_class_parent, js_register_class_parent_dynamic, js_register_class_static_method,
-    lookup_class_method_in_chain, method_owner_class_id,
 };
 
 /// `PERRY_GC_CENSUS`: the class metadata family (names, vtables, static

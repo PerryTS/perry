@@ -269,7 +269,9 @@ fn private_instance_access_is_proven(
             return Some(first);
         }
         let second = second.get();
-        second.matches(shape_id, class_id, name, is_field).then_some(second)
+        second
+            .matches(shape_id, class_id, name, is_field)
+            .then_some(second)
     });
     if cached.is_some() {
         return cached;
@@ -301,9 +303,16 @@ fn private_shape_proof_learn(
     // evaluation is involved.
     let present = if is_field {
         let storage = private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, interned);
-        unsafe { crate::object::key_attrs::object_key_has_private_entry(object, storage.as_bytes()) }
+        unsafe {
+            crate::object::key_attrs::object_key_has_private_entry(object, storage.as_bytes())
+        }
     } else {
-        unsafe { crate::object::shapes::object_has_brand(object, private_brand_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID)) }
+        unsafe {
+            crate::object::shapes::object_has_brand(
+                object,
+                private_brand_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID),
+            )
+        }
     };
     if !present {
         return None;
@@ -345,8 +354,8 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     if site.is_null() {
         return false;
     }
-    let word = (*(site as *const std::sync::atomic::AtomicU64))
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let word =
+        (*(site as *const std::sync::atomic::AtomicU64)).load(std::sync::atomic::Ordering::Relaxed);
     if word == 0 || private_template_may_be_evaluated(class_id) {
         return false;
     }
@@ -364,8 +373,10 @@ unsafe fn private_site_publish(class_id: u32, site: *mut u64, proof: PrivateShap
     if site.is_null() || private_template_may_be_evaluated(class_id) {
         return;
     }
-    (*(site as *const std::sync::atomic::AtomicU64))
-        .store(u64::from(proof.shape_id), std::sync::atomic::Ordering::Relaxed);
+    (*(site as *const std::sync::atomic::AtomicU64)).store(
+        u64::from(proof.shape_id),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// A field site word's lane bit: the field's slot is an `F64` lane of the
@@ -406,9 +417,11 @@ unsafe fn private_field_site_word(
         return 0;
     }
     let storage = private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name);
-    let Some(slot) =
-        crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
-    else {
+    let Some(slot) = crate::object::keys_find_private_slot_by_bytes(
+        keys.arr(),
+        keys.count(),
+        storage.as_bytes(),
+    ) else {
         return 0;
     };
     if crate::object::key_attrs::keys_entry(keys.arr(), slot)
@@ -514,8 +527,8 @@ pub extern "C" fn js_private_field_site_get(
         0,
         site,
     );
-    let key_ptr =
-        crate::value::js_get_string_pointer_unified(key.get_nanbox_f64()) as *const crate::StringHeader;
+    let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
+        as *const crate::StringHeader;
     js_object_get_field_by_name_boxed(obj.get_nanbox_f64(), key_ptr)
 }
 
@@ -688,7 +701,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
             throw_private_type_error("Invalid private field name");
         };
         let Some((ptr, param_count, has_synthetic_arguments, has_rest)) =
-            super::super::class_registry::lookup_class_method_in_chain(declaring_class_id, name)
+            super::super::class_registry::class_method_slot_target(declaring_class_id, name)
         else {
             return private_method_call_by_storage_name(
                 receiver,
@@ -701,7 +714,11 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
         };
         func_ptr = ptr;
         facts = u64::from(param_count)
-            | if has_synthetic_arguments { PRIVATE_CALL_SITE_SYNTHETIC_ARGUMENTS } else { 0 }
+            | if has_synthetic_arguments {
+                PRIVATE_CALL_SITE_SYNTHETIC_ARGUMENTS
+            } else {
+                0
+            }
             | if has_rest { PRIVATE_CALL_SITE_REST } else { 0 };
         if !site.is_null() {
             (*words.add(1)).store(facts, std::sync::atomic::Ordering::Relaxed);
@@ -893,7 +910,10 @@ mod private_guard_fast_tests {
                     kind,
                 );
                 let fast = proven(obj, obj, CID, name, kind);
-                assert!(!fast || general, "fast path proved an access the general path rejects");
+                assert!(
+                    !fast || general,
+                    "fast path proved an access the general path rejects"
+                );
                 assert_eq!(fast, general);
             }
         }
@@ -914,7 +934,10 @@ mod private_guard_fast_tests {
                     JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>(),
                 )
             };
-            assert_ne!(shape_of(branded.get_nanbox_f64()), shape_of(plain.get_nanbox_f64()));
+            assert_ne!(
+                shape_of(branded.get_nanbox_f64()),
+                shape_of(plain.get_nanbox_f64())
+            );
             assert_eq!(
                 crate::object::shapes::shape_brands_by_id(shape_of(branded.get_nanbox_f64())),
                 Some(&[u64::from(CID)][..])
@@ -928,7 +951,8 @@ mod private_guard_fast_tests {
             );
             assert!(
                 crate::object::shapes::object_has_brand(
-                    JSValue::from_bits(branded.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>(),
+                    JSValue::from_bits(branded.get_nanbox_f64().to_bits())
+                        .as_pointer::<ObjectHeader>(),
                     u64::from(CID)
                 ),
                 "a key add must carry the brand"
@@ -983,7 +1007,10 @@ mod private_guard_fast_tests {
             let obj = instance_with(CID, &fields, false);
             let (_, shape_id) = private_plain_receiver_shape(obj).unwrap();
             let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape_id).unwrap();
-            assert!(live < fields.len() as u32, "fixture must spill its last field");
+            assert!(
+                live < fields.len() as u32,
+                "fixture must spill its last field"
+            );
             let other = instance_with(CID, &[], false);
             for (name, inline) in [(&b"#in"[..], true), (&b"#out"[..], false)] {
                 let mut site = 0u64;

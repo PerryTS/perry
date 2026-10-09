@@ -9,8 +9,10 @@
 //! * Which identities have a word: [`proto_id_carries_word`]. These are a
 //!   recorded prototype's serial, `MIXED` (class | serial, which uses the
 //!   serial's word) and `UNIQUE` (a prototype with no serial, one identity per
-//!   link). Null, the default, class-implied and per-object identities answer
-//!   by themselves (`shapes::object_prototype_word`).
+//!   link), and CLASS (a declared or synthetic class holder). Null, the
+//!   default and per-object identities answer by themselves.
+//!   CLASS words also represent unbuilt declared holders as `undefined`; a
+//!   negative probe admits only the empty word.
 //! * One word per IDENTITY, not per shape record: every shape of one
 //!   prototype names the same word, and the record stays one cache line. The
 //!   words live in stable pages (an address never moves). The pages are
@@ -31,8 +33,8 @@
 //!     roots every word that names a young object (the young log).
 //!   - Rewrite passes repair every word through forwarding.
 //!   - [`prune_dead_shape_prototypes`] clears a word whose prototype died.
-//! * Workers: the seed copies no record whose identity has a word, so a
-//!   pointer never crosses agents.
+//! * Workers: serial identities are not seeded. CLASS records carry class
+//!   ids only, and each agent publishes its own identity word.
 
 use std::cell::Cell;
 
@@ -56,19 +58,17 @@ struct PageData {
 type Page = Box<PageData>;
 
 /// Does identity `proto_id` name its prototype through a word? False for an
-/// identity that answers by itself: the realm's default, a compiled class's,
-/// a per-object one, and null.
+/// identity that answers by itself: the realm's default, a per-object one,
+/// and null.
 #[inline]
 pub(crate) fn proto_id_carries_word(proto_id: u64) -> bool {
-    proto_id != PROTO_ID_DEFAULT
-        && proto_id != PROTO_ID_NULL
-        && proto_id != PROTO_ID_PER_OBJECT
-        && proto_id & PROTO_ID_TAG_MASK != PROTO_ID_CLASS
+    proto_id != PROTO_ID_DEFAULT && proto_id != PROTO_ID_NULL && proto_id != PROTO_ID_PER_OBJECT
 }
 
 /// The (band, index) of identity `proto_id`'s word: band 0 is indexed by
 /// prototype serial (a plain serial identity and a `MIXED` one share it — one
-/// object), band 1 by `UNIQUE` number.
+/// object), band 1 by `UNIQUE` number, and bands 2–5 by the existing class-id
+/// bands (dense compiled, runtime builtin, synthetic and native ids).
 #[inline]
 fn word_key(proto_id: u64) -> Option<(usize, usize)> {
     if !proto_id_carries_word(proto_id) {
@@ -77,6 +77,10 @@ fn word_key(proto_id: u64) -> Option<(usize, usize)> {
     Some(match proto_id & PROTO_ID_TAG_MASK {
         0 => (0, proto_id as usize),
         PROTO_ID_MIXED => (0, (proto_id & MIXED_SERIAL_MASK) as usize),
+        PROTO_ID_CLASS => {
+            let (band, offset) = crate::object::class_value::class_value_band(proto_id as u32)?;
+            (2 + band, offset as usize)
+        }
         _ => (1, (proto_id & !PROTO_ID_TAG_MASK) as usize),
     })
 }
@@ -98,7 +102,7 @@ impl WordDir {
 }
 
 #[thread_local]
-static AGENT_WORD_DIR: [WordDir; 2] = [WordDir::empty(), WordDir::empty()];
+static AGENT_WORD_DIR: [WordDir; 6] = [const { WordDir::empty() }; 6];
 
 /// The current full trace, counted from 1 (`note_full_trace_begin`). A word
 /// whose edge was emitted in this trace is not emitted again: the first
@@ -115,7 +119,7 @@ pub(crate) fn note_full_trace_begin() {
 /// slab). Pages are allocated on first use and never move or shrink.
 #[derive(Default)]
 pub(crate) struct ProtoWords {
-    bands: [Vec<Option<Page>>; 2],
+    bands: [Vec<Option<Page>>; 6],
     /// Word addresses that named a nursery object when written or last
     /// visited: the minor's complete candidate set.
     young: Vec<*mut u64>,
@@ -123,9 +127,10 @@ pub(crate) struct ProtoWords {
 }
 
 #[inline]
-fn bits_in_nursery(bits: u64) -> bool {
+fn bits_minor_collectible(bits: u64) -> bool {
     let value = crate::value::JSValue::from_bits(bits);
-    value.is_pointer() && crate::arena::pointer_in_nursery(value.as_pointer::<u8>() as usize)
+    value.is_pointer()
+        && crate::gc::young_log::addr_is_minor_collectible(value.as_pointer::<u8>() as usize)
 }
 
 impl ProtoWords {
@@ -190,6 +195,17 @@ impl ProtoWords {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_class_identity_words() {
+    let table = &crate::state::state().shapes;
+    let words = unsafe { &mut table.slab_mut().protos };
+    for pages in &mut words.bands[2..] {
+        for page in pages.iter_mut().flatten() {
+            page.words.fill(0);
         }
     }
 }
@@ -266,8 +282,10 @@ pub(crate) fn shape_prototype_word(id: u32) -> u64 {
 /// Make identity `proto_id` name `bits`, before any shape names it (the
 /// prototype funnel). An identity names one object for its whole life, so
 /// the write only ever fills an empty word or repeats the same bits — or
-/// replaces bits whose object died (the prune clears those).
-pub(super) fn write_identity_word(proto_id: u64, bits: u64) {
+/// replaces bits whose object died (the prune clears those). CLASS identities
+/// additionally publish an unbuilt holder and replace a constructor's holder;
+/// sites compare their live identity word before trusting a recorded chain.
+pub(crate) fn write_identity_word(proto_id: u64, bits: u64) {
     let Some((band, index)) = word_key(proto_id) else {
         return;
     };
@@ -281,7 +299,7 @@ pub(super) fn write_identity_word(proto_id: u64, bits: u64) {
         // scan_shape_prototype_words_mut and traced through its carriers.
         *slot = bits;
     }
-    if bits_in_nursery(bits) {
+    if bits_minor_collectible(bits) {
         words.young.push(slot);
     }
 }
@@ -308,11 +326,11 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
         for slot in log {
             // SAFETY: a stable word of this agent's pages.
             unsafe {
-                if !bits_in_nursery(*slot) {
+                if !bits_minor_collectible(*slot) {
                     continue;
                 }
                 visitor.visit_nanbox_u64_slot(&mut *slot);
-                if bits_in_nursery(*slot) {
+                if bits_minor_collectible(*slot) {
                     young.push(slot);
                 }
             }
@@ -324,7 +342,7 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
             // SAFETY: a stable word of this agent's pages.
             unsafe {
                 visitor.visit_nanbox_u64_slot(&mut *slot);
-                if bits_in_nursery(*slot) {
+                if bits_minor_collectible(*slot) {
                     young.push(slot);
                 }
             }

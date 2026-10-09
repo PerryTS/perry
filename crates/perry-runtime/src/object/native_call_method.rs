@@ -9,7 +9,7 @@
 use super::*;
 
 mod bare_receiver;
-mod class_holder;
+pub(crate) mod class_holder;
 mod collection_methods;
 mod common_methods;
 mod direct_site;
@@ -2250,7 +2250,7 @@ pub(crate) unsafe fn native_call_method_tower(
                             || super::prototype_chain::object_static_prototype(obj as usize)
                                 .is_some()
                             || !crate::array::is_array_subclass_class_id(class_id)
-                            || lookup_class_method_in_chain(class_id, method_name).is_some()
+                            || class_method_slot_target(class_id, method_name).is_some()
                         {
                             return None;
                         }

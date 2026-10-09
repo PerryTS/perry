@@ -155,6 +155,7 @@ unsafe fn register_test_method(class_id: u32, name: &'static [u8]) {
         0,
         0,
     );
+    crate::object::class_decl_prototype_value(class_id);
 }
 
 fn plain_object_with_key(

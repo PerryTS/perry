@@ -246,7 +246,7 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
     // readers (`class_prototype_object`, `class_decl_prototype_object`) and
     // the ordinary prototype read's chain hop to the generic's id, so a cached
     // per-class-id chain verdict must retire (#10696).
-    crate::object::class_lookup_surface_gen_bump();
+    crate::object::prop_plan::prop_plan_epoch_bump();
     // A redirect that changes the holder retires the old one's ShapeId, as a
     // registry replacement does (`retire_displaced_decl_prototype`).
     if !before.is_null() && crate::object::class_decl_prototype_object(class_id) != before {

@@ -114,3 +114,35 @@ fn new_f_and_object_create_of_its_prototype_share_a_shape() {
     );
     assert_eq!(a, b, "one prototype, one empty layout: one ShapeId");
 }
+
+#[test]
+fn s7b_class_identity_publishes_and_replaces_its_holder_word() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 190_702;
+    let pid = super::super::PROTO_ID_CLASS | u64::from(cid);
+    let recv = js_object_alloc(cid, 0);
+    let stamp = unsafe { super::super::object_shape_stamp(recv) };
+    assert_eq!(shape_prototype_word(stamp), 0);
+    let first = js_object_alloc(0, 0);
+    crate::object::class_registry::class_prototype_object_root_store(cid, first);
+    assert_eq!(shape_prototype_word(stamp), bits(first));
+    let second = js_object_alloc(0, 0);
+    crate::object::class_registry::class_prototype_object_root_store(cid, second);
+    assert_eq!(shape_prototype_word(stamp), bits(second));
+    assert_eq!(identity_prototype_word(pid), bits(second));
+    assert_eq!(unsafe { super::super::object_shape_stamp(recv) }, stamp);
+}
+
+#[test]
+fn s7b_constructor_heritage_is_not_an_instance_holder_word() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 190_705;
+    let parent = js_object_alloc(190_706, 0);
+    crate::object::js_object_mark_class(parent as i64);
+    crate::object::class_registry::class_prototype_object_root_store(cid, parent);
+    assert_eq!(
+        identity_prototype_word(super::super::class_proto_id(cid)),
+        0
+    );
+    assert!(crate::object::class_holder_prototype(cid).is_null());
+}

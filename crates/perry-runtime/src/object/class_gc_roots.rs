@@ -126,5 +126,8 @@ pub(crate) fn test_clear_class_inheritance_roots(proto_cid: u32, closure_cid: u3
             m.remove(&closure_cid);
         }
     });
-    super::class_lookup_surface_gen_bump();
+    crate::object::shapes::write_identity_word(
+        crate::object::shapes::PROTO_ID_CLASS | u64::from(proto_cid),
+        0,
+    );
 }

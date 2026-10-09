@@ -10,7 +10,7 @@ fn object_create_does_not_register_classes_or_invalidate_existing_caches() {
     let proto = js_object_alloc(0, 0);
     let bits = ptr_bits(proto as usize);
     let next_id = NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
-    let class_generation = class_lookup_surface_generation();
+
     let plan_epoch = prop_plan::prop_plan_semantic_epoch();
     let element_epoch = crate::array::js_array_element_shape_epoch();
     for _ in 0..1024 {
@@ -23,7 +23,7 @@ fn object_create_does_not_register_classes_or_invalidate_existing_caches() {
         NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed),
         next_id
     );
-    assert_eq!(class_lookup_surface_generation(), class_generation);
+
     assert_eq!(prop_plan::prop_plan_semantic_epoch(), plan_epoch);
     assert_eq!(crate::array::js_array_element_shape_epoch(), element_epoch);
     let mut retained = false;

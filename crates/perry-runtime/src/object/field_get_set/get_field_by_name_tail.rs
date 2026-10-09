@@ -1333,7 +1333,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                         }
                     }
                     if class_walk
-                        && lookup_class_method_in_chain(class_id, name).is_some()
+                        && class_method_slot_target(class_id, name).is_some()
                         && !super::class_object_template::evaluation_chain_lost_method(obj, key)
                     {
                         let heap_name = {
@@ -1708,7 +1708,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
             // through here — they lower directly to `js_native_call_method`.
             if let Ok(name) = std::str::from_utf8(key_bytes) {
                 if class_walk
-                    && lookup_class_method_in_chain(class_id, name).is_some()
+                    && class_method_slot_target(class_id, name).is_some()
                     && !super::class_object_template::evaluation_chain_lost_method(obj, key)
                 {
                     // Allocate a fresh i8 buffer for the method name owned
