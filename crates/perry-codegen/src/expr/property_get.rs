@@ -248,7 +248,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | "try"
             ) =>
         {
-            Ok(lower_global_builtin_static_value(ctx, "Promise", property))
+            lower_global_builtin_static_value(ctx, "Promise", property)
         }
 
         Expr::PropertyGet {

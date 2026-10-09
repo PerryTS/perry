@@ -114,6 +114,39 @@ pub(crate) fn object_alloc_created(
     obj
 }
 
+/// An intrinsic's empty object, born with its internal brand and class
+/// prototype in one shape. Only scalar facts cross allocation; no literal
+/// keys cache, intermediate prototype shape or brand transition is needed.
+pub(crate) fn object_alloc_branded(class_id: u32, brand: u64) -> *mut ObjectHeader {
+    let object = object_alloc_unpublished(class_id, 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(object);
+    let shape = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
+        std::ptr::null(),
+        0,
+        0,
+        0,
+        shapes::ShapeObjectKind::Ordinary,
+        0,
+        shapes::class_proto_id(class_id),
+        0,
+        super::field_rep::REP_ANY,
+        &[brand],
+        None,
+    ));
+    let object = owner.get_raw_mut_ptr::<ObjectHeader>();
+    unsafe {
+        if crate::arena::pointer_in_nursery(object as usize) {
+            // GC_STORE_AUDIT(POINTER_FREE): the sole birth publication is a ShapeId.
+            (*object).parent_class_id = shape;
+        } else {
+            shapes::stamp_object_shape_id_with_carrier_note(object, shape);
+        }
+        shapes::store_kind::check_store_facts(object);
+    }
+    object
+}
+
 /// A null-parent object must publish that edge in its birth shape, before
 /// any reader can observe the object. Setting only a post-birth header bit
 /// leaves the descriptor claiming the default prototype.
