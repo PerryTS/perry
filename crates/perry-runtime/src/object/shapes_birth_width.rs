@@ -109,14 +109,34 @@ pub(super) fn note_descendant_width(
     }
 }
 
-/// The inline width to allocate an object born on the keyless birth shape of
-/// `proto_id` with, or 0 for the allocator's floor. Mints the birth shape if
-/// it is absent (its first birth, or its first after a prune), counts this
-/// birth against the tracking window, and keeps the record through the next
-/// full collection.
-pub(crate) fn keyless_birth_width(proto_id: u64) -> u32 {
+/// Scalar facts resolved for one keyless birth. The shape proves the zero
+/// logical live bound; the width is the allocation this birth was served.
+/// These may differ while tracking or after descendants grow past the floor.
+pub(crate) struct KeylessBirth {
+    shape: u32,
+    width: u32,
+}
+
+impl KeylessBirth {
+    /// Prototype kinds without a tracked ordinary birth resolve their shape
+    /// through the same final-birth interner, without a prior shape proof.
+    pub(crate) fn untracked() -> Self {
+        Self { shape: 0, width: 0 }
+    }
+
+    pub(crate) fn width(&self) -> u32 {
+        self.width
+    }
+}
+
+/// Resolve the zero-live keyless birth shape of `proto_id` and choose this
+/// birth's allocation width (0 means the allocator's floor). Mints the shape
+/// if absent (its first birth, or its first after a prune), counts this birth
+/// against the tracking window, and keeps the record through the next full
+/// collection.
+pub(crate) fn keyless_birth_width(proto_id: u64) -> KeylessBirth {
     if !is_prototype_serial(proto_id) {
-        return 0;
+        return KeylessBirth::untracked();
     }
     let id = super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
         std::ptr::null(),
@@ -129,7 +149,7 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> u32 {
     ));
     let table = &crate::state::state().shapes;
     let Some(record) = table.slab().record_ptr(id) else {
-        return 0;
+        return KeylessBirth::untracked();
     };
     // SAFETY: a live slab record; single-threaded agent. No table borrow is
     // held (`shape_descriptor_ensure_with_generation` released it).
@@ -143,27 +163,37 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> u32 {
     } else {
         learned
     };
-    if width <= crate::object::INLINE_SLOT_FLOOR as u32 {
+    let width = if width <= crate::object::INLINE_SLOT_FLOOR as u32 {
         0
     } else {
         width.min(LEARNED_WIDTH_MAX)
-    }
+    };
+    KeylessBirth { shape: id, width }
 }
 
 /// Resolve an ordinary keyless birth on its final prototype, including the
 /// slack slots this birth was served. The identity word is an edge of its
 /// carriers, not a permanent root; the caller roots the prototype until the
 /// newborn carries this shape.
-pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, width: u32) -> u32 {
+pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, birth: &KeylessBirth) -> u32 {
     // An identity names one prototype for its lifetime. GC rewrites its word;
     // another birth need not write it or append another young-log entry.
     if super::shapes_prototype::identity_prototype_word(proto_id) != proto_bits {
         super::shapes_prototype::write_identity_word(proto_id, proto_bits);
     }
+    // A floor birth already resolved these exact facts while selecting its
+    // allocation width. Tracking/wider births require a different live bound.
+    // The proof is scalar, so revalidate presence before reusing it: a full
+    // collection can retire an uncarried shape between resolution and use.
+    if birth.width == 0
+        && super::shape_is_keyless_birth_of(birth.shape, proto_id, 0, ShapeObjectKind::Ordinary)
+    {
+        return birth.shape;
+    }
     super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
         std::ptr::null(),
         0,
-        width,
+        birth.width,
         0,
         ShapeObjectKind::Ordinary,
         proto_id,
