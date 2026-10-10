@@ -139,20 +139,21 @@ pub(crate) fn object_alloc_branded(class_id: u32, brand: u64) -> *mut ObjectHead
     let object = object_alloc_unpublished(class_id, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(object);
-    let shape = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
-        std::ptr::null(),
-        0,
-        0,
-        0,
-        shapes::ShapeObjectKind::Ordinary,
-        0,
-        shapes::class_proto_id(class_id),
-        0,
-        super::field_rep::REP_ANY,
-        &[brand],
-        None,
-    ));
-    let object = owner.get_raw_mut_ptr::<ObjectHeader>();
+    let (shape, object) = owner.across_mut::<ObjectHeader, _>(|| {
+        shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            shapes::ShapeObjectKind::Ordinary,
+            0,
+            shapes::class_proto_id(class_id),
+            0,
+            super::field_rep::REP_ANY,
+            &[brand],
+            None,
+        ))
+    });
     unsafe {
         if crate::arena::pointer_in_nursery(object as usize) {
             // GC_STORE_AUDIT(POINTER_FREE): the sole birth publication is a ShapeId.

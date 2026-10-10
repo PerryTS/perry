@@ -354,8 +354,7 @@ fn invalidate_generation_cache() {
     PAGE_GENERATION_CACHE.with(|cache| unsafe { (*cache.get()).invalidate() });
 }
 
-// Linux production uses reservation classification and never records a cache
-// lookup; there is no legacy cache report to emit.
+// Linux production classifies from its reservation: no legacy cache report.
 #[cfg(all(target_os = "linux", not(test)))]
 pub(crate) fn page_class_table_report() {}
 

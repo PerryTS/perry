@@ -52,7 +52,9 @@ impl Drop for ClosureCountGuard {
 unsafe fn leave_rebind_space(clones: usize) -> usize {
     let bytes = (GC_HEADER_SIZE + crate::closure::closure_payload_size(2) + 7) & !7;
     let cycles = copying_minor_cycles();
-    crate::array::js_array_alloc(0); // Ordinary birth synchronizes inline/bump state.
+    crate::array::js_array_alloc(0);
+    // The inline Eden offset is authoritative; publish it before reading the block.
+    crate::arena::sync_inline_arena_state();
     let remaining = {
         let arena = &*crate::arena::hot_arena();
         let block = &arena.blocks[arena.current];
@@ -86,6 +88,7 @@ unsafe fn leave_rebind_space(clones: usize) -> usize {
         cycles,
         "padding is outside the clone window"
     );
+    crate::arena::sync_inline_arena_state();
     let arena = &*crate::arena::hot_arena();
     let block = &arena.blocks[arena.current];
     assert_eq!(block.size - block.offset, clones * bytes);

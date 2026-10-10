@@ -128,6 +128,7 @@ fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
         let floor = expected.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
         let poison = 0x0123_4567_89ab_cdef;
         for i in 0..crate::object::INLINE_SLOT_FLOOR {
+            // GC_STORE_AUDIT(POINTER_FREE): test poison in an uninitialized inline slot floor.
             floor.add(i).write(poison);
         }
         let value = crate::object::js_object_create(proto_value);

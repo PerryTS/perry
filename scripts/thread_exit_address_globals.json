@@ -1477,14 +1477,6 @@
    "why": "Survivor count of the previous copying minor, used only to pre-size worklist vectors (capped at SURVIVOR_ESTIMATE_CAP); a count."
   },
   {
-   "file": "crates/perry-runtime/src/gc/copying.rs",
-   "names": [
-    "PREVIOUS_DIRTY_COVERED_ESTIMATE"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Previous minor's dirty-scan covered-set size used to pre-size the next one; a capped count."
-  },
-  {
    "file": "crates/perry-runtime/src/node_vm.rs",
    "names": [
     "VM_COMPILED_FUNCTION_SOURCES"

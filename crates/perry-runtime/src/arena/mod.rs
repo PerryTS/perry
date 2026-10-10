@@ -48,9 +48,9 @@ mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_page_meta_audit;
 #[cfg(test)]
-mod tests_promoted_runs;
-#[cfg(test)]
 mod tests_page_walk;
+#[cfg(test)]
+mod tests_promoted_runs;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface

@@ -511,10 +511,11 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         // WITHOUT touching it: old/longlived arena pages are always
         // mapped; anything else must still be a registered malloc GC
         // object.
-        let deref_safe = matches!(
-            crate::arena::classify_heap_generation(header_addr),
-            crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
-        ) || super::malloc::gc_malloc_header_is_owned(header_addr as *const GcHeader);
+        let deref_safe =
+            matches!(
+                crate::arena::classify_heap_generation(header_addr),
+                crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
+            ) || super::malloc::gc_malloc_header_is_owned(header_addr as *const GcHeader);
         if deref_safe {
             visit_parent(header_addr as *mut GcHeader);
         }
