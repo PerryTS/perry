@@ -267,7 +267,20 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let bits = value.to_bits();
     let ptr = if jv.is_pointer() {
         jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    } else if (bits >> 48) == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
+    } else if (bits >> 48) == 0
+        // A bare word is a wrapper only when the allocator owns it (#9675):
+        // a positive subnormal number spells an address-shaped word
+        // (`1e-310` is `0x1268_8b70_e62b`), and magnitude cannot tell the
+        // two apart. `Number.prototype.toString` reaches here with exactly
+        // that receiver once the dispatch tower has classified it a number.
+        && unsafe {
+            crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                bits as usize,
+                crate::gc::GC_TYPE_OBJECT,
+            )
+        }
+        .is_some()
+    {
         bits as *mut crate::object::ObjectHeader
     } else {
         return None;
@@ -400,5 +413,34 @@ mod tests {
     fn boxed_primitive_probe_rejects_pointer_tagged_native_handles() {
         let fetch_family_handle = crate::value::js_nanbox_pointer(0x40001);
         assert!(boxed_primitive_payload(fetch_family_handle).is_none());
+    }
+
+    /// #9713: a positive subnormal number is a bare word that spells an
+    /// address (`1e-310` is `0x1268_8b70_e62b`). `Number.prototype.toString`
+    /// asks this probe whether its receiver is a wrapper, so the probe must
+    /// decide by allocator ownership, never by magnitude, or it reads a header
+    /// out of unmapped memory. A wrapper handed over as a bare word is still
+    /// recognised.
+    #[test]
+    fn boxed_primitive_probe_reads_a_bare_word_only_when_the_allocator_owns_it() {
+        let subnormal = 1e-310f64;
+        assert_eq!(subnormal.to_bits() >> 48, 0, "premise: a bare word");
+        assert!(
+            crate::value::addr_class::is_plausible_heap_addr(subnormal.to_bits() as usize),
+            "premise: magnitude alone admits it"
+        );
+        assert!(boxed_primitive_payload(subnormal).is_none());
+
+        let wrapper = js_boxed_number_new(42.0);
+        let bare = f64::from_bits(crate::value::js_nanbox_get_pointer(wrapper) as u64);
+        assert_eq!(
+            bare.to_bits() >> 48,
+            0,
+            "premise: the wrapper as a bare word"
+        );
+        let (class_id, payload) =
+            boxed_primitive_payload(bare).expect("an owned bare wrapper is still a wrapper");
+        assert_eq!(class_id, CLASS_ID_BOXED_NUMBER);
+        assert_eq!(payload, 42.0);
     }
 }
