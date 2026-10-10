@@ -57,7 +57,9 @@ try:
         regs = Registers()
         trace(12, pid, ctypes.byref(regs))
         if entering and regs.orig_rax == 1 and regs.rdi == 1:
-            rows.append(snapshot(pid))
+            rows.append(dict(phase='stdout', **snapshot(pid)))
+        if entering and regs.orig_rax in [60, 231]:
+            rows.append(dict(phase='exit', **snapshot(pid)))
         entering = not entering
     Path(dest).write_text(json.dumps(rows, indent=2))
 finally:
