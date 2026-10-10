@@ -1366,3 +1366,5 @@ fn outlined_iterator_close_uses_the_existing_synchronous_protocol_channel() {
         "{hir}"
     );
 }
+
+mod export_class_declarator;
