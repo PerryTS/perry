@@ -53,7 +53,7 @@ pub extern "C" fn js_string_append(
                 (*new_ptr).utf16_len = (*src).utf16_len;
                 // Preserve the lone-surrogate flag on the duplicate so later
                 // concats/appends still canonicalize correctly. (#6728)
-                (*new_ptr).flags |= (*src).flags & STRING_FLAG_HAS_LONE_SURROGATES;
+                (*new_ptr).flags = (*src).flags & !STRING_FLAG_WTF8_VALIDATED;
             }
         }
         return new_ptr;
@@ -100,7 +100,8 @@ pub extern "C" fn js_string_append(
         // kept two lone 3-byte WTF-8 surrogates instead of the astral char's
         // 4-byte UTF-8 (unlike expression `hi + lo`, which canonicalizes). That
         // corrupted every emoji built up code-unit-by-code-unit. (#6728)
-        let flag_bits = ((*dest).flags | (*src).flags) & STRING_FLAG_HAS_LONE_SURROGATES;
+        let flag_bits = combine_string_flags((*dest).flags, (*src).flags)
+            & (STRING_FLAG_HAS_LONE_SURROGATES | STRING_FLAG_VALID_WTF8);
         let boundary_pair = {
             let d = std::slice::from_raw_parts(
                 (dest as *const u8).add(std::mem::size_of::<StringHeader>()),
@@ -127,7 +128,7 @@ pub extern "C" fn js_string_append(
             );
             (*dest).byte_len = new_blen;
             (*dest).utf16_len += (*src).utf16_len;
-            (*dest).flags = ((*dest).flags | flag_bits) & !STRING_FLAG_WTF8_VALIDATED;
+            (*dest).flags = flag_bits;
             return if boundary_pair {
                 // Merge the straddling pair (usually returns a new, smaller
                 // string; rare, so the in-place win still holds in general).
@@ -166,7 +167,7 @@ pub extern "C" fn js_string_append(
         );
         (*new_ptr).byte_len = new_blen;
         (*new_ptr).utf16_len = (*dest).utf16_len + (*src).utf16_len;
-        (*new_ptr).flags |= flag_bits;
+        (*new_ptr).flags = flag_bits;
 
         // Mark as uniquely owned — the caller (codegen) is about to assign
         // this pointer to a single variable, so in-place append is safe next time.

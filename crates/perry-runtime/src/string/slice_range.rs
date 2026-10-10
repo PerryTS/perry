@@ -30,7 +30,13 @@ pub(super) fn advance(bytes: &[u8], mut at: Boundary, mut units: usize) -> Bound
 /// staged in Rust-owned bytes before the destination allocation can collect.
 pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> *mut StringHeader {
     if is_ascii_string(s) {
-        return string_copy_range(s, start as usize, end - start, end - start, 0);
+        return string_copy_range(
+            s,
+            start as usize,
+            end - start,
+            end - start,
+            STRING_FLAG_VALID_WTF8,
+        );
     }
     let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
     // #10685: resolve the start boundary through the cached UTF-16 index
@@ -54,13 +60,14 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
     };
     if !first.low && !last.low {
         let part = &bytes[first.byte..last.byte];
-        let flags = if unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0
-            && bytes_have_lone_surrogate(part)
-        {
-            STRING_FLAG_HAS_LONE_SURROGATES
-        } else {
-            0
-        };
+        let flags = (unsafe { (*s).flags } & STRING_FLAG_VALID_WTF8)
+            | if unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0
+                && bytes_have_lone_surrogate(part)
+            {
+                STRING_FLAG_HAS_LONE_SURROGATES
+            } else {
+                0
+            };
         return string_copy_range(s, first.byte, part.len() as u32, end - start, flags);
     }
 
@@ -82,6 +89,6 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
         out.as_ptr(),
         out.len() as u32,
         end - start,
-        STRING_FLAG_HAS_LONE_SURROGATES,
+        STRING_FLAG_HAS_LONE_SURROGATES | (unsafe { (*s).flags } & STRING_FLAG_VALID_WTF8),
     )
 }

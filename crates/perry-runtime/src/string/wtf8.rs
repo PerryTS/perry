@@ -37,6 +37,7 @@ pub(crate) struct Wtf8Str<'a> {
     bytes: &'a [u8],
     /// The header's `STRING_FLAG_HAS_LONE_SURROGATES` bit.
     lone: bool,
+    known: bool,
 }
 
 impl<'a> Wtf8Str<'a> {
@@ -51,6 +52,7 @@ impl<'a> Wtf8Str<'a> {
         Wtf8Str {
             bytes: s.as_bytes(),
             lone: false,
+            known: true,
         }
     }
 
@@ -61,7 +63,11 @@ impl<'a> Wtf8Str<'a> {
     #[cfg(any(test, feature = "string-normalize"))]
     #[inline]
     pub(crate) fn from_wtf8_bytes(bytes: &'a [u8]) -> Self {
-        Wtf8Str { bytes, lone: true }
+        Wtf8Str {
+            bytes,
+            lone: true,
+            known: true,
+        }
     }
 
     /// Borrow a live string header's payload.
@@ -75,6 +81,7 @@ impl<'a> Wtf8Str<'a> {
         Wtf8Str {
             bytes: slice::from_raw_parts(string_data(s), len),
             lone: (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+            known: (*s).flags & STRING_FLAG_VALID_WTF8 != 0,
         }
     }
 
@@ -95,12 +102,12 @@ impl<'a> Wtf8Str<'a> {
         if self.lone {
             return None;
         }
-        debug_assert!(
-            str::from_utf8(self.bytes).is_ok(),
-            "STRING_FLAG_HAS_LONE_SURROGATES clear but payload is not valid UTF-8"
-        );
-        // SAFETY: see the doc comment — the cleared flag proves valid UTF-8.
-        Some(unsafe { str::from_utf8_unchecked(self.bytes) })
+        if self.known {
+            // Construction proved WTF-8, and `lone == false` excludes surrogates.
+            Some(unsafe { str::from_utf8_unchecked(self.bytes) })
+        } else {
+            str::from_utf8(self.bytes).ok()
+        }
     }
 
     /// Re-borrow from `offset`, which must be a code-point boundary.
@@ -109,6 +116,7 @@ impl<'a> Wtf8Str<'a> {
         Wtf8Str {
             bytes: &self.bytes[offset..],
             lone: self.lone,
+            known: self.known,
         }
     }
 

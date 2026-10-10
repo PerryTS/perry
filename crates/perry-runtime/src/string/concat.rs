@@ -94,11 +94,12 @@ pub(crate) fn canonicalize_surrogate_pairs(ptr: *mut StringHeader) -> *mut Strin
         i += 1;
     }
 
-    let new_flags = if still_has_lone {
-        STRING_FLAG_HAS_LONE_SURROGATES
-    } else {
-        0
-    };
+    let new_flags = (flags & STRING_FLAG_VALID_WTF8)
+        | if still_has_lone {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
     js_string_from_bytes_known_utf16(out.as_ptr(), out.len() as u32, u16len, new_flags)
 }
 
@@ -164,6 +165,66 @@ pub(crate) unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) 
     }
 }
 
+/// A payload view plus the metadata its producer already proved. `owner` is
+/// only used to root/reload the view if the open nursery block cannot serve it.
+#[derive(Clone, Copy)]
+struct ConcatPart {
+    data: *const u8,
+    len: u32,
+    ascii: bool,
+    units: u32,
+    flags: u32,
+    owner: *const StringHeader,
+}
+
+impl ConcatPart {
+    fn ascii(data: *const u8, len: u32) -> Self {
+        Self {
+            data,
+            len,
+            ascii: true,
+            units: len,
+            flags: STRING_FLAG_VALID_WTF8,
+            owner: ptr::null(),
+        }
+    }
+}
+
+#[inline]
+fn concat_string_part(
+    value: f64,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<ConcatPart> {
+    let (data, len, ascii) = str_bytes_ascii_from_jsvalue(value, scratch)?;
+    let value = crate::value::JSValue::from_bits(value.to_bits());
+    if value.is_string() && !value.as_string_ptr().is_null() {
+        let owner = value.as_string_ptr();
+        return Some(unsafe {
+            ConcatPart {
+                data,
+                len,
+                ascii,
+                units: (*owner).utf16_len,
+                flags: (*owner).flags,
+                owner,
+            }
+        });
+    }
+    let (units, flags) = if ascii {
+        (len, STRING_FLAG_VALID_WTF8)
+    } else {
+        raw_string_metadata(data, len)
+    };
+    Some(ConcatPart {
+        data,
+        len,
+        ascii,
+        units,
+        flags,
+        owner: ptr::null(),
+    })
+}
+
 /// SSO-aware pairwise `a + b` for two operands the codegen believes are
 /// strings. Both operands arrive NaN-boxed so an SSO operand stays inline, and
 /// the result is NaN-boxed too — SSO when the total fits five ASCII bytes, a
@@ -201,20 +262,22 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     // admission range below is non-negative), so this arm's third tuple
     // element is a constant `true`, never a scan.
     #[inline]
-    fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<(*const u8, u32, bool)> {
+    fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<ConcatPart> {
         let bits = bits_value.to_bits();
         let tag = bits >> 48;
         let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
-        if is_plain_f64 && bits_value.fract() == 0.0 && (0.0..=999_999_999.0).contains(&bits_value)
+        if is_plain_f64
+            && (0.0..=999_999_999.0).contains(&bits_value)
+            && (bits_value as u32) as f64 == bits_value
         {
             let len = fast_itoa_u32(bits_value as u32, buf);
-            Some((buf.as_ptr(), len as u32, true))
+            Some(ConcatPart::ascii(buf.as_ptr(), len as u32))
         } else {
             None
         }
     }
-    let l_str = str_bytes_ascii_from_jsvalue(l_value, &mut scratch_l);
-    let r_str = str_bytes_ascii_from_jsvalue(r_value, &mut scratch_r);
+    let l_str = concat_string_part(l_value, &mut scratch_l);
+    let r_str = concat_string_part(r_value, &mut scratch_r);
     if let (Some(l), Some(r)) = (l_str, r_str) {
         // Two real strings: straight to assembly, no number buffer touched
         // (the itoa scratch below would cost this path a 32-byte memset).
@@ -573,20 +636,20 @@ unsafe fn operand_byte_slice<'a>(ptr: *const u8, len: u32) -> &'a [u8] {
 /// r_slice.is_ascii()` on the heap path below with `both_ascii` sitting
 /// unused in scope) — one real scan per operand now, not two.
 #[inline(always)]
-fn concat_byte_parts(l: (*const u8, u32, bool), r: (*const u8, u32, bool)) -> f64 {
-    let total_blen = l.1 + r.1;
-    let both_ascii = l.2 && r.2;
+fn concat_byte_parts(mut l: ConcatPart, mut r: ConcatPart) -> f64 {
+    let total_blen = l.len + r.len;
+    let both_ascii = l.ascii && r.ascii;
 
     // SSO fast path — assemble the result inline when it fits (≤ 5
     // bytes). Pure bit arithmetic, no heap touch.
     if both_ascii && total_blen as usize <= crate::value::SHORT_STRING_MAX_LEN {
         unsafe {
             let mut payload: u64 = 0;
-            for i in 0..l.1 as usize {
-                payload |= (*l.0.add(i) as u64) << (i * 8);
+            for i in 0..l.len as usize {
+                payload |= (*l.data.add(i) as u64) << (i * 8);
             }
-            for i in 0..r.1 as usize {
-                payload |= (*r.0.add(i) as u64) << ((l.1 as usize + i) * 8);
+            for i in 0..r.len as usize {
+                payload |= (*r.data.add(i) as u64) << ((l.len as usize + i) * 8);
             }
             let len_bits = (total_blen as u64) << crate::value::SHORT_STRING_LEN_SHIFT;
             return f64::from_bits(crate::value::SHORT_STRING_TAG | len_bits | payload);
@@ -596,8 +659,8 @@ fn concat_byte_parts(l: (*const u8, u32, bool), r: (*const u8, u32, bool)) -> f6
     // Byte views over both operands — used by the memo probe below and by
     // the heap path's copy (and, on the non-ASCII arm only, its UTF-16/flags
     // walk). Built once and shared, rather than re-derived per use.
-    let l_slice: &[u8] = unsafe { operand_byte_slice(l.0, l.1) };
-    let r_slice: &[u8] = unsafe { operand_byte_slice(r.0, r.1) };
+    let l_slice: &[u8] = unsafe { operand_byte_slice(l.data, l.len) };
+    let r_slice: &[u8] = unsafe { operand_byte_slice(r.data, r.len) };
 
     // Memo probe, ahead of the allocation: hash and look up `l_slice ++
     // r_slice` directly (F1 — no stack buffer to materialise the
@@ -627,38 +690,32 @@ fn concat_byte_parts(l: (*const u8, u32, bool), r: (*const u8, u32, bool)) -> f6
     // Heap path — allocate a StringHeader and memcpy. Decode both
     // operands' byte slices via `str_bytes_ascii_from_jsvalue` (already done
     // above) and write directly into the new header's payload region.
-    let (ptr, data_ptr) = string_storage_alloc(total_blen);
+    let (ptr, data_ptr) = match string_storage_alloc_no_collect(total_blen) {
+        Some(storage) => storage,
+        None => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let left = scope.root_string_ptr(l.owner);
+            let right = scope.root_string_ptr(r.owner);
+            let storage = string_storage_alloc(total_blen);
+            if !l.owner.is_null() {
+                l.data = string_data(left.get_raw_const_ptr::<StringHeader>());
+            }
+            if !r.owner.is_null() {
+                r.data = string_data(right.get_raw_const_ptr::<StringHeader>());
+            }
+            storage
+        }
+    };
     unsafe {
-        let (utf16_len, flags) = if both_ascii {
-            (total_blen, 0)
-        } else {
-            // Sum each operand's UTF-16 length independently (concatenating two
-            // strings never merges code units across the boundary). Carry the
-            // lone-surrogate flag forward when an operand is WTF-8 so
-            // `isWellFormed()` / `JSON.stringify` stay correct on the result.
-            let mut u16 = 0u32;
-            let mut flags = 0u32;
-            if !l_slice.is_empty() {
-                u16 += compute_utf16_len(l.0, l.1);
-                if str::from_utf8(l_slice).is_err() {
-                    flags |= STRING_FLAG_HAS_LONE_SURROGATES;
-                }
-            }
-            if !r_slice.is_empty() {
-                u16 += compute_utf16_len(r.0, r.1);
-                if str::from_utf8(r_slice).is_err() {
-                    flags |= STRING_FLAG_HAS_LONE_SURROGATES;
-                }
-            }
-            (u16, flags)
-        };
+        let utf16_len = l.units + r.units;
+        let flags = combine_string_flags(l.flags, r.flags);
 
         init_string_header(ptr, utf16_len, total_blen, total_blen, 0, flags);
-        if !l_slice.is_empty() {
-            copy_bytes_small(l.0, data_ptr, l.1 as usize);
+        if l.len != 0 {
+            copy_bytes_small(l.data, data_ptr, l.len as usize);
         }
-        if !r_slice.is_empty() {
-            copy_bytes_small(r.0, data_ptr.add(l.1 as usize), r.1 as usize);
+        if r.len != 0 {
+            copy_bytes_small(r.data, data_ptr.add(l.len as usize), r.len as usize);
         }
         // Merge any surrogate pair newly formed across the join boundary
         // (no-op unless the result carries the lone-surrogate flag).
@@ -688,10 +745,6 @@ pub extern "C" fn js_string_concat(
     if crate::hot_diag::enum_on() {
         crate::hot_diag::enum_with(|d| d.concat_calls += 1);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let a_handle = scope.root_string_ptr(a);
-    let b_handle = scope.root_string_ptr(b);
-
     // Snapshot all validity-gated reads from `a` in one pass. For invalid
     // pointers this stays at the zero-defaults so the rest of the function
     // sees a "behaves like an empty string" view.
@@ -700,12 +753,12 @@ pub extern "C" fn js_string_concat(
     let (blen_a, u16len_a, flags_a) = if a_valid {
         unsafe { ((*a).byte_len, (*a).utf16_len, (*a).flags) }
     } else {
-        (0, 0, 0)
+        (0, 0, STRING_FLAG_VALID_WTF8)
     };
     let (blen_b, u16len_b, flags_b) = if b_valid {
         unsafe { ((*b).byte_len, (*b).utf16_len, (*b).flags) }
     } else {
-        (0, 0, 0)
+        (0, 0, STRING_FLAG_VALID_WTF8)
     };
     let total_blen = blen_a + blen_b;
 
@@ -735,9 +788,21 @@ pub extern "C" fn js_string_concat(
         }
     }
 
-    let (ptr, data_ptr) = string_storage_alloc(total_blen);
-    let a = a_handle.get_raw_const_ptr::<StringHeader>();
-    let b = b_handle.get_raw_const_ptr::<StringHeader>();
+    let (ptr, data_ptr, a, b) = match string_storage_alloc_no_collect(total_blen) {
+        Some((ptr, data)) => (ptr, data, a, b),
+        None => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let left = scope.root_string_ptr(a);
+            let right = scope.root_string_ptr(b);
+            let (ptr, data) = string_storage_alloc(total_blen);
+            (
+                ptr,
+                data,
+                left.get_raw_const_ptr::<StringHeader>(),
+                right.get_raw_const_ptr::<StringHeader>(),
+            )
+        }
+    };
 
     unsafe {
         init_string_header(
@@ -746,7 +811,7 @@ pub extern "C" fn js_string_concat(
             total_blen,
             total_blen,
             0,
-            flags_a | flags_b,
+            combine_string_flags(flags_a, flags_b),
         );
 
         if a_valid && blen_a > 0 {
@@ -811,36 +876,7 @@ pub extern "C" fn js_string_concat_value(
     if is_plain_f64 {
         // Format the number into a stack buffer
         let mut num_buf = [0u8; 32]; // max f64 string is ~24 chars
-        let num_len: usize;
-
-        if value.fract() == 0.0 && value.abs() < 1e15 && !value.is_nan() && !value.is_infinite() {
-            // Integer path: format directly without Rust heap allocation
-            let n = value as i64;
-            if (0..=999_999_999).contains(&n) {
-                // Fast itoa for common positive integers
-                num_len = fast_itoa_u32(n as u32, &mut num_buf);
-            } else {
-                num_len = fast_itoa_i64(n, &mut num_buf);
-            }
-        } else if value.is_nan() {
-            num_buf[..3].copy_from_slice(b"NaN");
-            num_len = 3;
-        } else if value.is_infinite() {
-            if value > 0.0 {
-                num_buf[..8].copy_from_slice(b"Infinity");
-                num_len = 8;
-            } else {
-                num_buf[..9].copy_from_slice(b"-Infinity");
-                num_len = 9;
-            }
-        } else if value == 0.0 {
-            num_buf[0] = b'0';
-            num_len = 1;
-        } else {
-            // #3987: match ECMAScript NumberToString (scientific notation for
-            // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
-            num_len = format_ryu_js_into(value, &mut num_buf);
-        }
+        let num_len = format_number_into(value, &mut num_buf);
 
         // Single allocation for prefix + number string. `Some` from the
         // no-collect allocator means the open nursery block served it and
@@ -872,7 +908,9 @@ pub extern "C" fn js_string_concat_value(
         let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen
-            && unsafe { (*prefix).flags & !STRING_FLAG_WTF8_VALIDATED == 0 }
+            && unsafe {
+                (*prefix).flags & !(STRING_FLAG_WTF8_VALIDATED | STRING_FLAG_VALID_WTF8) == 0
+            }
             && bytes_all_ascii(string_data(prefix), prefix_blen)
             && concat_memo_should_probe();
         let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
@@ -1123,7 +1161,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut total_blen = 0u32;
     let mut total_u16 = 0u32;
-    let mut piece_flags = 0u32;
+    let mut piece_flags = STRING_FLAG_VALID_WTF8;
 
     for i in 0..n {
         let bits = unsafe { *parts.add(i) }.to_bits();
@@ -1139,7 +1177,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
         piece_lens[i] = blen;
         total_blen = total_blen.saturating_add(blen);
         total_u16 = total_u16.saturating_add(unsafe { (*piece).utf16_len });
-        piece_flags |= unsafe { (*piece).flags };
+        piece_flags = combine_string_flags(piece_flags, unsafe { (*piece).flags });
     }
 
     let dest = piece_ptrs[0] as *mut StringHeader;
@@ -1160,7 +1198,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
             (*dest).byte_len = total_blen;
             (*dest).utf16_len = total_u16;
             // The destination's payload just changed; no piece's validation carries over.
-            (*dest).flags = ((*dest).flags | piece_flags) & !STRING_FLAG_WTF8_VALIDATED;
+            (*dest).flags = piece_flags & !STRING_FLAG_WTF8_VALIDATED;
             return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 canonicalize_surrogate_pairs(dest)
             } else {
@@ -1290,7 +1328,7 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
 ) -> Option<*mut StringHeader> {
     let mut piece_ptrs: [*const StringHeader; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
-    let mut piece_flags: u32 = 0;
+    let mut piece_flags: u32 = STRING_FLAG_VALID_WTF8;
     let mut total_blen: u32 = 0;
     let mut total_u16: u32 = 0;
 
@@ -1321,7 +1359,7 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
         let blen = unsafe { (*ptr).byte_len };
         if blen > 0 {
             piece_lens[i] = blen;
-            piece_flags |= unsafe { (*ptr).flags };
+            piece_flags = combine_string_flags(piece_flags, unsafe { (*ptr).flags });
             total_blen = total_blen.saturating_add(blen);
             total_u16 = total_u16.saturating_add(unsafe { (*ptr).utf16_len });
         }
@@ -1372,7 +1410,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
     let mut piece_ptrs: [*const u8; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut piece_u16: [u32; MAX_PARTS] = [0; MAX_PARTS];
-    let mut piece_flags: u32 = 0;
+    let mut piece_flags: u32 = STRING_FLAG_VALID_WTF8;
     let mut total_blen: u32 = 0;
     let mut total_u16: u32 = 0;
 
@@ -1396,7 +1434,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                     piece_string_handles[i] = Some(scope.root_string_ptr(ptr));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
-                    piece_flags |= flags;
+                    piece_flags = combine_string_flags(piece_flags, flags);
                     total_blen = total_blen.saturating_add(blen);
                     total_u16 = total_u16.saturating_add(u16len);
                 }
@@ -1416,7 +1454,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                     piece_string_handles[i] = Some(scope.root_string_ptr(s));
                     piece_lens[i] = blen;
                     piece_u16[i] = u16len;
-                    piece_flags |= flags;
+                    piece_flags = combine_string_flags(piece_flags, flags);
                     total_blen = total_blen.saturating_add(blen);
                     total_u16 = total_u16.saturating_add(u16len);
                 }
@@ -1467,7 +1505,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                 piece_string_handles[i] = Some(scope.root_string_ptr(s));
                 piece_lens[i] = blen;
                 piece_u16[i] = u16len;
-                piece_flags |= flags;
+                piece_flags = combine_string_flags(piece_flags, flags);
                 total_blen = total_blen.saturating_add(blen);
                 total_u16 = total_u16.saturating_add(u16len);
             }
@@ -1595,34 +1633,7 @@ pub extern "C" fn js_value_concat_string(
 
     if is_plain_f64 {
         let mut num_buf = [0u8; 32];
-        let num_len: usize;
-
-        if value.fract() == 0.0 && value.abs() < 1e15 && !value.is_nan() && !value.is_infinite() {
-            let n = value as i64;
-            if (0..=999_999_999).contains(&n) {
-                num_len = fast_itoa_u32(n as u32, &mut num_buf);
-            } else {
-                num_len = fast_itoa_i64(n, &mut num_buf);
-            }
-        } else if value.is_nan() {
-            num_buf[..3].copy_from_slice(b"NaN");
-            num_len = 3;
-        } else if value.is_infinite() {
-            if value > 0.0 {
-                num_buf[..8].copy_from_slice(b"Infinity");
-                num_len = 8;
-            } else {
-                num_buf[..9].copy_from_slice(b"-Infinity");
-                num_len = 9;
-            }
-        } else if value == 0.0 {
-            num_buf[0] = b'0';
-            num_len = 1;
-        } else {
-            // #3987: match ECMAScript NumberToString (scientific notation for
-            // |n| >= 1e21 / < 1e-6) instead of Rust's full-decimal `{}`.
-            num_len = format_ryu_js_into(value, &mut num_buf);
-        }
+        let num_len = format_number_into(value, &mut num_buf);
 
         let total_blen = num_len + suffix_blen as usize;
         let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);

@@ -35,17 +35,7 @@ pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
     } else {
         crate::builtins::js_number_coerce(index)
     };
-    if n.is_nan() {
-        return 0;
-    }
-    let truncated = n.trunc();
-    if truncated <= i32::MIN as f64 {
-        i32::MIN
-    } else if truncated >= i32::MAX as f64 {
-        i32::MAX
-    } else {
-        truncated as i32
-    }
+    n as i32
 }
 
 /// `end`-argument coercion for `slice`/`substring`. Per ECMA-262 §22.1.3.20 /
