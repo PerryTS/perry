@@ -131,7 +131,7 @@ fn every_registered_global_store_omits_redundant_root_shading() {
 
 fn capture_store_ir() -> String {
     let mut module = Module::new("capture_cost");
-    let body = vec![
+    let mut body = vec![
         Stmt::Let {
             id: 1,
             name: "captured".into(),
@@ -164,6 +164,17 @@ fn capture_store_ir() -> String {
             }),
         },
     ];
+    // A lexical for-head takes the existing snapshot-capture path rather
+    // than the shared box path. Its closure therefore writes the capture
+    // through js_closure_set_capture_bits, the owner this probe exercises.
+    let init = body.remove(0);
+    body.push(Stmt::Return(Some(Expr::LocalGet(2))));
+    let body = vec![Stmt::For {
+        init: Some(Box::new(init)),
+        condition: Some(Expr::LocalGet(1)),
+        update: None,
+        body,
+    }];
     module.functions.push(Function {
         id: 1,
         name: "capture_probe".into(),
