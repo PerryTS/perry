@@ -118,6 +118,10 @@ mod io;
 mod iter_object;
 mod locale;
 mod pad;
+mod provenance;
+use provenance::{combine_string_flags, raw_string_metadata};
+#[cfg(test)]
+mod provenance_tests;
 mod raw;
 mod slice_ops;
 mod slice_range;
@@ -219,7 +223,8 @@ pub(crate) use format::js_format_f64;
 /// from user data belongs on the ordinary allocation path.
 #[inline]
 pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
-    intern::intern_dispatch_bytes(0, name.as_ptr(), name.len(), 0, false) as *mut StringHeader
+    let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+    intern::intern_prehashed_bytes(name.as_ptr(), name.len(), hash, false) as *mut StringHeader
 }
 #[cfg(feature = "regex-engine")]
 pub use crate::regex::{js_string_split_js, js_string_split_n};
@@ -311,6 +316,14 @@ pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
 /// without marking it shared, so a later in-place append is what clears it.
 pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
+/// The payload is valid generalized WTF-8, with an exact UTF-16 length.
+/// Unlike regex's binding certificate, this is construction provenance: copies
+/// on code-unit boundaries preserve it, and concatenation requires BOTH inputs
+/// to carry it. Raw/FFI bytes acquire it only after boundary validation.
+/// Together with a clear lone-surrogate bit it proves a Rust `&str` borrow safe.
+/// This uses the existing flags word; neither header size nor payload ABI changes.
+pub(crate) const STRING_FLAG_VALID_WTF8: u32 = 1 << 3;
+
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
 #[no_mangle]
@@ -319,7 +332,7 @@ pub static PERRY_EMPTY_STRING: StringHeader = StringHeader {
     byte_len: 0,
     capacity: 0,
     refcount: 0,
-    flags: 0,
+    flags: STRING_FLAG_VALID_WTF8,
 };
 
 /// Get a pointer to the static empty string (for codegen null guards).
@@ -476,7 +489,8 @@ pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHead
 /// are pointer-identical to the same literals elsewhere in the program.
 #[inline]
 pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
-    intern::intern_dispatch_bytes(0, bytes.as_ptr(), bytes.len(), 0, false)
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    intern::intern_prehashed_bytes(bytes.as_ptr(), bytes.len(), hash, false)
 }
 
 /// Header for heap-allocated strings
@@ -1036,7 +1050,8 @@ pub fn str_bytes_ascii_from_jsvalue(
             // ambiguous — a truncated/malformed lead byte can coincidentally
             // match — so only THAT arm pays for the real scan.
             let ascii = (*hdr).utf16_len == byte_len
-                && std::slice::from_raw_parts(data, byte_len as usize).is_ascii();
+                && ((*hdr).flags & STRING_FLAG_VALID_WTF8 != 0
+                    || std::slice::from_raw_parts(data, byte_len as usize).is_ascii());
             return Some((data, byte_len, ascii));
         }
     }
@@ -1047,7 +1062,7 @@ pub fn str_bytes_ascii_from_jsvalue(
 /// Skips the `compute_utf16_len` byte scan — sets utf16_len = byte_len directly.
 #[inline]
 pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut StringHeader {
-    js_string_from_bytes_known_utf16(data, len, len, 0)
+    js_string_from_bytes_known_utf16(data, len, len, STRING_FLAG_VALID_WTF8)
 }
 
 /// Allocate an uninitialised ASCII-typed string of `len` bytes and return
@@ -1061,7 +1076,7 @@ pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut Stri
 pub(crate) fn js_string_alloc_ascii_uninit(len: u32) -> (*mut StringHeader, *mut u8) {
     let (ptr, data_ptr) = string_storage_alloc(len);
     unsafe {
-        init_string_header(ptr, len, len, len, 0, 0);
+        init_string_header(ptr, len, len, len, 0, STRING_FLAG_VALID_WTF8);
     }
     (ptr, data_ptr)
 }
@@ -1197,7 +1212,12 @@ pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
 /// Internal helper: Create a StringHeader from a Rust &str
 #[inline]
 pub(crate) fn js_string_from_str(s: &str) -> *mut StringHeader {
-    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    js_string_from_bytes_known_utf16(
+        s.as_ptr(),
+        s.len() as u32,
+        utf16_count::count(s) as u32,
+        STRING_FLAG_VALID_WTF8,
+    )
 }
 
 /// Get the data pointer for a string
@@ -1268,30 +1288,28 @@ pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 /// Check if string is pure ASCII (utf16_len == byte_len → all single-byte chars)
 #[inline]
 pub(crate) fn is_ascii_string(s: *const StringHeader) -> bool {
-    unsafe { (*s).utf16_len == (*s).byte_len }
+    unsafe {
+        (*s).utf16_len == (*s).byte_len
+            && ((*s).flags & STRING_FLAG_VALID_WTF8 != 0
+                || slice::from_raw_parts(string_data(s), (*s).byte_len as usize).is_ascii())
+    }
 }
 
-/// Borrow a header's payload as `&str`, answering `None` for a WTF-8 payload
-/// (lone surrogates), like `std::str::from_utf8(..).ok()` — but without the
-/// scan when the header already proves the answer: `utf16_len == byte_len`
-/// holds iff every byte is a one-byte code unit, i.e. pure ASCII, which is
-/// what nearly every property key is. The generic property-read ladder
-/// decodes the key at several layers per read (`ic_miss`, closure expandos,
-/// accessor and reflection probes, async-resource dispatch), and
-/// `core::str::from_utf8` was 2 % of the claude-code keystroke profile on
-/// those decodes alone.
-///
-/// Same borrow rule as [`string_as_str`]: the slice must not outlive any
-/// call that can move the payload.
+/// Borrow a live header as UTF-8 when its construction proves that encoding.
+/// Unknown raw/FFI payloads still use checked decoding; WTF-8 with lone
+/// surrogates never becomes a Rust `&str`. The borrow cannot span collection.
 ///
 /// # Safety
 /// `s` must point at a live `StringHeader`.
 #[inline]
 pub(crate) unsafe fn header_str_checked<'a>(s: *const StringHeader) -> Option<&'a str> {
-    let len = (*s).byte_len as usize;
-    let bytes = slice::from_raw_parts(string_data(s), len);
-    if (*s).utf16_len as usize == len {
-        Some(str::from_utf8_unchecked(bytes))
+    let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+    if (*s).flags & STRING_FLAG_VALID_WTF8 != 0 {
+        if (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+            None
+        } else {
+            Some(str::from_utf8_unchecked(bytes))
+        }
     } else {
         str::from_utf8(bytes).ok()
     }
