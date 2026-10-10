@@ -107,6 +107,14 @@
     },
     {
       "path": "crates/perry-codegen/src/expr/compare.rs",
+      "function": "is_plain_number_or_undefined",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "An immutable ordinary-double local with an established Number-or-undefined scalar proof uses raw double/undefined storage. Checked byte results establish this proof after their initializer; no declared type, reassigned binding, boxed variable, or pointer shadow slot can justify removing compact-integer decoding."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/compare.rs",
       "function": "is_proven_symbol_expr",
       "access": "stable_local_type_proof",
       "count": 1,
@@ -240,6 +248,14 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The Array hint on a class evaluation's compiler-private self binding (the evaluation_owner of a fresh or first evaluation) is not a user annotation: the shared-mutable capture rewrite is what both sets it and allocates the one-element cell, in the same pass, so the cell representation holds by construction wherever the hint is present. The raw POINTER_MASK_I64 decode and js_array_set_f64 below are therefore reaching a cell the compiler itself created; the else arm stores the plain value for an unrewritten binding."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
+      "function": "byte_read_is_numeric",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "Reject nullable numeric-looking index locals before publishing a byte-result proof: undefined is an observable expando property key. Actual Number keys and a separate construction/dominating B4 receiver proof are required."
     },
     {
       "path": "crates/perry-codegen/src/expr/ta_element_read.rs",
@@ -485,9 +501,9 @@
       "path": "crates/perry-codegen/src/stmt/number_local_loop.rs",
       "function": "lower",
       "access": "snapshot_guarded_proof",
-      "count": 1,
+      "count": 2,
       "classification": "metadata-only",
-      "reason": "Restore bookkeeping for the existing Number-loop clone: byte-brand narrowing is installed only under B4 admission and the exact prior proof is restored before lowering the generic loop."
+      "reason": "Exact restore bookkeeping for the existing Number-loop clone: snapshot the receiver proof and immutable byte-result proofs before B4-scoped narrowing; restore the original proofs before the generic body. These snapshots are not consumed as evidence."
     },
     {
       "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",

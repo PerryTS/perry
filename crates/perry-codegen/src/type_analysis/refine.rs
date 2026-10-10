@@ -190,6 +190,11 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         return Some(kind);
     }
     match init {
+        Expr::IndexGet { .. } | Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
+            if crate::expr::ta_element_read::byte_read_is_numeric(ctx, init) =>
+        {
+            Some(HirType::Union(vec![HirType::Number, HirType::Void]))
+        }
         // #11759 (c′): `new C()` guarded on the first evaluation proves what
         // its static construction proves.
         Expr::Conditional {

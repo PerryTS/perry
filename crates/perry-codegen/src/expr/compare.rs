@@ -685,30 +685,55 @@ fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
 /// proven operand leaves that conversion off the varying operand's dependency
 /// chain and folds away for constants. Saturation avoids poison for NaN,
 /// infinity and out-of-range Numbers; the round trip rejects those and fractions.
+/// Checked numeric bytes use raw doubles or the undefined tag, never the
+/// compact-integer tag. The same scoped scalar-union proof applies to their
+/// immutable result locals. Keep Number-or-undefined distinct from Number:
+/// two undefined operands still need ordinary identity equality.
+fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(id) => {
+            !ctx.shadow_slot_map.contains_key(id)
+                && !ctx.boxed_vars.contains(id)
+                && ctx.stable_local_type_proof(id).is_some_and(|ty| {
+                    matches!(ty, HirType::Union(types) if !types.is_empty()
+                        && types.iter().all(|ty| matches!(ty, HirType::Number | HirType::Void)))
+                })
+        }
+        _ => super::ta_element_read::byte_read_is_numeric(ctx, expr),
+    }
+}
+
 fn lower_strict_eq_against_number(
     ctx: &mut FnCtx<'_>,
     op: CompareOp,
     l: &str,
     r: &str,
     dynamic_is_left: bool,
+    dynamic_expr: &Expr,
 ) -> String {
+    let plain = is_plain_number_or_undefined(ctx, dynamic_expr);
     let (dynamic, number) = if dynamic_is_left { (l, r) } else { (r, l) };
     let number = normalize_int32_immediate(ctx, number);
     let number = number.as_str();
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
-    let tag = ctx.block().lshr(I64, &bits, "48");
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
-    let integer = ctx
-        .block()
-        .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
-    let roundtrip = ctx.block().sitofp(I32, &integer, DOUBLE);
-    let exact = ctx.block().fcmp("oeq", &roundtrip, number);
-    let payload = ctx.block().trunc(I64, &bits, I32);
-    let same_integer = ctx.block().icmp_eq(I32, &payload, &integer);
-    let compact = ctx.block().and(I1, &is_i32, &exact);
-    let compact = ctx.block().and(I1, &compact, &same_integer);
+    let compact = if plain {
+        None
+    } else {
+        let tag = ctx.block().lshr(I64, &bits, "48");
+        let is_i32 = ctx
+            .block()
+            .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
+        let integer = ctx
+            .block()
+            .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
+        let roundtrip = ctx.block().sitofp(I32, &integer, DOUBLE);
+        let exact = ctx.block().fcmp("oeq", &roundtrip, number);
+        let payload = ctx.block().trunc(I64, &bits, I32);
+        let same_integer = ctx.block().icmp_eq(I32, &payload, &integer);
+        let compact = ctx.block().and(I1, &is_i32, &exact);
+        let compact = ctx.block().and(I1, &compact, &same_integer);
+        Some(compact)
+    };
     // Raw doubles compare by bits, except that both signed zeros are equal and
     // NaN is unequal to itself. Keeping the NaN check on the proven operand
     // avoids a floating-point round trip through the varying value as well.
@@ -722,7 +747,10 @@ fn lower_strict_eq_against_number(
     let raw = ctx.block().or(I1, &same_bits, &both_zero);
     let ordered = ctx.block().fcmp("oeq", number, number);
     let raw = ctx.block().and(I1, &raw, &ordered);
-    let equal = ctx.block().or(I1, &raw, &compact);
+    let equal = match compact {
+        Some(compact) => ctx.block().or(I1, &raw, &compact),
+        None => raw,
+    };
     let bit = if matches!(op, CompareOp::Ne) {
         ctx.block().xor(I1, &equal, "true")
     } else {
@@ -1777,6 +1805,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &l,
                         &r,
                         !left_numeric,
+                        if left_numeric { right } else { left },
                     ));
                 }
                 if is_relational_op && !both_numeric {
