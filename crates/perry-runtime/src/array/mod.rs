@@ -305,7 +305,7 @@ pub(crate) use self::flat_clone::{
 };
 pub(crate) use self::header::{
     array_byte_size, array_has_plain_shape_resolved, array_is_frozen, array_is_sealed_or_no_extend,
-    array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds_resolved,
+    array_numeric_layout_resolved, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds_resolved,
     array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
     array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
     buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value_from_flags,

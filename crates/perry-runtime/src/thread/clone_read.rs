@@ -9,7 +9,7 @@
 use std::ptr;
 
 use super::{fs_thread_codec, store_thread_array_slot, store_thread_object_field};
-use super::{SerializedValue, VIEW_KIND_DATA_VIEW};
+use super::{CloneMessage, CloneNode, CloneSlot, SerializedValue, VIEW_KIND_DATA_VIEW};
 use super::{BIGINT_TAG, POINTER_MASK, TAG_UNDEFINED};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::{JSValue, POINTER_TAG};
@@ -21,21 +21,31 @@ use crate::value::{JSValue, POINTER_TAG};
 ///
 /// # Safety
 /// `sv` must come from the writer in `clone_write.rs` (or keep its rules).
+#[optimize(size)]
 pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
+    #[cfg(feature = "gc-instruments")]
+    let _timer = super::clone_timing::CloneTimer::new("deserialize");
     let scope = RuntimeHandleScope::new();
     let mut reader = Reader {
         scope: &scope,
         made: Vec::new(),
+        message: None,
+        shapes: Vec::new(),
+        strings: Vec::new(),
     };
     reader.value(sv)
 }
 
 /// Whether the writer gave this value an index (`Writer::begin`). The reader
 /// must make a slot for exactly these, in the same order.
+#[optimize(size)]
 fn remembers(sv: &SerializedValue) -> bool {
     matches!(
         sv,
-        SerializedValue::Array(_)
+        SerializedValue::RawArray(_)
+            | SerializedValue::SlotArray { .. }
+            | SerializedValue::ShapeObject { .. }
+            | SerializedValue::Array(_)
             | SerializedValue::Object { .. }
             | SerializedValue::Closure { .. }
             | SerializedValue::Date(_)
@@ -60,33 +70,65 @@ enum Made {
     BytesOfTypedArray,
 }
 
-struct Reader<'s> {
+enum ArrayElements<'m> {
+    Values(&'m [SerializedValue]),
+    Slots(&'m [CloneSlot]),
+}
+impl ArrayElements<'_> {
+    #[optimize(size)]
+    fn len(&self) -> usize {
+        match self {
+            Self::Values(v) => v.len(),
+            Self::Slots(v) => v.len(),
+        }
+    }
+    #[optimize(size)]
+    fn holes(&self) -> bool {
+        match self {
+            Self::Values(v) => v.iter().any(|e| matches!(e, SerializedValue::Hole)),
+            Self::Slots(v) => v.iter().any(|e| e.is_hole()),
+        }
+    }
+}
+
+struct Reader<'s, 'm> {
+    message: Option<&'m CloneMessage>,
+    shapes: Vec<(RuntimeHandle<'s>, u32)>,
+    strings: Vec<Option<RuntimeHandle<'s>>>,
     scope: &'s RuntimeHandleScope,
     made: Vec<(RuntimeHandle<'s>, Made)>,
 }
 
-impl<'s> Reader<'s> {
+impl<'s, 'm> Reader<'s, 'm> {
+    #[inline(never)]
+    #[optimize(size)]
     fn reserve(&mut self) -> usize {
         let handle = self.scope.root_nanbox_u64(TAG_UNDEFINED);
         self.made.push((handle, Made::Value));
         self.made.len() - 1
     }
 
+    #[inline(never)]
+    #[optimize(size)]
     fn fill(&mut self, slot: usize, bits: u64, made: Made) {
         self.made[slot].0.set_nanbox_u64(bits);
         self.made[slot].1 = made;
     }
 
+    #[inline(never)]
+    #[optimize(size)]
     fn get(&self, slot: usize) -> u64 {
         self.made[slot].0.get_nanbox_u64()
     }
 
+    #[optimize(size)]
     fn ptr<T>(&self, slot: usize) -> *mut T {
         (self.get(slot) & POINTER_MASK) as *mut T
     }
 
     /// The value a `Ref` names. For a view that owns its bytes, make its
     /// ArrayBuffer now and remember it.
+    #[optimize(size)]
     unsafe fn resolve(&mut self, slot: usize) -> u64 {
         let buffer = match self.made[slot].1 {
             Made::Value => return self.get(slot),
@@ -102,13 +144,34 @@ impl<'s> Reader<'s> {
         bits
     }
 
-    unsafe fn value(&mut self, sv: &SerializedValue) -> u64 {
+    #[optimize(size)]
+    unsafe fn value(&mut self, sv: &'m SerializedValue) -> u64 {
+        if let SerializedValue::Message { root, data } = sv {
+            self.prepare_message(data);
+            return self.value(root);
+        }
         let slot = if remembers(sv) {
             Some(self.reserve())
         } else {
             None
         };
         let bits = match sv {
+            SerializedValue::RawArray(bits) => JSValue::pointer(
+                crate::array::js_array_from_f64(bits.as_ptr().cast(), bits.len() as u32).cast(),
+            )
+            .bits(),
+            SerializedValue::Message { .. } => unreachable!(),
+            SerializedValue::StringRef(index) => self.string(*index as usize),
+            SerializedValue::ShapeObject { shape, start } => {
+                return self.shape_object(slot.unwrap(), *shape as usize, *start as usize)
+            }
+            SerializedValue::SlotArray {
+                start,
+                len,
+                properties,
+            } => {
+                return self.slot_array(slot.unwrap(), *start as usize, *len as usize, *properties)
+            }
             SerializedValue::Inline(bits) => *bits,
             SerializedValue::Hole => crate::value::TAG_HOLE,
             SerializedValue::Ref(index) => self.resolve(*index as usize),
@@ -119,7 +182,9 @@ impl<'s> Reader<'s> {
             }
             // #2089: a fresh DateCell in this thread's arena.
             SerializedValue::Date(ts) => crate::date::alloc_date_cell(*ts).to_bits(),
-            SerializedValue::Array(elements) => return self.array(slot.unwrap(), elements),
+            SerializedValue::Array(elements) => {
+                return self.array(slot.unwrap(), ArrayElements::Values(elements))
+            }
             SerializedValue::Object {
                 final_constfn,
                 class_id,
@@ -198,39 +263,148 @@ impl<'s> Reader<'s> {
         bits
     }
 
-    unsafe fn array(&mut self, slot: usize, elements: &[SerializedValue]) -> u64 {
-        let arr = crate::array::js_array_alloc(elements.len() as u32);
-        self.fill(slot, JSValue::pointer(arr as *const u8).bits(), Made::Value);
-        if elements.iter().any(|e| matches!(e, SerializedValue::Hole)) {
-            // Pushing keeps the array's hole bookkeeping right.
-            for element in elements {
-                let bits = self.value(element);
-                let grown = crate::array::js_array_push_f64(self.ptr(slot), f64::from_bits(bits));
-                self.fill(
-                    slot,
-                    JSValue::pointer(grown as *const u8).bits(),
-                    Made::Value,
-                );
+    #[cold]
+    #[optimize(size)]
+    unsafe fn prepare_message(&mut self, data: &'m CloneMessage) {
+        self.message = Some(data);
+        self.strings.resize_with(data.strings.len(), || None);
+        for shape in &data.shapes {
+            let names = &shape.keys;
+            let keys = self.keys(names);
+            let seed = crate::object::alloc_plain::alloc_plain_record_with_keys(
+                names.len() as u32,
+                crate::object::ObjectKeys::new(keys.get_raw_mut_ptr(), names.len() as u32),
+            );
+            let id = crate::object::shapes::object_shape_stamp(seed);
+            self.shapes.push((self.scope.root_raw_mut_ptr(seed), id));
+        }
+    }
+
+    #[cold]
+    #[optimize(size)]
+    unsafe fn keys(&self, names: &[Vec<u8>]) -> RuntimeHandle<'s> {
+        let keys = self
+            .scope
+            .root_raw_mut_ptr(crate::array::js_array_alloc(names.len() as u32));
+        for (i, name) in names.iter().enumerate() {
+            let bits = string_bits(name);
+            store_thread_array_slot(keys.get_raw_mut_ptr(), i, bits);
+        }
+        keys
+    }
+
+    #[optimize(size)]
+    unsafe fn string(&mut self, index: usize) -> u64 {
+        if let Some(handle) = &self.strings[index] {
+            return handle.get_nanbox_u64();
+        }
+        let bits = string_bits(&self.message.unwrap().strings[index]);
+        self.strings[index] = Some(self.scope.root_nanbox_u64(bits));
+        bits
+    }
+
+    #[optimize(size)]
+    unsafe fn read_slot(&mut self, slot: CloneSlot) -> u64 {
+        match slot.0 & super::TAG_MASK {
+            super::STRING_TAG => self.string((slot.0 & super::POINTER_MASK) as usize),
+            super::POINTER_TAG => {
+                match &self.message.unwrap().nodes[(slot.0 & super::POINTER_MASK) as usize] {
+                    CloneNode::Object { shape, start } => {
+                        let slot = self.reserve();
+                        self.shape_object(slot, *shape as usize, *start as usize)
+                    }
+                    CloneNode::Array {
+                        start,
+                        len,
+                        properties,
+                    } => {
+                        let slot = self.reserve();
+                        self.slot_array(slot, *start as usize, *len as usize, *properties)
+                    }
+                    CloneNode::Ref(index) => self.resolve(*index as usize),
+                    CloneNode::Value(value) => self.value(value),
+                }
             }
-            return self.get(slot);
+            _ => slot.0,
         }
-        for (i, element) in elements.iter().enumerate() {
-            let bits = self.value(element);
-            // GC_STORE_AUDIT(BARRIERED): deserialized thread array slot uses the shared array slot-store helper.
-            store_thread_array_slot(self.ptr(slot), i, bits);
+    }
+
+    #[optimize(size)]
+    unsafe fn shape_object(&mut self, slot: usize, shape: usize, start: usize) -> u64 {
+        let count = self.message.unwrap().shapes[shape].keys.len();
+        let (seed, id) = &self.shapes[shape];
+        let keys = crate::object::object_keys(seed.get_raw_const_ptr()).arr();
+        let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+            count as u32,
+            keys,
+            *id,
+        );
+        self.fill(slot, JSValue::pointer(obj.cast()).bits(), Made::Value);
+        for i in 0..count {
+            let bits = self.read_slot(self.message.unwrap().slots[start + i]);
+            store_thread_object_field(self.ptr(slot), i, bits);
         }
-        let arr = self.ptr::<crate::array::ArrayHeader>(slot);
-        (*arr).length = elements.len() as u32;
         self.get(slot)
     }
 
+    #[optimize(size)]
+    unsafe fn slot_array(
+        &mut self,
+        slot: usize,
+        start: usize,
+        len: usize,
+        properties: Option<(u32, u32)>,
+    ) -> u64 {
+        let elements = &self.message.unwrap().slots[start..start + len];
+        self.array(slot, ArrayElements::Slots(elements));
+        if let Some((shape, start)) = properties {
+            for i in 0..self.message.unwrap().shapes[shape as usize].keys.len() {
+                let bits = self.read_slot(self.message.unwrap().slots[start as usize + i]);
+                let value = self.scope.root_nanbox_u64(bits);
+                let name = &self.message.unwrap().shapes[shape as usize].keys[i];
+                let key = heap_string(name);
+                let arr = crate::array::array_named_property_set(
+                    self.ptr(slot),
+                    key,
+                    value.get_nanbox_f64(),
+                );
+                self.fill(slot, JSValue::pointer(arr.cast()).bits(), Made::Value);
+            }
+        }
+        self.get(slot)
+    }
+
+    #[inline(never)]
+    #[optimize(size)]
+    unsafe fn array(&mut self, slot: usize, elements: ArrayElements<'m>) -> u64 {
+        let len = elements.len();
+        let arr = crate::array::js_array_alloc(len as u32);
+        self.fill(slot, JSValue::pointer(arr.cast()).bits(), Made::Value);
+        let holes = elements.holes();
+        for i in 0..len {
+            let bits = match &elements {
+                ArrayElements::Values(values) => self.value(&values[i]),
+                ArrayElements::Slots(slots) => self.read_slot(slots[i]),
+            };
+            if holes {
+                let arr = crate::array::js_array_push_f64(self.ptr(slot), f64::from_bits(bits));
+                self.fill(slot, JSValue::pointer(arr.cast()).bits(), Made::Value);
+            } else {
+                store_thread_array_slot(self.ptr(slot), i, bits);
+            }
+        }
+        (*self.ptr::<crate::array::ArrayHeader>(slot)).length = len as u32;
+        self.get(slot)
+    }
+
+    #[optimize(size)]
     unsafe fn object(
         &mut self,
         slot: usize,
         final_constfn: Option<&super::constfn_transfer::ConstFnTransferFacts>,
         class_id: u32,
         parent_class_id: u32,
-        fields: &[SerializedValue],
+        fields: &'m [SerializedValue],
         keys: Option<&[Vec<u8>]>,
     ) -> u64 {
         let obj = crate::object::js_object_alloc_with_parent(
@@ -252,17 +426,8 @@ impl<'s> Reader<'s> {
             store_thread_object_field(self.ptr(slot), i, bits);
         }
         if let Some(names) = keys {
-            let keys_arr = crate::array::js_array_alloc(names.len() as u32);
-            let keys_handle = self.scope.root_raw_mut_ptr(keys_arr);
-            for (i, name) in names.iter().enumerate() {
-                let key = string_bits(name);
-                // GC_STORE_AUDIT(BARRIERED): deserialized key array slot uses the shared array slot-store helper.
-                keys_handle.with_mut_ptr(|keys_arr| store_thread_array_slot(keys_arr, i, key));
-            }
-            keys_handle.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_arr| {
-                (*keys_arr).length = names.len() as u32;
-                crate::object::js_object_set_keys(self.ptr(slot), keys_arr);
-            });
+            let keys = self.keys(names);
+            crate::object::js_object_set_keys(self.ptr(slot), keys.get_raw_mut_ptr());
         }
         if let (Some(facts), Some(names)) = (final_constfn, keys) {
             let obj = super::constfn_transfer::restore(
@@ -277,12 +442,13 @@ impl<'s> Reader<'s> {
         self.get(slot)
     }
 
+    #[optimize(size)]
     unsafe fn closure(
         &mut self,
         slot: usize,
         info: usize,
         capture_count: u32,
-        captures: &[SerializedValue],
+        captures: &'m [SerializedValue],
     ) -> u64 {
         let closure = crate::closure::js_closure_alloc(
             info as *const crate::closure::JsFunctionInfo,
@@ -305,7 +471,8 @@ impl<'s> Reader<'s> {
         self.get(slot)
     }
 
-    unsafe fn scope_capture(&mut self, slots: &[SerializedValue]) -> u64 {
+    #[optimize(size)]
+    unsafe fn scope_capture(&mut self, slots: &'m [SerializedValue]) -> u64 {
         let base = crate::r#box::scope::js_scope_alloc(slots.len() as i32, TAG_UNDEFINED as i64)
             as usize as *mut u8;
         let rooted = self.scope.root_raw_mut_ptr(base);
@@ -318,11 +485,12 @@ impl<'s> Reader<'s> {
         rooted.with_mut_ptr(|base: *mut u8| POINTER_TAG | base as u64)
     }
 
+    #[optimize(size)]
     unsafe fn view(
         &mut self,
         slot: usize,
         kind: u8,
-        buffer: &SerializedValue,
+        buffer: &'m SerializedValue,
         byte_offset: u32,
         length: u32,
     ) -> u64 {
@@ -370,6 +538,7 @@ impl<'s> Reader<'s> {
     }
 
     #[cfg(feature = "regex-engine")]
+    #[optimize(size)]
     unsafe fn regexp(&mut self, source: &[u8], flags: &[u8]) -> u64 {
         let source = self.scope.root_nanbox_u64(string_bits(source));
         let flags = string_bits(flags);
@@ -382,11 +551,17 @@ impl<'s> Reader<'s> {
 
     /// Without the regex engine no RegExp can exist to be sent.
     #[cfg(not(feature = "regex-engine"))]
+    #[optimize(size)]
     unsafe fn regexp(&mut self, _source: &[u8], _flags: &[u8]) -> u64 {
         TAG_UNDEFINED
     }
 
-    unsafe fn map(&mut self, slot: usize, entries: &[(SerializedValue, SerializedValue)]) -> u64 {
+    #[optimize(size)]
+    unsafe fn map(
+        &mut self,
+        slot: usize,
+        entries: &'m [(SerializedValue, SerializedValue)],
+    ) -> u64 {
         let map = crate::map::js_map_alloc((entries.len() as u32).max(8));
         self.fill(slot, JSValue::pointer(map as *const u8).bits(), Made::Value);
         for (key, value) in entries {
@@ -401,7 +576,8 @@ impl<'s> Reader<'s> {
         self.get(slot)
     }
 
-    unsafe fn set(&mut self, slot: usize, values: &[SerializedValue]) -> u64 {
+    #[optimize(size)]
+    unsafe fn set(&mut self, slot: usize, values: &'m [SerializedValue]) -> u64 {
         let set = crate::set::js_set_alloc((values.len() as u32).max(8));
         self.fill(slot, JSValue::pointer(set as *const u8).bits(), Made::Value);
         for value in values {
@@ -412,13 +588,14 @@ impl<'s> Reader<'s> {
         self.get(slot)
     }
 
+    #[optimize(size)]
     unsafe fn error(
         &mut self,
         slot: usize,
         name: &[u8],
         message: Option<&[u8]>,
         stack: Option<&[u8]>,
-        cause: Option<&SerializedValue>,
+        cause: Option<&'m SerializedValue>,
     ) -> u64 {
         let kind = crate::error::error_kind_for_name(name);
         let message = message.map_or(ptr::null_mut(), |bytes| heap_string(bytes));
@@ -437,10 +614,12 @@ impl<'s> Reader<'s> {
     }
 }
 
+#[optimize(size)]
 unsafe fn string_bits(bytes: &[u8]) -> u64 {
     JSValue::string_ptr(heap_string(bytes)).bits()
 }
 
+#[optimize(size)]
 unsafe fn heap_string(bytes: &[u8]) -> *mut crate::string::StringHeader {
     crate::string::js_string_from_bytes(
         if bytes.is_empty() {
@@ -453,16 +632,19 @@ unsafe fn heap_string(bytes: &[u8]) -> *mut crate::string::StringHeader {
 }
 
 /// Perry's Uint8Array is a `BufferHeader` plus a brand; restore both (#10103).
+#[optimize(size)]
 unsafe fn owned_uint8array(bytes: &[u8]) -> u64 {
     let buffer = new_buffer(crate::buffer::bytes::Brand::Uint8Array, bytes);
     JSValue::pointer(buffer as *const u8).bits()
 }
 
+#[optimize(size)]
 unsafe fn array_buffer(bytes: &[u8]) -> u64 {
     let buffer = new_buffer(crate::buffer::bytes::Brand::ArrayBuffer, bytes);
     JSValue::pointer(buffer as *const u8).bits()
 }
 
+#[optimize(size)]
 unsafe fn new_buffer(
     brand: crate::buffer::bytes::Brand,
     bytes: &[u8],
@@ -472,6 +654,7 @@ unsafe fn new_buffer(
         .cast_mut()
 }
 
+#[optimize(size)]
 unsafe fn owned_typed_array(kind: u8, length: u32, bytes: &[u8]) -> u64 {
     let ta = crate::typedarray::typed_array_alloc(kind, length);
     if !bytes.is_empty() {

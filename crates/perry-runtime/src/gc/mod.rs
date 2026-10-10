@@ -1207,7 +1207,6 @@ pub fn gc_init() {
     reg_scanner!(crate::buffer::pool::scan_pool_roots_mut);
     reg_scanner!(crate::string::trim_cache::scan_trim_cache_roots_mut);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
-    reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
     // #8282/#8294: process EventEmitter listener closures live as raw
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.

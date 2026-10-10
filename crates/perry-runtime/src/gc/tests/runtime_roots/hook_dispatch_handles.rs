@@ -440,15 +440,6 @@ fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
     let _protect =
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
-    // The harness clears MUTABLE_ROOT_SCANNERS so a collection sees exactly the
-    // roots the test installs. structuredClone's source->clone memo is one of
-    // them, so without this the memo is decorative here and the clone's address
-    // is never rewritten across the copying minor this test forces.
-    crate::gc::gc_register_named_mutable_root_scanner(
-        "scan_structured_clone_memo_roots_mut",
-        crate::builtins::scan_structured_clone_memo_roots_mut,
-    );
-
     let outer_key = test_string_value(b"clone-map-outer-key");
     let outer_key_original = (outer_key.to_bits() & POINTER_MASK) as usize;
     let inner_key = test_string_value(b"clone-map-inner-key");
@@ -465,21 +456,44 @@ fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
         f64::from_bits(ptr_bits(inner_map as usize)),
     );
 
+    let scope = RuntimeHandleScope::new();
+    let cloned = scope.root_nanbox_f64(crate::builtins::js_structured_clone(f64::from_bits(
+        ptr_bits(outer_map as usize),
+    )));
     let before = gc_collection_count();
-    crate::map::test_force_next_map_helper_gc();
-    crate::map::test_force_next_map_helper_gc();
-    let cloned = crate::builtins::js_structured_clone(f64::from_bits(ptr_bits(outer_map as usize)));
+    let moved = crate::gc::moved_objects_total();
+    let _ = gc_collect_minor();
+    let _ = gc_collect_minor();
     assert!(
         gc_collection_count() >= before + 2,
-        "structuredClone(Map) should force copied-minor GC in outer and nested Map.entries"
+        "nested Map clone must survive two copying minors"
     );
+    assert!(
+        crate::gc::moved_objects_total() > moved,
+        "the cloned graph must actually relocate"
+    );
+    let cloned = cloned.get_nanbox_f64();
+    // The second minor can promote a live string. Validate its relocated
+    // tracked cell rather than requiring it to remain in the nursery.
+    let assert_cloned_string = |value: f64, original: usize, expected: &[u8]| {
+        let bits = value.to_bits();
+        assert_eq!(bits & TAG_MASK, STRING_TAG);
+        let ptr = (bits & POINTER_MASK) as *const crate::StringHeader;
+        assert_ne!(ptr as usize, original);
+        assert!(
+            unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) }.is_some()
+        );
+        unsafe {
+            assert_string_bytes(ptr, expected);
+        }
+    };
 
     let cloned_bits = cloned.to_bits();
     assert_eq!(cloned_bits & TAG_MASK, POINTER_TAG);
     let cloned_map = (cloned_bits & POINTER_MASK) as *mut crate::map::MapHeader;
     assert!(crate::map::is_registered_map(cloned_map as usize));
     assert_eq!(crate::map::js_map_size(cloned_map), 1);
-    assert_moved_string_value(
+    assert_cloned_string(
         crate::map::js_map_entry_key_at(cloned_map, 0),
         outer_key_original,
         b"clone-map-outer-key",
@@ -492,12 +506,12 @@ fn test_structured_clone_map_runtime_handles_survive_nested_copied_minor_gc() {
     assert!(crate::map::is_registered_map(inner_clone as usize));
     assert_ne!(inner_clone as usize, inner_map as usize);
     assert_eq!(crate::map::js_map_size(inner_clone), 1);
-    assert_moved_string_value(
+    assert_cloned_string(
         crate::map::js_map_entry_key_at(inner_clone, 0),
         inner_key_original,
         b"clone-map-inner-key",
     );
-    assert_moved_string_value(
+    assert_cloned_string(
         crate::map::js_map_entry_value_at(inner_clone, 0),
         inner_value_original,
         b"clone-map-inner-value",

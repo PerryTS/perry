@@ -33,12 +33,19 @@ pub(super) fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedV
     } else {
         Some(&refuse)
     };
-    unsafe {
+    let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
         perry_runtime::thread::serialize_message(
             value.get_nanbox_f64().to_bits(),
             &buffers,
             uncloneable,
         )
+    });
+    drop(marked);
+    drop(buffers);
+    drop(scope);
+    match outcome {
+        Ok(message) => message,
+        Err(error) => perry_runtime::exception::js_throw(error),
     }
 }
 
