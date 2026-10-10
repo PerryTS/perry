@@ -141,6 +141,7 @@
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+#[cfg(test)]
 use crate::bigint::BIGINT_LIMBS;
 use crate::closure::{self, real_capture_count, ClosureHeader};
 use crate::gc;
@@ -272,8 +273,8 @@ pub enum SerializedValue {
     /// the receiving thread. Like `BoxedCapture`, only in capture position.
     ScopeCapture(Vec<SerializedValue>),
 
-    /// A BigInt: 16 x u64 limbs in little-endian order.
-    BigInt([u64; BIGINT_LIMBS]),
+    /// A BigInt: owned two's-complement limbs in little-endian order.
+    BigInt(Vec<u64>),
 
     /// A Date: its millisecond timestamp (may be NaN for an Invalid Date).
     /// Re-allocated as a fresh `DateCell` on the receiving thread (#2089) —
@@ -561,7 +562,7 @@ pub(crate) unsafe fn test_store_thread_object_field(
 
 #[cfg(test)]
 pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -> u64 {
-    deserialize_nanbox_on_current_thread(&SerializedValue::BigInt(limbs))
+    deserialize_nanbox_on_current_thread(&SerializedValue::BigInt(limbs.to_vec()))
 }
 
 /// Run image-local, string-only initialization on the current worker. This

@@ -1,11 +1,6 @@
-//! BigInt runtime support for Perry
-//!
-//! Provides 1024-bit integer arithmetic for cryptocurrency operations.
-//! Uses 16 x u64 limbs in little-endian order.
-//! 1024 bits is needed because secp256k1 (used by ethers.js/noble-curves)
-//! has a ~256-bit prime, and intermediate products (a*b before mod reduction)
-//! can be ~512 bits. With 512-bit two's complement, bit 511 is the sign bit,
-//! causing false negatives. 1024 bits keeps the sign bit at bit 1023.
+//! BigInt values use GC-owned, variable-length two's-complement limbs.
+//! The payload has no pointers or separately owned allocations: moving and
+//! sweeping it use the arena allocation's size, just like other leaf objects.
 
 mod arith;
 mod bitwise;
@@ -20,13 +15,12 @@ pub use compare::*;
 pub(crate) use compare::{bigint_cmp_f64, string_to_bigint};
 pub use convert::*;
 
-/// Number of 64-bit limbs in a BigInt (1024 bits total)
-pub const BIGINT_LIMBS: usize = 16;
-/// Total number of bits
-const BIGINT_BITS: usize = BIGINT_LIMBS * 64;
+use num_bigint::BigInt;
+use num_traits::{FromPrimitive, Signed, ToPrimitive, Zero};
 
+/// Inline limb capacity. This is a minimum allocation size, not a precision limit.
+pub const BIGINT_LIMBS: usize = 16;
 const ZERO_LIMBS: [u64; BIGINT_LIMBS] = [0; BIGINT_LIMBS];
-const DIVISION_BY_ZERO_MESSAGE: &[u8] = b"Division by zero";
 
 /// Throw a `TypeError` with the given message (matches Node's BigInt coercion
 /// and operator errors). Never returns.
@@ -53,119 +47,120 @@ fn throw_bigint_syntax_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-/// V8 caps BigInt precision and throws `RangeError: Maximum BigInt size
-/// exceeded` past it. Perry's representation is a fixed 1024-bit two's
-/// complement value (issue #6073); rather than silently wrapping past
-/// ±2^1023 like an `i1024`, arithmetic that would overflow throws this same
-/// `RangeError` — a loud, catchable failure until true arbitrary precision
-/// lands. Its threshold is lower than V8's, but the observable shape matches.
-const MAX_BIGINT_SIZE_MESSAGE: &str = "Maximum BigInt size exceeded";
+/// Match V8's implementation limit, rather than the old signed i1024 limit.
+const MAX_BIGINT_BITS: u64 = 1 << 30;
 
-/// Throw the "Maximum BigInt size exceeded" `RangeError` (#6073). Never returns.
 #[cold]
 #[inline(never)]
 fn throw_bigint_overflow() -> ! {
-    throw_bigint_range_error(MAX_BIGINT_SIZE_MESSAGE);
+    throw_bigint_range_error("Maximum BigInt size exceeded");
 }
 
-/// A signed 1024-bit BigInt spans `[-2^1023, 2^1023 - 1]`. Given a
-/// non-negative magnitude in little-endian limbs (`mag.len() >= BIGINT_LIMBS`)
-/// and the sign the value will carry, report whether it is representable
-/// without wrapping. Any set bit at or above 2^1024 (a nonzero limb past the
-/// low 16) never fits; a magnitude in `[2^1023, 2^1024)` fits only when it is
-/// exactly `2^1023` *and* negative — the single `-2^1023` endpoint.
-fn magnitude_fits_1024(mag: &[u64], negative: bool) -> bool {
-    debug_assert!(mag.len() >= BIGINT_LIMBS);
-    if mag[BIGINT_LIMBS..].iter().any(|&l| l != 0) {
-        return false;
-    }
-    let top = mag[BIGINT_LIMBS - 1];
-    if top >> 63 == 0 {
-        // magnitude < 2^1023 — representable with either sign.
-        return true;
-    }
-    // magnitude >= 2^1023 — only exactly -2^1023 is representable.
-    negative && top == 1u64 << 63 && mag[..BIGINT_LIMBS - 1].iter().all(|&l| l == 0)
-}
-
-/// Decode a 1024-bit two's-complement value into a host i64 if it fits.
-/// Layout: positive small → all upper limbs zero AND limb[0] high bit clear;
-/// negative small → all upper limbs `u64::MAX` AND limb[0] high bit set.
-/// Returns None for anything that needs more than 64 bits to represent.
-#[inline(always)]
-fn fits_in_i64(limbs: &[u64; BIGINT_LIMBS]) -> Option<i64> {
-    let lo = limbs[0];
-    let hi_bit = lo >> 63;
-    let expected_fill = if hi_bit == 0 { 0u64 } else { u64::MAX };
-    for &l in &limbs[1..] {
-        if l != expected_fill {
-            return None;
-        }
-    }
-    Some(lo as i64)
-}
-
-/// Write a host i64 into a 1024-bit two's-complement limb array,
-/// sign-extending the upper limbs.
-#[inline(always)]
-fn write_i64(value: i64, limbs: &mut [u64; BIGINT_LIMBS]) {
-    let fill = if value < 0 { u64::MAX } else { 0u64 };
-    *limbs = [fill; BIGINT_LIMBS];
-    limbs[0] = value as u64;
-}
-
-/// Write a host i128 into a 1024-bit two's-complement limb array,
-/// sign-extending the upper 14 limbs.
-#[inline(always)]
-fn write_i128(value: i128, limbs: &mut [u64; BIGINT_LIMBS]) {
-    let fill = if value < 0 { u64::MAX } else { 0u64 };
-    *limbs = [fill; BIGINT_LIMBS];
-    let bits = value as u128;
-    limbs[0] = bits as u64;
-    limbs[1] = (bits >> 64) as u64;
-}
-
-/// BigInt is stored as a heap-allocated 1024-bit integer
-/// Layout: 128 bytes (16 x u64)
+/// The inline prefix preserves cheap low-word access for explicitly narrowing
+/// APIs (BigInt64Array, Buffer, FFI). Additional limbs follow the header in the
+/// same arena allocation. All whole-value readers must use `all_limbs()`.
 #[repr(C)]
 pub struct BigIntHeader {
-    /// The 1024-bit value stored as 16 x u64 in little-endian order
+    pub limb_count: usize,
     pub limbs: [u64; BIGINT_LIMBS],
 }
 
-/// Allocate a BigInt from the arena (bump-pointer, no per-object Vec/HashSet tracking).
-///
-/// Switching from gc_malloc to arena_alloc_gc eliminates the dominant per-call
-/// overhead: system malloc (~30 ns) + MALLOC_STATE Vec push (~10 ns) +
-/// HashSet insert (~30 ns) = ~70 ns → reduced to ~20 ns bump-pointer.
-/// Arena objects are discovered by linear block walking at GC time; the mark
-/// phase already handles GC_TYPE_BIGINT (no child references to trace).
-#[inline]
-fn bigint_alloc() -> *mut BigIntHeader {
-    let raw = crate::arena::arena_alloc_gc(
-        std::mem::size_of::<BigIntHeader>(),
-        std::mem::align_of::<BigIntHeader>(),
-        crate::gc::GC_TYPE_BIGINT,
-    );
-    raw as *mut BigIntHeader
+impl BigIntHeader {
+    /// Borrow the complete little-endian two's-complement payload.
+    ///
+    /// # Safety
+    /// `ptr` must identify a live allocation containing `limb_count`
+    /// words, including any words following the inline prefix. That allocation
+    /// must remain live and immutable for the returned borrow.
+    pub unsafe fn all_limbs<'a>(ptr: *const Self) -> &'a [u64] {
+        // Every runtime constructor allocates this many contiguous words.
+        unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::addr_of!((*ptr).limbs).cast::<u64>(),
+                (*ptr).limb_count,
+            )
+        }
+    }
 }
 
-#[inline]
-pub(crate) fn bigint_alloc_with_limbs(limbs: [u64; BIGINT_LIMBS]) -> *mut BigIntHeader {
-    let ptr = bigint_alloc();
+fn is_negative(limbs: &[u64]) -> bool {
+    limbs.last().is_some_and(|word| word >> 63 != 0)
+}
+
+#[cfg(test)]
+fn fits_in_i64(limbs: &[u64]) -> Option<i64> {
+    let lo = *limbs.first().unwrap_or(&0);
+    let fill = if lo >> 63 != 0 { u64::MAX } else { 0 };
+    limbs[1..]
+        .iter()
+        .all(|word| *word == fill)
+        .then_some(lo as i64)
+}
+
+#[cfg(test)]
+fn write_i128(value: i128, limbs: &mut [u64; BIGINT_LIMBS]) {
+    *limbs = [if value < 0 { u64::MAX } else { 0 }; BIGINT_LIMBS];
+    limbs[0] = value as u64;
+    limbs[1] = (value >> 64) as u64;
+}
+
+fn integer_from_limbs(limbs: &[u64]) -> BigInt {
+    let bytes: Vec<u8> = limbs.iter().flat_map(|word| word.to_le_bytes()).collect();
+    BigInt::from_signed_bytes_le(&bytes)
+}
+
+fn integer_limbs(value: &BigInt) -> Vec<u64> {
+    if value.bits() > MAX_BIGINT_BITS {
+        throw_bigint_overflow();
+    }
+    let mut bytes = value.to_signed_bytes_le();
+    let count = bytes.len().div_ceil(8).max(BIGINT_LIMBS);
+    bytes.resize(count * 8, if value.is_negative() { 0xff } else { 0 });
+    bytes
+        .chunks_exact(8)
+        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        .collect()
+}
+
+pub(crate) fn bigint_alloc_with_limbs(limbs: impl AsRef<[u64]>) -> *mut BigIntHeader {
+    // Canonicalize the sign extension so equal values also hash identically.
+    bigint_alloc_integer(integer_from_limbs(limbs.as_ref()))
+}
+
+fn bigint_alloc_integer(value: BigInt) -> *mut BigIntHeader {
+    let limbs = integer_limbs(&value);
+    let size = std::mem::size_of::<BigIntHeader>() + (limbs.len() - BIGINT_LIMBS) * 8;
+    let ptr = crate::arena::arena_alloc_gc(
+        size,
+        std::mem::align_of::<BigIntHeader>(),
+        crate::gc::GC_TYPE_BIGINT,
+    ) as *mut BigIntHeader;
     unsafe {
-        (*ptr).limbs = limbs;
+        (*ptr).limb_count = limbs.len();
+        std::ptr::copy_nonoverlapping(
+            limbs.as_ptr(),
+            std::ptr::addr_of_mut!((*ptr).limbs).cast::<u64>(),
+            limbs.len(),
+        );
     }
     ptr
 }
 
-#[inline(always)]
-fn bigint_limbs_or_zero(a: *const BigIntHeader) -> [u64; BIGINT_LIMBS] {
+fn bigint_integer(a: *const BigIntHeader) -> BigInt {
     let a = clean_bigint_ptr(a);
     if a.is_null() {
-        ZERO_LIMBS
+        BigInt::zero()
     } else {
-        unsafe { (*a).limbs }
+        unsafe { integer_from_limbs(crate::bigint::BigIntHeader::all_limbs(a)) }
+    }
+}
+
+fn bigint_limbs_or_zero(a: *const BigIntHeader) -> Vec<u64> {
+    let a = clean_bigint_ptr(a);
+    if a.is_null() {
+        ZERO_LIMBS.to_vec()
+    } else {
+        unsafe { crate::bigint::BigIntHeader::all_limbs(a).to_vec() }
     }
 }
 
@@ -200,28 +195,5 @@ pub fn clean_bigint_ptr_mut(p: *mut BigIntHeader) -> *mut BigIntHeader {
 
 #[cold]
 fn throw_bigint_division_by_zero() -> ! {
-    let msg = crate::string::js_string_from_bytes(
-        DIVISION_BY_ZERO_MESSAGE.as_ptr(),
-        DIVISION_BY_ZERO_MESSAGE.len() as u32,
-    );
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-/// Check if a bigint value is negative (high bit of highest limb is set = two's complement negative)
-fn is_negative(limbs: &[u64; BIGINT_LIMBS]) -> bool {
-    (limbs[BIGINT_LIMBS - 1] >> 63) == 1
-}
-
-/// Negate limbs in place (two's complement: flip all bits and add 1)
-fn negate_limbs(limbs: &[u64; BIGINT_LIMBS]) -> [u64; BIGINT_LIMBS] {
-    let mut result = ZERO_LIMBS;
-    let mut carry = 1u64;
-    for i in 0..BIGINT_LIMBS {
-        let flipped = !limbs[i];
-        let sum = (flipped as u128) + (carry as u128);
-        result[i] = sum as u64;
-        carry = (sum >> 64) as u64;
-    }
-    result
+    throw_bigint_range_error("Division by zero");
 }

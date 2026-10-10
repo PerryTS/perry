@@ -11,7 +11,7 @@
 use perry_ffi::{
     alloc_bigint_from_str, alloc_buffer, alloc_string, build_object_shape,
     js_object_alloc_with_shape, js_object_set_field, BigIntHeader, BufferHeader, JsValue,
-    StringHeader, BIGINT_LIMBS,
+    StringHeader,
 };
 
 /// `getAddress(address: string) -> string` — EIP-55 checksummed.
@@ -99,7 +99,7 @@ pub extern "C" fn js_ethers_format_units(
         return alloc_string("0").as_raw();
     }
     unsafe {
-        let limbs = &(*bigint_ptr).limbs;
+        let limbs = BigIntHeader::all_limbs(bigint_ptr);
         let value_str = limbs_to_string(limbs);
         let formatted = format_with_decimals(&value_str, decimals as usize);
         alloc_string(&formatted).as_raw()
@@ -320,11 +320,11 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     output
 }
 
-fn limbs_to_string(limbs: &[u64; BIGINT_LIMBS]) -> String {
+fn limbs_to_string(limbs: &[u64]) -> String {
     if limbs.iter().all(|&x| x == 0) {
         return "0".to_string();
     }
-    let mut work = *limbs;
+    let mut work = limbs.to_vec();
     let mut digits = Vec::with_capacity(155);
     while !is_zero(&work) {
         let remainder = div_by_10(&mut work);
@@ -334,13 +334,13 @@ fn limbs_to_string(limbs: &[u64; BIGINT_LIMBS]) -> String {
     digits.into_iter().collect()
 }
 
-fn is_zero(limbs: &[u64; BIGINT_LIMBS]) -> bool {
+fn is_zero(limbs: &[u64]) -> bool {
     limbs.iter().all(|&x| x == 0)
 }
 
-fn div_by_10(limbs: &mut [u64; BIGINT_LIMBS]) -> u8 {
+fn div_by_10(limbs: &mut [u64]) -> u8 {
     let mut remainder: u128 = 0;
-    for i in (0..BIGINT_LIMBS).rev() {
+    for i in (0..limbs.len()).rev() {
         let current = (remainder << 64) | (limbs[i] as u128);
         limbs[i] = (current / 10) as u64;
         remainder = current % 10;

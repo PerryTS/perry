@@ -82,7 +82,7 @@ fn transferable_trees_report_no_unsupported() {
             ],
             keys: None,
         },
-        SerializedValue::BigInt([0u64; BIGINT_LIMBS]),
+        SerializedValue::BigInt(vec![0u64; BIGINT_LIMBS]),
     ]);
     assert_eq!(first_unsupported_transfer_type(&tree), None);
 }
@@ -185,5 +185,20 @@ fn uint8array_round_trips_bytes_and_brand() {
                 .unwrap()[..],
             &[3, 5, 8, 255]
         );
+    }
+}
+
+#[test]
+fn variable_width_bigint_clone_preserves_upper_words() {
+    unsafe {
+        let mut words = vec![0; 65];
+        words[0] = 99;
+        words[64] = 1;
+        let original = crate::bigint::bigint_alloc_with_limbs(&words);
+        let bits = BIGINT_TAG | (original as u64 & POINTER_MASK);
+        let serialized = serialize_nanbox_for_thread(bits);
+        let restored = deserialize_nanbox_on_current_thread(&serialized);
+        let ptr = (restored & POINTER_MASK) as *const crate::bigint::BigIntHeader;
+        assert_eq!(crate::bigint::BigIntHeader::all_limbs(ptr), words);
     }
 }

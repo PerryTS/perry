@@ -2,7 +2,7 @@ use super::*;
 use crate::bigint::BIGINT_LIMBS;
 use crate::value::JSValue;
 
-fn bigint_limbs(env: NapiEnv, value: NapiValue) -> Result<[u64; BIGINT_LIMBS], NapiStatus> {
+fn bigint_limbs(env: NapiEnv, value: NapiValue) -> Result<Vec<u64>, NapiStatus> {
     let bits = value_bits(env, value)?;
     let js = JSValue::from_bits(bits);
     if !js.is_bigint() {
@@ -12,10 +12,10 @@ fn bigint_limbs(env: NapiEnv, value: NapiValue) -> Result<[u64; BIGINT_LIMBS], N
     if pointer.is_null() {
         return Err(NapiStatus::BigintExpected);
     }
-    Ok(unsafe { (*pointer).limbs })
+    Ok(unsafe { crate::bigint::BigIntHeader::all_limbs(pointer).to_vec() })
 }
 
-fn twos_complement(limbs: &mut [u64; BIGINT_LIMBS]) {
+fn twos_complement(limbs: &mut [u64]) {
     for limb in limbs.iter_mut() {
         *limb = !*limb;
     }
@@ -50,33 +50,11 @@ pub unsafe extern "C" fn napi_create_bigint_words(
     } else {
         std::slice::from_raw_parts(words, word_count)
     };
-    if input
-        .get(BIGINT_LIMBS..)
-        .is_some_and(|upper| upper.iter().any(|word| *word != 0))
-    {
-        return set_status(
-            env,
-            NapiStatus::GenericFailure,
-            "BigInt exceeds Perry's 1024-bit representation",
-        );
-    }
     let negative = sign_bit != 0 && input.iter().any(|word| *word != 0);
-    let mut limbs = [0u64; BIGINT_LIMBS];
-    let copied = input.len().min(BIGINT_LIMBS);
-    limbs[..copied].copy_from_slice(&input[..copied]);
-    let top_negative_bit = limbs[BIGINT_LIMBS - 1] >> 63 != 0;
-    if (!negative && top_negative_bit)
-        || (negative
-            && top_negative_bit
-            && !(limbs[BIGINT_LIMBS - 1] == 1u64 << 63
-                && limbs[..BIGINT_LIMBS - 1].iter().all(|limb| *limb == 0)))
-    {
-        return set_status(
-            env,
-            NapiStatus::GenericFailure,
-            "BigInt magnitude exceeds Perry's signed 1024-bit representation",
-        );
-    }
+    // Keep a zero sign word before negating a magnitude with its high bit set.
+    let mut limbs = input.to_vec();
+    limbs.push(0);
+    limbs.resize(limbs.len().max(BIGINT_LIMBS), 0);
     if negative {
         twos_complement(&mut limbs);
     }
@@ -112,7 +90,7 @@ pub unsafe extern "C" fn napi_get_value_bigint_words(
         }
         Err(status) => return set_status(env, status, "value is not a live handle"),
     };
-    let negative = limbs[BIGINT_LIMBS - 1] >> 63 != 0;
+    let negative = limbs[limbs.len() - 1] >> 63 != 0;
     if negative {
         twos_complement(&mut limbs);
     }

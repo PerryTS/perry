@@ -414,29 +414,15 @@ fn pow2(n: i64) -> *mut BigIntHeader {
 }
 
 #[test]
-fn magnitude_fits_1024_boundaries() {
-    let mut m = [0u64; 2 * BIGINT_LIMBS];
-    // magnitude < 2^1023 → representable with either sign.
-    m[BIGINT_LIMBS - 1] = 0x7fff_ffff_ffff_ffff;
-    assert!(magnitude_fits_1024(&m, false));
-    assert!(magnitude_fits_1024(&m, true));
-
-    // magnitude == 2^1023 → only the negative endpoint (-2^1023) fits.
-    let mut m = [0u64; 2 * BIGINT_LIMBS];
-    m[BIGINT_LIMBS - 1] = 1u64 << 63;
-    assert!(!magnitude_fits_1024(&m, false));
-    assert!(magnitude_fits_1024(&m, true));
-
-    // magnitude in (2^1023, 2^1024) → fits neither sign.
-    m[0] = 1;
-    assert!(!magnitude_fits_1024(&m, false));
-    assert!(!magnitude_fits_1024(&m, true));
-
-    // any bit at or above 2^1024 → never fits.
-    let mut m = [0u64; 2 * BIGINT_LIMBS];
-    m[BIGINT_LIMBS] = 1;
-    assert!(!magnitude_fits_1024(&m, false));
-    assert!(!magnitude_fits_1024(&m, true));
+fn values_beyond_old_signed_width() {
+    for n in [1023, 1024, 2048, 4096] {
+        let a = pow2(n);
+        let neg = js_bigint_neg(a);
+        assert_eq!(js_bigint_is_negative(a), 0);
+        assert_eq!(js_bigint_is_negative(neg), 1);
+        assert_eq!(js_bigint_is_zero(js_bigint_add(a, neg)), 1);
+        assert_eq!(js_bigint_cmp(a, js_bigint_from_i64(0)), 1);
+    }
 }
 
 #[test]

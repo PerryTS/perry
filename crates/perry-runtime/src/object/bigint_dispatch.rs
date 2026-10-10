@@ -111,54 +111,41 @@ pub(crate) unsafe fn dispatch_bigint_binary_method(
             let result = crate::bigint::js_bigint_cmp(a_ptr(), b_ptr());
             result as f64
         }
-        "fromTwos" => {
-            // bn.js: interpret `a` as the unsigned encoding of a signed
-            // `width`-bit integer in two's complement. If bit (width-1) of
-            // `a` is set the result is `a - 2^width`; otherwise return `a`.
-            // `width` arrives in `b` (already a BigInt — see top of fn).
+        "fromTwos" | "toTwos" => {
             let b = b_ptr();
             let a = a_ptr();
-            let width = if b.is_null() { 0u64 } else { (*b).limbs[0] };
-            let max_bits = (crate::bigint::BIGINT_LIMBS * 64) as u64;
-            if width == 0 || width > max_bits {
+            let width = if b.is_null() { 0 } else { (*b).limbs[0] };
+            if width == 0 {
                 return f64::from_bits(
                     JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),
                 );
             }
-            let bit = (width - 1) as usize;
-            let high_bit_set = ((*a).limbs[bit / 64] >> (bit % 64)) & 1 == 1;
-            if !high_bit_set {
+            if method == "fromTwos" {
+                let limbs = crate::bigint::BigIntHeader::all_limbs(a);
+                let bit = width - 1;
+                let word = limbs.get((bit / 64) as usize).copied().unwrap_or_else(|| {
+                    if crate::bigint::js_bigint_is_negative(a) != 0 {
+                        u64::MAX
+                    } else {
+                        0
+                    }
+                });
+                if (word >> (bit % 64)) & 1 == 0 {
+                    return f64::from_bits(
+                        JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),
+                    );
+                }
+            }
+            let bits = width.min(u32::MAX as u64) as u32;
+            let result = if method == "fromTwos" {
+                crate::bigint::js_bigint_as_int_n(bits, a)
+            } else if crate::bigint::js_bigint_is_negative(a) != 0 {
+                crate::bigint::js_bigint_as_uint_n(bits, a)
+            } else {
                 return f64::from_bits(
                     JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),
                 );
-            }
-            let one = crate::bigint::js_bigint_from_u64(1);
-            let two_pow = crate::bigint::js_bigint_shl(one, b);
-            let result = crate::bigint::js_bigint_sub(a, two_pow);
-            f64::from_bits(JSValue::bigint_ptr(result).bits())
-        }
-        "toTwos" => {
-            // bn.js: convert to `width`-bit two's complement encoding. If `a`
-            // is negative the result is `a + 2^width` (mod 2^width);
-            // otherwise return `a` unchanged. bn.js does not mask
-            // non-negative inputs to `width` bits, so neither do we.
-            let b = b_ptr();
-            let a = a_ptr();
-            let width = if b.is_null() { 0u64 } else { (*b).limbs[0] };
-            let max_bits = (crate::bigint::BIGINT_LIMBS * 64) as u64;
-            if width == 0 || width > max_bits {
-                return f64::from_bits(
-                    JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),
-                );
-            }
-            if crate::bigint::js_bigint_is_negative(a) == 0 {
-                return f64::from_bits(
-                    JSValue::bigint_ptr(a as *mut crate::bigint::BigIntHeader).bits(),
-                );
-            }
-            let one = crate::bigint::js_bigint_from_u64(1);
-            let two_pow = crate::bigint::js_bigint_shl(one, b);
-            let result = crate::bigint::js_bigint_add(a, two_pow);
+            };
             f64::from_bits(JSValue::bigint_ptr(result).bits())
         }
         _ => f64::from_bits(crate::value::TAG_UNDEFINED),
