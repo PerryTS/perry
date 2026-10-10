@@ -24,6 +24,8 @@ extern "C" {
 }
 mod allocation;
 mod driver;
+mod inflate_context;
+pub(crate) use driver::decode_bytes;
 mod one_shot_callback;
 mod zlib_encoder;
 pub(crate) use one_shot_callback::queue_one_shot_callback;

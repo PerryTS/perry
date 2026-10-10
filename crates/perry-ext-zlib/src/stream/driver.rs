@@ -93,22 +93,15 @@ impl Read for Input {
 // WouldBlock would settle a write before all its output had been drained.
 struct Inflate {
     input: Input,
-    engine: Placed<miniz_oxide::inflate::stream::InflateState>,
+    engine: super::inflate_context::Context,
     finished: bool,
-    zlib_header: bool,
 }
 impl Inflate {
     fn new(input: Input, zlib_header: bool, buffers: &BufferOwner) -> io::Result<Self> {
-        let format = if zlib_header {
-            miniz_oxide::DataFormat::Zlib
-        } else {
-            miniz_oxide::DataFormat::Raw
-        };
         Ok(Self {
             input,
-            engine: allocation::inflate_state(buffers, format)?,
+            engine: super::inflate_context::Context::new(buffers, zlib_header)?,
             finished: false,
-            zlib_header,
         })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
@@ -121,32 +114,11 @@ impl Inflate {
                 Err(e) if e.kind() == ErrorKind::WouldBlock => &[],
                 Err(e) => return Err(e),
             };
-            let result = miniz_oxide::inflate::stream::inflate(
-                &mut self.engine,
-                input,
-                out,
-                miniz_oxide::MZFlush::None,
-            );
-            let consumed = result.bytes_consumed;
-            let written = result.bytes_written;
-            let status = match result.status {
-                Ok(s) => Some(s),
-                Err(miniz_oxide::MZError::Buf) => None,
-                Err(_) => {
-                    let message = if self.engine.last_status()
-                        == miniz_oxide::inflate::TINFLStatus::Adler32Mismatch
-                    {
-                        "incorrect data check"
-                    } else if !self.zlib_header {
-                        "invalid block type"
-                    } else {
-                        "incorrect header check"
-                    };
-                    return Err(io::Error::new(ErrorKind::InvalidData, message));
-                }
-            };
+            let result = self.engine.step(input, out)?;
+            let consumed = result.consumed;
+            let written = result.written;
             self.input.consume(consumed);
-            self.finished = status == Some(miniz_oxide::MZStatus::StreamEnd);
+            self.finished = result.ended;
             if written > 0 || self.finished {
                 return Ok(written);
             }
@@ -597,6 +569,35 @@ impl Decoder {
             Self::Sniff(_) => unreachable!(),
         }
     }
+}
+
+/// One-shot and streaming inflate share the same decoder and state ownership.
+/// read_to_end writes directly into the result Vec, without an output copy.
+pub(crate) fn decode_bytes(data: &[u8], codec: Codec) -> io::Result<Vec<u8>> {
+    let buffers = BufferOwner::new();
+    let mut decoder = Decoder::new(codec, &buffers)?
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "encoder used as decoder"))?;
+    decoder.input().borrow(data, true);
+    struct Reader<'a> {
+        decoder: &'a mut Decoder,
+        buffers: &'a BufferOwner,
+    }
+    impl Read for Reader<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            self.decoder.read(output, self.buffers)
+        }
+    }
+    let mut result = Vec::new();
+    let decoded = Reader {
+        decoder: &mut decoder,
+        buffers: &buffers,
+    }
+    .read_to_end(&mut result);
+    decoder.input().clear_borrow();
+    decoded.map(|_| result)
 }
 
 fn zstd_error(code: usize) -> io::Error {
