@@ -1,4 +1,4 @@
-# String operations lane — 2026-10-10
+# String operations lane October 10 2026
 
 Baseline: `854fcd48ec295c258ea871024bc526c47ff2abc3`. This lane unifies construction and regex binding under the existing WTF-8 validity/count proof, removes repeated validation/counting of proven strings, and reuses the existing intern probe and hash authority. StringHeader remains 20 bytes; no ABI/version bump, new cache, side table, or latch.
 
@@ -7,6 +7,17 @@ Baseline: `854fcd48ec295c258ea871024bc526c47ff2abc3`. This lane unifies construc
 Supplied evidence: `attribution-final-20261010.md` and the six raw `*.full.txt` reports under `attr-final-20261010/`. These are sampled **self cycles**, from another host and commit; they prioritize mechanisms rather than predict qb6 instruction deltas. Exact per-program string symbols are retained in `symbols.json`.
 
 The largest entry points among the requested concat/slice/search/character/numeric operations, summed over the six reports, are `js_string_concat` (1.71 percentage points), `js_string_concat_chain` (1.26), and `js_string_concat_box` (0.91). Generic `js_string_coerce` contributes another 1.08 points and is also improved at its typed-output boundary. In qs stringify alone, those three concat entries are 1.03%, 0.90%, and 0.73%. The broader family totals in `attribution.json` also include shared `trunc`; its entire share cannot be attributed to string calls.
+
+| Program | Prominent string operation symbols and self share | intern_dispatch / intern_lookup | from_utf8 |
+| --- | --- | ---: | ---: |
+| tsc | coerce 0.43%; index_to_i32 0.26%; last_index_of_from and char_code_at 0.13% each | 0.55% / 0.26% | 0.77% |
+| qs parse | index_of_from, index_to_i32, concat 0.36% each | 0.31% / 0.88% | 1.24% |
+| qs stringify | concat 1.03%; concat_chain 0.90%; concat_box 0.73% | 0.50% / 0.05% | 0.50% |
+| Commander | concat_chain 0.31%; concat_box and index_of_from 0.16% each | 1.25% / 0.78% | 0.94% |
+| Effect | concat_value 0.09%; from_bytes_with_capacity 0.31% | 0.31% / 0.13% | 1.25% |
+| Fastify | coerce 0.19%; pool_atom and from_bytes_with_capacity 0.14% each | 0.47% / 0.03% | 1.24% |
+
+Operation labels abbreviate their `js_string_` prefix. Fastify also samples `atom_lookup` at 0.46%; that identity mechanism is unchanged. The from_utf8 column includes consumers outside these builtins.
 
 - Construction establishes the existing `STRING_FLAG_WTF8_VALIDATED` proof from typed UTF-8/ASCII encoders or once at an unknown raw-byte boundary. The same proof certifies an exact UTF-16 count and the lone-surrogate flag. Checked borrows skip UTF-8 validation only for proven, surrogate-free payloads. Regex checked binding completes the same proof for legacy producers.
 - Exact slices/copies preserve proof; concat and append intersect operand proof and preserve counted lengths. Boxed concat reads header metadata instead of recounting/revalidating operands. Pairwise concat opens roots only when the existing no-collection allocator cannot serve the request, then reloads source addresses after allocation. No GC/allocator policy changes.
