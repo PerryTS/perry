@@ -23,7 +23,7 @@ def main():
     p.add_argument('--hostdir', type=Path, required=True)
     p.add_argument('--label', required=True)
     p.add_argument('--arm', choices=['head', 'main'], default='head')
-    p.add_argument('--names', default='m7,m7s,m7s-computed,wm-get,wm-has,wm-set,wm-direct-get,wm-direct-has,wm-direct-set,inh,abs,inh2,abs2,inh3,abs3,s3,s2,own,full,a2')
+    p.add_argument('--names', default='m7,m7s,m7s-computed,wm-get,wm-has,wm-set,wm-direct-get,wm-direct-has,wm-direct-set,inh,abs,inh2,abs2,inh3,abs3,s3,s2,own,full,a2,a2-computed')
     args = p.parse_args()
     root = args.hostdir
     lane = root / 'main-arm' if args.arm == 'main' else root

@@ -81,6 +81,7 @@ pub(crate) use entry_answer::{entry_answer, primary_entry_answer};
 use function_own::HOLDER_FUNCTION_BAG;
 pub(crate) use function_own::{prime_alias, try_alias_cached_accessor};
 pub(crate) mod class_read;
+pub(crate) mod keyed;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod probe;
 use accessor_guard::validated_accessor;
@@ -211,7 +212,13 @@ fn holder_words_mut(c: &mut PicCache) -> &mut HolderEntry {
 /// Every cache that holds (or held) a holder entry, for the primary agent's
 /// root scan until a worker starts. The entries are in the per-site caches;
 /// this is only where the scan finds them.
-static HOLDER_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+#[derive(Clone, Copy)]
+enum HolderSite {
+    Named(usize),
+    Keyed(usize),
+}
+
+static HOLDER_SITES: std::sync::Mutex<Vec<HolderSite>> = std::sync::Mutex::new(Vec::new());
 
 per_test_global! {
     static PRIMES_HOLDER: AtomicU64 = AtomicU64::new(0);
@@ -564,7 +571,8 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 
 /// [`admitted_proto_id`], with `obj`'s recorded word.
 pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
-    let pid = shape_proto_id(object_shape_stamp(obj))?;
+    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(obj))?;
+    let pid = record.proto_id();
     if !hop_identity_pins_link(pid) {
         // Only a declaration's immutable parent proof admits bare CLASS.
         // Reject other CLASS shapes before classifying their link: that
@@ -587,7 +595,7 @@ pub(crate) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64
     // link. Re-deriving it through object_proto_id_for repeats class/anon
     // registry queries at each hop and cannot strengthen the live shape
     // proof. A structural write moves the owner to a successor ShapeId.
-    Some((pid, crate::object::shapes::object_prototype_word(obj)))
+    Some((pid, record.prototype_word()))
 }
 
 /// The prototype identity `obj`'s shape records, if it admits: a serial, the
@@ -600,7 +608,8 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// names its live identity word. Hits compare that word with the recorded
 /// direct holder, then check each hop and holder ShapeId.
 pub(crate) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
-    let pid = shape_proto_id(object_shape_stamp(recv))?;
+    let record = crate::object::shapes::shape_record_by_id(object_shape_stamp(recv))?;
+    let pid = record.proto_id();
     // Most ordinary receivers have serial/default links. Their shape rules
     // out a class entry before any registry-backed identity derivation.
     if !(PROTO_ID_CLASS..PROTO_ID_UNIQUE).contains(&pid) {
@@ -609,12 +618,11 @@ pub(crate) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const Obje
     // The prototype funnel minted this identity with the receiver's link.
     // Re-deriving its generic origin through the registry cannot strengthen
     // the shape proof and would repeat a lock/hash lookup on every memo hit.
-    let word = crate::object::shapes::object_prototype_word(recv);
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-        next_from_word(recv, word)
+        next_from_word(recv, crate::object::shapes::object_prototype_word(recv))
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
         {
-            let bits = crate::object::shapes::identity_prototype_word(pid);
+            let bits = record.prototype_word();
             let value = crate::JSValue::from_bits(bits);
             if !value.is_pointer() {
                 return None;
@@ -818,99 +826,15 @@ unsafe fn walk_to(
     class_first: bool,
     max_depth: usize,
 ) -> Option<Walk> {
-    debug_assert!(max_depth <= WALK_HOPS + 1);
-    let mut w = Walk {
-        holder: 0,
-        holder_shape: 0,
-        slot: None,
-        hops: NO_HOPS,
-        depth: 0,
-        getter: 0,
-    };
-    let object_prototype = crate::array::object_prototype_addr_if_resolved();
-    let mut current = recv;
-    for depth in 1..=max_depth {
-        // `%Object.prototype%` is an immutable-prototype exotic object: its
-        // [[Prototype]] is null for its whole life, whatever its shape's
-        // identity word says, so reaching it ends the chain.
-        let terminal = depth > 1 && current as usize == object_prototype;
-        // `current`'s recorded word, once read for its identity check.
-        let mut word = None;
-        let pid = if terminal {
-            PROTO_ID_NULL
-        } else if depth == 1 && class_first {
-            // A bare CLASS ShapeId does not pin the registry's live
-            // C.prototype. The collecting class-read hit compares that
-            // pointer on every use; this walk records it as the first hop.
-            crate::object::shapes::PROTO_ID_CLASS
-        } else {
-            let (pid, w) = admitted_link(current)?;
-            word = Some(w);
-            pid
-        };
-        if pid == PROTO_ID_NULL {
-            // `current` is the terminal object, and it lacks `name`.
-            if depth == 1 {
-                return None;
-            }
-            let (h, sh) = w.hops[depth - 2];
-            w.hops[depth - 2] = (0, 0);
-            w.holder = h;
-            w.holder_shape = sh;
-            w.depth = depth - 1;
-            return Some(w);
-        }
-        let next = if depth == 1 && class_first {
-            class_link(recv)?
-        } else if pid == PROTO_ID_DEFAULT {
-            object_prototype as *const ObjectHeader
-        } else {
-            match word {
-                Some(w) => next_from_word(current, w),
-                None => next_prototype(current),
-            }
-        };
-        if next.is_null() || next == current || next == recv || !hop_admitted(next as usize) {
-            return None;
-        }
-        let shape = object_shape_descriptor(next)?;
-        if !shape.object_kind.is_ordinary_layout() || object_shape_stamp(next) == 0 {
-            return None;
-        }
-        let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-        if !keys.is_null() {
-            if let Some(s) =
-                crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
-            {
-                // This exact slot, not another name walk, supplies the data
-                // admission proof kept by the existing holder memo. Its
-                // ShapeId compare invalidates it when the entry changes.
-                if crate::object::key_attrs::key_is_accessor_at(keys, s) {
-                    return None;
-                }
-                let s = holder_slot_word(next as usize, s, shape.live_inline_slot_count)?;
-                w.holder = next as usize;
-                w.holder_shape = object_shape_stamp(next);
-                w.slot = Some(s);
-                w.depth = depth;
-                return Some(w);
-            }
-        }
-        if depth == max_depth {
-            // One more object would be needed: either the holder or the null
-            // link past the last hop.
-            if next as usize != object_prototype && admitted_proto_id(next) != Some(PROTO_ID_NULL) {
-                return None;
-            }
-            w.holder = next as usize;
-            w.holder_shape = object_shape_stamp(next);
-            w.depth = depth;
-            return Some(w);
-        }
-        w.hops[depth - 1] = (next as usize, object_shape_stamp(next));
-        current = next;
-    }
-    None
+    keyed::walk_to_key(
+        recv,
+        keyed::KeyRef::Name {
+            word: 0,
+            bytes: name,
+        },
+        class_first,
+        max_depth,
+    )
 }
 
 /// What the receiver's shapes prove about a computed-key read of one name
@@ -1397,7 +1321,7 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
         c[HOLDER_STATE] |= STATE_REGISTERED;
         if let Ok(mut sites) = HOLDER_SITES.lock() {
-            sites.push(cache as usize);
+            sites.push(HolderSite::Named(cache as usize));
         }
     }
     // Last: the entry is live only once every other word is written.
@@ -1453,6 +1377,13 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         return;
     };
     for &site in sites.iter() {
+        let site = match site {
+            HolderSite::Named(site) => site,
+            HolderSite::Keyed(site) => {
+                unsafe { keyed::scan_roots(site, visitor) };
+                continue;
+            }
+        };
         // SAFETY: registered caches are PIC-arena allocations
         // (`pic_arena_alloc`), which are never freed.
         let c = unsafe { &mut *(site as *mut PicCache) };

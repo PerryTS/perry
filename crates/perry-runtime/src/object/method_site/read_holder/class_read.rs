@@ -557,7 +557,7 @@ unsafe fn site_mut(cache: *mut PicCache) -> &'static mut Site {
             let mut sites = HOLDER_SITES
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            sites.push(cache as usize);
+            sites.push(HolderSite::Named(cache as usize));
             c[HOLDER_STATE] |= STATE_REGISTERED;
         }
         let addr = new as usize as u64;

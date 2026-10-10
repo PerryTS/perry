@@ -1,0 +1,1 @@
+Computed string reads now keep their own, inherited and deep absent shape proofs in the read site's bounded holder record. Hits validate the receiver and every recorded prototype or holder shape before reloading the current value. The entries reuse the existing holder root scan and decline accessors, proxy chains and exotic receivers to ordinary Get.
