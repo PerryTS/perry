@@ -886,21 +886,31 @@ fn escape_is(carrier: LocalId, op: CompareOp, value: f64) -> Expr {
     }
 }
 
+///
+/// A `try` whose LAST statement is a loop is loop-shaped too: completing that
+/// loop completes the try body, so a completion aimed at the loop and one aimed
+/// at the try leave by the same edge (through the finally). This is how a
+/// `for...of` holding an iterator record lowers — `try { <setup>; <loop> }
+/// finally { <release> }` — and a source label on the `for...of` names that
+/// try (#9199).
 fn is_loop_stmt(s: &Stmt) -> bool {
     match s {
         Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
         Stmt::Labeled { body, .. } => is_loop_stmt(body),
+        Stmt::Try { body, .. } => body.last().is_some_and(is_loop_stmt),
         _ => false,
     }
 }
 
-/// The body statements of a loop-shaped statement, seeing through `Labeled`.
-fn loop_body_mut(s: &mut Stmt) -> Option<&mut Vec<Stmt>> {
+/// The body statements of a loop-shaped statement ([`is_loop_stmt`]), seeing
+/// through `Labeled` and a try that ends in the loop.
+pub(super) fn loop_body_mut(s: &mut Stmt) -> Option<&mut Vec<Stmt>> {
     match s {
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
             Some(body)
         }
         Stmt::Labeled { body, .. } => loop_body_mut(body),
+        Stmt::Try { body, .. } => body.last_mut().and_then(loop_body_mut),
         _ => None,
     }
 }
