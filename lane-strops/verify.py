@@ -58,6 +58,7 @@ def compile_arm(root, arm, names):
         (out / (name + '.compile.log')).write_bytes(compiled.stdout + compiled.stderr)
         if compiled.returncode:
             statuses[name] = {'compile': compiled.returncode, 'parity': False}
+            (out / 'statuses.json').write_text(json.dumps(statuses, indent=2))
             print(arm, name, statuses[name], flush=True)
             continue
         expected = run([*NODE, relative, *args], cwd, env)
@@ -66,6 +67,7 @@ def compile_arm(root, arm, names):
         save_result(out / (name + '.perry'), actual)
         parity = expected.returncode == actual.returncode == 0 and expected.stdout == actual.stdout and expected.stderr == actual.stderr
         statuses[name] = {'compile': 0, 'node_exit': expected.returncode, 'perry_exit': actual.returncode, 'parity': parity}
+        (out / 'statuses.json').write_text(json.dumps(statuses, indent=2))
         print(arm, name, statuses[name], flush=True)
     (out / 'statuses.json').write_text(json.dumps(statuses, indent=2))
 
@@ -88,7 +90,19 @@ def stat(root, label, command, cwd, env, thp_off=False):
 def measure(root, names, thp_off=False):
     report = {'mode': 'THP off' if thp_off else 'normal', 'programs': {}}
     dest = root / 'verify' / ('thp-results.json' if thp_off else 'results.json')
-    statuses = {arm: json.loads((root / 'verify' / arm / 'statuses.json').read_text()) for arm in ['base', 'head']}
+    if dest.exists(): report = json.loads(dest.read_text())
+    statuses = {}
+    for arm in ['base', 'head']:
+        out = root / 'verify' / arm
+        statuses[arm] = {}
+        for name in names:
+            try:
+                parity = (out / (name + '.node.status')).read_text() == (out / (name + '.perry.status')).read_text() == '0'
+                parity = parity and (out / (name + '.node.out')).read_bytes() == (out / (name + '.perry.out')).read_bytes()
+                parity = parity and (out / (name + '.node.err')).read_bytes() == (out / (name + '.perry.err')).read_bytes()
+                statuses[arm][name] = {'parity': parity}
+            except FileNotFoundError:
+                pass
     for name in names:
         if not all(statuses[arm].get(name, {}).get('parity') for arm in statuses):
             print(name, 'baseline/head parity failure; excluded from perf gate', flush=True)
