@@ -1492,7 +1492,10 @@ mod tests {
         assert_eq!(unsafe { str_from_header(output).unwrap() }, "\"é\"");
         assert_eq!(unsafe { (*output).byte_len }, 4);
         assert_eq!(unsafe { (*output).utf16_len }, 3);
-        assert_eq!(unsafe { (*output).flags }, 0);
+        assert_eq!(
+            unsafe { (*output).flags },
+            crate::string::STRING_FLAG_WTF8_VALIDATED
+        );
     }
 
     #[test]
