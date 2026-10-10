@@ -839,6 +839,46 @@ pub(crate) extern "C" fn array_prototype_reverse_thunk(
     let this = this.as_f64();
     crate::array::array_proto_mutator(this, "reverse", std::ptr::null(), 0)
 }
+/// Keep borrowed variadic arguments in mutable native cells across user
+/// setters and traps. The upstream native-list ABI avoids rest Arrays; Moving GC rewrites the cells the shared
+/// mutator reads, including when an array-like receiver runs user code.
+unsafe fn array_variadic_mutator(
+    this: crate::closure::JsThis,
+    method: &str,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    use std::cell::UnsafeCell;
+    use std::mem::MaybeUninit;
+    let values = native_args(args, len);
+    let mut stack = [const { MaybeUninit::<UnsafeCell<f64>>::uninit() }; 16];
+    let heap;
+    let cells: &[UnsafeCell<f64>] = if values.len() <= stack.len() {
+        for (slot, value) in stack.iter_mut().zip(values) {
+            slot.write(UnsafeCell::new(*value));
+        }
+        std::slice::from_raw_parts(stack.as_ptr().cast(), values.len())
+    } else {
+        heap = values
+            .iter()
+            .map(|v| UnsafeCell::new(*v))
+            .collect::<Vec<_>>();
+        &heap
+    };
+    // The scope must drop before the cells do.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    for cell in cells {
+        scope.root_nanbox_cell(cell);
+    }
+    crate::array::array_proto_mutator(
+        receiver.get_nanbox_f64(),
+        method,
+        cells.as_ptr().cast(),
+        cells.len(),
+    )
+}
+
 pub(crate) extern "C" fn array_prototype_push_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -876,7 +916,7 @@ pub(crate) extern "C" fn array_prototype_push_thunk(
             }
         }
     }
-    crate::array::array_proto_mutator(this.as_f64(), "push", args, argc)
+    unsafe { array_variadic_mutator(this, "push", args, argc) }
 }
 pub(crate) extern "C" fn array_prototype_unshift_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -884,9 +924,7 @@ pub(crate) extern "C" fn array_prototype_unshift_thunk(
     args: *const f64,
     argc: usize,
 ) -> f64 {
-    let this = this.as_f64();
-    let args = unsafe { native_args(args, argc) };
-    crate::array::array_proto_mutator(this, "unshift", args.as_ptr(), args.len())
+    unsafe { array_variadic_mutator(this, "unshift", args, argc) }
 }
 pub(crate) extern "C" fn array_prototype_splice_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -894,9 +932,7 @@ pub(crate) extern "C" fn array_prototype_splice_thunk(
     args: *const f64,
     argc: usize,
 ) -> f64 {
-    let this = this.as_f64();
-    let args = unsafe { native_args(args, argc) };
-    crate::array::array_proto_mutator(this, "splice", args.as_ptr(), args.len())
+    unsafe { array_variadic_mutator(this, "splice", args, argc) }
 }
 pub(crate) extern "C" fn array_prototype_sort_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -1113,3 +1149,6 @@ pub(crate) extern "C" fn array_prototype_concat_thunk(
 mod apply_args_tests;
 #[cfg(test)]
 mod native_args_tests;
+
+#[cfg(test)]
+mod variadic_args_tests;

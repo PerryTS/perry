@@ -1,11 +1,10 @@
-/// `call` / `apply` on a compiled JavaScript body whose explicit receiver
+/// `call` / `apply` on a compiled JavaScript body, or `call` on a real
+/// non-constructor builtin body, whose explicit receiver
 /// needs no boxing and that keeps no re-bindable `this` capture: exactly what
-/// the intrinsic does for it, with none of its probes. A compiled body
-/// ([`crate::codegen_abi::FN_COMPILED_BODY`]) is never a Proxy, a built-in, a
-/// bound or native-module function or a class constructor, so the
-/// intrinsic's native special cases (stream / http construction, static
-/// bound methods, value-called built-ins) cannot apply, and the call is the
-/// ordinary compiled-body call with the arguments padded to its parameters.
+/// the intrinsic does for it, with none of its probes. The body's immutable
+/// record excludes Proxy, bound/native-export, constructor and no-op method
+/// forwarding (see [`crate::closure::has_direct_call_body`]). The call enters
+/// that body with the arguments padded to its parameters.
 /// `apply`'s argument list comes from a real Array, an `arguments` object,
 /// or `null` / `undefined`; any other array-like (and everything else) is
 /// `None`: the intrinsic's full arm runs.
@@ -28,6 +27,12 @@ pub(crate) unsafe fn compiled_target_call(
     }
     let closure = addr as *const crate::closure::ClosureHeader;
     let info = (*closure).info.as_ref()?;
+    // Native `apply` keeps the intrinsic's rooted CreateListFromArrayLike
+    // path, which can run getters. Native `call` already has its argument
+    // list and enters the same body as value-call dispatch.
+    if apply && info.flags & crate::codegen_abi::FN_COMPILED_BODY == 0 {
+        return None;
+    }
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let arg = |i: usize| {
         if i < argc {
@@ -109,20 +114,23 @@ unsafe fn enter_compiled_body(
     if info.flags & crate::closure::FN_REST_MASK != 0 || n > DIRECT || params > DIRECT {
         return crate::closure::call_compiled_body_this(closure, info, this, args_ptr, n);
     }
-    let mut a = [f64::from_bits(crate::value::TAG_UNDEFINED); DIRECT];
-    for (i, slot) in a.iter_mut().enumerate().take(n) {
-        *slot = *args_ptr.add(i);
-    }
+    let a = |i: usize| {
+        if i < n {
+            *args_ptr.add(i)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+    };
     let code = info.code;
     use crate::closure::body_call::js_body_call;
-    match n.max(params) {
+    match params {
         0 => js_body_call!(code, closure, this),
-        1 => js_body_call!(code, closure, this, a[0]),
-        2 => js_body_call!(code, closure, this, a[0], a[1]),
-        3 => js_body_call!(code, closure, this, a[0], a[1], a[2]),
-        4 => js_body_call!(code, closure, this, a[0], a[1], a[2], a[3]),
-        5 => js_body_call!(code, closure, this, a[0], a[1], a[2], a[3], a[4]),
-        _ => js_body_call!(code, closure, this, a[0], a[1], a[2], a[3], a[4], a[5]),
+        1 => js_body_call!(code, closure, this, a(0)),
+        2 => js_body_call!(code, closure, this, a(0), a(1)),
+        3 => js_body_call!(code, closure, this, a(0), a(1), a(2)),
+        4 => js_body_call!(code, closure, this, a(0), a(1), a(2), a(3)),
+        5 => js_body_call!(code, closure, this, a(0), a(1), a(2), a(3), a(4)),
+        _ => js_body_call!(code, closure, this, a(0), a(1), a(2), a(3), a(4), a(5)),
     }
 }
 
@@ -137,8 +145,7 @@ unsafe fn receiver_passes_unchanged(
     this_arg: f64,
 ) -> bool {
     use crate::closure::{FN_ARROW, FN_STRICT};
-    use crate::codegen_abi::FN_COMPILED_BODY;
-    if info.flags & FN_COMPILED_BODY == 0 {
+    if !crate::closure::has_direct_call_body(info) {
         return false;
     }
     // The explicit-`this` forwarder's own boxing test, so a Symbol receiver
