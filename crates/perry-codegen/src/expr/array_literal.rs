@@ -1,26 +1,15 @@
 //! Array-literal lowering (extracted from `expr.rs`, issue #1098).
-//! Pure move — no logic changes.
 //!
 //! # Layer 1 migrated module (#7615, slice 3)
 //!
 //! Nothing here names `expr::temp_root`. The element group goes through
-//! [`crate::rooting::with_operands_rooted`], and
+//! [`crate::rooting::with_rooted_group`], and
 //! `crate::rooting::migration_ledger` fails the build if this module reaches
 //! back into the raw API.
 //!
-//! ## What the migration found here
-//!
-//! Nothing new: #6951 already rooted the element group correctly. The
-//! migration is a *translation* and its IR is byte-identical, which is the
-//! claim this module makes — not a closed hazard.
-//!
-//! What it does buy is the release, and here that is not hypothetical. Three
-//! separate exits (the #5391 outline path, the inline bump-alloc path, the
-//! `N > 16` extern path) each carried their own `temp_root_release`, plus a
-//! `?` on every element's lowering that released nothing at all — the guard
-//! outlived a failed lowering. `with_operands_rooted` owns the release on all
-//! five paths, so "released on one arm" (#7462, which shipped in
-//! `URLSearchParams.delete`) stops being a program this arm can express.
+//! The group protects elements across later evaluations and the allocation,
+//! then re-reads them below the collecting slow arm. It owns release across
+//! outlined, inline and large-array exits, including lowering errors.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -61,18 +50,12 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 /// before the allocation and each one then sits in an SSA register across
 /// every later element's evaluation — which is not a root, and was only ever
 /// covered by conservative native-stack scanning. `[freshString(), f()]` lost
-/// its first element as soon as `f` collected. `lower_exprs_rooted` roots each
-/// value that has an allocating element after it, and emits nothing for the
-/// all-literal / all-local shapes.
+/// its first element as soon as `f` collected. The rooted group now also
+/// protects the last element across the array's own allocation, then reads
+/// every element again before initialization.
 pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Result<String> {
     let n = elements.len();
     let all_numeric_elements = elements.iter().all(|e| is_numeric_expr(ctx, e));
-
-    // Empty literal: no elements to worry about, keep the simple path.
-    if n == 0 {
-        let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-        return Ok(nanbox_pointer_inline(ctx.block(), &arr));
-    }
 
     // #8583 follow-up: a LARGE, fully-CONSTANT array literal (the minified
     // data-table shape — a giant nested array of number/bool/null literals)
@@ -89,8 +72,8 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
 
     // Evaluate all element expressions *before* allocating, so nested
     // allocations inside element expressions don't see a half-initialized
-    // outer array. Each evaluated value is kept in a temp root until the last
-    // element has been lowered (#6951).
+    // outer array. Pointer-bearing values remain rooted through the array's
+    // allocation and are re-read before initialization (#6951).
     let canonical_raw_f64: Vec<bool> = elements
         .iter()
         .map(|e| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e))
@@ -101,17 +84,80 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             ctx, value_expr,
         ));
     }
-    let element_refs: Vec<&Expr> = elements.iter().collect();
-    rooting::with_operands_rooted(ctx, &element_refs, |ctx, vals| {
+    rooting::with_rooted_group(ctx, n, |ctx, group| {
+        for element in elements {
+            group.lower(ctx, element, true)?;
+        }
         let arr = emit_array_from_lowered_values(
             ctx,
-            vals,
+            n,
             &canonical_raw_f64,
             &layout_notes_needed,
             all_numeric_elements,
+            |ctx| group.reread_all(ctx),
         )?;
         Ok(nanbox_pointer_inline(ctx.block(), &arr))
     })
+}
+
+#[cfg(test)]
+mod empty_birth_tests {
+    use perry_hir::{types::Type, Expr, Function, Module, Stmt};
+
+    #[test]
+    fn empty_literal_uses_the_bump_birth_with_initialized_append_reserve() {
+        let mut hir = Module::new("empty_birth");
+        hir.functions.push(Function {
+            id: 0,
+            name: "empty".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Array(Vec::new())))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("arrlit.fast"),
+            "the birth must actually be inline: {ir}"
+        );
+        assert!(
+            !ir.contains("call i64 @js_array_alloc("),
+            "outlined birth: {ir}"
+        );
+        assert!(ir.contains("call ptr @js_inline_arena_slow_alloc("));
+        assert!(
+            ir.contains("store i64 17179869184,"),
+            "length 0, capacity 4: {ir}"
+        );
+        assert_eq!(
+            ir.matches(&format!("store i64 {},", crate::nanbox::TAG_HOLE))
+                .count(),
+            4,
+            "every unused slot must be initialized: {ir}"
+        );
+        assert!(
+            ir.contains("load volatile i8"),
+            "birth color must stay live: {ir}"
+        );
+    }
 }
 
 /// Element count up to which an array is built inline (bump allocation plus N
@@ -119,8 +165,10 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
 /// in collectors.rs so every candidate the escape pass rejects still benefits.
 pub(crate) const INLINE_ARRAY_MAX_ELEMENTS: usize = 16;
 
-/// Build an array from element values the caller has already lowered (and
-/// rooted), returning the raw `i64` user pointer.
+/// Build an array from elements the caller has already lowered and rooted,
+/// returning the raw `i64` user pointer. `reread` must recover their current
+/// values using GC-leaf root reads; it runs after the collecting allocation
+/// and before initialization. The outlined helper consumes them in its call.
 ///
 /// Split out of [`lower_array_literal`] so the rest/`arguments` bundle at a
 /// call site builds its array the same way a literal does — one inline bump
@@ -134,14 +182,14 @@ pub(crate) const INLINE_ARRAY_MAX_ELEMENTS: usize = 16;
 /// `all_numeric_elements` that every element is statically a number. The
 /// caller owns rooting: the slow arm of the bump allocator collects, so every
 /// pointer value must already live in a root the group re-reads.
-pub(crate) fn emit_array_from_lowered_values(
-    ctx: &mut FnCtx<'_>,
-    vals: &[String],
+pub(crate) fn emit_array_from_lowered_values<'f>(
+    ctx: &mut FnCtx<'f>,
+    n: usize,
     canonical_raw_f64: &[bool],
     layout_notes_needed: &[bool],
     all_numeric_elements: bool,
+    reread: impl FnOnce(&mut FnCtx<'f>) -> Result<Vec<String>>,
 ) -> Result<String> {
-    let n = vals.len();
     // #5391: oversized modules outline array-literal construction. The inline
     // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
     // data-table builders huge (single 18MB functions are impractical to
@@ -150,6 +198,7 @@ pub(crate) fn emit_array_from_lowered_values(
     // buffer is hoisted to the entry block (fixed size per site; bounded total
     // stack) and consumed immediately by the call, so no GC-visible window.
     if crate::codegen::full_outline_ic_enabled() {
+        let vals = reread(ctx)?;
         let buf = ctx.func.alloca_entry_array(DOUBLE, n);
         for (i, v) in vals.iter().enumerate() {
             let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
@@ -168,6 +217,9 @@ pub(crate) fn emit_array_from_lowered_values(
     // ILP32 (wasm32 WASI, #11378): the inline bump reads `InlineArenaState`
     // at LP64 offsets; take the runtime call below instead.
     if n <= INLINE_ARRAY_MAX_ELEMENTS && !crate::codegen::helpers::ilp32_target() {
+        if n == 0 {
+            return Ok(super::inline_birth::empty_array(ctx));
+        }
         // Layout constants — must match `ArrayHeader` in array.rs and
         // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
         // byte offsets; the runtime declarations are authoritative.
@@ -181,7 +233,10 @@ pub(crate) fn emit_array_from_lowered_values(
         // values whose non-pointer bits are proven by expression shape.
         const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
 
-        let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (n as u64) * ELEMENT_SIZE;
+        // Empty arrays use the same birth protocol, retaining the runtime's
+        // four-slot append reserve. Nonempty literals keep their exact size.
+        let capacity = n;
+        let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (capacity as u64) * ELEMENT_SIZE;
         let total_size_str = total_size.to_string();
 
         // Load state + compute bump check. `total_size` is always a
@@ -235,6 +290,10 @@ pub(crate) fn emit_array_from_lowered_values(
             PTR,
             &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
         );
+        // The slow allocation can move every element. Root homes own the
+        // values until this point; their reads are GC-leaf, so initialization
+        // still contains no collecting call after the raw pointer is born.
+        let vals = reread(ctx)?;
         let birth_flags = super::inline_birth::flags(ctx, &state_ptr);
         let blk = ctx.block();
 
@@ -293,9 +352,14 @@ pub(crate) fn emit_array_from_lowered_values(
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
         let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
-        let arr_header_packed = (n as u64) | ((n as u64) << 32);
+        let arr_header_packed = (n as u64) | ((capacity as u64) << 32);
         // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
         blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
+        for i in n..capacity {
+            let slot = blk.gep_inbounds(I8, &raw, &[(I64, &(16 + i * 8).to_string())]);
+            // GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
+            blk.store(I64, &crate::nanbox::TAG_HOLE.to_string(), &slot);
+        }
 
         // User pointer = raw + GC_HEADER_SIZE. Computed before the
         // element loop so the per-slot layout notes target the correct
@@ -415,6 +479,7 @@ pub(crate) fn emit_array_from_lowered_values(
     let arr = ctx
         .block()
         .call(I64, "js_array_alloc_literal", &[(I32, &cap_str)]);
+    let vals = reread(ctx)?;
 
     let arr_ptr = ctx.block().inttoptr(I64, &arr);
     for (i, v) in vals.iter().enumerate() {

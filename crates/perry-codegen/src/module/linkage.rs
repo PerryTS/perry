@@ -484,6 +484,8 @@ pub(crate) fn declare_line_for(f: &LlFunction) -> String {
     // cross-unit ABI silently splits from the defining unit's.
     let cconv: String = if f.is_preserve_none() {
         format!("{} ", crate::inst::PRESERVE_NONE_CC)
+    } else if let Some(cc) = crate::expr::inline_birth::calling_convention(&f.name) {
+        format!("{cc} ")
     } else {
         String::new()
     };

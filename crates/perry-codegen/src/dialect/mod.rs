@@ -38,6 +38,8 @@ mod vector;
 /// is UB, so both the function value and every call/invoke site set this
 /// explicitly when the token is present.
 pub(crate) const LLVM_CC_PRESERVE_NONE: u32 = 21;
+/// LLVM PreserveMost: shared births save live caller registers in one body.
+pub(crate) const LLVM_CC_PRESERVE_MOST: u32 = 14;
 
 use text::{
     add_enum_attr, apply_flags, be, float_pred, int_pred, rauw, rmatch_paren, set_alignment_if_any,
@@ -191,6 +193,7 @@ struct ParsedHeader {
     /// `preserve_nonecc` between linkage and return type (#8175). Applied as
     /// the function's calling convention; every call site carries it too.
     preserve_none: bool,
+    preserve_most: bool,
 }
 
 fn parse_header(header: &str) -> Result<ParsedHeader> {
@@ -214,6 +217,10 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
                 linkage = Some(Linkage::Private);
                 toks.next();
             }
+            "linkonce_odr" => {
+                linkage = Some(Linkage::LinkOnceODR);
+                toks.next();
+            }
             // Explicit default linkage (init_body functions carry it).
             "external" => {
                 toks.next();
@@ -224,6 +231,10 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
     let mut preserve_none = false;
     if toks.peek() == Some(&crate::inst::PRESERVE_NONE_CC) {
         preserve_none = true;
+        toks.next();
+    }
+    let preserve_most = toks.peek() == Some(&"preserve_mostcc");
+    if preserve_most {
         toks.next();
     }
     let ret_tok = toks
@@ -299,6 +310,7 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         personality,
         gc_strategy,
         preserve_none,
+        preserve_most,
     })
 }
 
@@ -323,6 +335,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         };
         if let Some(l) = h.linkage {
             func.set_linkage(l);
+        }
+        if h.preserve_most {
+            func.set_call_conventions(LLVM_CC_PRESERVE_MOST);
         }
         if h.preserve_none {
             func.set_call_conventions(LLVM_CC_PRESERVE_NONE);
@@ -801,6 +816,10 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             None => (rest, false),
         };
 
+        let (rest, preserve_most) = match rest.strip_prefix("preserve_mostcc") {
+            Some(tail) => (tail.trim_start(), true),
+            None => (rest, false),
+        };
         // Inline asm: `RET asm sideeffect "ASM", "CONSTRAINTS"(ARGS)`.
         // Validate the whole prefix as a return type before committing to
         // this branch: an ordinary quoted callee or operand may itself
@@ -884,6 +903,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .builder
             .build_indirect_call(fn_ty, callee_ptr, &args, name)
             .map_err(be)?;
+        if preserve_most {
+            site.set_call_convention(LLVM_CC_PRESERVE_MOST);
+        }
         if preserve_none {
             site.set_call_convention(LLVM_CC_PRESERVE_NONE);
         }
@@ -1682,6 +1704,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     Some(cc) if *cc == crate::inst::PRESERVE_NONE_CC => {
                         site.set_call_convention(LLVM_CC_PRESERVE_NONE);
                     }
+                    Some("preserve_mostcc") => site.set_call_convention(LLVM_CC_PRESERVE_MOST),
                     // Closed dialect: an unknown token is a construction bug,
                     // not something to normalize away silently.
                     Some(cc) => bail!("unknown calling-convention token `{cc}`"),

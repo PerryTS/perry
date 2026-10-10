@@ -162,6 +162,16 @@ pub(super) fn check(ir: &str) {
                 }
             }
         }
+        if function
+            .lines()
+            .next()
+            .unwrap()
+            .contains("@perry_birth_class(")
+        {
+            super::shared_birth_invariant::check(function);
+            objects += 1;
+            continue;
+        }
         for slow in lines.iter().filter(|l| l.contains(super::INLINE_SLOW_CALL)) {
             sites += 1;
             let slow_reg = slow.split_once(" = ").unwrap().0;
@@ -335,7 +345,10 @@ pub(super) fn check(ir: &str) {
         "both independent inline allocators must be live"
     );
     assert_eq!(
-        sites,
+        sites
+            + usize::from(
+                ir.contains("define linkonce_odr preserve_mostcc i64 @perry_birth_class(")
+            ),
         ir.lines()
             .filter(|l| l.contains("call ") && l.contains("@js_gc_note_black_birth("))
             .count(),

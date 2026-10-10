@@ -41,6 +41,10 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             Some(tail) => (tail.trim_start(), true),
             None => (head, false),
         };
+        let (head, preserve_most) = match head.trim_start().strip_prefix("preserve_mostcc") {
+            Some(tail) => (tail.trim_start(), true),
+            None => (head, false),
+        };
         let callee_pos = head
             .find(['@', '%'])
             .ok_or_else(|| anyhow!("invoke without callee"))?;
@@ -83,6 +87,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .builder
             .build_indirect_invoke(fn_ty, callee_ptr, &args, cont, pad, name)
             .map_err(be)?;
+        if preserve_most {
+            site.set_call_convention(super::LLVM_CC_PRESERVE_MOST);
+        }
         if preserve_none {
             site.set_call_convention(super::LLVM_CC_PRESERVE_NONE);
         }

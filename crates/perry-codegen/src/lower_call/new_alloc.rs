@@ -21,9 +21,39 @@ use perry_hir::Class;
 use crate::expr::{load_inline_arena_state, FnCtx};
 use crate::types::{I32, I64, I8, PTR};
 
+/// An imported constructor can add slots the local keys image cannot describe.
+/// Keep its cold births on the runtime path, which consumes learned widths.
+/// This is a compile-time fact check; existing hot-site admission is unchanged.
+pub(super) fn cold_birth_constructor_chain_visible<'c>(
+    class_name: &str,
+    class: &'c Class,
+    lookup: &dyn Fn(&str) -> Option<&'c Class>,
+    imported: &dyn Fn(&str) -> bool,
+) -> bool {
+    let mut current = class;
+    let mut name = class_name;
+    for _ in 0..32 {
+        if imported(name) || current.extends_expr.is_some() || current.native_extends.is_some() {
+            return false;
+        }
+        match current.extends_name.as_deref() {
+            None => return true,
+            Some(parent) => {
+                let Some(next) = lookup(parent) else {
+                    return false;
+                };
+                current = next;
+                name = parent;
+            }
+        }
+    }
+    false
+}
+
 /// #7469: is the `new` site being lowered inside a **loop body**?
 ///
-/// This is the gate on the inline bump allocator. Inlining removes the
+/// This is the hot-site admission for larger inline births. Small exact
+/// births bypass this heuristic. Inlining removes the
 /// `js_object_alloc_class_inline_keys` FFI call and, with it, the thread-local
 /// resolutions that call performs — measured 1.81× on `churn_alloc`, 1.78× on
 /// `push_cls`. But it costs ~268 bytes of machine code **per site** (measured
@@ -504,40 +534,11 @@ fn emit_instance_alloc_inner(
         // width crosses the large-object threshold; constructor-free pointer
         // stores retain the ordinary generation-tested write barrier.
         *constructor_stores_ready = true;
-        // [#bloat] Outline the per-`new`-site allocator EXCEPT inside a loop.
-        //
-        // Outlining collapses ~145 lines of per-class-constant IR per site into
-        // a single `js_object_alloc_class_inline_keys` call (~3 lines), which
-        // performs the identical bump alloc + header init + slot zero-fill and
-        // returns the same user pointer. That is the right default for code
-        // size, and the size half of the original measurement still holds:
-        // ~268 bytes of machine code per site, +214,656 bytes over an 800-site
-        // program.
-        //
-        // The SPEED half of that measurement has since inverted. It read
-        // "~17% faster on an 8M-allocation loop (the inline bump bloated the
-        // hot loop, hurting icache/regalloc more than the saved call)"; today
-        // the outlined form is **1.81× SLOWER** on `churn_alloc` and 1.78× on
-        // `push_cls`. Nothing about the inline bump changed — everything
-        // *around* the allocation got cheaper (#7474, #7486, #7487, #7501,
-        // #7525, #7532, #7535, #7536, #7552), so the surviving FFI call and
-        // the thread-local resolutions it performs now dominate what the
-        // inline bump's code bloat costs. On Darwin those resolutions cannot
-        // be made cheaper — Mach-O has no local-exec TLS model, and building
-        // the runtime with `-Ztls-model=local-exec` leaves the `blr` through
-        // the TLV descriptor byte-identical (measured: 1.02×). Only their
-        // COUNT can be reduced, and inlining removes them outright.
-        //
-        // So the choice is per site, not global: a `new` inside a loop takes
-        // the inline bump (it runs many times, and the size cost is bounded to
-        // loop bodies); everything else keeps the outlined call and
-        // contributes nothing to binary growth. `PERRY_INLINE_NEW=1` forces
-        // the inline form for A/B measurement only when the exact descriptor
-        // facts below admit raw inline allocation; missing or mismatched facts
-        // still use the outlined entry point.
-        //
-        // NOTE the env test is `is_none()`: `PERRY_INLINE_NEW=""` *enables*
-        // the inline path, because an empty string is `Some("")`.
+        // Exact small births use emitted allocation even in callbacks and
+        // cross-module factories, where lexical loop membership says nothing
+        // about execution frequency. Large sites retain the established
+        // hot-site admission and its experimental force flag. Descriptor and
+        // header-size agreement below remain mandatory on every inline site.
         let force_inline_new = std::env::var_os("PERRY_INLINE_NEW").is_some();
         // #8067: the raw inline allocator cannot ask the runtime to validate
         // descriptor facts after writing the ShapeId. Admit it only when the
@@ -571,8 +572,19 @@ fn emit_instance_alloc_inner(
             || wide_birth_image;
         // ILP32 (wasm32 WASI, #11378): the inline bump below reads
         // `InlineArenaState` at LP64 offsets; take the outlined call.
+        // Small, exactly described births use the same emitted Eden bump
+        // regardless of the caller's lexical loop visibility. The runtime's
+        // small-birth cutoff is 16 KiB; retain the old admission for larger
+        // sites rather than changing their generation/allocation policy.
+        let small_birth = site_total < 16 * 1024
+            && cold_birth_constructor_chain_visible(
+                class_name,
+                class,
+                &|name| ctx.classes.get(name).copied(),
+                &|name| ctx.imported_class_ctors.contains_key(name),
+            );
         if !descriptor_facts_exact
-            || (!force_inline_new && !new_site_is_in_loop(ctx))
+            || (!small_birth && !force_inline_new && !new_site_is_in_loop(ctx))
             || crate::codegen::helpers::ilp32_target()
         {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
@@ -615,40 +627,8 @@ fn emit_instance_alloc_inner(
                 ],
             )
         } else {
-            // Compile-time layout constants.
-            const GC_HEADER_SIZE: u64 = 8;
-            // `size_of::<ObjectHeader>()` is 16 on LP64 and padded ILP32.
-            // Derive from the target
-            // triple so the inline alloc size and field-region base match the
-            // target-compiled runtime (no-op on 64-bit; see `target_layout`).
-            let object_header_size: u64 =
-                crate::target_layout::object_header_size_bytes(ctx.target_triple);
-            // #6759 Phase B: pointer width for the trailing `meta` header
-            // field (computed here, before `ctx.block()` mutably borrows).
-            let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-                4
-            } else {
-                8
-            };
-            const FIELD_SLOT_SIZE: u64 = 8;
-            // Inline-slot floor — MUST match perry-runtime `object::INLINE_SLOT_FLOOR`
-            // (they independently pad `new` objects to the same minimum; a mismatch
-            // where codegen allocs fewer slots than the runtime's get/set bound-check
-            // assumes is heap corruption). Single source of truth, paired with the
-            // runtime by `target_layout::tests::inline_slot_floor_matches_runtime`.
-            // Lowered 8->4 (#6712) then 4->2 (#7916) to shrink small-object footprint.
-            const MIN_FIELD_SLOTS: u64 = crate::target_layout::INLINE_SLOT_FLOOR;
-            const GC_TYPE_OBJECT: u64 = 2;
-            const GC_FLAG_ARENA: u64 = 0x02;
-            // The packed object header has no layout state: the birth
-            // ShapeId carries the rep used by GC tracing.
-            let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-            let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
-            // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
-            // bump allocator's offset invariant (below) requires every
-            // allocation to be a multiple of 8. #8047 makes the object header
-            // 16 bytes on both pointer widths, so this is currently a no-op.
-            let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
+            let total_size =
+                crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
             let total_size_str = total_size.to_string();
 
             // Inline bump-allocator IR.
@@ -676,45 +656,6 @@ fn emit_instance_alloc_inner(
 
             // fits = new_offset <= size
             let fits = blk.icmp_ule(I64, &new_offset, &size_val);
-
-            // Set up fast/slow/merge basic blocks.
-            let fast_idx = ctx.new_block("alloc.fast");
-            let slow_idx = ctx.new_block("alloc.slow");
-            let merge_idx = ctx.new_block("alloc.merge");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            let merge_label = ctx.block_label(merge_idx);
-
-            ctx.block().cond_br(&fits, &fast_label, &slow_label);
-
-            // ---- Fast path: bump and return data + aligned ----
-            ctx.current_block = fast_idx;
-            let blk = ctx.block();
-            // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
-            blk.store(I64, &new_offset, &offset_field_ptr);
-            // data ptr is at byte offset 0 in InlineArenaState
-            let data_ptr = blk.load(PTR, &state_ptr);
-            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            let fast_pred_label = blk.label.clone();
-            blk.br(&merge_label);
-
-            // ---- Slow path: call into the runtime ----
-            ctx.current_block = slow_idx;
-            let raw_slow = ctx.block().call(
-                PTR,
-                "js_inline_arena_slow_alloc",
-                &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
-            );
-            let slow_pred_label = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-
-            // ---- Merge: phi the raw pointer, write headers, NaN-box ----
-            ctx.current_block = merge_idx;
-            let blk = ctx.block();
-            let raw = blk.phi(
-                PTR,
-                &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
-            );
 
             // Write the 16-byte header prefix — GcHeader (8 bytes) followed by
             // the first ObjectHeader word — with ONE `<2 x i64>` store.
@@ -745,11 +686,6 @@ fn emit_instance_alloc_inner(
             // allocation, the shape the pre-#8113 constant pair compiled to.
             let gc_packed: u64 =
                 crate::target_layout::inline_alloc_gc_packed(ctx.target_triple, field_count);
-            debug_assert_eq!(
-                gc_packed,
-                GC_TYPE_OBJECT | (GC_FLAG_ARENA << 8) | ((total_size as u64) << 32),
-                "inline_alloc_gc_packed must reproduce this site's packed header word"
-            );
             // Prefer the module-level image global — composed once at module
             // init from the SAME `inline_alloc_gc_packed` derivation — and use
             // it only when the table's packed word equals this site's own. A
@@ -800,70 +736,50 @@ fn emit_instance_alloc_inner(
                 }
                 crate::expr::HeaderImageSource::EntryValue(value) => value,
             };
-            let birth_flags = crate::expr::inline_birth::flags(ctx, &state_ptr);
-            let born_packed =
-                crate::expr::inline_birth::header(ctx, &gc_packed.to_string(), &birth_flags);
+            let fast_idx = ctx.new_block("alloc.fast");
+            let slow_idx = ctx.new_block("alloc.slow");
+            let merge_idx = ctx.new_block("alloc.merge");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&fits, &fast_label, &slow_label);
+            ctx.current_block = fast_idx;
             let blk = ctx.block();
-            let born_image = blk.next_reg();
-            blk.emit_raw(format!(
-                "{born_image} = insertelement <2 x i64> {header_image}, i64 {born_packed}, i32 0"
+            // GC_STORE_AUDIT(INIT): arena allocator metadata, not a JS edge.
+            blk.store(I64, &new_offset, &offset_field_ptr);
+            let data_ptr = blk.load(PTR, &state_ptr);
+            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
+            // GC_STORE_AUDIT(INIT): unpublished base header. The shared
+            // routine composes live color before publication or a GC call.
+            ctx.block().emit_raw(format!(
+                "store <2 x i64> {header_image}, ptr {raw_fast}, align 8"
             ));
-            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
-            blk.emit_raw(format!(
-                "store <2 x i64> {}, ptr {}, align 8",
-                born_image, raw
-            ));
-
-            // #6759 Phase B: null the `meta` record pointer — the LAST header
-            // field, at header offset (object_header_size - pointer_size).
-            // Pointer-width store: on ILP32 the field is 4 bytes at a
-            // 4-aligned offset, and an i64 store there would violate the
-            // arm64_32 `i64:64` ABI alignment (and spill into slot 0).
-            let meta_off = GC_HEADER_SIZE + object_header_size - meta_ptr_size;
-            let meta_addr = blk.gep(I8, &raw, &[(I64, &meta_off.to_string())]);
-            // GC_STORE_AUDIT(INIT): fresh inline object starts with no per-object meta record (#6759 B).
-            let meta_store_ty = if meta_ptr_size == 4 { I32 } else { I64 };
-            blk.store(meta_store_ty, "0", &meta_addr);
-
-            // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
-            // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
-            // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
-            // previously freed GC objects from bleeding through." This inline bump path
-            // wrote only the headers and left the slots uninitialized, so a field
-            // read-before-write — or a GC that scans the still-constructing instance —
-            // observed stale arena bytes. When those bytes were a previously-freed
-            // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
-            // crashed with "Cannot read properties of undefined". Slots start
-            // at raw + GcHeader(8) + ObjectHeader(16) = raw + 24 (#8047).
-            //
-            // Charter step 5, T1: an `F64` lane of the class's birth rep starts
-            // as +0.0 instead (the same word module init minted the ShapeId
-            // with), so the representation invariant holds before the
-            // constructor's stores; the constructor proof behind the lane says
-            // nothing reads the slot first. The runtime allocator does the same
-            // (`field_rep_store::birth_fill_f64_lanes`).
-            for i in 0..alloc_field_count {
-                let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
-                let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-                if crate::typed_shape::birth_rep_slot_is_f64(birth_rep, i as u32) {
-                    // GC_STORE_AUDIT(INIT): fresh F64 birth lane initialized to +0.0 (T1).
-                    blk.store(I64, "0", &slot_ptr);
-                } else {
-                    // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-                    blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
-                }
-            }
-
-            // User pointer = raw + 8 (the ObjectHeader address — what the
-            // function-call path returned). Convert to i64 to match what
-            // the existing nanbox_pointer_inline expects.
-            let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-            let handle = blk.ptrtoint(&user_ptr, I64);
-
-            // Seed only after EVERY field has a valid default, before the
-            // constructor can allocate/poll. Same protocol as runtime births.
-            crate::expr::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
-            handle
+            let fast_handle = crate::expr::inline_birth::class(
+                ctx,
+                &raw_fast,
+                &state_ptr,
+                &header_image,
+                birth_rep,
+                true,
+            );
+            let fast_pred = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = slow_idx;
+            let slow_handle = crate::expr::inline_birth::class(
+                ctx,
+                "null",
+                &state_ptr,
+                &header_image,
+                birth_rep,
+                false,
+            );
+            let slow_pred = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            ctx.block().phi(
+                I64,
+                &[(&fast_handle, &fast_pred), (&slow_handle, &slow_pred)],
+            )
         }
     } else {
         // Fallback: build the packed-keys string at this site and

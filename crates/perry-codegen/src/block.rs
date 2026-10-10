@@ -1553,7 +1553,8 @@ impl LlBlock {
         let cconv = self
             .counter
             .callee_preserve_none(func_name)
-            .then_some(crate::inst::PRESERVE_NONE_CC);
+            .then_some(crate::inst::PRESERVE_NONE_CC)
+            .or_else(|| crate::expr::inline_birth::calling_convention(func_name));
         // Invoke-EH (#7302): inside a handler scope, throw-capable calls
         // carry the unwind edge. The invoke + inline continuation label ride
         // the Raw escape hatch; the native-construction backend bails on
@@ -1591,7 +1592,8 @@ impl LlBlock {
         let cconv = self
             .counter
             .callee_preserve_none(func_name)
-            .then_some(crate::inst::PRESERVE_NONE_CC);
+            .then_some(crate::inst::PRESERVE_NONE_CC)
+            .or_else(|| crate::expr::inline_birth::calling_convention(func_name));
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
             let cc = cconv.map(|c| format!("{c} ")).unwrap_or_default();

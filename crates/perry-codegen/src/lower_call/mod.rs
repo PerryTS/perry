@@ -511,8 +511,8 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
         // `js_array_push_f64` per element re-classified the receiver,
         // re-noted the slot layout and re-checked the barrier on every push —
         // 1,586 instructions for `f(a, b, c)` into a three-element rest.
-        // Rooting is unchanged: every element is re-read from the group's
-        // slots first (the allocator's slow arm collects), and the finished
+        // Every element is re-read from the group's slots AFTER the
+        // allocator's collecting slow arm, and the finished
         // array is adopted into the same scope, so the next bundle's
         // allocation cannot sweep it.
         if count > 0 && count <= crate::expr::INLINE_ARRAY_MAX_ELEMENTS {
@@ -528,16 +528,17 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
             let all_numeric = rest_args
                 .iter()
                 .all(|e| crate::type_analysis::is_numeric_expr(ctx, e));
-            let mut vals: Vec<String> = Vec::with_capacity(count);
-            for i in bundle.from..group.len() {
-                vals.push(group.reread(ctx, i)?);
-            }
             let arr = crate::expr::emit_array_from_lowered_values(
                 ctx,
-                &vals,
+                count,
                 &canonical_raw_f64,
                 &layout_notes_needed,
                 all_numeric,
+                |ctx| {
+                    (bundle.from..group.len())
+                        .map(|i| group.reread(ctx, i))
+                        .collect()
+                },
             )?;
             accs.push(group.adopt_array(ctx, &arr));
             continue;

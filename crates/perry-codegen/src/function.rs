@@ -974,6 +974,8 @@ impl LlFunction {
         // so splitting is carried, not refused.
         let cconv: String = if self.is_preserve_none() {
             format!("{} ", crate::inst::PRESERVE_NONE_CC)
+        } else if let Some(cc) = crate::expr::inline_birth::calling_convention(&self.name) {
+            format!("{cc} ")
         } else {
             String::new()
         };

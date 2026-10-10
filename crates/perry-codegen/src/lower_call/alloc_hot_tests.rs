@@ -1,23 +1,13 @@
 //! #7871 / #7908: allocation-hot functions and closures take the INLINE bump
 //! allocator.
 //!
-//! The subject is [`super::new_alloc::new_site_is_in_loop`]'s second arm and the
-//! `collectors::collect_alloc_hot_functions` set behind it.
+//! Small exact births take the emitted bump even when an indirect factory or
+//! cross-module caller hides hotness. Larger births retain the hot-site
+//! admission from `new_site_is_in_loop` and `collect_alloc_hot_functions`.
 //!
-//! This is a liveness gate, and it exists because the failure mode is silence.
-//! `js_object_alloc_class_inline_keys` performs the identical bump alloc and
-//! returns the identical user pointer, so a gate that stops firing changes no
-//! output, breaks no other test, and simply makes every allocation in a
-//! recursive-descent evaluator cost a cross-crate call again — `interp.ts`'s
-//! −22.9% quietly evaporating with nothing to show for it. Only the emitted
-//! `alloc.fast` / `js_inline_arena_slow_alloc` shape separates the two.
-//!
-//! The negative half is the anti-bloat property: a `new` in a function that is
-//! neither in a loop, nor called from one, nor recursive keeps the outlined
-//! call. Likewise, indirect closure admission has a per-module allocation-site
-//! cap. Without those checks this file would pass just as happily if the gate
-//! had been widened to "always", which is the ~268-bytes-per-site default the
-//! `[#bloat]` comment in `new_alloc.rs` exists to refuse.
+//! This is a liveness gate: an outlined allocator has identical observable
+//! behavior, so output parity cannot detect losing the emitted mechanism.
+//! Assert on CALL/LABEL forms, and separately keep large cold births outlined.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -434,33 +424,16 @@ fn a_tiny_allocation_method_inlines_its_bump_allocator() {
 }
 
 #[test]
-fn a_non_tiny_allocation_method_keeps_the_outlined_allocator() {
+fn small_births_do_not_depend_on_method_statement_count_or_module_budget() {
     assert_inline_new_not_forced();
-    // Two prefix statements plus the return make this a three-statement
-    // method, just beyond the deliberately narrow tiny-method admission.
-    let ir = ir_for(tiny_factory_module(2));
-    assert!(
-        ir.contains(STAMPED_OUTLINED_CALL),
-        "a three-statement method escaped the bounded tiny-method rule:\n{ir}"
-    );
-    assert!(
-        !ir.contains(INLINE_FAST_BLOCK),
-        "the non-tiny method unexpectedly emitted an inline allocation site:\n{ir}"
-    );
-}
-
-#[test]
-fn tiny_allocation_methods_over_the_module_budget_are_all_outlined() {
-    assert_inline_new_not_forced();
-    let ir = ir_for(tiny_factory_budget_module(9));
-    assert!(
-        ir.contains(STAMPED_OUTLINED_CALL),
-        "allocation methods over the eight-site budget emitted no outlined allocator:\n{ir}"
-    );
-    assert!(
-        !ir.contains(INLINE_FAST_BLOCK),
-        "the all-or-none method budget admitted part of a nine-site module:\n{ir}"
-    );
+    for module in [tiny_factory_module(2), tiny_factory_budget_module(9)] {
+        let ir = ir_for(module);
+        assert!(ir.contains(INLINE_FAST_BLOCK) && ir.contains(INLINE_SLOW_CALL));
+        assert!(
+            !ir.contains(STAMPED_OUTLINED_CALL),
+            "small birth was outlined: {ir}"
+        );
+    }
 }
 
 #[test]
@@ -492,6 +465,7 @@ fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
     let mut module = walk_module(true);
     // Whole module: both numeric branches, noted pointer elements, different
     // sizes, and specialized clones. No subject-function filtering is allowed.
+    module.init.push(Stmt::Expr(Expr::Array(vec![])));
     module.functions[0].body.insert(
         0,
         Stmt::Expr(Expr::Array(vec![Expr::LocalGet(N_ID), Expr::Number(3.0)])),
@@ -514,6 +488,49 @@ fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
 
 #[path = "inline_birth_invariant.rs"]
 mod inline_birth_invariant;
+
+#[path = "shared_birth_invariant.rs"]
+mod shared_birth_invariant;
+
+#[test]
+fn birth_initialization_is_shared_and_fast_calls_cannot_collect() {
+    let mut module = walk_module(true);
+    module.init.extend([
+        Stmt::Expr(Expr::Array(vec![])),
+        Stmt::Expr(Expr::Array(vec![])),
+    ]);
+    let ir = ir_for(module);
+    for name in ["perry_birth_class", "perry_birth_empty_array"] {
+        assert_eq!(
+            ir.matches(&format!("define linkonce_odr preserve_mostcc i64 @{name}("))
+                .count(),
+            1,
+            "{ir}"
+        );
+        let calls: Vec<_> = ir
+            .lines()
+            .filter(|l| l.contains(&format!("call preserve_mostcc i64 @{name}(")))
+            .collect();
+        assert!(!calls.is_empty());
+        for call in calls {
+            assert_eq!(
+                call.contains("\"gc-leaf-function\""),
+                !call.contains("(ptr null,"),
+                "{call}"
+            );
+        }
+    }
+    let caller = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("alloc.fast") && !f.starts_with("linkonce_odr"))
+        .unwrap();
+    assert!(
+        !caller.contains("load volatile i8"),
+        "color belongs in the shared routine"
+    );
+    assert!(!caller.contains("call ptr @js_inline_arena_slow_alloc("));
+    assert!(!caller.contains("call void @js_gc_note_black_birth("));
+}
 
 /// #8591: the public entry resolves the thread's stable arena state once, and
 /// the internal recursive body forwards it through every self call.
@@ -595,33 +612,82 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
     );
 }
 
-/// The anti-bloat half. Identical module minus the self-call: one call site, no
-/// loop, not recursive — nothing about it says "runs many times", so it keeps
-/// the outlined call and contributes nothing to binary growth.
+/// A callback or cross-module factory can be hot without a lexical loop.
 #[test]
-fn a_cold_straight_line_function_keeps_the_outlined_allocator() {
+fn a_small_straight_line_birth_uses_the_emitted_allocator() {
     assert_inline_new_not_forced();
     let ir = ir_for(walk_module(false));
+    assert!(ir.contains(INLINE_SLOW_CALL) && ir.contains(INLINE_FAST_BLOCK));
     assert!(
-        ir.contains(OUTLINED_CALL),
-        "a `new` in a cold, non-recursive, non-in-loop function took the \
-         inline bump allocator — the gate has been widened to `always`, which \
-         is ~268 bytes per site across the whole program:\n{ir}"
-    );
-    assert!(
-        !ir.contains(INLINE_SLOW_CALL),
-        "the inline bump allocator reached a cold site:\n{ir}"
+        !ir.contains(OUTLINED_CALL),
+        "small birth was outlined: {ir}"
     );
     assert!(
         !ir.contains(".__arena("),
-        "a non-recursive function paid for an arena-threaded entry wrapper:\n{ir}"
+        "a non-recursive function needs no wrapper: {ir}"
+    );
+    assert!(ir.contains(SHAPE_MINT_CALL) && ir.contains(SHAPE_GLOBAL_LOAD));
+}
+
+#[test]
+fn a_large_straight_line_birth_retains_the_outlined_allocator() {
+    assert_inline_new_not_forced();
+    let mut module = walk_module(false);
+    let template = module.classes[0].fields[0].clone();
+    module.classes[0].fields = (0..2048)
+        .map(|i| ClassField {
+            name: format!("v{i}"),
+            ..template.clone()
+        })
+        .collect();
+    let ir = ir_for(module);
+    assert!(ir.contains(STAMPED_OUTLINED_CALL));
+    assert!(
+        !ir.contains(INLINE_FAST_BLOCK),
+        "large cold birth changed policy: {ir}"
+    );
+}
+
+#[test]
+fn cold_birth_requires_visible_constructor_facts_through_the_whole_chain() {
+    let mut leaf = cell_class();
+    let mut parent = cell_class();
+    parent.name = "Parent".into();
+    leaf.extends_name = Some(parent.name.clone());
+    let visible = |name: &str| (name == "Parent").then_some(&parent);
+    assert!(super::new_alloc::cold_birth_constructor_chain_visible(
+        &leaf.name,
+        &leaf,
+        &visible,
+        &|_| false,
+    ));
+    assert!(!super::new_alloc::cold_birth_constructor_chain_visible(
+        &leaf.name,
+        &leaf,
+        &visible,
+        &|name| name == "Parent",
+    ));
+    assert!(!super::new_alloc::cold_birth_constructor_chain_visible(
+        &leaf.name,
+        &leaf,
+        &|_| None,
+        &|_| false,
+    ));
+}
+
+#[test]
+fn cold_birth_of_an_unresolved_chain_retains_runtime_sizing() {
+    assert_inline_new_not_forced();
+    let mut module = walk_module(false);
+    module.classes[0].extends_name = Some("OpaqueParent".into());
+    let ir = ir_for(module);
+    assert!(
+        ir.contains(STAMPED_OUTLINED_CALL),
+        "unknown constructor birth: {ir}"
     );
     assert!(
-        ir.contains(STAMPED_OUTLINED_CALL)
-            && ir.contains(SHAPE_MINT_CALL)
-            && ir.contains(SHAPE_GLOBAL_LOAD),
-        "the cold allocation did not pass its module-init ShapeId to the stamped \
-         outlined allocator:\n{ir}"
+        !ir.contains(INLINE_FAST_BLOCK),
+        "unknown constructor was inlined: {ir}"
     );
 }
 
@@ -641,34 +707,19 @@ fn allocation_closures_are_admitted_by_an_indirect_loop_call() {
 }
 
 #[test]
-fn a_straight_line_indirect_call_does_not_admit_its_closure() {
+fn small_closure_births_do_not_depend_on_loop_visibility_or_module_budget() {
     assert_inline_new_not_forced();
-    let ir = ir_for(indirect_closure_module(1, false));
-    assert!(
-        ir.contains(OUTLINED_CALL),
-        "an indirect call outside a loop supplied no hotness evidence, but its \
-         closure allocation was inlined:\n{ir}"
-    );
-    assert!(
-        !ir.contains(INLINE_SLOW_CALL),
-        "the inline bump allocator reached a closure with no hot call shape:\n{ir}"
-    );
-}
-
-#[test]
-fn indirect_closure_admission_refuses_modules_over_eight_sites() {
-    assert_inline_new_not_forced();
-    let ir = ir_for(indirect_closure_module(9, true));
-    assert!(
-        ir.contains(OUTLINED_CALL),
-        "nine closure allocation sites exceed the 8-site / ~2.1 KiB module \
-         budget, but the outlined allocator disappeared:\n{ir}"
-    );
-    assert!(
-        !ir.contains(INLINE_SLOW_CALL),
-        "an over-budget module admitted some closure sites; admission must be \
-         all-or-none so traversal order cannot affect code size:\n{ir}"
-    );
+    for module in [
+        indirect_closure_module(1, false),
+        indirect_closure_module(9, true),
+    ] {
+        let ir = ir_for(module);
+        assert!(ir.contains(INLINE_SLOW_CALL) && ir.contains(INLINE_FAST_BLOCK));
+        assert!(
+            !ir.contains(OUTLINED_CALL),
+            "small birth was outlined: {ir}"
+        );
+    }
 }
 
 #[test]

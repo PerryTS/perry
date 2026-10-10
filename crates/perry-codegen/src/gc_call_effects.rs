@@ -102,7 +102,12 @@ pub(crate) const GENERATED_TABLES: &[(&str, &str)] = &[
 /// Symbols the archives cannot speak for, each with its reason. Kept tiny on
 /// purpose: an entry here shadows the graph, so it must name something the
 /// graph does not contain (checked by a unit test).
-pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[];
+pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
+    ("perry_birth_class", GcCallEffect::AllocNoReentry,
+     "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
+    ("perry_birth_empty_array", GcCallEffect::AllocNoReentry,
+     "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
+];
 
 /// Merge target tables: the most conservative class wins, and a symbol absent
 /// from any table is dropped (reads as `Reenters`). Panics on a malformed row:

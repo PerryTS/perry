@@ -2122,7 +2122,7 @@ js_net_socket_unpipe	i64	i64,f64
 js_net_socket_unref	i64	i64
 js_net_socket_upgrade_tls	ptr	i64,i64,f64
 js_net_socket_write	void	i64,i64
-js_net_subclass_init	f64	f64,f64,f64,i32
+js_net_subclass_init	f64	f64,f64,f64,i32u
 js_net_throw_invalid_address	void	
 js_net_validate_block_list_prefix	i32s	f64,f64
 js_net_validate_connect_port	void	f64
@@ -3783,7 +3783,7 @@ js_timer_unref	void	i64
 js_timer_validate_callback	i64	f64,i32s
 js_tls_check_server_identity	f64	f64,f64
 js_tls_client_attach_socket_prototype	void	i64
-js_tls_client_certificate	f64	i64,i32,f64
+js_tls_client_certificate	f64	i64,i32s,f64
 js_tls_client_check_identity	f64	i64,f64
 js_tls_client_check_identity_from_metadata	f64	i64
 js_tls_client_is_connected	i32s	i64
