@@ -267,10 +267,12 @@ fn split_part_meta(arr: *mut crate::array::ArrayHeader, i: u32) -> (Vec<u8>, u32
 fn split_parts_get_metadata_from_their_own_bytes() {
     let src = [0x80u8, b'|', 0xF0];
     let s = js_string_from_bytes(src.as_ptr(), 3);
-    // The aggregate check really does lie here — that is the whole bug.
+    // Equal lengths alone lie here. The public predicate now also requires
+    // construction proof or an actual ASCII scan for an unproved payload.
+    assert_eq!(unsafe { (*s).byte_len }, unsafe { (*s).utf16_len });
     assert!(
-        is_ascii_string(s),
-        "precondition: the aggregate byte_len == utf16_len check misfires"
+        !is_ascii_string(s),
+        "an unproved aggregate length equality must not assert ASCII"
     );
 
     let delim = js_string_from_bytes(b"|".as_ptr(), 1);
@@ -308,7 +310,8 @@ fn split_parts_preserve_lone_surrogate_flag() {
     assert_eq!(b0, vec![0xED, 0xA0, 0x80]);
     assert_eq!(u0, 1);
     assert_eq!(
-        f0, STRING_FLAG_HAS_LONE_SURROGATES,
+        f0 & STRING_FLAG_HAS_LONE_SURROGATES,
+        STRING_FLAG_HAS_LONE_SURROGATES,
         "the part holding the lone surrogate must stay flagged"
     );
     let part0 = {
@@ -324,14 +327,21 @@ fn split_parts_preserve_lone_surrogate_flag() {
     // The clean part must NOT inherit the flag.
     let (b1, _, f1) = split_part_meta(arr, 1);
     assert_eq!(b1, vec![b'B']);
-    assert_eq!(f1, 0, "a part with no surrogate must not carry the flag");
+    assert_eq!(
+        f1 & STRING_FLAG_HAS_LONE_SURROGATES,
+        0,
+        "a part with no surrogate must not carry the flag"
+    );
 
     // Same for the empty-delimiter path.
     let empty = js_string_from_bytes(b"".as_ptr(), 0);
     let chars = js_string_split_n(s, empty, -1);
     let (cb0, _, cf0) = split_part_meta(chars, 0);
     assert_eq!(cb0, vec![0xED, 0xA0, 0x80]);
-    assert_eq!(cf0, STRING_FLAG_HAS_LONE_SURROGATES);
+    assert_eq!(
+        cf0 & STRING_FLAG_HAS_LONE_SURROGATES,
+        STRING_FLAG_HAS_LONE_SURROGATES
+    );
 }
 
 /// A truncated multi-byte tail must NOT be mistaken for whitespace.
@@ -434,9 +444,10 @@ fn astral_and_truncated_astral_lead() {
 fn case_convert_rejects_the_aggregate_ascii_lie() {
     let g = GuardedString::new(&[0xC3, 0xA9, b'a', 0xF0]);
     let s = g.ptr();
+    assert_eq!(unsafe { (*s).byte_len }, unsafe { (*s).utf16_len });
     assert!(
-        is_ascii_string(s),
-        "precondition: the aggregate byte_len == utf16_len check misfires"
+        !is_ascii_string(s),
+        "an unproved aggregate length equality must not assert ASCII"
     );
     let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
     assert!(

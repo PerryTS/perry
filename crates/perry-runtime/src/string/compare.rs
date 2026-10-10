@@ -1150,7 +1150,9 @@ pub extern "C" fn js_string_is_well_formed(s: *const StringHeader) -> f64 {
         return f64::from_bits(TAG_TRUE);
     }
     let flags = unsafe { (*s).flags };
-    if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+    if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0
+        || (flags & STRING_FLAG_WTF8_VALIDATED == 0 && unsafe { header_str_checked(s) }.is_none())
+    {
         return f64::from_bits(TAG_FALSE);
     }
     f64::from_bits(TAG_TRUE)

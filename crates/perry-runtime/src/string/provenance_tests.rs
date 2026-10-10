@@ -67,6 +67,7 @@ fn invalid_raw_bytes_cannot_gain_proof_from_matching_lengths_or_concat() {
         assert!(!proven(raw));
         assert!(unsafe { header_str_checked(raw) }.is_none());
         assert!(!is_ascii_string(raw));
+        assert_eq!(crate::value::js_is_truthy(js_string_is_well_formed(raw)), 0);
         let good = heap("ascii");
         let result = js_string_concat(good, raw);
         assert!(!proven(result), "one proven operand cannot certify both");
