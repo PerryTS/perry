@@ -46,10 +46,22 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::OrdinaryUnmarked,
         ShapeObjectKind::OrdinaryNumericProof,
         ShapeObjectKind::NativeNamespace,
+        ShapeObjectKind::OrdinaryNativeAlias,
     ] {
         assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
         let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);
         assert_eq!(r.object_kind(), kind);
+        let mut summary = r.with_summary(0xFF);
+        summary.set_tracked_births(3);
+        assert_eq!(
+            summary.object_kind(),
+            kind,
+            "summary and birth bits do not change the kind"
+        );
+        assert_eq!(
+            summary.summary(),
+            crate::object::key_attrs::SUMMARY_KEY_BITS
+        );
         for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
             if other != kind {
                 assert!(!r.facts_match(0x1000, 1, 1, 0, other, 0));

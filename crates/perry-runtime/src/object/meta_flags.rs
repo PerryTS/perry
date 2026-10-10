@@ -29,11 +29,13 @@ pub(crate) const OBJECT_META_FLAG_IS_PROTOTYPE: u64 = 1 << 5;
 /// instructions on every cached read and that an EMITTED read sequence could
 /// not have called at all.
 pub(crate) const OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: u64 = 1 << 6;
+/// Ordinary storage and prototype links, with native forwarding only after
+/// an ordinary read yields undefined. Projected into the shape kind.
+pub(crate) const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in
 // `array/subclass.rs` and every reader in the tree:
-//   bit 0      free (was the prototype-divergence bit: a diverged prototype
-//              is a different ShapeId now, `shapes::object_prototype_word`)
+//   bit 0      native fallback after ordinary undefined
 //   bit 1      packed-numeric payload valid       (#8690)
 //   bit 2      packed-numeric u32 entity proof    (#8690)
 //   bit 3      free (was the user-override bit)   \ how a prototype was linked

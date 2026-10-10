@@ -544,7 +544,28 @@ extern "C" fn ns_emit_rest(
         raw_ptr_from_value(rest) as *const _,
     )
 }
-/// A method-call site's miss (`NmEeOps::emit_call`): when `recv`'s shapes
+
+/// The prototype's emit body consumes the caller's argument slice directly.
+/// This same body is callable from holder entries and reflected method values.
+unsafe extern "C" fn ns_emit_args(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let args = if args.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args, len)
+    };
+    let target = this_value(closure, this);
+    match args.split_first() {
+        Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
+        None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
+    }
+}
+
+/// Test witness for argument-list emit dispatch: when `recv`'s shapes
 /// resolve the requested name to an ordinary data property holding
 /// the emitter `emit` body (every emitter prototype and stream table installs
 /// the one body), run it with the call's arguments as they arrived -- the
@@ -554,6 +575,7 @@ extern "C" fn ns_emit_rest(
 ///
 /// # Safety
 /// `args_ptr` holds `argc` values (or is null with `argc == 0`).
+#[cfg(test)]
 pub(crate) unsafe fn emitter_emit_call(
     recv: f64,
     key: i64,
@@ -577,7 +599,7 @@ pub(crate) unsafe fn emitter_emit_call(
     }
     let closure = addr as *const ClosureHeader;
     let info = (*closure).info.as_ref()?;
-    if info.code != ns_emit_rest as *const u8 {
+    if info.code != ns_emit_args as *const u8 {
         return None;
     }
     let args: &[f64] = if args_ptr.is_null() || argc == 0 {

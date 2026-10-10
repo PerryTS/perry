@@ -734,6 +734,7 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         depth: 1,
         absent: true,
         pinned_hops: true,
+        forward_absent: false,
         slot: 0,
         holder: a as usize,
         holder_shape: proto_shape,

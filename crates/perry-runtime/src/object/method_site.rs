@@ -43,18 +43,12 @@
 //!   inline slot. A structural change invalidates one of those word compares;
 //!   a value overwrite is seen by loading the slot on every hit.
 //!
-//! What the prime refuses (they keep the ordinary dispatch): non-ordinary
-//! receivers other than shape-described functions (class objects,
-//! native-module namespaces, dictionaries,
-//! `Object.prototype`, typed-array prototypes, exotic read receivers),
-//! accessors, spill slots, and any value that is not a plain closure the call can enter directly for
-//! this site's argument count (bound functions, fixed-ABI rest / `arguments` bodies,
-//! the no-op builtin thunk, class constructors, closures that capture `this`).
-//! A native argument-list body accepts the site's argument buffer directly.
-//! A builtin method (`FN_BUILTIN`) whose thunk is direct-callable for the
-//! argument count IS admitted on an ordinary receiver, own or inherited: its
-//! prototype holds it in an inline slot like any method, the hit loads that
-//! slot on every call, so `Object.prototype.hasOwnProperty = f` is seen.
+//! Non-ordinary/exotic receivers and accessors retain generic dispatch. Deep
+//! ordinary holders and inherited spill slots use entry-owned chain proofs.
+//! Captured, rest and bound methods use a property-value entry: the shape
+//! proves the slot, which is reloaded and checked as callable on every hit;
+//! its generic invocation route does not depend on the current body's identity.
+//! Direct body entries retain the info guard and ConstFn entries the shape guard.
 //!
 //! # The one site-memo module (shared)
 //!
@@ -71,14 +65,14 @@
 //!   ([`METHOD_SITE_SPILL`]), bit 61 own function-bag
 //!   ([`METHOD_SITE_FUNCTION_BAG`]: a function-object receiver whose method is
 //!   an inline slot of its own-property object); bit 60 marks the native
-//!   argument-list body ABI. A new kind extends the emitted `msite.other` dispatch and
+//!   argument-list body ABI; bit 58 names an owned chain proof. A new kind extends the emitted `msite.other` dispatch and
 //!   [`publish`], nothing else;
 //! * an entry that holds a heap reference stores it in [`MethodEntry::closure`]
 //!   and is registered by [`publish`], so [`scan_method_site_roots_mut`] marks
 //!   and rewrites it;
 //! * an inherited entry records the direct holder's word in
-//!   [`MethodEntry::gen`]; deeper chains stay on ordinary dispatch;
-//! * primes run after the ordinary dispatch, with collection suppressed.
+//!   [`MethodEntry::gen`]; deeper entries own the consumed holder shapes;
+//! * primes resolve the pre-call receiver shape, with collection suppressed.
 //!
 //! # GC
 //!
@@ -94,9 +88,7 @@
 //! traced by any agent after the gate; their stale words are inert and the
 //! holders can be collected by the primary GC. The cost thereafter is
 //! ordinary method dispatch at every site.
-
 use crate::object::ObjectHeader;
-
 pub(crate) mod chain_memo;
 mod function_receiver;
 mod holder_prime;
@@ -106,7 +98,9 @@ pub use miss_entry::js_method_site_miss;
 pub(crate) mod own_slot_memo;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
-
+const METHOD_SITE_CHAIN: u64 = crate::codegen_abi::METHOD_SITE_CHAIN;
+const METHOD_SITE_VALUE_INFO: u64 = crate::codegen_abi::METHOD_SITE_VALUE_INFO;
+const _: () = assert!(std::mem::align_of::<crate::closure::JsFunctionInfo>() >= 2);
 /// `word` of a site no prime has touched: no receiver word is all-ones.
 pub const METHOD_SITE_EMPTY: u64 = u64::MAX;
 /// The `slot` bit that marks an inherited entry.
@@ -123,7 +117,6 @@ pub const METHOD_SITE_FUNCTION_BAG: u64 = crate::codegen_abi::METHOD_SITE_FUNCTI
 pub const METHOD_SITE_CONSTFN: u64 = crate::codegen_abi::METHOD_SITE_CONSTFN;
 /// The index bits of an entry's `slot` word.
 pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MASK;
-
 /// One entry of a site's memo. **Field offsets are baked into emitted code**
 /// (`perry_abi::METHOD_SITE_*_OFFSET`).
 #[repr(C)]
@@ -134,8 +127,9 @@ pub struct MethodEntry {
     /// Own entry: the inline slot, optionally tagged as ConstFn. Inherited
     /// entry: [`METHOD_SITE_INHERITED`] plus the direct holder's slot index.
     pub slot: u64,
-    /// The method body's `JsFunctionInfo` (the identity an own hit compares
-    /// the slot closure's info word with).
+    /// The method body's `JsFunctionInfo`, or METHOD_SITE_VALUE_INFO for a value
+    /// entry whose generic invocation route consumes the current closure.
+    /// A value entry validates closure kind and a non-null info, not body identity.
     pub info: u64,
     /// Inherited entry: the direct holder's address (a STRONG GC root).
     pub closure: usize,
@@ -425,39 +419,30 @@ unsafe fn method_site_miss_object(
             argc,
         );
     }
-    // Resolve the requested property from the shapes/prototype. If its
-    // callable body consumes the original arguments directly, bypass its
-    // rest-array construction. Aliases qualify by body; overrides decline.
-    if let MissReceiver::Ordinary = receiver {
-        if let Some(ops) = super::nm_ee_ops() {
-            if let Some(result) = (ops.emit_call)(recv, method_id, name, args_ptr, argc) {
-                return result;
-            }
-        }
-    }
-    // Dispatch first, then prime: the prime may allocate (marking a
-    // prototype hop, the borrowed-builtin classifier's key), which can move
-    // the receiver and the arguments the dispatcher still needs. The
-    // receiver and the result are rooted across the prime.
+    // Prime the lookup-time shape before a method can mutate its receiver.
+    // The entire prime suppresses collection, and suppression exits by
+    // restoring only a flag. No receiver, name or argument can move between
+    // the incoming call and dispatch, so use the original argument buffer.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_h = scope.root_nanbox_f64(recv);
-    let result = crate::typed_feedback::js_typed_feedback_native_call_method(
-        site_id,
-        recv,
-        name_ref.ptr as *const i8,
-        name_ref.len,
-        args_ptr,
-        argc,
-    );
-    let result_h = scope.root_nanbox_f64(result);
     {
-        // The prime reads the receiver, its holder chain and the method value
-        // as raw addresses and may allocate (a prototype mark, the
-        // borrowed-builtin classifier key, a lazily built intrinsic), so no
-        // collection may move anything until it has published its entry.
         let _no_move = crate::gc::GcSuppressScope::new();
-        prime(slot, recv_h.get_nanbox_f64(), name, argc);
+        prime(slot, recv_h.get_nanbox_f64(), name, argc); // pre-call shape
     }
+    let recv = recv_h.get_nanbox_f64();
+    let result = if let Some((value, _)) = memo_hit(slot, recv.to_bits()) {
+        js_method_site_call_value(f64::from_bits(value), recv, args_ptr, argc)
+    } else {
+        crate::typed_feedback::js_typed_feedback_native_call_method(
+            site_id,
+            recv,
+            name_ref.ptr as *const i8,
+            name_ref.len,
+            args_ptr,
+            argc,
+        )
+    };
+    let result_h = scope.root_nanbox_f64(result);
     result_h.get_nanbox_f64()
 }
 
@@ -698,7 +683,9 @@ fn receiver_word(word: u64) -> u64 {
 /// call the memoized code. A plain entry whose slot no longer holds a
 /// closure of the recorded body resumes at the next way; every other failed
 /// check misses.
-#[inline]
+// Keep the existing split lookup call-free on its common entry kinds.
+// The deep-chain arm is confined to inherited entries and stays out of line.
+#[inline(always)]
 unsafe fn memo_hit(slot: *mut MethodSiteSlot, bits: u64) -> Option<(u64, u64)> {
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
@@ -732,11 +719,15 @@ unsafe fn memo_hit(slot: *mut MethodSiteSlot, bits: u64) -> Option<(u64, u64)> {
                 return Some((field_bits(holder, index), body as u64));
             }
             _ if s & METHOD_SITE_INHERITED != 0 => {
-                let holder = e.closure;
-                if std::ptr::read(holder as *const u64) != e.gen {
-                    return None;
+                if s & METHOD_SITE_CHAIN != 0 {
+                    holder_prime::js_method_site_chain_value(e)
+                } else {
+                    let holder = e.closure;
+                    if std::ptr::read(holder as *const u64) != e.gen {
+                        return None;
+                    }
+                    field_bits(holder, index)
                 }
-                field_bits(holder, index)
             }
             _ if s & METHOD_SITE_SPILL != 0 => {
                 let meta = (*(addr as *const ObjectHeader)).meta;
@@ -784,9 +775,17 @@ unsafe fn closure_of_body(value: u64, info: u64) -> bool {
         return false;
     }
     let header = &*((h - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    header.obj_type == crate::gc::GC_TYPE_CLOSURE
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (*(h as *const crate::closure::ClosureHeader)).info as u64 == info
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return false;
+    }
+    let actual = (*(h as *const crate::closure::ClosureHeader)).info as u64;
+    if info == METHOD_SITE_VALUE_INFO {
+        actual != 0
+    } else {
+        actual == info
+    }
 }
 
 /// The call half of a split method site when the lookup did not hit: `value`
@@ -1268,7 +1267,7 @@ unsafe fn site_is_megamorphic(slot: *mut MethodSiteSlot) -> bool {
 /// Publish `entry` into `slot`'s site: over the entry that already names the
 /// receiver word, else into an empty one, else over the next in turn. The
 /// word is written LAST, so a half-written entry never matches.
-unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
+unsafe fn publish(slot: *mut MethodSiteSlot, mut entry: MethodEntry) -> bool {
     let Ok(mut sites) = METHOD_SITES.lock() else {
         return false;
     };
@@ -1280,10 +1279,8 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
         return false;
     }
     let site = &mut *site;
-    // An inherited entry replaces the one for its word (a newer generation);
-    // an own entry replaces only the one naming the same slot AND body, so
-    // objects of one shape holding different bodies each get an entry (the
-    // emitted own hit falls through to the next way on a body mismatch).
+    // A shape owns one answer for this site's property slot. Distinct callable
+    // bodies widen that answer to current-value invocation in the same entry.
     let inherited = entry.slot & METHOD_SITE_INHERITED != 0;
     let idx = site
         .entries
@@ -1293,7 +1290,8 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
                 && if inherited {
                     e.slot & METHOD_SITE_INHERITED != 0
                 } else {
-                    e.slot == entry.slot && e.info == entry.info
+                    e.slot & !crate::codegen_abi::METHOD_SITE_NATIVE_ARGS
+                        == entry.slot & !crate::codegen_abi::METHOD_SITE_NATIVE_ARGS
                 }
         })
         .or_else(|| {
@@ -1306,11 +1304,15 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
             site.next = site.next.wrapping_add(1);
             i
         });
+    if !inherited && holder_prime::unify_own_body(&site.entries[idx], &mut entry) {
+        return true;
+    }
     if entry.closure != 0 && site.registered == 0 {
         site.registered = 1;
         sites.push(site as *mut MethodSite as usize);
     }
     let e = &mut site.entries[idx];
+    holder_prime::drop_chain(e);
     e.word = METHOD_SITE_EMPTY;
     e.slot = entry.slot;
     e.info = entry.info;
@@ -1415,7 +1417,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         // `direct_callable`). A class object is a function object: a borrowed
         // builtin there keeps the dispatcher's native arm, as for any
         // function-object receiver (`prime_function`).
-        let Some(info) = direct_callable(value, argc) else {
+        let Some((info, call_code, call_tag)) = holder_prime::callable_route(value, argc) else {
             refuse(5);
             return;
         };
@@ -1450,7 +1452,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
                 refuse(17);
                 return;
             }
-            if native_args_tag(info) == 0 && declares_at_most(info, argc) {
+            if call_tag == 0 && declares_at_most(info, argc) {
                 slot_word | METHOD_SITE_CONSTFN
             } else {
                 // The ConstFn hit passes exactly the call's arguments; a body
@@ -1462,9 +1464,15 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         };
         let entry = MethodEntry {
             word,
-            slot: slot_word | native_args_tag(info),
-            info: info as *const crate::closure::JsFunctionInfo as u64,
-            code: info.code as u64,
+            slot: slot_word | call_tag,
+            // The generic route calls the value loaded from this shape's slot;
+            // its invocation ABI never depends on that value's body identity.
+            info: if call_code == info.code as u64 {
+                info as *const crate::closure::JsFunctionInfo as u64
+            } else {
+                METHOD_SITE_VALUE_INFO
+            },
+            code: call_code,
             closure: 0,
             gen: 0,
         };
@@ -1701,7 +1709,7 @@ fn native_args_tag(info: &crate::closure::JsFunctionInfo) -> u64 {
 }
 
 /// Prime an inherited entry when the receiver's shape pins a direct holder
-/// with `name` in a plain inline data slot. Deeper chains use ordinary dispatch.
+/// with `name` in a plain inline data slot, or a guarded deeper holder.
 unsafe fn prime_inherited(
     slot: *mut MethodSiteSlot,
     obj: *const ObjectHeader,
@@ -1758,7 +1766,12 @@ unsafe fn prime_inherited(
     } else {
         next_prototype(obj)
     };
-    prime_holder(slot, next, word, name, argc);
+    if matches!(
+        prime_holder(slot, next, word, name, argc),
+        holder_prime::HolderPrime::NeedsChain
+    ) {
+        holder_prime::prime_chain(slot, obj, word, name, argc);
+    }
 }
 
 /// The next prototype the way the inherited-read walk resolves it: the meta
@@ -1796,7 +1809,9 @@ pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
     if let Ok(sites) = METHOD_SITES.lock() {
         for &site in sites.iter() {
             for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {
-                if e.closure != 0 {
+                if e.slot & METHOD_SITE_CHAIN != 0 {
+                    unsafe { holder_prime::scan_chain(e, visitor) };
+                } else if e.closure != 0 {
                     if visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG) {
                         HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1962,16 +1977,4 @@ mod constfn_tests {
 }
 
 #[cfg(test)]
-mod report_names_line_up {
-    #[test]
-    fn refusal_names_cover_every_counter() {
-        assert_eq!(super::refusal_name(0), "not_object_pointer");
-        assert_eq!(super::refusal_name(11), "inh_workers");
-        assert_eq!(super::refusal_name(18), "site_megamorphic");
-        assert_eq!(super::refusal_name(19), "function_implicit_own_key");
-        for i in 0..super::SITE_REFUSED.len() {
-            assert_ne!(super::refusal_name(i), "?", "unnamed counter {i}");
-        }
-        assert_eq!(super::refusal_name(super::SITE_REFUSED.len()), "?");
-    }
-}
+mod report_names_line_up;

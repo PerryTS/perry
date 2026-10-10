@@ -72,6 +72,13 @@ pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
     object_alloc_with_parent_impl::<true, false>(0, 0, field_count)
 }
 
+/// Literal builders have ordinary [[Set]] from birth, including before their
+/// source-ordered descriptor definitions. Reuse the plain-record birth funnel.
+#[no_mangle]
+pub extern "C" fn js_object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
+    object_alloc_plain(field_count)
+}
+
 /// `Object.create`: publish only the final ordinary prototype shape. Only
 /// scalar shape/prototype identities cross the allocating call; the prototype
 /// is refreshed through its caller's handle afterwards.

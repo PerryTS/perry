@@ -819,6 +819,8 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                         entry: 0,
                     },
                 );
+                drop(registry);
+                super::class_meta::refresh_anon_declaration_role(class_id);
             }
         }
         let proto = super::state::class_decl_prototype_object(class_id);
@@ -898,6 +900,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         );
         // Backfill when reflection already materialized `C.prototype`.
         drop(registry);
+        super::class_meta::refresh_anon_declaration_role(class_id);
         let proto = class_decl_prototype_object(class_id);
         super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
     }

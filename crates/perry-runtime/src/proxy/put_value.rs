@@ -471,6 +471,7 @@ mod packed_add;
 #[path = "put_value/packed_set.rs"]
 mod packed_set;
 pub(crate) use packed_add::note_packed_add_carriers;
+pub(crate) use packed_add::scan_packed_add_roots_mut;
 pub use packed_add::PackedSetSite;
 pub(crate) use packed_add::{
     census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,

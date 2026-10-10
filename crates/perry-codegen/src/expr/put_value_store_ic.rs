@@ -130,6 +130,7 @@ const CONSTFN_INFO_WORD: usize = crate::runtime_abi::PACKED_SET_CONSTFN_INFO_WOR
 const PACKED_SET_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_SET_CONSTFN_SLOT;
 /// The key-add guard's ConstFn bit (`perry_abi::PACKED_ADD_CONSTFN_SLOT`).
 const ADD_CONSTFN_SLOT: u64 = crate::runtime_abi::PACKED_ADD_CONSTFN_SLOT;
+const ADD_REP_ONLY_SLOT: u64 = crate::runtime_abi::PACKED_ADD_REP_ONLY_SLOT;
 pub(crate) const ADD_SHAPES_WORD: usize = 1;
 pub(crate) const ADD_GUARD_WORD: usize = 2;
 pub(crate) const ADD_SLOT_BITS: u32 = 16;
@@ -167,12 +168,12 @@ const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 const ADD_STEM: &str = "put.add";
 /// `GC_FLAG_TENURED` (gc_flags byte).
 pub(crate) const ADD_REFUSE_GC_FLAGS: u32 = 0x20;
-/// `_reserved` bits the key-add hit refuses: `OBJ_FLAG_HAS_DESCRIPTORS`
-/// (0x800), `OBJ_FLAG_STABLE_TOMBSTONES` (0x400). The numeric proof is not
+/// `_reserved` bits the key-add hit refuses: `OBJ_FLAG_STABLE_TOMBSTONES`
+/// (0x400). Descriptors on other keys cannot intercept an absent key. The numeric proof is not
 /// here: it is a shape kind (charter step 3), and a memo's pre-shape is an
 /// `Ordinary` one. Pinned by the runtime's
 /// `packed_add_refuse_bits_match_codegen`.
-pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0C00;
+pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0400;
 /// The mask over the GcHeader's first 32-bit word
 /// (obj_type | gc_flags << 8 | _reserved << 16) whose zero admits a
 /// key-add receiver. Layout state is absent for objects.
@@ -500,7 +501,10 @@ pub(crate) fn emit_static_store_ic(
         let constfn_label = ctx.block_label(constfn_idx);
         ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
         ctx.current_block = constfn_idx;
-        emit_constfn_value_check(ctx, &packed_ref, value_bits, &store_label, &miss_label);
+        let body_ptr = ctx
+            .block()
+            .gep(I64, &packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
+        emit_constfn_value_check(ctx, &body_ptr, value_bits, &store_label, &miss_label);
     } else {
         ctx.block().cond_br(&f64_slot, &f64_label, &miss_label);
     }
@@ -542,7 +546,6 @@ pub(crate) fn emit_static_store_ic(
     };
     let add_end_label = emit_key_add_hit(
         ctx,
-        &packed_ref,
         &shapes,
         &pair_ptr,
         &handle,
@@ -619,7 +622,6 @@ mod setter_arm;
 #[allow(clippy::too_many_arguments)]
 fn emit_key_add_hit(
     ctx: &mut FnCtx<'_>,
-    packed_ref: &str,
     shapes: &str,
     pair_ptr: &str,
     handle: &str,
@@ -629,6 +631,18 @@ fn emit_key_add_hit(
     merge_label: &str,
     value_may_be_closure: bool,
 ) -> String {
+    // Static ShapeIds can be seeded into workers. Their matched site words
+    // cannot authorize reading a proof owned by the primary heap.
+    let workers = ctx.block().load_atomic_monotonic(
+        crate::types::I8,
+        "@PERRY_METHOD_SITE_WORKERS_PRESENT",
+        1,
+    );
+    let solo = ctx.block().icmp_eq(crate::types::I8, &workers, "0");
+    let agent_idx = ctx.new_block(&format!("{ADD_STEM}.agent"));
+    let agent_label = ctx.block_label(agent_idx);
+    ctx.block().cond_br(&solo, &agent_label, miss_label);
+    ctx.current_block = agent_idx;
     let rep_idx = ctx.new_block(&format!("{ADD_STEM}.rep"));
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
     let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
@@ -636,34 +650,59 @@ fn emit_key_add_hit(
     let obj_label = ctx.block_label(obj_idx);
     let store_label = ctx.block_label(store_idx);
 
-    // The chain verdict's generation: the one global prototype-validity word,
-    // against the guard of the memo that matched.
+    // Validate the matched transition's prototype shapes and successor
+    // representation. Unrelated prototype mutations cannot invalidate it.
     let guard_ptr = ctx.block().gep(
         I64,
         pair_ptr,
         &[(I64, &(ADD_GUARD_WORD - ADD_SHAPES_WORD).to_string())],
     );
     let guard = ctx.block().load_atomic_monotonic(I64, &guard_ptr, 8);
-    let now = ctx
+    let proof_bits = ctx.block().lshr(I64, &guard, "16");
+    let proof = ctx.block().inttoptr(I64, &proof_bits);
+    super::shape_chain::guard_store(ctx, &proof, miss_label);
+    let flags = ctx.block().and(I64, &guard, &ADD_REP_ONLY_SLOT.to_string());
+    let plain = ctx.block().icmp_eq(I64, &flags, "0");
+    let snapshot_idx = ctx.new_block(&format!("{ADD_STEM}.snapshot"));
+    let snapshot_label = ctx.block_label(snapshot_idx);
+    ctx.block().cond_br(&plain, &obj_label, &snapshot_label);
+    ctx.current_block = snapshot_idx;
+    let rep_offset = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        8
+    } else {
+        16
+    };
+    let rep_ptr = ctx
         .block()
-        .load_atomic_monotonic(I64, "@PERRY_PROTO_VALIDITY", 8);
-    let recorded = ctx.block().lshr(I64, &guard, &ADD_SLOT_BITS.to_string());
-    let gen_eq = ctx.block().icmp_eq(I64, &now, &recorded);
-    ctx.block().cond_br(&gen_eq, &rep_label, miss_label);
+        .gep(crate::types::I8, &proof, &[(I64, &rep_offset.to_string())]);
+    let expected_offset = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        16
+    } else {
+        24
+    };
+    let expected_ptr = ctx.block().gep(
+        crate::types::I8,
+        &proof,
+        &[(I64, &expected_offset.to_string())],
+    );
+    let expected = ctx.block().load(I64, &expected_ptr);
+    let rep_ptr = ctx.block().load(crate::types::PTR, &rep_ptr);
+    let rep = ctx.block().load_atomic_monotonic(I64, &rep_ptr, 8);
+    let valid = ctx.block().icmp_eq(I64, &rep, &expected);
+    ctx.block().cond_br(&valid, &rep_label, miss_label);
 
     // Charter step 5 (P2c): a memo whose successor has an `F64` lane at the
     // slot admits only a value whose exponent is not all ones (a finite
     // double); the miss serves the rest, before anything is stamped.
     // A memo whose successor's lane is ConstFn admits only a closure of the
-    // site's one body (`emit_constfn_value_check`), also before any stamp.
+    // successor's body (`emit_constfn_value_check`), also before any stamp.
     ctx.current_block = rep_idx;
-    let flags = ctx
+    let rep_only = ctx
         .block()
-        .and(I64, &guard, &(ADD_F64_SLOT | ADD_CONSTFN_SLOT).to_string());
-    let plain = ctx.block().icmp_eq(I64, &flags, "0");
+        .icmp_eq(I64, &flags, &ADD_REP_ONLY_SLOT.to_string());
     let lane_idx = ctx.new_block(&format!("{ADD_STEM}.lane"));
     let lane_label = ctx.block_label(lane_idx);
-    ctx.block().cond_br(&plain, &obj_label, &lane_label);
+    ctx.block().cond_br(&rep_only, &obj_label, &lane_label);
     ctx.current_block = lane_idx;
     let f64_slot = ctx.block().icmp_eq(I64, &flags, &ADD_F64_SLOT.to_string());
     let f64_idx = ctx.new_block(&format!("{ADD_STEM}.f64"));
@@ -673,7 +712,11 @@ fn emit_key_add_hit(
         let constfn_label = ctx.block_label(constfn_idx);
         ctx.block().cond_br(&f64_slot, &f64_label, &constfn_label);
         ctx.current_block = constfn_idx;
-        emit_constfn_value_check(ctx, packed_ref, value_bits, &obj_label, miss_label);
+        let body_offset = expected_offset + 8;
+        let body_ptr =
+            ctx.block()
+                .gep(crate::types::I8, &proof, &[(I64, &body_offset.to_string())]);
+        emit_constfn_value_check(ctx, &body_ptr, value_bits, &obj_label, miss_label);
     } else {
         ctx.block().cond_br(&f64_slot, &f64_label, miss_label);
     }
@@ -748,7 +791,7 @@ fn emit_key_add_hit(
 }
 
 /// The ConstFn store check (a word or memo flagged ConstFn): `value_bits` is
-/// a function object of the site's one body, so storing it keeps the
+/// a function object of the checked shape's body, so storing it keeps the
 /// ShapeId's body claim. Branches to `ok_label` or `miss_label`; nothing is
 /// written, nothing can collect.
 ///
@@ -767,7 +810,7 @@ fn emit_key_add_hit(
 /// (`field_rep_store::constfn_store_info`): its miss stores it correctly.
 fn emit_constfn_value_check(
     ctx: &mut FnCtx<'_>,
-    packed_ref: &str,
+    body_ptr: &str,
     value_bits: &str,
     ok_label: &str,
     miss_label: &str,
@@ -799,8 +842,7 @@ fn emit_constfn_value_check(
         crate::runtime_abi::CLOSURE_INFO_OFFSET as i64,
     );
     let info = blk.load(I64, &info_ptr);
-    let body_ptr = blk.gep(I64, packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
-    let body = blk.load_atomic_monotonic(I64, &body_ptr, 8);
+    let body = blk.load_atomic_monotonic(I64, body_ptr, 8);
     let info_eq = blk.icmp_eq(I64, &info, &body);
     let body_set = blk.icmp_ne(I64, &body, "0");
     let count_ptr = emit_field_ptr(blk, &fused.biased, 0);

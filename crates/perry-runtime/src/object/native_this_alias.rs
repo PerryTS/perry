@@ -204,12 +204,12 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     if !installed {
         return;
     }
-    // Native state is per receiver, not a fact of its ordinary shape. Move
-    // onto an exotic-read lineage so pre-alias cached misses cannot survive
-    // construction or be shared with a sibling receiver (#11725). The mark
-    // roots its receiver before it allocates.
+    // Alias installation changes the receiver kind and therefore its shape.
+    // Pre-alias absence entries cannot survive construction (#11725). Own
+    // ordinary slots remain describable; undefined still forwards natively.
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        super::proto_validity::mark_exotic_read_receiver(obj as usize)
+        (*(*obj).meta).flags |= super::OBJECT_META_FLAG_NATIVE_ALIAS;
+        super::shapes::restamp_object_proto_id(obj);
     });
 }
 

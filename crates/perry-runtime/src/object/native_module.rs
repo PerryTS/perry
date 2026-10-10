@@ -560,7 +560,6 @@ static NM_EE_OPS_IMPL: super::NmEeOps = super::NmEeOps {
     ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
     ee_prototype_inline_slots:
         super::class_registry::prototype_objects::nm_ee_prototype_inline_slots,
-    emit_call: crate::node_stream::emitter_emit_call,
     ee_dynamic_super: nm_ee_dynamic_super,
 };
 

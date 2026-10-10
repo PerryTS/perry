@@ -253,8 +253,8 @@ fn a_dispatch_receiver_is_rooted_across_its_argument_list() {
                  list, which allocates"
             ),
         );
-        let last_arg = first_call_result(&ir, "js_object_alloc").unwrap_or_else(|| {
-            panic!("{lowering}: allocating argument emitted no js_object_alloc:\n{ir}")
+        let last_arg = first_call_result(&ir, "js_object_alloc_plain").unwrap_or_else(|| {
+            panic!("{lowering}: allocating argument emitted no js_object_alloc_plain:\n{ir}")
         });
         assert!(
             temp_root_slot_holding(&ir, &last_arg).is_none(),
@@ -304,7 +304,7 @@ fn dispatch_arguments_use_their_individual_collection_suffixes() {
             .map(str::trim)
             .filter_map(|line| line.split_once(" = "))
             .filter(|(_, instruction)| {
-                instruction.starts_with("call ") && instruction.contains("@js_object_alloc(")
+                instruction.starts_with("call ") && instruction.contains("@js_object_alloc_plain(")
             })
             .map(|(result, _)| result.to_string())
             .collect();
@@ -337,7 +337,7 @@ fn known_class_dispatch_uses_the_same_suffix_windows() {
             heap.contains("method_direct."),
             "{lowering}: fixture did not select the known-class guarded tower:\n{heap}"
         );
-        let argument = first_call_result(&heap, "js_object_alloc")
+        let argument = first_call_result(&heap, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: heap argument allocation missing:\n{heap}"));
         assert!(
             temp_root_slot_holding(&heap, &argument).is_none(),
@@ -364,7 +364,7 @@ fn rest_dispatch_keeps_the_post_argument_window() {
             Type::Any,
             true,
         );
-        let argument = first_call_result(&ir, "js_object_alloc")
+        let argument = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: heap argument allocation missing:\n{ir}"));
         assert!(
             temp_root_slot_holding(&ir, &argument).is_some(),

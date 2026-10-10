@@ -54,6 +54,8 @@ struct Entry {
     depth: u8,
     absent: bool,
     pinned_hops: bool,
+    /// Ordinary absence is proven, but a native alias still needs forwarding.
+    forward_absent: bool,
     /// A holder slot word (`HOLDER_SLOT_SPILL` for a spill position), or
     /// `MULTI_ABSENT | receiver_count` for a shared absent proof.
     slot: u32,
@@ -77,6 +79,7 @@ const EMPTY: Entry = Entry {
     depth: 0,
     absent: false,
     pinned_hops: false,
+    forward_absent: false,
     slot: 0,
     holder: 0,
     holder_shape: 0,
@@ -383,27 +386,42 @@ pub(super) unsafe fn leaf_bits(c: &PicCache, recv: *const ObjectHeader, token: i
 unsafe fn leaf_site_bits(s: &Site, recv: *const ObjectHeader, token: i64) -> u64 {
     let class_id = (*recv).class_id;
     let e = &s.primary_class;
-    if e.token == token && e.class_id == class_id && identity_matches(e) && e.pinned_hops {
+    if e.token == token
+        && e.class_id == class_id
+        && identity_matches(e)
+        && e.pinned_hops
+        && !e.forward_absent
+    {
         return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
     }
     if s.entries.is_empty() && s.holders.is_empty() && s.next & (SHARED_MASK << CURSOR_BITS) == 0 {
         return crate::value::TAG_HOLE;
     }
-    secondary_leaf_bits(s, token, class_id)
+    secondary_leaf_bits(s, recv, token, class_id)
 }
 
 /// Neither a monomorphic ordinary nor a matching first class answer enters
 /// this scan. Its loop bounds and scratch registers stay out of the front.
 #[cold]
 #[inline(never)]
-unsafe fn secondary_leaf_bits(s: &Site, token: i64, class_id: u32) -> u64 {
+unsafe fn secondary_leaf_bits(
+    s: &Site,
+    recv: *const ObjectHeader,
+    token: i64,
+    class_id: u32,
+) -> u64 {
     for e in &s.entries {
-        if e.token == token && e.class_id == class_id && identity_matches(e) && e.pinned_hops {
+        if e.token == token
+            && e.class_id == class_id
+            && identity_matches(e)
+            && e.pinned_hops
+            && !e.forward_absent
+        {
             return pinned_answer(e).unwrap_or(crate::value::TAG_HOLE);
         }
     }
     for e in &s.holders {
-        if let Some(bits) = super::saved_entry_answer(e, token) {
+        if let Some(bits) = super::saved_entry_answer(e, token, recv) {
             return bits;
         }
     }
@@ -456,7 +474,9 @@ pub(super) unsafe fn try_hit(
     }
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     for e in &(*s).holders {
-        if let Some(bits) = super::saved_entry_answer(e, token) {
+        if let Some(bits) = super::function_own::alias_own_answer(e, recv, token)
+            .or_else(|| super::saved_entry_answer(e, token, recv))
+        {
             return Some(crate::value::JSValue::from_bits(bits));
         }
         if let Some((getter, pair)) = super::validated_accessor::<false>(e, token) {
@@ -475,10 +495,15 @@ pub(super) unsafe fn prime(
     cache_slot: *mut PicCacheSlot,
     name: &[u8],
 ) -> Option<crate::value::JSValue> {
-    if class_link(obj).is_none() || !holder_name_admitted(name) {
+    let class_first = class_link(obj).is_some();
+    let alias = object_shape_descriptor(obj)?.object_kind
+        == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias;
+    if (!class_first && !alias) || !holder_name_admitted(name) {
         return None;
     }
-    if key_may_be_accessor(obj, name) || walk_to(obj, name, true, CLASS_READ_MAX_DEPTH).is_none() {
+    if key_may_be_accessor(obj, name)
+        || walk_to(obj, name, class_first, CLASS_READ_MAX_DEPTH).is_none()
+    {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -495,7 +520,7 @@ pub(super) unsafe fn prime(
         let Some(obj) = ordinary_receiver(obj as usize) else {
             return Some(value);
         };
-        let Some(w) = walk_to(obj, name, true, CLASS_READ_MAX_DEPTH) else {
+        let Some(w) = walk_to(obj, name, class_first, CLASS_READ_MAX_DEPTH) else {
             return Some(value);
         };
         let bits = value.bits();
@@ -558,15 +583,19 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     // The walk proved the direct link through this identity's word, so the
     // slot exists; an identity without one has nothing a hit could compare.
-    let Some(word) = prototype_identity(token as u32)
-        .and_then(crate::object::shapes::identity_word_slot)
+    let Some(word) =
+        prototype_identity(token as u32).and_then(crate::object::shapes::identity_word_slot)
     else {
         return;
     };
     let s = site_mut(cache);
     // Filling the ways alone is not evidence of churn. Arm sharing only
     // after an absent way has actually been replaced by a different shape.
-    if w.slot.is_none() && s.next & ABSENT_CHURN != 0 {
+    let forward_absent = w.slot.is_none()
+        && object_shape_descriptor(recv).is_some_and(|shape| {
+            shape.object_kind == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias
+        });
+    if w.slot.is_none() && !forward_absent && s.next & ABSENT_CHURN != 0 {
         if let Some(pid) = prototype_identity(token as u32) {
             let mut group = WAYS;
             for i in 0..1 + s.entries.len() {
@@ -627,6 +656,7 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         depth: w.depth as u8,
         absent: w.slot.is_none(),
         pinned_hops: true,
+        forward_absent,
         slot: w.slot.unwrap_or(0),
         holder: w.holder,
         holder_shape: w.holder_shape,
@@ -687,7 +717,7 @@ pub(super) unsafe fn function_bag_answer(
 pub(super) unsafe fn holder_answer(c: &PicCache, token: i64) -> Option<u64> {
     let s = site(c)?;
     for entry in &s.holders {
-        if let Some(bits) = super::saved_entry_answer(entry, token) {
+        if let Some(bits) = super::saved_entry_answer(entry, token, std::ptr::null()) {
             return Some(bits);
         }
     }
@@ -794,6 +824,7 @@ unsafe fn same_absence(e: &Entry, w: &Walk, walked: &[Hop], class_id: u32, pid: 
     e.token != 0
         && !e.retired()
         && e.absent
+        && !e.forward_absent
         && e.class_id == class_id
         && e.depth as usize == w.depth
         && e.holder == w.holder

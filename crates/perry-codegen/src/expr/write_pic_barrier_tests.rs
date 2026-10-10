@@ -554,10 +554,14 @@ fn assert_constfn_body_compare(ir: &str) {
         .next()
         .unwrap_or("")
         .to_string();
-    let site_gep = header.lines().any(|l| {
-        l.contains("getelementptr")
-            && l.contains("_packed_set")
-            && l.trim_end().ends_with(", i64 4")
+    let site_gep = ir.lines().any(|l| {
+        let Some((result, instruction)) = l.trim().split_once(" = ") else {
+            return false;
+        };
+        instruction.contains("getelementptr")
+            && instruction.contains("_packed_set")
+            && instruction.trim_end().ends_with(", i64 4")
+            && body_load.contains(&format!("ptr {result} "))
     });
     assert!(
         site_gep,

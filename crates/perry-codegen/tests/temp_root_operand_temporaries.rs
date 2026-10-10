@@ -174,6 +174,36 @@ fn allocating() -> Expr {
     Expr::Object(Vec::new())
 }
 
+// Both literal birth entries can collect. Match the actual allocation before
+// checking which value is rooted and reloaded across it.
+fn is_object_allocation(line: &str) -> bool {
+    line.contains("call i64 @js_object_alloc(") || line.contains("call i64 @js_object_alloc_plain(")
+}
+
+fn is_empty_object_allocation(line: &str) -> bool {
+    line.contains("= call i64 @js_object_alloc(i32 0, i32 0)")
+        || line.contains("= call i64 @js_object_alloc_plain(i32 0)")
+}
+
+fn object_allocation_count(ir: &str) -> usize {
+    ir.lines().filter(|line| is_object_allocation(line)).count()
+}
+
+fn first_object_allocation_result(ir: &str) -> Option<String> {
+    ir.lines()
+        .map(str::trim)
+        .filter_map(|line| line.split_once(" = "))
+        .find(|(_, def)| def.starts_with("call ") && is_object_allocation(def))
+        .map(|(dst, _)| dst.trim().to_string())
+}
+
+fn last_object_allocation(ir: &str) -> Option<usize> {
+    ir.rfind("call i64 @js_object_alloc(")
+        .into_iter()
+        .chain(ir.rfind("call i64 @js_object_alloc_plain("))
+        .max()
+}
+
 #[test]
 fn prototype_assignment_receiver_survives_an_allocating_rhs() {
     let ir = ir_for(
@@ -186,13 +216,11 @@ fn prototype_assignment_receiver_survives_an_allocating_rhs() {
     );
     let f = init_ir(&ir);
     assert_eq!(
-        f.lines()
-            .filter(|line| line.contains("call i64 @js_object_alloc("))
-            .count(),
+        f.lines().filter(|line| is_object_allocation(line)).count(),
         2,
         "both operands must allocate exactly once:\n{f}",
     );
-    let receiver = first_call_result(f, "js_object_alloc").expect("receiver allocation");
+    let receiver = first_object_allocation_result(f).expect("receiver allocation");
     assert_rooted_across(f, &receiver, "js_set_prototype_property", "#9365 receiver");
 }
 
@@ -217,7 +245,7 @@ fn map_set_key_is_rooted_across_an_allocating_value() {
     );
 
     let f = init_ir(&ir);
-    let key = first_call_result(f, "js_object_alloc")
+    let key = first_object_allocation_result(f)
         .unwrap_or_else(|| panic!("the key must allocate, or this proves nothing:\n{f}"));
     assert_rooted_across(f, &key, "js_map_set", "#6970 map.set key");
 
@@ -306,7 +334,7 @@ fn concat_accumulator_is_rooted_and_written_back() {
     );
 
     let f = init_ir(&ir);
-    let arg = first_call_result(f, "js_object_alloc").unwrap_or_else(|| {
+    let arg = first_object_allocation_result(f).unwrap_or_else(|| {
         panic!("the concat argument must allocate, or this proves nothing:\n{f}")
     });
     let slot = slot_holding(f, &arg).unwrap_or_else(|| {
@@ -437,7 +465,7 @@ fn constructor_arguments_are_rooted_across_the_instance_allocation() {
     let arg_allocs: Vec<(usize, String)> = f
         .lines()
         .enumerate()
-        .filter(|(_, l)| l.contains("call i64 @js_object_alloc("))
+        .filter(|(_, l)| is_object_allocation(l))
         .filter_map(|(i, l)| l.trim().split_once(" = ").map(|(r, _)| (i, r.to_string())))
         .collect();
     assert_eq!(arg_allocs.len(), 2, "both arguments allocate:\n{f}");
@@ -700,7 +728,7 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
         "exactly one fused string+value concat in @main:\n{f}"
     );
     assert_eq!(
-        f.matches("call i64 @js_object_alloc(").count(),
+        object_allocation_count(f),
         1,
         "exactly one allocating sibling in @main:\n{f}"
     );
@@ -714,8 +742,7 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
     );
 
     let concat = f.find("call double @js_string_concat_value_box(").unwrap();
-    let alloc = f[..concat]
-        .rfind("call i64 @js_object_alloc(")
+    let alloc = last_object_allocation(&f[..concat])
         .unwrap_or_else(|| panic!("the sibling must allocate before the concat:\n{f}"));
     let handle_load = f[..concat]
         .rfind(handle)
@@ -787,13 +814,13 @@ fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
     let f = init_ir(&ir);
     let handle_pat = "load double, ptr @array_reload_ts_.str.";
     assert_eq!(
-        f.matches("call i64 @js_object_alloc(").count(),
+        object_allocation_count(f),
         1,
         "exactly one allocating element in @main:\n{f}"
     );
     let element_alloc = f
         .lines()
-        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .position(|l| is_object_allocation(l))
         .expect("just counted it");
 
     // #7114's invariant admits TWO discharges, and which one a given operand
@@ -869,14 +896,14 @@ fn wtf8_literal_operand_is_rooted_under_shadow_lowering() {
          longer about the operand it names. Slots: {slots:?}\n{f}"
     );
     assert_eq!(
-        f.matches("call i64 @js_object_alloc(").count(),
+        object_allocation_count(f),
         1,
         "exactly one allocating sibling in @main:\n{f}"
     );
 
     let alloc = f
         .lines()
-        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .position(|l| is_object_allocation(l))
         .expect("just counted it");
     let events = &slot_traffic(f)[&slots[0]];
     assert!(
@@ -910,7 +937,7 @@ fn wtf8_literal_operand_is_re_derived_under_native_lowering() {
     // is precisely the #7114 `Reuse` shape (suppressed, not re-derived).
     let alloc = f
         .lines()
-        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .position(|l| is_object_allocation(l))
         .expect("the positive check counted it");
     let stale = f
         .lines()
@@ -973,7 +1000,7 @@ const REMAT_MARK_I64: i64 = 0x7FFC_0000_0000_4D52_u64 as i64;
 ///    re-read from the collector-rewritten global after the collection point,
 ///    and no pre-collection register leaks into it.
 fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
-    if f.matches("call i64 @js_object_alloc(").count() != 1 {
+    if object_allocation_count(f) != 1 {
         return Err("expected exactly one allocating sibling in @main".into());
     }
     if f.matches("@js_string_concat_value_box(").count() != 1 {
@@ -982,7 +1009,7 @@ fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
     let lines: Vec<&str> = f.lines().map(str::trim).collect();
     let alloc = lines
         .iter()
-        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .position(|l| is_object_allocation(l))
         .expect("just counted it");
     let concat = lines
         .iter()
@@ -1522,7 +1549,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
     // Before the fix there was exactly one such load and it sat above it.
     let alloc_idx = lines
         .iter()
-        .position(|l| l.contains("= call i64 @js_object_alloc(i32 0, i32 0)"))
+        .position(|l| is_empty_object_allocation(l))
         .and_then(|first| {
             // the value's allocation is the SECOND `js_object_alloc` (the first
             // is the receiver `o`)
@@ -1530,7 +1557,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
                 .iter()
                 .enumerate()
                 .skip(first + 1)
-                .find(|(_, l)| l.contains("= call i64 @js_object_alloc(i32 0, i32 0)"))
+                .find(|(_, l)| is_empty_object_allocation(l))
                 .map(|(i, _)| i)
         })
         .unwrap_or_else(|| panic!("no value allocation in:\n{f}"));

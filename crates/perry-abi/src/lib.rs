@@ -766,12 +766,24 @@ pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
 /// A method body using the native argument-list ABI (callee, this, args, argc).
 /// Composes with each storage kind; never with ConstFn.
 pub const METHOD_SITE_NATIVE_ARGS: u64 = 1 << 60;
+/// Method-entry info marker for current-value invocation. Function-info pointers
+/// are aligned, so this cannot match a live body (or a null info). It keeps the
+/// direct-body hit unchanged; only a failed body comparison checks this format.
+pub const METHOD_SITE_VALUE_INFO: u64 = 1;
 /// An own inline method whose ShapeId fixes one static body. The hit loads
 /// the receiver's current closure slot for captures, but needs no closure
 /// kind or info load after the shape compare.
 pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
+pub const METHOD_SITE_CHAIN: u64 = 1 << 58;
+/// Entry-owned shape proof ABI: native (address, shape word) pairs.
+pub const SHAPE_CHAIN_LEN_OFFSET: usize = 8;
+pub const SHAPE_CHAIN_HOP_BYTES: usize = 24;
+pub const ADD_CHAIN_REP_OFFSET: usize = 16;
+pub const METHOD_CHAIN_HOLDER_OFFSET: usize = 16;
+pub const METHOD_CHAIN_SLOT_OFFSET: usize = 24;
+
 /// The index bits of an entry's `slot` word (bit 60 is NativeArgs; bit 59 is ConstFn).
-pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
+pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 58) - 1;
 /// What `js_method_site_prepare` answers for a call whose method read nothing
 /// can observe: dispatch by name after the arguments (#11910). The array-hole
 /// marker, a bit pattern no JS value takes.
@@ -805,6 +817,9 @@ pub const PACKED_SET_CONSTFN_SLOT: u64 = 1 << 62;
 /// ConstFn (the slot field is the guard's low 16 bits; bit 15 is the `F64`
 /// lane bit, the index is below bit 14).
 pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
+/// Both otherwise exclusive value flags: an Any target with typed prefix
+/// lanes. Validate its representation, but impose no value restriction.
+pub const PACKED_ADD_REP_ONLY_SLOT: u64 = (1 << 15) | PACKED_ADD_CONSTFN_SLOT;
 /// `closure::CAPTURES_THIS_FLAG` / `closure::NO_THIS_REBIND_FLAG`, the high
 /// bits of `ClosureHeader::capture_count`. A closure with the first and not
 /// the second is a rebindable `this` clone, which never satisfies a ConstFn

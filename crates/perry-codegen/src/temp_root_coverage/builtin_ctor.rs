@@ -48,7 +48,7 @@ fn regexp_pattern_is_rooted_across_flags_lowering() {
             "regexp_ctor_rooted.ts",
             vec![new_builtin("RegExp", vec![allocating(), allocating()])],
         );
-        let pattern = first_call_result(&ir, "js_object_alloc")
+        let pattern = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: pattern must allocate:\n{ir}"));
         assert_rooted_across(&ir, &pattern, "js_regexp_construct", lowering);
     });
@@ -88,7 +88,7 @@ fn event_emitter_options_is_rooted_across_the_discard_loop() {
                 vec![allocating(), allocating()],
             )],
         );
-        let opts = first_call_result(&ir, "js_object_alloc")
+        let opts = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: opts must allocate:\n{ir}"));
         assert_rooted_across(&ir, &opts, "js_event_emitter_object_new", lowering);
     });
@@ -107,7 +107,7 @@ fn data_view_view_arg_is_rooted_across_offset_and_length() {
                 vec![allocating(), allocating(), allocating()],
             )],
         );
-        let view = first_call_result(&ir, "js_object_alloc")
+        let view = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: view_box must allocate:\n{ir}"));
         assert_rooted_across(&ir, &view, "js_data_view_new", lowering);
     });
@@ -125,7 +125,7 @@ fn suppressed_error_first_arg_is_rooted_across_the_others() {
                 vec![allocating(), allocating(), allocating()],
             )],
         );
-        let error = first_call_result(&ir, "js_object_alloc")
+        let error = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: error must allocate:\n{ir}"));
         assert_rooted_across(&ir, &error, "js_suppressed_error_new", lowering);
     });
@@ -144,7 +144,7 @@ fn weakmap_iterable_is_rooted_across_the_allocation_call() {
             "weakmap_ctor_rooted.ts",
             vec![new_builtin("WeakMap", vec![allocating()])],
         );
-        let iterable = first_call_result(&ir, "js_object_alloc")
+        let iterable = first_call_result(&ir, "js_object_alloc_plain")
             .unwrap_or_else(|| panic!("{lowering}: iterable must allocate:\n{ir}"));
         assert_rooted_across(&ir, &iterable, "js_weakmap_init_iterable", lowering);
     });

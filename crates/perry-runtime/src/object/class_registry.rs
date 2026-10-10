@@ -129,6 +129,12 @@ pub(crate) use prototype_objects::{test_alloc_synthetic_class_id, SYNTHETIC_CLAS
 pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 #[cfg(feature = "global-text")]
 pub(crate) use class_meta::text_decoder_bool_option;
+pub(crate) use class_meta::{
+    anonymous_class_role, identify_global_builtin_constructor, report_dispatch_miss,
+    shared_global_builtin_constructor_body, text_encoding_stream_new_with_constructor,
+    validate_web_compression_stream_format, CLASS_ID_COMPRESSION_STREAM,
+    CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM, CLASS_ID_TEXT_ENCODER_STREAM,
+};
 pub use class_meta::{
     class_length_for_id, class_name_for_id, class_ref_inspect_label, class_ref_to_string,
     class_source_for_id, declared_class_outranks_anon_shape, is_anon_shape_class_id,
@@ -137,12 +143,6 @@ pub use class_meta::{
     js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
     js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
     CLASS_NAMES,
-};
-pub(crate) use class_meta::{
-    identify_global_builtin_constructor, report_dispatch_miss,
-    shared_global_builtin_constructor_body, text_encoding_stream_new_with_constructor,
-    validate_web_compression_stream_format, CLASS_ID_COMPRESSION_STREAM,
-    CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM, CLASS_ID_TEXT_ENCODER_STREAM,
 };
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{class_prototype_set, synthetic_class_id_for_function};
@@ -308,3 +308,6 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
 }
 
 pub(crate) use state::reserved_native_parent_prototype_bits;
+
+#[cfg(test)]
+pub(crate) use class_meta::refresh_anon_declaration_role;

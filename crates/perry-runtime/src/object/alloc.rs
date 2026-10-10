@@ -7,7 +7,7 @@
 //! module and are reached via `use super::*;`.
 
 pub use super::alloc_basic::{
-    js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
+    js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent, js_object_alloc_plain,
     js_object_alloc_with_parent, js_object_coerce,
 };
 use super::*;

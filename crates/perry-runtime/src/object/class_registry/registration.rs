@@ -50,6 +50,10 @@ pub(crate) fn record_class_string_member_order(
         // property without moving it in [[OwnPropertyKeys]].
         .and_modify(|order| *order = (*order).min(definition_order))
         .or_insert(definition_order);
+    drop(guard);
+    if !is_static {
+        super::class_meta::refresh_anon_declaration_role(class_id);
+    }
 }
 
 /// A configurable class element that is deleted and later recreated is a new
@@ -71,6 +75,10 @@ pub(crate) fn invalidate_class_string_member_order(class_id: u32, name: &str, is
         .as_mut()
         .unwrap()
         .insert((class_id, is_static, name.to_string()), u32::MAX);
+    drop(guard);
+    if !is_static {
+        super::class_meta::refresh_anon_declaration_role(class_id);
+    }
 }
 
 pub(crate) unsafe fn record_class_symbol_member_order(
@@ -210,6 +218,7 @@ pub unsafe extern "C" fn js_register_class_method_with_entry(
     );
     drop(registry);
     publish_unbuilt_holder(class_id as u32);
+    super::class_meta::refresh_anon_declaration_role(class_id as u32);
 }
 
 /// The ClassBody's own public instance accessor declaration for `class_id` +

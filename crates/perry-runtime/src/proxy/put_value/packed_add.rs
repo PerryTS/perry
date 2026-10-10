@@ -18,18 +18,12 @@
 //! generation, same kind, no holes, and `T`'s live bound is exactly what the
 //! append rule gives) and publishes nothing otherwise.
 //!
-//! The one input that is NOT a property of `S` is whether the prototype chain
-//! intercepts the write (an inherited setter, an inherited non-writable data
-//! property). That verdict is the inherited-access lane's
-//! (`object::chain_store`): every prototype hop is MARKED before the verdict
-//! is computed, so any later property change that could flip it moves the
-//! one global word `proto_validity`. Class accessors are properties of those
-//! same holders. The guard word
-//! records it, read after the marking and before the predicate, and the
-//! emitted hit re-proves the verdict with one load and one compare. Evaluating
-//! a class moves nothing unless it installs on a marked holder. The prototype the verdict walked is the one
-//! the receiver's SHAPE names, because the pre-shape compare is what admitted
-//! the receiver.
+//! The prototype chain can intercept an append through a setter or a
+//! non-writable property. Priming marks and resolves that chain once, then
+//! the matched transition owns its ordinary holders and their shape words.
+//! Every hit compares those words and rejects a deprecated successor field
+//! representation. An unrelated prototype mutation is not an input. The
+//! receiver's pre-shape pins the first link; each holder shape pins the next.
 //!
 //! # What the emitted hit re-tests per object
 //!
@@ -49,8 +43,8 @@
 //!   placement ORs the bit in; see `write_barrier.rs`) and objects are only
 //!   ever born in the nursery or old space (`arena_alloc_gc`), so a clear bit
 //!   proves the receiver young and the note unnecessary;
-//! * no stable tombstones and no descriptor flag (both conservative: the
-//!   shape already covers them);
+//! * no stable tombstones (conservative: the shape already covers them).
+//!   Descriptors on other own keys cannot intercept the absent key;
 //!
 //! Everything else takes the miss, which serves the memo in the runtime
 //! ([`packed_add_try`], through the audited stamp funnel and overflow store)
@@ -65,13 +59,15 @@
 //! sites ([`note_packed_add_carriers`], called by
 //! `shape_carriers::recompute_after_full_trace`). A cache-carried descriptor's
 //! keys array is rooted and rewritten by the shape table's scan. The words
-//! hold only numbers, never a heap address.
+//! own native proof blocks whose prototype edges are marked and rewritten by
+//! the existing chain-store root scanner.
 //!
 //! # Agents
 //!
 //! Sites are process-global. Only the primary agent primes (and registers) a
-//! site; ShapeIds are process-unique, so a worker's receivers never match a
-//! primary-agent pre-shape and a worker only ever takes the miss.
+//! site. Workers can inherit static ShapeIds, but cannot consume a primary
+//! agent's proof pointers. Emitted add hits use the existing worker gate;
+//! the runtime serves memos only on the primary agent.
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
@@ -88,7 +84,7 @@ pub struct PackedSetSite {
     /// `pre | post << 32`. `pre` is flipped by the read path's spill flip for
     /// an overflow slot, so no emitted compare can match it.
     pub add_shapes: AtomicU64,
-    /// `proto_validity << ADD_SLOT_BITS | slot`.
+    /// `shape-proof address << ADD_SLOT_BITS | slot/representation flags`.
     pub add_guard: AtomicU64,
     /// A `*mut AddWays` (0 = none): the memos of further pre-shapes, served
     /// by [`packed_add_try`]. A base-class constructor's key-add sees one
@@ -99,9 +95,8 @@ pub struct PackedSetSite {
     pub add_ways: AtomicU64,
     /// The site's ConstFn body (`perry_abi::PACKED_SET_CONSTFN_INFO_WORD`):
     /// a `JsFunctionInfo` address, 0 = none. Claimed once by the first
-    /// ConstFn-flagged publication ([`claim_constfn_body`]) and never
-    /// changed, so every flagged entry of the site names this one body and
-    /// the emitted hit compares the stored closure's info word with it.
+    /// ConstFn overwrite publication ([`claim_constfn_body`]) and never
+    /// changed. Key-add entries use their successor's own body fact instead.
     pub constfn_info: AtomicU64,
 }
 
@@ -185,10 +180,11 @@ pub const ADD_SLOT_BITS: u32 = 16;
 /// perry-codegen `expr/put_value_store_ic.rs::ADD_F64_SLOT`.**
 pub const ADD_F64_SLOT: u64 = 1 << (ADD_SLOT_BITS - 1);
 /// The guard's bit for a memo whose successor's lane at the slot is ConstFn:
-/// the emitted hit admits only a closure whose info word is the site's
-/// [`PackedSetSite::constfn_info`] (and that is not a rebindable `this`
+/// the emitted hit admits only a closure whose info word is the successor's
+/// body recorded in [`AddChain`] (and that is not a rebindable `this`
 /// clone), before it stamps anything.
 pub const ADD_CONSTFN_SLOT: u64 = crate::codegen_abi::PACKED_ADD_CONSTFN_SLOT;
+const ADD_REP_ONLY_SLOT: u64 = crate::codegen_abi::PACKED_ADD_REP_ONLY_SLOT;
 const ADD_SLOT_MASK: u64 = ADD_CONSTFN_SLOT - 1;
 const _: () = assert!(ADD_CONSTFN_SLOT == 1 << (ADD_SLOT_BITS - 2));
 
@@ -245,14 +241,94 @@ const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 const ADD_BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
     | crate::gc::OBJ_FLAG_SEALED
     | crate::gc::OBJ_FLAG_NO_EXTEND
-    | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-    | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+    | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
 
-/// The verdict generation the guard word records and the emitted hit
-/// recomputes: `PERRY_PROTO_VALIDITY`.
-#[inline]
-pub(crate) fn add_generation() -> u64 {
-    crate::object::chain_store::verdict_generation()
+#[repr(C)]
+struct AddChain {
+    links: crate::object::shape_chain::ShapeChain,
+    rep: usize,
+    rep_word: u64,
+    body: u64,
+}
+
+/// The add guard's upper 48 bits own the prototype-shape proof. No global
+/// mutation counter is an input: unrelated constructions cannot invalidate it.
+#[no_mangle]
+pub unsafe extern "C" fn js_packed_add_chain_valid(guard: u64) -> i32 {
+    let proof = (guard >> ADD_SLOT_BITS) as usize as *const AddChain;
+    (!proof.is_null()
+        && (*proof).links.valid()
+        && (guard & ADD_REP_ONLY_SLOT == 0
+            || (*((*proof).rep as *const AtomicU64)).load(Ordering::Relaxed) == (*proof).rep_word))
+        as i32
+}
+
+unsafe fn drop_chain(guard: u64) {
+    let proof = (guard >> ADD_SLOT_BITS) as usize as *mut AddChain;
+    if !proof.is_null() {
+        drop(Box::from_raw(proof));
+    }
+}
+
+/// A different representation at the same pre-shape converges to Any through
+/// the existing shape generalization funnel. Different pre-shapes retain
+/// their own body facts. No site latch learns a value category.
+unsafe fn add_rep_conflicts(site: *const PackedSetSite, pre: u32, flags: u64, body: u64) -> bool {
+    let conflict = |shapes: u64, guard: u64| {
+        if shapes == PACKED_SET_EMPTY || shapes as u32 != pre {
+            return false;
+        }
+        let old_flags = match guard & ADD_REP_ONLY_SLOT {
+            ADD_REP_ONLY_SLOT => 0,
+            flags => flags,
+        };
+        old_flags != flags
+            || (flags == ADD_CONSTFN_SLOT && {
+                let proof = (guard >> ADD_SLOT_BITS) as usize as *const AddChain;
+                (*proof).body != body
+            })
+    };
+    conflict(
+        (*site).add_shapes.load(Ordering::Relaxed),
+        (*site).add_guard.load(Ordering::Relaxed),
+    ) || site_ways(site).is_some_and(|ways| {
+        ways.iter().any(|w| {
+            conflict(
+                w.shapes.load(Ordering::Relaxed),
+                w.guard.load(Ordering::Relaxed),
+            )
+        })
+    })
+}
+
+pub(crate) fn scan_packed_add_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    ADD_SITES.with(|cell| unsafe {
+        for &site in (*cell.get()).iter() {
+            let visit =
+                |shapes: u64, guard: u64, visitor: &mut crate::gc::RuntimeRootVisitor<'_>| {
+                    if shapes != PACKED_SET_EMPTY {
+                        let proof = (guard >> ADD_SLOT_BITS) as usize as *mut AddChain;
+                        if !proof.is_null() {
+                            (*proof).links.scan(visitor);
+                        }
+                    }
+                };
+            visit(
+                (*site).add_shapes.load(Ordering::Relaxed),
+                (*site).add_guard.load(Ordering::Relaxed),
+                visitor,
+            );
+            if let Some(ways) = site_ways(site) {
+                for way in ways {
+                    visit(
+                        way.shapes.load(Ordering::Relaxed),
+                        way.guard.load(Ordering::Relaxed),
+                        visitor,
+                    );
+                }
+            }
+        }
+    });
 }
 
 /// `PERRY_KEYADD_IC=0` stops publication (A/B in one binary; both store
@@ -354,6 +430,7 @@ pub(crate) const C_REP_CONVERGE: usize = 26;
 pub(crate) const C_REP_MIGRATE: usize = 27;
 /// A ConstFn key-add or overwrite was not published: the site already names
 /// another body.
+#[cfg(test)]
 pub(crate) const C_PRIME_CONSTFN_OTHER_BODY: usize = 28;
 
 /// Counter `i`'s report name. One string, see
@@ -434,7 +511,7 @@ pub(crate) unsafe fn packed_add_try(
     target: f64,
     value: f64,
 ) -> Option<f64> {
-    if site.is_null() {
+    if site.is_null() || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
         return None;
     }
     let primary = (*site).add_shapes.load(Ordering::Relaxed);
@@ -476,7 +553,7 @@ pub(crate) unsafe fn packed_add_try(
         found
     };
     let spill = shapes as u32 != sid;
-    if guard >> ADD_SLOT_BITS != add_generation() {
+    if js_packed_add_chain_valid(guard) == 0 {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
@@ -498,12 +575,13 @@ pub(crate) unsafe fn packed_add_try(
     let post_d = crate::object::shapes::shape_descriptor_by_id(post)?;
     let slot = (guard & ADD_SLOT_MASK) as usize;
     // Charter step 5 (T2): the post-shape is the class guard of the memo. A
-    // ConstFn memo admits exactly a closure of the body its successor names
-    // (the site's body), whose lane the checked slot store below keeps.
-    if guard & ADD_CONSTFN_SLOT != 0 {
-        let body = post_constfn_body(post, slot as u32)?;
+    // ConstFn memo admits exactly a closure of the body its successor names,
+    // whose lane the checked slot store below keeps.
+    if guard & ADD_REP_ONLY_SLOT == ADD_CONSTFN_SLOT {
+        let proof = (guard >> ADD_SLOT_BITS) as usize as *const AddChain;
+        let body = (*proof).body;
         if spill
-            || (*site).constfn_info.load(Ordering::Relaxed) != body
+            || body == 0
             || crate::object::field_rep_store::constfn_store_info(value.to_bits()) != Some(body)
         {
             return None;
@@ -629,6 +707,9 @@ pub(crate) unsafe fn packed_add_prime(
     let post = crate::object::shapes::object_shape_stamp(obj);
     if post == pre || !crate::object::shapes::is_site_matchable_shape_id(post) {
         census(C_FULL_OTHER);
+        if census_enabled() {
+            js_packed_add_refused(site, key, pre, post, 7);
+        }
         return;
     }
     let (Some(pre_d), Some(post_d)) = (
@@ -641,6 +722,9 @@ pub(crate) unsafe fn packed_add_prime(
     let n = pre_d.logical_key_count;
     if post_d.logical_key_count != n + 1 {
         census(C_FULL_OTHER);
+        if census_enabled() {
+            js_packed_add_refused(site, key, pre, post, 8);
+        }
         return;
     }
     census(C_FULL_KEYADD);
@@ -681,6 +765,14 @@ pub(crate) unsafe fn packed_add_prime(
         ) == Some(n);
     if !verified {
         census(C_PRIME_UNVERIFIED);
+        if census_enabled() {
+            let facts = (pre_d.hole_count != 0 || post_d.hole_count != 0) as u32
+                | ((pre_d.proto_id != post_d.proto_id) as u32) << 1
+                | ((pre_d.semantic_generation != post_d.semantic_generation) as u32) << 2
+                | ((pre_d.object_kind != post_d.object_kind) as u32) << 3
+                | ((post_d.live_inline_slot_count != expected_live) as u32) << 4;
+            js_packed_add_refused(site, key, pre, post, 0x100 | facts);
+        }
         return;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
@@ -693,10 +785,13 @@ pub(crate) unsafe fn packed_add_prime(
         || !crate::object::shapes::store_kind::shape_admits_plain_store(post)
     {
         census(C_PRIME_UNVERIFIED);
+        if census_enabled() {
+            js_packed_add_refused(site, key, pre, post, 2);
+        }
         return;
     }
     // A ConstFn append: the successor names the body of the closure this
-    // store wrote. The memo is published only for the site's one body, and
+    // store wrote. The memo retains that successor's body, and
     // its hit (emitted or runtime) admits only a closure of that body; the
     // stamp and the slot store are not separated by any collection point, so
     // no collector sees the ConstFn lane without the closure (the slow path's
@@ -717,20 +812,37 @@ pub(crate) unsafe fn packed_add_prime(
             }
             _ => {
                 census(C_PRIME_UNVERIFIED);
+                if census_enabled() {
+                    js_packed_add_refused(site, key, pre, post, 3);
+                }
                 return;
             }
         }
     } else {
         None
     };
-    if let Some(body) = constfn_body {
-        // Another body at this site keeps the miss; nothing is claimed for
-        // a site that cannot publish (see the lane and agent tests above).
-        let site_body = (*site).constfn_info.load(Ordering::Relaxed);
-        if site_body != 0 && site_body != body {
-            census(C_PRIME_CONSTFN_OTHER_BODY);
-            return;
+    let typed_flags = if constfn_body.is_some() {
+        ADD_CONSTFN_SLOT
+    } else if inline && crate::object::field_rep_store::shape_slot_is_f64(post, n) {
+        ADD_F64_SLOT
+    } else {
+        0
+    };
+    if typed_flags != 0 && add_rep_conflicts(site, pre, typed_flags, constfn_body.unwrap_or(0)) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let recv_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_raw_const_ptr(key);
+        {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            crate::object::field_rep_store::object_store_generalize(obj as *mut _, n);
         }
+        packed_add_prime(
+            site,
+            recv_h.get_nanbox_f64(),
+            key_h.get_raw_const_ptr(),
+            pre,
+        );
+        return;
     }
     // A marked prototype or exotic read receiver is on a private shape lineage
     // (`proto_validity::ensure_meta_for_mark`); never learn one of its shapes,
@@ -745,10 +857,13 @@ pub(crate) unsafe fn packed_add_prime(
             != 0
     {
         census(C_PRIME_UNVERIFIED);
+        if census_enabled() {
+            js_packed_add_refused(site, key, pre, post, 4);
+        }
         return;
     }
     // The chain verdict (object::chain_store's discipline): mark every hop,
-    // read the generation, then ask the authoritative predicate. Both calls
+    // ask the authoritative predicate, then capture its shape proof. Both calls
     // can allocate, so receiver and key live in roots across them.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_h = scope.root_nanbox_f64(target);
@@ -766,7 +881,6 @@ pub(crate) unsafe fn packed_add_prime(
     } else {
         class_id
     };
-    let generation = add_generation();
     if crate::object::class_instance_set_may_intercept(recv, verdict_class, key_h.get_nanbox_f64())
     {
         census(C_PRIME_INTERCEPTED);
@@ -775,18 +889,29 @@ pub(crate) unsafe fn packed_add_prime(
     let recv = (recv_h.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     if crate::object::shapes::object_shape_stamp(recv) != post {
         census(C_PRIME_UNVERIFIED);
+        if census_enabled() {
+            js_packed_add_refused(site, key, pre, post, 5);
+        }
         return;
     }
-    // The body is claimed before the flagged memo is published (the claim
-    // re-checks it after the collecting verdict above).
-    let constfn_slot = match constfn_body {
-        Some(body) if claim_constfn_body(site, body) => ADD_CONSTFN_SLOT,
-        Some(_) => {
-            census(C_PRIME_CONSTFN_OTHER_BODY);
-            return;
-        }
-        None => 0,
+    let Some(chain) = crate::object::shape_chain::ShapeChain::capture(recv) else {
+        census(C_PRIME_INTERCEPTED);
+        return;
     };
+    // The successor shape owns this body fact. Different receiver shapes at
+    // one constructor site can have different bodies without a site latch.
+    let constfn_slot = if constfn_body.is_some() {
+        ADD_CONSTFN_SLOT
+    } else {
+        0
+    };
+    let rep = crate::object::shapes::shape_record_by_id(post)
+        .unwrap()
+        .rep_address();
+    let rep_word = (*(rep as *const AtomicU64)).load(Ordering::Relaxed);
+    if crate::object::field_rep::has_deprecated(rep_word) {
+        return;
+    }
     // Own both ShapeIds before they can be stamped from the site.
     crate::object::shape_carriers::note_shape_id(pre);
     crate::object::shape_carriers::note_shape_id(post);
@@ -804,13 +929,34 @@ pub(crate) unsafe fn packed_add_prime(
     } else {
         0
     };
-    let guard = (generation << ADD_SLOT_BITS) | f64_slot | constfn_slot | u64::from(n);
+    let proof = Box::into_raw(Box::new(AddChain {
+        links: chain,
+        rep,
+        rep_word,
+        body: constfn_body.unwrap_or(0),
+    })) as usize as u64;
+    assert_eq!(
+        proof >> (64 - ADD_SLOT_BITS),
+        0,
+        "native proof address fits guard"
+    );
+    // An all-Any word is immutable: only F64 lanes can become deprecated,
+    // and special deprecation requires a special lane. Zero value flags
+    // therefore need no per-use representation load. The unused combination
+    // names an Any append whose prefix still contains typed lanes.
+    let rep_only_slot = if rep_word != 0 && typed_flags == 0 {
+        ADD_REP_ONLY_SLOT
+    } else {
+        0
+    };
+    let guard = (proof << ADD_SLOT_BITS) | f64_slot | constfn_slot | rep_only_slot | u64::from(n);
     let same_pre = |word: u64| word != PACKED_SET_EMPTY && unflip(word as u32) == pre;
     // A way that holds this pre-shape (a stale guard) is superseded.
     if let Some(ways) = site_ways(site_ptr) {
         for way in ways.iter() {
             if same_pre(way.shapes.load(Ordering::Relaxed)) {
                 way.shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+                drop_chain(way.guard.swap(0, Ordering::Relaxed));
             }
         }
     }
@@ -822,6 +968,7 @@ pub(crate) unsafe fn packed_add_prime(
     // way taken it is dropped. Way hits never re-prime, so a polymorphic site
     // does not cycle its words.
     let primary = site.add_shapes.load(Ordering::Relaxed);
+    let mut displaced = false;
     if primary != PACKED_SET_EMPTY && !same_pre(primary) {
         let displaced_guard = site.add_guard.load(Ordering::Relaxed);
         if site.add_ways.load(Ordering::Relaxed) == 0 {
@@ -844,13 +991,20 @@ pub(crate) unsafe fn packed_add_prime(
                 })
         }) {
             way.shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
-            way.guard.store(displaced_guard, Ordering::Relaxed);
+            let previous_guard = way.guard.swap(displaced_guard, Ordering::Relaxed);
+            if previous_guard != displaced_guard {
+                drop_chain(previous_guard);
+            }
             way.shapes.store(primary, Ordering::Relaxed);
+            displaced = true;
         }
     }
     // Retire the old pair first, so no reader pairs new shapes with an old
     // guard (one thread publishes; this orders it for the emitted reads).
     site.add_shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+    if primary != PACKED_SET_EMPTY && !displaced {
+        drop_chain(site.add_guard.load(Ordering::Relaxed));
+    }
     site.add_guard.store(guard, Ordering::Relaxed);
     site.add_shapes.store(shapes, Ordering::Relaxed);
     census(C_PRIME_PUBLISHED);
@@ -893,4 +1047,18 @@ mod report_names_line_up {
         assert_eq!(super::census_name(47), "emit.47");
         assert_eq!(super::census_name(48), "?");
     }
+}
+
+/// External census probe. Executed only under the existing store census;
+/// it retains no site, key, receiver, or admission state.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn js_packed_add_refused(
+    site: *const PackedSetSite,
+    key: *const crate::StringHeader,
+    pre: u32,
+    post: u32,
+    cause: u32,
+) {
+    std::hint::black_box((site, key, pre, post, cause));
 }

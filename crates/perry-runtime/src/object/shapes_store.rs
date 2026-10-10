@@ -121,14 +121,11 @@ pub(crate) struct ShapeRecord {
     pub(super) logical_key_count: u32,
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
-    /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
-    /// discriminant (codes 0-6; the store facts F-A/F-B are kinds 5 and 6).
-    /// Bits 11-14: the births a keyless birth shape served while tracking its
-    /// width (#10905). Bit 15: a weak-collection brand; bit 31 distinguishes WeakSet.
-    /// Bits 16-23: the
-    /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
-    /// Bits 24-30: the inline width a keyless birth shape's descendants grow
-    /// to (#10905). The two #10905 fields are learned facts of the record,
+    /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-11: the
+    /// `ShapeObjectKind` discriminant. Bits 12-15: tracked birth count.
+    /// Bits 16-20: attribute summary; bit 21: weak-collection brand.
+    /// Bits 24-30: learned inline width; bit 31: WeakSet brand.
+    /// The two #10905 birth fields are learned facts of the record,
     /// never identity.
     ///
     /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
@@ -165,14 +162,14 @@ pub(crate) struct ShapeRecord {
     extras: u64,
 }
 
-const RECORD_WEAK_COLLECTION: u32 = 1 << 15;
+const RECORD_WEAK_COLLECTION: u32 = 1 << 21;
 const RECORD_WEAK_SET: u32 = 1 << 31;
 const RECORD_KIND_SHIFT: u32 = 8;
-const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
-/// The largest `ShapeObjectKind::code()` (`NativeNamespace`, 7).
-/// `kind_codes_round_trip` pins every kind within this three-bit field.
-const RECORD_KIND_MAX_CODE: u32 = 7;
-const _: () = assert!(RECORD_KIND_MAX_CODE <= RECORD_KIND_MASK >> RECORD_KIND_SHIFT);
+const RECORD_KIND_MASK: u32 = 0xF << RECORD_KIND_SHIFT;
+/// The largest `ShapeObjectKind::code()` (`OrdinaryNativeAlias`, 8).
+/// Four contiguous bits keep kind decoding to one shift/mask.
+const RECORD_KIND_MAX_CODE: u32 = 8;
+const _: () = assert!(RECORD_KIND_MAX_CODE < 16);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
 /// whose keys are all default answers without touching its keys. Derived
@@ -181,14 +178,15 @@ const _: () = assert!(RECORD_KIND_MAX_CODE <= RECORD_KIND_MASK >> RECORD_KIND_SH
 /// shape publishes no keys and carries its private list's conservative
 /// summary here instead.
 const RECORD_SUMMARY_SHIFT: u32 = 16;
-const RECORD_SUMMARY_MASK: u32 = 0xFF << RECORD_SUMMARY_SHIFT;
+const RECORD_SUMMARY_MASK: u32 = 0x1F << RECORD_SUMMARY_SHIFT;
+const _: () = assert!(crate::object::key_attrs::SUMMARY_KEY_BITS & !0x1F == 0);
 const _: () = assert!(RECORD_KIND_MASK & RECORD_SUMMARY_MASK == 0);
 const _: () = assert!(RECORD_KIND_MASK & 0xFF == 0);
 
-/// #10905 (`shapes_birth_width`): births served while tracking, bits 11-14.
+/// #10905 (`shapes_birth_width`): births served while tracking, bits 12-15.
 /// Four bits hold every count the tracker stores (it stops at
 /// `TRACKING_BIRTHS`, asserted below).
-const RECORD_BIRTHS_SHIFT: u32 = 11;
+const RECORD_BIRTHS_SHIFT: u32 = 12;
 const RECORD_BIRTHS_MASK: u32 = 0xF << RECORD_BIRTHS_SHIFT;
 /// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-30 (maximum 64).
 const RECORD_WIDTH_SHIFT: u32 = 24;
@@ -313,7 +311,7 @@ impl ShapeRecord {
     #[inline(always)]
     pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
-            | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
+            | ((u32::from(summary) << RECORD_SUMMARY_SHIFT) & RECORD_SUMMARY_MASK);
         // The summary is an input of the positional bit (an accessor key).
         self.refresh_positional();
         self
@@ -352,7 +350,9 @@ impl ShapeRecord {
 
     #[inline]
     pub(super) fn object_kind(&self) -> ShapeObjectKind {
-        match (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT {
+        let code = (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT;
+        match code {
+            0 => ShapeObjectKind::Ordinary,
             1 => ShapeObjectKind::Class,
             2 => ShapeObjectKind::Dictionary,
             3 => ShapeObjectKind::Function,
@@ -360,7 +360,12 @@ impl ShapeRecord {
             5 => ShapeObjectKind::OrdinaryUnmarked,
             6 => ShapeObjectKind::OrdinaryNumericProof,
             7 => ShapeObjectKind::NativeNamespace,
-            _ => ShapeObjectKind::Ordinary,
+            // Every constructor writes a typed code in 0..=8. Decode the
+            // reserved upper range conservatively as the native-fallback
+            // family, rather than wrapping it to ordinary absence. This
+            // lets the contiguous field decode as a cheap clamp and avoids
+            // a range-check ladder on every valid record read.
+            _ => ShapeObjectKind::OrdinaryNativeAlias,
         }
     }
 
@@ -377,7 +382,9 @@ impl ShapeRecord {
         // The kind is a FIELD, not a flag: it has three values, and a record
         // that reported the wrong one would be a wrong identity match,
         // because `facts_match` compares the full enum.
-        let kind_bits = (object_kind.code() as u32) << RECORD_KIND_SHIFT;
+        let code = object_kind.code() as u32;
+        debug_assert!(code <= RECORD_KIND_MAX_CODE, "kind has no packed decoder");
+        let kind_bits = code << RECORD_KIND_SHIFT;
         debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
         let mut record = ShapeRecord {
             keys,

@@ -33,6 +33,7 @@ fn declaration_collision_is_projected_when_the_shape_is_minted() {
             },
         );
     drop(table);
+    crate::object::class_registry::refresh_anon_declaration_role(id);
     let after = crate::object::js_object_alloc(id, 0);
     assert_eq!(
         unsafe { crate::object::shapes::object_shape_identity(after) },

@@ -1,0 +1,39 @@
+// ObjectMeta offsets: flags +24, dictionary_keys +120 (LP64).
+config = { max_map_keys = 131072; missing_probes = warn; }
+uprobe:@BINARY@:*read_holder*prime_read_holder /pid == cpid/ {
+  @readkey[tid] = str(arg1 + 20, *(uint32*)uptr(arg1 + 4) + 1);
+  $o = arg0; $m = *(uint64*)uptr($o + 8);
+  @read_receivers[@readkey[tid], *(uint32*)uptr($o), *(uint32*)uptr($o + 4),
+    *(uint64*)uptr($m + 24), *(uint64*)uptr($m + 120)] = count();
+}
+uretprobe:@BINARY@:*read_holder*prime_read_holder /pid == cpid/ { delete(@readkey[tid]); }
+uprobe:@BINARY@:*method_site*ordinary_receiver /pid == cpid/ { @ordinary[tid] = arg0; }
+uretprobe:@BINARY@:*method_site*ordinary_receiver /pid == cpid && retval == 0/ {
+  $o = @ordinary[tid]; $m = *(uint64*)uptr($o + 8);
+  @ordinary_refused[@readkey[tid], *(uint32*)uptr($o), *(uint32*)uptr($o + 4),
+    *(uint64*)uptr($m + 24), *(uint64*)uptr($m + 120)] = count();
+}
+uprobe:@BINARY@:*method_site*holder_prime*prime_holder /pid == cpid/ {
+  $o = arg1;
+  $m = *(uint64*)uptr($o + 8);
+  @method_holders[str(arg3, arg4 + 1), *(uint32*)uptr($o),
+    *(uint32*)uptr($o + 4), *(uint8*)uptr($o - 8),
+    *(uint64*)uptr($m + 24), *(uint64*)uptr($m + 120)] = count();
+}
+uprobe:@BINARY@:*read_holder*hop_admitted /pid == cpid/ {
+  @hop[tid] = arg0;
+}
+uretprobe:@BINARY@:*read_holder*hop_admitted /pid == cpid/ {
+  if (retval == 0) {
+    $o = @hop[tid];
+    $m = *(uint64*)uptr($o + 8);
+    @read_refused[*(uint32*)uptr($o), *(uint32*)uptr($o + 4),
+      *(uint8*)uptr($o - 8), *(uint64*)uptr($m + 24),
+      *(uint64*)uptr($m + 120)] = count();
+  }
+  delete(@hop[tid]);
+}
+uprobe:@BINARY@:js_put_value_set_packed_miss /pid == cpid/ {
+  @store_sites[arg3] = count();
+}
+END { clear(@hop); clear(@ordinary); clear(@readkey); }

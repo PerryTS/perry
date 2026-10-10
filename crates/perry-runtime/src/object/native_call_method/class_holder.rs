@@ -142,7 +142,10 @@ pub(crate) unsafe fn shape_answers(addr: usize) -> bool {
     let meta = (*obj).meta;
     meta.is_null()
         || ((*meta).elements == 0
-            && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0)
+            && (*meta).flags
+                & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                == 0)
 }
 
 /// The [[Prototype]] of holder `obj` as its link records it: `Ok(Some)` an

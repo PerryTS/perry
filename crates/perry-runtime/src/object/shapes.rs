@@ -413,6 +413,12 @@ impl ShapeRecordRef {
         true
     }
 
+    /// Stable representation-word address. A persistent borrower must own
+    /// this ShapeId as a cache carrier so full-trace pruning retains its slab.
+    pub(crate) fn rep_address(self) -> usize {
+        self.rep_word() as *const std::sync::atomic::AtomicU64 as usize
+    }
+
     #[inline]
     fn rep_word(self) -> &'static std::sync::atomic::AtomicU64 {
         // SAFETY: a live slab record (type docs); `rep` is an 8-aligned u64
@@ -977,6 +983,10 @@ pub(crate) enum ShapeObjectKind {
     /// export surface. The namespace brand is part of shape identity, so an
     /// ordinary record with a module name in a data slot cannot impersonate it.
     NativeNamespace,
+    /// Ordinary slots and links, plus receiver-local native fallback when
+    /// an ordinary read produces undefined. Absence proofs must retain
+    /// collecting native forwarding.
+    OrdinaryNativeAlias,
 }
 
 impl ShapeObjectKind {
@@ -1000,6 +1010,7 @@ impl ShapeObjectKind {
                 | ShapeObjectKind::OrdinaryUnmarked
                 | ShapeObjectKind::OrdinaryNumericProof
                 | ShapeObjectKind::NativeNamespace
+                | ShapeObjectKind::OrdinaryNativeAlias
         )
     }
 
@@ -1016,6 +1027,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::OrdinaryUnmarked => 5,
             ShapeObjectKind::OrdinaryNumericProof => 6,
             ShapeObjectKind::NativeNamespace => 7,
+            ShapeObjectKind::OrdinaryNativeAlias => 8,
         }
     }
 }
@@ -1034,6 +1046,7 @@ const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
 const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
 const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
 const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
+const SHAPE_KIND_NATIVE_ALIAS: u64 = 9;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -1057,6 +1070,7 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
         SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
         SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
+        SHAPE_KIND_NATIVE_ALIAS => Some(ShapeObjectKind::OrdinaryNativeAlias),
         _ => None,
     }
 }
@@ -1073,6 +1087,7 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
         ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
         ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
+        ShapeObjectKind::OrdinaryNativeAlias => SHAPE_KIND_NATIVE_ALIAS,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
@@ -4644,9 +4659,7 @@ fn vtable_class(class_id: u32) -> u32 {
     // Module-local anonymous ids may collide with declarations. Project the
     // existing reflective precedence when minting the shape, so a CLASS
     // link remains a shape fact instead of a registry check on every read.
-    if crate::object::is_anon_shape_class_id(class_id)
-        && !crate::object::class_registry::declared_class_outranks_anon_shape(class_id)
-    {
+    if crate::object::class_registry::anonymous_class_role(class_id) == Some(false) {
         return 0;
     }
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
