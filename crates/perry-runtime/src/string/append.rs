@@ -53,7 +53,7 @@ pub extern "C" fn js_string_append(
                 (*new_ptr).utf16_len = (*src).utf16_len;
                 // Preserve the lone-surrogate flag on the duplicate so later
                 // concats/appends still canonicalize correctly. (#6728)
-                (*new_ptr).flags = (*src).flags & !STRING_FLAG_WTF8_VALIDATED;
+                (*new_ptr).flags = (*src).flags;
             }
         }
         return new_ptr;
@@ -101,7 +101,7 @@ pub extern "C" fn js_string_append(
         // 4-byte UTF-8 (unlike expression `hi + lo`, which canonicalizes). That
         // corrupted every emoji built up code-unit-by-code-unit. (#6728)
         let flag_bits = combine_string_flags((*dest).flags, (*src).flags)
-            & (STRING_FLAG_HAS_LONE_SURROGATES | STRING_FLAG_VALID_WTF8);
+            & (STRING_FLAG_HAS_LONE_SURROGATES | STRING_FLAG_WTF8_VALIDATED);
         let boundary_pair = {
             let d = std::slice::from_raw_parts(
                 (dest as *const u8).add(std::mem::size_of::<StringHeader>()),
