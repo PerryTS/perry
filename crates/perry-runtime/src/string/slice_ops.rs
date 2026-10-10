@@ -360,13 +360,13 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
             bytes.to_ascii_lowercase()
         };
         let len = out.len() as u32;
-        return js_string_from_bytes_known_utf16(out.as_ptr(), len, len, 0);
+        return js_string_from_ascii_bytes(out.as_ptr(), len);
     }
 
     if !upper {
-        if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Some(text) = unsafe { header_str_checked(s) } {
             let out = text.to_lowercase();
-            return js_string_from_bytes(out.as_ptr(), out.len() as u32);
+            return js_string_from_str(&out);
         }
     }
 

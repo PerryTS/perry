@@ -478,13 +478,23 @@ pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
     }
     if (0xD800..=0xDFFF).contains(&unit) {
         let buf = encode_3byte_wtf8(unit);
-        return crate::string::js_string_from_wtf8_bytes(buf.as_ptr(), 3);
+        return js_string_from_bytes_known_utf16(
+            buf.as_ptr(),
+            3,
+            1,
+            STRING_FLAG_VALID_WTF8 | STRING_FLAG_HAS_LONE_SURROGATES,
+        );
     }
     // BMP, non-surrogate → a valid Unicode scalar value.
     let ch = unsafe { char::from_u32_unchecked(unit as u32) };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
-    js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
+    js_string_from_bytes_known_utf16(
+        encoded.as_ptr(),
+        encoded.len() as u32,
+        1,
+        STRING_FLAG_VALID_WTF8,
+    )
 }
 
 /// Append the WTF-8/UTF-8 bytes of one UTF-16 code unit to `out`, returning
@@ -582,11 +592,14 @@ pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeade
         cps.push(unit as u32);
     }
     let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
-    if has_lone_surrogate {
-        crate::string::js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32)
-    } else {
-        js_string_from_bytes(out.as_ptr(), out.len() as u32)
-    }
+    let units = cps.iter().map(|&cp| if cp > 0xffff { 2 } else { 1 }).sum();
+    let flags = STRING_FLAG_VALID_WTF8
+        | if has_lone_surrogate {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
+    js_string_from_bytes_known_utf16(out.as_ptr(), out.len() as u32, units, flags)
 }
 
 /// Throw `RangeError: Invalid code point <n>` for `String.fromCodePoint`,
@@ -623,7 +636,12 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
     let ch = unsafe { char::from_u32_unchecked(cp) };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
-    js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
+    js_string_from_bytes_known_utf16(
+        encoded.as_ptr(),
+        encoded.len() as u32,
+        2,
+        STRING_FLAG_VALID_WTF8,
+    )
 }
 
 /// `String.fromCodePoint(...codePoints)` — variadic form. Builds a string from
@@ -647,11 +665,14 @@ pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
         cps.push(code as u32);
     }
     let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
-    if has_lone_surrogate {
-        crate::string::js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32)
-    } else {
-        js_string_from_bytes(out.as_ptr(), out.len() as u32)
-    }
+    let units = cps.iter().map(|&cp| if cp > 0xffff { 2 } else { 1 }).sum();
+    let flags = STRING_FLAG_VALID_WTF8
+        | if has_lone_surrogate {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
+    js_string_from_bytes_known_utf16(out.as_ptr(), out.len() as u32, units, flags)
 }
 
 /// String.prototype.at(index) — supports negative indices.
