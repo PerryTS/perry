@@ -158,7 +158,8 @@ fn forward_split(
             api::QUANTUM,
             &mut host::poll,
         )?;
-        near = Some(position);
+        // The automaton answers without a position; keep the last one.
+        near = position.or(near);
         let Some(found) = found else {
             break;
         };

@@ -248,7 +248,9 @@ fn perex_test_entry_holds_no_handle_and_reads_every_base_back_after_a_moving_pol
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_host_roots();
     let scope = RuntimeHandleScope::new();
-    let receiver = regex(&scope, "(a+)(b)", "g");
+    // The lookahead keeps the lazy automaton out (it reads no lookaround): this
+    // is the evaluator's search, which pauses and polls between quanta.
+    let receiver = regex(&scope, "(a+)(?=b)(b)", "g");
     let units = 3 * api::QUANTUM;
     let mut bytes = vec![b'a'; units];
     bytes.push(b'b');

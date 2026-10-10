@@ -3,13 +3,16 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, Charge, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, HostResourceError, InPlace, OwnerError};
+use super::perex_owner::{
+    BuildError, CellProgram, GcProgram, HostResourceError, InPlace, OwnerError,
+};
 use crate::gc::RuntimeHandleScope;
 use perex::binding::{
     BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
     SubjectError,
 };
 use perex::compiler::{self, CompileError, Node, Range};
+use perex::dfa;
 use perex::executor::{
     ExecError, Frame, Progress, Resources, Run, Scratch, ScratchOwner, ScratchRequirements, Search,
     SearchError, Undo,
@@ -321,6 +324,13 @@ crate::perry_thread_local! {
 
 #[cfg(test)]
 crate::perry_thread_local! {
+    /// Test-only: how many searches the lazy automaton decided (a match's
+    /// bounds or no match), so a test can assert the automaton answered.
+    pub(crate) static DFA_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
     /// Test-only: how many searches took the owned path (built per-call
     /// `MatchBuffers`), so a test can assert which path a program took.
     pub(crate) static OWNED_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -462,16 +472,30 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<Option<Match<'mem>>, EngineError> {
-    find_near(
-        program, subject, start, None, mode, budget, memory, quantum, poll,
-    )
-    .map(|(found, _)| found)
+    // A one-shot search: no later search continues from its position.
+    let mut captures = None;
+    let (full, _) = find_near_into(
+        program,
+        subject,
+        start,
+        None,
+        false,
+        mode,
+        budget,
+        memory,
+        quantum,
+        &mut captures,
+        poll,
+    )?;
+    Ok(full.map(|full| Match { full, captures }))
 }
 
 /// `find`, seeking to `start` from `near` when that is closer than either end
 /// of the subject, and returning where the search stood: the match's end, or
-/// the start of its last attempt (#10164). On non-ASCII storage a search from
-/// an end costs up to half the subject, so a loop of them is quadratic.
+/// the start of its last attempt (#10164), or `None` when the lazy automaton
+/// answered without the evaluator. On non-ASCII storage a search from an end
+/// costs up to half the subject, so a loop of them is quadratic; such a loop
+/// is the evaluator's, which reports positions (see [`dfa_bounds`]).
 ///
 /// `near` must come from a search or reader over this same binding. Another
 /// string with an identical layout cannot be detected and would give wrong
@@ -486,13 +510,14 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     memory: &'mem MemoryBudget,
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<(Option<Match<'mem>>, Position), EngineError> {
+) -> Result<(Option<Match<'mem>>, Option<Position>), EngineError> {
     let mut captures = None;
     let (full, position) = find_near_into(
         program,
         subject,
         start,
         near,
+        true,
         mode,
         budget,
         memory,
@@ -505,19 +530,21 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
 
 /// [`find_near`] answering the full match and position, with the captures (under
 /// `All`, on a match) written to the caller's slot instead of moved out.
+/// `follows` says a later search will continue from the returned position.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_near_into<'mem, S: ImmutableSubject<Error = OwnerError>>(
     program: &BoundProgram<GcProgram<'_>>,
     subject: &BoundSubject<S>,
     start: usize,
     near: Option<Position>,
+    follows: bool,
     mode: CaptureMode,
     budget: &mut Budget,
     memory: &'mem MemoryBudget,
     quantum: usize,
     captures: &mut Option<Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<(Option<Span>, Position), EngineError> {
+) -> Result<(Option<Span>, Option<Position>), EngineError> {
     begin(quantum, poll)?;
     let registers = program
         .with_view(|program| program.register_count())
@@ -528,6 +555,7 @@ pub(crate) fn find_near_into<'mem, S: ImmutableSubject<Error = OwnerError>>(
         registers,
         start,
         near,
+        follows,
         mode,
         budget,
         memory,
@@ -559,7 +587,7 @@ pub(crate) fn find_in_place<'mem>(
     quantum: usize,
     captures: &mut Option<Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<(Option<Span>, Position, *mut super::RegExpHeader), EngineError> {
+) -> Result<(Option<Span>, Option<Position>, *mut super::RegExpHeader), EngineError> {
     // The pre-search poll runs before either base is read.
     begin(quantum, poll)?;
     // No collecting action from here on except the search's own polls, each
@@ -607,6 +635,7 @@ pub(crate) fn find_in_place<'mem>(
         registers,
         start,
         near,
+        hint,
         mode,
         budget,
         memory,
@@ -614,7 +643,7 @@ pub(crate) fn find_in_place<'mem>(
         captures,
         poll,
     )?;
-    if identity.is_some() {
+    if let (Some(_), Some(position)) = (identity, position) {
         // Re-read after the search: a collection during it may have moved the
         // string, and the identity must be the one the next call will see.
         if let Some(identity) =
@@ -839,11 +868,158 @@ fn grow_lent_frames(cell: &mut ScratchCell, required: ScratchRequirements) {
     }
 }
 
-/// The search every entry above runs once its resources are bound: lent
-/// scratch first, owned buffers when the lent cell cannot serve it. Every poll
-/// it runs goes through `hooks` ([`PollRoots`]).
+/// What the lazy automaton said about a search.
+enum Bounds {
+    /// No match at or after the start: nothing else needs to run.
+    NoMatch,
+    /// The span of the match the evaluator would return, and whether the
+    /// program has capture groups beyond group zero.
+    Match(Span, bool),
+    /// The automaton cannot answer this search; the evaluator does.
+    Declined,
+}
+
+/// Word 2 of a program holds its flags; `Y` is sticky (perex `program.rs`).
+const PROGRAM_FLAGS_WORD: usize = 2;
+const PROGRAM_FLAG_Y: u32 = 8;
+/// Word 7 bit 24: every match begins at the search's start (perex
+/// `docs/candidate.md`, "start-anchored starts"; validated, format 14+).
+const PROGRAM_DESCRIPTOR_WORD: usize = 7;
+const PROGRAM_START_ANCHORED: u32 = 1 << 24;
+
+/// Whether the evaluator tries only the search's start: a sticky or
+/// start-anchored program. Read from validated header words, and used only to
+/// choose which of two exact executors runs.
+#[inline(always)]
+fn tries_one_start(words: &[u32]) -> bool {
+    words
+        .get(PROGRAM_FLAGS_WORD)
+        .is_some_and(|w| w & PROGRAM_FLAG_Y != 0)
+        || words
+            .get(PROGRAM_DESCRIPTOR_WORD)
+            .is_some_and(|w| w & PROGRAM_START_ANCHORED != 0)
+}
+
+/// Ask the program cell's lazy automaton (`perex::dfa`) for the bounds of the
+/// match at or after `start`. The automaton and the evaluator are two exact
+/// readings of the same program; this only chooses which one answers.
+///
+/// It declines, leaving the search to the evaluator, when the cell carries no
+/// cache (the program is ineligible: backreferences, lookaround, ...), when
+/// the subject is non-ASCII WTF-8 and the search starts away from zero or a
+/// later search will continue from its position (`follows`: the automaton
+/// walks from the subject's start and reports no position, where the
+/// evaluator seeks from a nearby one and reports where it stopped), and when capture groups are wanted from a program
+/// that tries a single start (the evaluator then runs one attempt either way,
+/// so bounds first would only add work). Neither allocates nor collects.
+#[inline(always)]
+fn dfa_bounds<P, S>(
+    resources: &BoundResources<'_, P, S>,
+    start: usize,
+    follows: bool,
+    mode: CaptureMode,
+    budget: &mut Budget,
+) -> Result<Bounds, EngineError>
+where
+    P: CellProgram,
+    S: ImmutableSubject,
+    P::Error: HostResourceError,
+    S::Error: HostResourceError,
+{
+    let answered = resources.with_views(|program, input| {
+        // SAFETY: `P: CellProgram`, so these are a program cell's words; the
+        // cache is used only inside this view, by this one call.
+        let Some(cache) = (unsafe { super::perex_owner::cell_dfa_cache(program.words()) }) else {
+            return Ok(Bounds::Declined);
+        };
+        if (start != 0 || follows) && input.ascii_bytes().is_none() {
+            return Ok(Bounds::Declined);
+        }
+        let groups = program.capture_count() > 1;
+        if matches!(mode, CaptureMode::All) && groups && tries_one_start(program.words()) {
+            return Ok(Bounds::Declined);
+        }
+        match dfa::find(program, input, start, cache, budget) {
+            Ok(dfa::Found::Match(span)) => Ok(Bounds::Match(span, groups)),
+            Ok(dfa::Found::NoMatch) => Ok(Bounds::NoMatch),
+            Ok(dfa::Found::Declined(_)) => Ok(Bounds::Declined),
+            Err(error) => Err(EngineError::Execution(error)),
+        }
+    });
+    match answered {
+        Ok(answer) => answer,
+        Err(PairError::Program(error)) => Err(EngineError::Program(program_error(error))),
+        Err(PairError::Subject(error)) => Err(EngineError::Subject(subject_error(error))),
+    }
+}
+
+/// The search every entry above runs once its resources are bound: the lazy
+/// automaton for the match's bounds where it can answer, then, when capture
+/// groups beyond the match are wanted, the evaluator from the match's start
+/// (it finds the same match there first); otherwise the evaluator alone, over lent scratch first and
+/// owned buffers when the lent cell cannot serve it. Every poll it runs goes
+/// through `hooks` ([`PollRoots`]). The position is `None` when the automaton
+/// answered alone.
 #[allow(clippy::too_many_arguments)]
-fn search<'mem, R, RP, RS, H>(
+fn search<'mem, P, S, H>(
+    resources: &BoundResources<'_, P, S>,
+    hooks: &H,
+    registers: usize,
+    start: usize,
+    near: Option<Position>,
+    follows: bool,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(Option<Span>, Option<Position>), EngineError>
+where
+    P: CellProgram,
+    S: ImmutableSubject,
+    P::Error: HostResourceError,
+    S::Error: HostResourceError,
+    H: PollRoots,
+{
+    let answer = dfa_bounds(resources, start, follows, mode, budget)?;
+    #[cfg(test)]
+    if !matches!(answer, Bounds::Declined) {
+        DFA_ANSWERS.with(|n| n.set(n.get() + 1));
+    }
+    let (start, bounds) = match answer {
+        Bounds::NoMatch => return Ok((None, None)),
+        Bounds::Match(span, groups) => match mode {
+            CaptureMode::All if groups => (span.start(), Some(span)),
+            CaptureMode::Full => return Ok((Some(span), None)),
+            CaptureMode::All => {
+                // Group zero is every capture there is: the slots the
+                // evaluator would fill, after the same capture poll.
+                poll_with(hooks, poll)?;
+                take_captures(mode, 1, memory, captures, |output| {
+                    output[0] = Some(span);
+                    Ok(())
+                })?;
+                return Ok((Some(span), None));
+            }
+        },
+        Bounds::Declined => (start, None),
+    };
+    let (found, position) = evaluate(
+        resources, hooks, registers, start, near, mode, budget, memory, quantum, captures, poll,
+    )?;
+    debug_assert!(
+        bounds.is_none() || found == bounds,
+        "the evaluator from the automaton's start found another match"
+    );
+    Ok((found, Some(position)))
+}
+
+/// The evaluator's search: lent scratch first, owned buffers when the lent
+/// cell cannot serve it.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn evaluate<'mem, R, RP, RS, H>(
     resources: &R,
     hooks: &H,
     registers: usize,
@@ -1014,3 +1190,6 @@ pub(crate) fn advance_empty(
         .map_err(EngineError::Subject)?
         .ok_or(EngineError::Storage(StorageError::Limit))
 }
+
+#[cfg(test)]
+mod dfa_tests;
