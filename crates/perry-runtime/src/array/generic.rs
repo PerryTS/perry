@@ -124,6 +124,14 @@ fn callable(cb: f64) -> *const ClosureHeader {
     crate::array::js_validate_array_map_callback(0, cb) as *const ClosureHeader
 }
 
+/// Re-read the callback after user code from its existing NaN-box root.
+/// The method validated this fixed value once, after reading `length`; moving
+/// collection changes its address, never its callability or immutable body.
+#[inline]
+fn callback_pointer(cb: f64) -> *const ClosureHeader {
+    JSValue::from_bits(cb.to_bits()).as_pointer::<ClosureHeader>()
+}
+
 /// `ToIntegerOrInfinity` clamped to a non-negative `i64` length
 /// (`LengthOfArrayLike`'s `ToLength`).
 #[inline]
@@ -331,7 +339,11 @@ pub(super) fn al_get(recv: f64, k: i64) -> f64 {
         if real_array_uses_recorded_spec_path(arr) {
             return crate::array::array_spec_get(arr, k as u32);
         }
-        return js_array_get_f64(arr, k as u32);
+        // SAFETY: `as_real_array` resolved this head. On this default-chain
+        // arm the prototype probe neither materialized a prototype nor collected.
+        return unsafe {
+            super::indexing::array_get_resolved(arr, k as u32, array_object_flags_resolved(arr))
+        };
     }
     let b = recv.to_bits();
     if is_string_value(b) {
@@ -587,14 +599,14 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
@@ -614,7 +626,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     // ArraySpeciesCreate → ArrayCreate throws RangeError for len ≥ 2^32
     // (test262 map/create-non-array-invalid-len) — BEFORE any callback runs.
     if len > u32::MAX as i64 {
@@ -632,8 +644,8 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
         // element pointer was derived before it. The pre-call address is never
         // bound, so there is nothing stale to reach for.
         let (mapped, result) = result_h.across_mut::<ArrayHeader, _>(|| {
-            crate::closure::js_closure_call3(
-                callable(cb_h.get_nanbox_f64()),
+            cb_site.call(
+                callback_pointer(cb_h.get_nanbox_f64()),
                 crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
                 v,
                 k as f64,
@@ -663,7 +675,7 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
     // One reusable handle keeps `v` (read BEFORE the callback, pushed AFTER
     // it — the spec's value, not a re-read) alive across the call without
@@ -674,8 +686,8 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
             continue;
         }
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
-        let keep = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let keep = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v_h.get_nanbox_f64(),
             k as f64,
@@ -706,14 +718,14 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
@@ -736,14 +748,14 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
@@ -769,13 +781,13 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     // `v` is read before the callback and returned after it — root it.
     let v_h = scope.root_nanbox_f64(undef());
     for k in 0..len {
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v_h.get_nanbox_f64(),
             k as f64,
@@ -798,11 +810,11 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
@@ -825,14 +837,14 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     // `v` is read before the callback and returned after it — root it.
     let v_h = scope.root_nanbox_f64(undef());
     let mut k = len - 1;
     while k >= 0 {
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v_h.get_nanbox_f64(),
             k as f64,
@@ -856,12 +868,12 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
     let mut k = len - 1;
     while k >= 0 {
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        let hit = crate::closure::js_closure_call3(
-            callable(cb_h.get_nanbox_f64()),
+        let hit = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
@@ -888,7 +900,7 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall4::resolve(callable(cb_h.get_nanbox_f64()));
     // The accumulator crosses every callback — keep it in a rooted handle.
     let acc_h = scope.root_nanbox_f64(init);
     let mut k = 0i64;
@@ -909,8 +921,8 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
     while k < len {
         if al_has(recv_h.get_nanbox_f64(), k) {
             let v = al_get(recv_h.get_nanbox_f64(), k);
-            acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
-                callable(cb_h.get_nanbox_f64()),
+            acc_h.set_nanbox_f64(cb_site.call(
+                callback_pointer(cb_h.get_nanbox_f64()),
                 crate::closure::plain_call_receiver(),
                 acc_h.get_nanbox_f64(),
                 v,
@@ -932,7 +944,7 @@ pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, in
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    callable(cb_h.get_nanbox_f64());
+    let cb_site = crate::closure::DirectCall4::resolve(callable(cb_h.get_nanbox_f64()));
     // The accumulator crosses every callback — keep it in a rooted handle.
     let acc_h = scope.root_nanbox_f64(init);
     let mut k = len - 1;
@@ -952,8 +964,8 @@ pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, in
     while k >= 0 {
         if al_has(recv_h.get_nanbox_f64(), k) {
             let v = al_get(recv_h.get_nanbox_f64(), k);
-            acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
-                callable(cb_h.get_nanbox_f64()),
+            acc_h.set_nanbox_f64(cb_site.call(
+                callback_pointer(cb_h.get_nanbox_f64()),
                 crate::closure::plain_call_receiver(),
                 acc_h.get_nanbox_f64(),
                 v,

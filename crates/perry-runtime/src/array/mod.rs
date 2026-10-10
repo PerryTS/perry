@@ -10,6 +10,8 @@ mod fill_extend;
 mod flat_clone;
 mod from_concat;
 mod generic;
+#[cfg(test)]
+mod generic_callback_tests;
 mod generic_mutators;
 mod generic_object;
 mod header;

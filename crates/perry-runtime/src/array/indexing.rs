@@ -688,11 +688,27 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     } else {
         array_receiver_gc_tag(arr)
     };
+    // SAFETY: the clean and exotic dispatch above resolved a live real
+    // array, and no allocation or safepoint intervened.
+    unsafe { array_get_resolved(arr, index, array_object_flags_from_tag(receiver_tag)) }
+}
+
+/// The indexed Get implementation after the caller has resolved a real array.
+/// Shared by the polymorphic entry and generic array-like operations, which
+/// already performed `as_real_array` and must not classify that head twice.
+///
+/// # Safety
+/// `arr` is a live non-forwarded real array returned by `clean_arr_ptr`, and
+/// `flags` is its current header flag word. No collection may intervene
+/// between those reads and this call. Getter and prototype dispatch happen
+/// only after the last direct use of that pointer.
+#[inline]
+pub(super) unsafe fn array_get_resolved(arr: *const ArrayHeader, index: u32, flags: u16) -> f64 {
     // #6748 grind: per-array flag, not the process-global gate (see
     // `array_has_own_index`) — this probe allocated two Strings on EVERY
     // checked element read once any descriptor existed process-wide, which
     // taxed every internal keys_array walk (`in`, defineProperty, Object.keys).
-    if array_object_flags_from_tag(receiver_tag) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let key = index.to_string();
         if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
             if acc.get != 0 {
