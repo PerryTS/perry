@@ -355,17 +355,17 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
         !ir.contains("@js_eq(") && !ir.contains("@js_strict_eq("),
         "a proven-Number left operand must not pay a runtime equality call:\n{ir}"
     );
-    // The raw-encoding comparison consumes the dynamic object first and the
+    // The numeric comparison consumes the dynamic object first and the
     // proven Number second. Trace every input through pure normalization ops,
     // so a reload after the allocation cannot hide behind a select or bitcast.
     let comparison = ir
         .lines()
         .map(str::trim)
         .find(|line| {
-            line.contains("icmp eq i64")
+            line.contains("fcmp oeq double")
                 && super::class_field_barrier_tests::operand(line, 2).is_some()
         })
-        .unwrap_or_else(|| panic!("no raw numeric equality comparison in:\n{ir}"));
+        .unwrap_or_else(|| panic!("no numeric equality comparison in:\n{ir}"));
     fn origin(ir: &str, reg: &str) -> usize {
         let (idx, line) = ir
             .lines()
@@ -724,7 +724,7 @@ fn reversed_dynamic_strict_ne_against_number_rejects_nan_before_inverting_equali
         Expr::LocalGet(X),
     );
     assert!(
-        ir.contains("fcmp oeq double") && ir.contains("xor i1"),
+        ir.contains("fcmp une double"),
         "strict !== must treat NaN and every non-number tag as unequal:\n{ir}"
     );
     assert!(!ir.contains(JS_EQ_CALL), "{ir}");
@@ -845,12 +845,12 @@ fn dynamic_string_order_checks_bounds_and_ascii_before_word_ordering() {
 }
 
 #[test]
-fn strict_number_equality_keeps_the_varying_operand_out_of_float_conversion() {
+fn strict_noninteger_number_equality_keeps_the_varying_operand_out_of_float_conversion() {
     for (op, reverse) in [(CompareOp::Eq, false), (CompareOp::Ne, true)] {
         let (left, right) = if reverse {
-            (Expr::Number(92.0), Expr::LocalGet(X))
+            (Expr::Number(92.5), Expr::LocalGet(X))
         } else {
-            (Expr::LocalGet(X), Expr::Number(92.0))
+            (Expr::LocalGet(X), Expr::Number(92.5))
         };
         let ir = cmp_ir("number_equality_dependency", op, left, right);
         for conversion in ir.lines().filter(|line| line.contains("sitofp i32")) {
@@ -893,6 +893,32 @@ fn strict_number_equality_keeps_the_varying_operand_out_of_float_conversion() {
         assert!(
             !ir.contains(JS_EQ_CALL),
             "strict equality must remain noncoercing: {ir}"
+        );
+    }
+}
+
+#[test]
+fn integer_literal_equality_has_one_numeric_compare() {
+    for (op, pred) in [(CompareOp::Eq, "oeq"), (CompareOp::Ne, "une")] {
+        let ir = cmp_ir(
+            "integer_compare_count",
+            op,
+            Expr::LocalGet(X),
+            Expr::Number(80.0),
+        );
+        assert_eq!(ir.matches("fcmp ").count(), 1, "one numeric compare: {ir}");
+        assert!(ir.contains(&format!("fcmp {pred} double")), "{ir}");
+        assert!(
+            ir.contains("sitofp i32"),
+            "compact numbers still normalize: {ir}"
+        );
+        assert!(
+            !ir.contains("llvm.fptosi.sat"),
+            "no re-encoded comparison: {ir}"
+        );
+        assert!(
+            !ir.contains(JS_EQ_CALL),
+            "strict comparison remains noncoercing: {ir}"
         );
     }
 }

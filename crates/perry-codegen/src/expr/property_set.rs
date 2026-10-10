@@ -297,6 +297,8 @@ pub(crate) fn lower_put_value_property_set_by_name(
 ) -> Result<String> {
     super::store_census::bump(ctx, super::store_census::BY_NAME_PUT_VALUE);
     let value_may_be_closure = !super::put_value_store_ic::value_never_closure(value);
+    let value_is_scalar = expr_produces_non_pointer_bits_by_construction(ctx, value)
+        || super::i32_fast_path::is_known_i32_range(ctx, value);
     rooting::with_operands_rooted_across(
         ctx,
         &[object],
@@ -342,6 +344,7 @@ pub(crate) fn lower_put_value_property_set_by_name(
                 // before `Throw` is consulted), so no guard is emitted here.
                 assignment_strict,
                 value_may_be_closure,
+                value_is_scalar,
             );
             Ok(result)
         },

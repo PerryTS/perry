@@ -1,0 +1,1 @@
+Remove repeated Number equality comparisons for proven i32 operands, omit pointer bookkeeping for proven scalar property stores, and delete dead uses before statepoint liveness is computed. Emitted-instruction ratchets and Number/Boolean gap tests cover the changes; unknown values retain their barriers.

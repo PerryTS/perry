@@ -36,7 +36,7 @@ use linker_temp::{
 /// Both the external and in-process backends consume this constant so their
 /// native-roots correctness pipelines cannot drift.
 pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
-    "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc";
+    "always-inline,function(mem2reg,sccp,dce),rewrite-statepoints-for-gc";
 
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.

@@ -63,35 +63,17 @@
 //! # Nothing is re-read per object
 //!
 //! Until charter step 3 the receiver kind and the Array-subclass numeric
-//! proof lived only on the object, and the hit re-read `class_id` and
-//! `_reserved` on every store. Both are now shape kinds (see above): every
-//! operation that changes either moves the receiver to another ShapeId, so the
-//! one compare proves them. `_reserved` is still loaded, for the barrier
-//! below only.
+//! proof lived on the object. Both are now shape kinds (see above), so the
+//! one compare proves them. Object layout is also a ShapeId fact; these
+//! stores owe no address-keyed layout note.
 //!
 //! # The barrier
 //!
-//! A store of a JSValue into an object slot owes the GC exactly what
-//! `emit_jsvalue_slot_store_pointer_tested` owes it, and uses the same stem
-//! (`put.pic`) so the barrier census verifies this site:
-//!
-//! * pointer-bearing value (`emit_may_carry_heap_pointer_check`, a superset of
-//!   the runtime's own test): the string alias demotion, the GC layout note
-//!   when the receiver's layout state / typed-layout bit says the note can act
-//!   (`_reserved & 0xD000`; a `GC_LAYOUT_UNKNOWN` receiver without a typed
-//!   descriptor is fully scanned, and `layout_note_slot` returns at once for
-//!   it), and `js_write_barrier_slot_validated_parent` — the remembered-set
-//!   insert AND the incremental-mark shading — behind
-//!   `emit_parent_may_need_remembering_check` (TENURED parent OR a live
-//!   incremental cycle).
-//! * a NaN-boxed non-pointer (`undefined`, a boolean, an int32, an inline
-//!   string): no barrier, but a typed-layout receiver (`INTACT`) may declare
-//!   the slot raw-f64, which such bits contradict, so the note runs there.
-//! * a plain double: nothing. It is raw-f64-compatible with every typed slot
-//!   and pointer-free (`layout_note_slot`'s #5094 fast `Conforms`).
-//!
-//! No value is trusted from its static type: the only static skip is LLVM
-//! folding these tests for a constant.
+//! A pointer-bearing value needs string alias demotion and the generational
+//! and incremental write barrier. The emitted hit skips that bookkeeping
+//! when the RHS is proven scalar by construction or integer range facts.
+//! Otherwise it tests the stored bits, then checks whether the parent may
+//! need remembering. Erased TypeScript annotations alone prove nothing.
 
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
@@ -225,6 +207,7 @@ pub(crate) fn emit_static_store_ic(
     value_bits: &str,
     strict: bool,
     value_may_be_closure: bool,
+    value_is_scalar: bool,
 ) -> String {
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -522,7 +505,16 @@ pub(crate) fn emit_static_store_ic(
     // of the receiver's header.
     ctx.block().store(DOUBLE, value_double, &slot_ptr);
     super::store_census::bump(ctx, super::store_census::PIC_HIT);
-    emit_static_store_ic_bookkeeping(ctx, &handle, &slot_ptr, value_double, value_bits, "put.pic");
+    if !value_is_scalar {
+        emit_static_store_ic_bookkeeping(
+            ctx,
+            &handle,
+            &slot_ptr,
+            value_double,
+            value_bits,
+            "put.pic",
+        );
+    }
     let hit_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -551,6 +543,7 @@ pub(crate) fn emit_static_store_ic(
         &miss_label,
         &merge_label,
         value_may_be_closure,
+        value_is_scalar,
     );
 
     ctx.current_block = miss_idx;
@@ -628,6 +621,7 @@ fn emit_key_add_hit(
     miss_label: &str,
     merge_label: &str,
     value_may_be_closure: bool,
+    value_is_scalar: bool,
 ) -> String {
     let rep_idx = ctx.new_block(&format!("{ADD_STEM}.rep"));
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
@@ -716,6 +710,7 @@ fn emit_key_add_hit(
             .block()
             .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
         Some(_) => value_double.to_string(),
+        None if value_is_scalar => value_double.to_string(),
         None => {
             let raw_bits = ctx.block().bitcast_double_to_i64(value_double);
             let null_ptr = ctx.block().icmp_eq(
@@ -741,7 +736,9 @@ fn emit_key_add_hit(
     // bookkeeping below is guarded only by live tests of the stored bits and
     // of the receiver's header.
     ctx.block().store(DOUBLE, &fixed, &slot_ptr);
-    emit_static_store_ic_bookkeeping(ctx, handle, &slot_ptr, &fixed, value_bits, "put.pic");
+    if !value_is_scalar {
+        emit_static_store_ic_bookkeeping(ctx, handle, &slot_ptr, &fixed, value_bits, "put.pic");
+    }
     let end = ctx.block().label.clone();
     ctx.block().br(merge_label);
     end
@@ -833,7 +830,8 @@ pub(crate) fn emit_static_store_ic_bookkeeping(
     value_bits_hint: &str,
     stem: &str,
 ) {
-    // The ONE static skip: the stored value is an LLVM constant, so its bits
+    // Callers may already skip proven scalar expressions. Here the stored
+    // value is an LLVM constant, so its bits
     // are known exactly in the emitted SSA. A plain double needs nothing, and
     // a constant tag (undefined / true / null) can never carry a pointer.
     // Every other value is classified at run time, from its bits.
