@@ -243,9 +243,10 @@ pub(crate) fn missing_ext_archive_diagnostics(
             };
             format!(
                 "`{symbol}` needs {filename}, but that archive is not linked. \
-                 Build it with: {build}. Make it available through \
-                 PERRY_RUNTIME_DIR or PERRY_LIB_DIR if Perry is installed \
-                 outside the workspace."
+                 From a Perry source checkout, build it with: {build}. For an \
+                 installed Perry, install the matching extension archive in \
+                 PERRY_RUNTIME_DIR or PERRY_LIB_DIR, or set PERRY_WORKSPACE_ROOT \
+                 to a matching source checkout to build it on demand."
             )
         })
         .collect()

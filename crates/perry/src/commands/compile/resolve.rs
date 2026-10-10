@@ -91,7 +91,8 @@ fn workspace_root_from_exe(exe: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Find the Perry workspace root by searching upward from the executable location.
+/// Find workspace source via an override, the executable, its build checkout,
+/// or the current directory.
 pub fn find_perry_workspace_root() -> Option<PathBuf> {
     // Explicit override: npm/homebrew installs place the perry binary
     // outside the workspace, so neither the exe walk nor the cwd walk
@@ -109,15 +110,50 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
              Perry workspace (missing crates/perry-runtime); ignoring it"
         );
     }
-    // First try: relative to the perry executable
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = workspace_root_from_exe(&exe) {
-            return Some(root);
-        }
+    workspace_root_from_locations(
+        std::env::current_exe().ok().as_deref(),
+        std::env::current_dir().ok().as_deref(),
+        Path::new(env!("PERRY_BUILD_WORKSPACE_ROOT")),
+    )
+}
+
+/// The embedded checkout is only a hint: an installed compiler can outlive it,
+/// or the directory can be reused for another checkout. Require a Perry
+/// workspace at the compiler's version before building libraries from it.
+fn workspace_root_from_build_record(root: &Path) -> Option<PathBuf> {
+    if !is_perry_workspace_root(root) {
+        return None;
     }
-    // Second try: current working directory or its ancestors
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut dir = cwd.as_path();
+    let manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("Cargo.toml")).ok()?).ok()?;
+    let version = manifest
+        .get("workspace")?
+        .get("package")?
+        .get("version")?
+        .as_str()?;
+    if version != env!("CARGO_PKG_VERSION") {
+        return None;
+    }
+    let compiler: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("crates/perry/Cargo.toml")).ok()?).ok()?;
+    if compiler.get("package")?.get("name")?.as_str()? != "perry" {
+        return None;
+    }
+    root.canonicalize().ok()
+}
+
+fn workspace_root_from_locations(
+    exe: Option<&Path>,
+    cwd: Option<&Path>,
+    build_root: &Path,
+) -> Option<PathBuf> {
+    if let Some(root) = exe.and_then(workspace_root_from_exe) {
+        return Some(root);
+    }
+    if let Some(root) = workspace_root_from_build_record(build_root) {
+        return Some(root);
+    }
+    if let Some(mut dir) = cwd {
         loop {
             if is_perry_workspace_root(dir) {
                 return Some(dir.to_path_buf());
@@ -127,6 +163,9 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
     }
     None
 }
+
+#[cfg(test)]
+mod build_workspace_tests;
 
 #[cfg(test)]
 mod bun_store_tests;
