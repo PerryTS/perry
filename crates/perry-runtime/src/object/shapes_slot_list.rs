@@ -651,7 +651,6 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = generation;
     record.hole_count = hole_count;
-    super::retire_cached_shape_object_kind(old_id);
     unsafe { table.slab_mut().insert(new_id, record) };
     let replaced = inner
         .families
@@ -1048,7 +1047,6 @@ fn rekey_predecessor_for_delete(
     record.semantic_generation = semantic_generation;
     record.hole_count = hole_count;
     record.set(RECORD_FLAG_FACTS_INDEXED, false);
-    super::retire_cached_shape_object_kind(predecessor);
     // SAFETY: as above.
     unsafe { table.slab_mut().insert(id, record) };
     let replaced = inner

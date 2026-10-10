@@ -99,10 +99,15 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
             None
         }
     };
-    let birth = serial.map_or_else(
-        crate::object::shapes::KeylessBirth::untracked,
-        crate::object::shapes::keyless_birth_width,
-    );
+    let birth = serial.map_or_else(crate::object::shapes::KeylessBirth::untracked, |proto_id| {
+        // Marking may move the prototype; read its producer ShapeId
+        // through the rooted value now, and carry only that scalar.
+        let value = crate::value::JSValue::from_bits(proto.get_nanbox_u64());
+        let producer = unsafe {
+            crate::object::shapes::object_shape_stamp(value.as_pointer::<ObjectHeader>())
+        };
+        crate::object::shapes::keyless_birth_width(proto_id, producer)
+    });
     let proto_id = serial.unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
     let born = crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth);
     crate::value::js_nanbox_pointer(born as i64)

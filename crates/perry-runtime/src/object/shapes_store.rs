@@ -61,8 +61,14 @@ pub(super) struct ShapeExtras {
     pub(super) to_any: std::sync::atomic::AtomicU32,
     /// Weak reverse key-add edge. Never shape identity or a GC carrier.
     pub(super) rollback_parent: std::sync::atomic::AtomicU32,
+    /// Weak keyless receiver-birth ShapeId of this prototype's shape.
+    /// Not identity, a carrier, a width, or a GC edge. Revalidated at use.
+    pub(super) created_birth_shape: std::sync::atomic::AtomicU32,
 }
 const _: () = assert!(std::mem::align_of::<ShapeExtras>() >= 2);
+// The new scalar occupies the extension's existing tail padding on LP64.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 48);
 
 /// A brand list is strictly ascending: sorted with no duplicate, so equal
 /// sets are equal slices.
@@ -263,6 +269,34 @@ impl ShapeRecord {
             .rollback_parent
             .store(parent, std::sync::atomic::Ordering::Relaxed);
     }
+    #[inline]
+    pub(super) fn created_birth_shape(&self) -> u32 {
+        if !self.has_boxed_extras() {
+            return 0;
+        }
+        // SAFETY: this live record owns its stable Rust extension.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .created_birth_shape
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record a weak shape relationship on the prototype's shape. An
+    /// existing extension has room for it; a plain record acquires the same
+    /// extension, preserving its scalar rollback edge.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn note_created_birth_shape(&mut self, birth: u32) {
+        if !self.has_boxed_extras() {
+            let rollback = self.rollback_parent();
+            self.extras = new_extras(&[], &[]);
+            self.note_rollback_parent(rollback);
+        }
+        // SAFETY: the present record owns this Rust extension, not GC storage.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .created_birth_shape
+            .store(birth, std::sync::atomic::Ordering::Relaxed);
+    }
+
     const EMPTY: ShapeRecord = ShapeRecord {
         keys: 0,
         semantic_generation: 0,
@@ -391,7 +425,10 @@ impl ShapeRecord {
         // that reported the wrong one would be a wrong identity match,
         // because `facts_match` compares the full enum.
         let kind_code = object_kind.code() as u32;
-        debug_assert!(kind_code <= RECORD_KIND_MAX_CODE, "kind has no packed decoder");
+        debug_assert!(
+            kind_code <= RECORD_KIND_MAX_CODE,
+            "kind has no packed decoder"
+        );
         let kind_bits = kind_code << RECORD_KIND_SHIFT;
         debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
         let mut record = ShapeRecord {
@@ -798,6 +835,7 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         to_nopointer: std::sync::atomic::AtomicU32::new(0),
         to_any: std::sync::atomic::AtomicU32::new(0),
         rollback_parent: std::sync::atomic::AtomicU32::new(0),
+        created_birth_shape: std::sync::atomic::AtomicU32::new(0),
     });
     Box::into_raw(extras) as usize as u64
 }

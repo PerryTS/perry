@@ -714,7 +714,7 @@ mod descriptor_tests_8067 {
     }
 
     #[test]
-    fn object_kind_direct_cache_is_agent_local_and_retires_with_descriptor() {
+    fn object_kind_reads_the_live_agent_record_and_retires_with_it() {
         let _lock = crate::gc::global_side_table_test_lock();
         let keys = 0x8067_0000_0000_1400usize;
         let id = shape_descriptor_ensure(keys as *const ArrayHeader, 2, 2)
@@ -723,14 +723,24 @@ mod descriptor_tests_8067 {
         assert_eq!(
             shape_object_kind_by_id(id),
             Some(ShapeObjectKind::Ordinary),
-            "the direct-cache hit must preserve the immutable descriptor fact"
+            "repeated reads must preserve the authoritative record fact"
         );
+
+        std::thread::spawn(move || {
+            assert_eq!(
+                shape_object_kind_by_id(id),
+                None,
+                "a foreign agent must not resolve the creator's record"
+            );
+        })
+        .join()
+        .expect("agent-isolation thread panicked");
 
         test_drop_shape_descriptors(keys);
         assert_eq!(
             shape_object_kind_by_id(id),
             None,
-            "retiring the authoritative descriptor must retire its direct-cache entry"
+            "a retired record must have no kind"
         );
     }
 

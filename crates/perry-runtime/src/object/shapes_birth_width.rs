@@ -134,38 +134,21 @@ impl KeylessBirth {
 /// if absent (its first birth, or its first after a prune), counts this birth
 /// against the tracking window, and keeps the record through the next full
 /// collection.
-pub(crate) fn keyless_birth_width(proto_id: u64) -> KeylessBirth {
+pub(crate) fn keyless_birth_width(proto_id: u64, prototype_shape: u32) -> KeylessBirth {
     if !is_prototype_serial(proto_id) {
         return KeylessBirth::untracked();
     }
-    let table = &crate::state::state().shapes;
-    // The birth owner's exact facts index already resolves this keyless
-    // ordinary record. Reuse it before asking the same interner to derive
-    // receiverless key/kind/representation facts again.
-    let resolved = {
-        let inner = table.inner.borrow();
-        find_birth_record(&inner, table.slab(), proto_id)
-    };
-    let (id, record) = resolved.unwrap_or_else(|| {
-        let id = super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
-            std::ptr::null(),
-            0,
-            0,
-            0,
-            ShapeObjectKind::Ordinary,
-            proto_id,
-            super::ReceiverFacts::NONE,
-        ));
-        (
-            id,
-            table.slab().record_ptr(id).unwrap_or(std::ptr::null_mut()),
-        )
-    });
-    if record.is_null() {
+    // A prototype shape names its receivers' keyless birth record. This is
+    // a weak scalar relationship, not a carrier: pruning still retires the
+    // birth record, and every use validates its complete facts.
+    let prior = shapes_store::ShapeSlab::agent_record_present(prototype_shape)
+        .map_or(0, |record| unsafe { (*record).created_birth_shape() });
+    let resolved = birth_record_for_prototype(prior, proto_id);
+    let Some((id, record)) = resolved.or_else(|| resolve_birth_record(proto_id)) else {
         return KeylessBirth::untracked();
-    }
-    // SAFETY: a live slab record; single-threaded agent. No table borrow is
-    // held (`shape_descriptor_ensure_with_generation` released it).
+    };
+    // SAFETY: a live slab record validated for this use, or just resolved
+    // through the sole interner. No allocating call follows before the read.
     let r = unsafe { &mut *record };
     r.set(RECORD_FLAG_BIRTH_OWNER, true);
     let learned = r.descendant_width();
@@ -181,7 +164,55 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> KeylessBirth {
     } else {
         width.min(LEARNED_WIDTH_MAX)
     };
+    if prior != id {
+        // Resolve the producer record again after minting. The link stores
+        // only a ShapeId; its extension allocation is Rust-owned metadata,
+        // with no nursery allocation or collection point.
+        if let Some(prototype) = shapes_store::ShapeSlab::agent_record_present(prototype_shape) {
+            unsafe { (*prototype).note_created_birth_shape(id) };
+        }
+    }
     KeylessBirth { shape: id, width }
+}
+
+/// Validate the prototype shape's weak birth relationship now. Width and
+/// tracking state remain solely on the referenced live birth record.
+#[inline]
+fn birth_record_for_prototype(id: u32, proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+    if id == 0 {
+        return None;
+    }
+    let record = shapes_store::ShapeSlab::agent_record_present(id)?;
+    // SAFETY: this agent's present record, consumed without a safepoint.
+    let r = unsafe { &*record };
+    (r.has(RECORD_FLAG_FACTS_INDEXED)
+        && r.facts_match_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0))
+    .then_some((id, record))
+}
+
+/// An absent or retired birth relationship resolves through the existing
+/// exact index/interner. No second index or allocation path is introduced.
+#[cold]
+#[inline(never)]
+fn resolve_birth_record(proto_id: u64) -> Option<(u32, *mut ShapeRecord)> {
+    let table = &crate::state::state().shapes;
+    let resolved = {
+        let inner = table.inner.borrow();
+        find_birth_record(&inner, table.slab(), proto_id)
+    };
+    let resolved = resolved.or_else(|| {
+        let id = super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            ShapeObjectKind::Ordinary,
+            proto_id,
+            super::ReceiverFacts::NONE,
+        ));
+        Some((id, table.slab().record_ptr(id)?))
+    })?;
+    Some(resolved)
 }
 
 /// Resolve an ordinary keyless birth on its final prototype, including the

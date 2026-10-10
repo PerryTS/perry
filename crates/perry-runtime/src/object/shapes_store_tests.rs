@@ -896,3 +896,27 @@ fn mutable_key_lists_cannot_publish_symbol_absence() {
         );
     }
 }
+
+#[test]
+fn created_birth_relationship_preserves_identity_and_rollback_edge() {
+    let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
+    let parent = 0x8000_1245;
+    record.note_rollback_parent(parent);
+    let facts = record.facts_key_with_keys(0);
+    assert_eq!(record.created_birth_shape(), 0);
+    record.note_created_birth_shape(0x8000_3456);
+    assert_eq!(record.created_birth_shape(), 0x8000_3456);
+    assert_eq!(record.rollback_parent(), parent);
+    assert_eq!(
+        record.facts_key_with_keys(0),
+        facts,
+        "a weak relationship is not identity"
+    );
+    assert!(record.constfn_infos().is_empty());
+    assert!(record.brands().is_empty());
+    record.note_created_birth_shape(0x8000_789a);
+    record.note_rollback_parent(parent + 1);
+    assert_eq!(record.created_birth_shape(), 0x8000_789a);
+    assert_eq!(record.rollback_parent(), parent + 1);
+    unsafe { record.release_extras() };
+}

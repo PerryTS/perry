@@ -107,7 +107,6 @@ pub(crate) fn test_clear_shape_table() {
     // SAFETY: test-only reset with no slab reference held.
     unsafe { table.slab_mut().clear() };
     drop(inner);
-    clear_shape_object_kind_cache();
 }
 
 #[cfg(test)]

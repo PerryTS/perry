@@ -994,7 +994,7 @@ pub(crate) enum ShapeObjectKind {
     NativeNamespace,
     /// A bound call/apply adapter with the ordinary five bound slots plus a
     /// resolved function operand in slot 5. Appended to preserve every earlier
-    /// ordinal and the direct decoding of ordinary kind-cache entries.
+    /// ordinal and the packed kind field of existing shape records.
     FunctionBoundCall,
     FunctionBoundApply,
     /// Ordinary bound function: target, receiver and partial-argument slots.
@@ -1010,7 +1010,10 @@ impl ShapeObjectKind {
     pub(crate) fn is_function_layout(self) -> bool {
         matches!(
             self,
-            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply | Self::FunctionBound
+            Self::Function
+                | Self::FunctionBoundCall
+                | Self::FunctionBoundApply
+                | Self::FunctionBound
         )
     }
 
@@ -1061,91 +1064,6 @@ impl ShapeObjectKind {
             ShapeObjectKind::OrdinaryNativeAlias => 11,
         }
     }
-}
-
-/// Per-agent direct cache for the immutable `object_kind` half of a ShapeId.
-/// A collision only falls back to the descriptor table. Entries contain no
-/// managed address, and descriptor retirement clears a matching id before it
-/// can be observed without the authoritative table record.
-pub(crate) const SHAPE_KIND_CACHE_SIZE: usize = 16_384;
-const SHAPE_KIND_CACHE_MASK: usize = SHAPE_KIND_CACHE_SIZE - 1;
-const SHAPE_KIND_ORDINARY: u64 = 1;
-const SHAPE_KIND_CLASS: u64 = 2;
-const SHAPE_KIND_DICTIONARY: u64 = 3;
-const SHAPE_KIND_FUNCTION: u64 = 4;
-const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
-const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
-const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
-const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
-const SHAPE_KIND_FUNCTION_BOUND_CALL: u64 = 9;
-const SHAPE_KIND_FUNCTION_BOUND_APPLY: u64 = 10;
-const SHAPE_KIND_FUNCTION_BOUND: u64 = 11;
-const SHAPE_KIND_NATIVE_ALIAS: u64 = 12;
-
-#[inline(always)]
-fn shape_kind_cache_slot(shape_id: u32) -> usize {
-    let mixed = u64::from(shape_id).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    (mixed ^ (mixed >> 32)) as usize & SHAPE_KIND_CACHE_MASK
-}
-
-#[inline]
-fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
-    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
-    let packed = cache[shape_kind_cache_slot(shape_id)];
-    if (packed >> 32) as u32 != shape_id {
-        return None;
-    }
-    match packed & 0xFFFF_FFFF {
-        SHAPE_KIND_ORDINARY => Some(ShapeObjectKind::Ordinary),
-        SHAPE_KIND_CLASS => Some(ShapeObjectKind::Class),
-        SHAPE_KIND_DICTIONARY => Some(ShapeObjectKind::Dictionary),
-        SHAPE_KIND_FUNCTION => Some(ShapeObjectKind::Function),
-        SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
-        SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
-        SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
-        SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
-        SHAPE_KIND_FUNCTION_BOUND_CALL => Some(ShapeObjectKind::FunctionBoundCall),
-        SHAPE_KIND_FUNCTION_BOUND_APPLY => Some(ShapeObjectKind::FunctionBoundApply),
-        SHAPE_KIND_FUNCTION_BOUND => Some(ShapeObjectKind::FunctionBound),
-        SHAPE_KIND_NATIVE_ALIAS => Some(ShapeObjectKind::OrdinaryNativeAlias),
-        _ => None,
-    }
-}
-
-#[inline]
-fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
-    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
-    let tag = match kind {
-        ShapeObjectKind::Ordinary => SHAPE_KIND_ORDINARY,
-        ShapeObjectKind::Class => SHAPE_KIND_CLASS,
-        ShapeObjectKind::Dictionary => SHAPE_KIND_DICTIONARY,
-        ShapeObjectKind::Function => SHAPE_KIND_FUNCTION,
-        ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
-        ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
-        ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
-        ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
-        ShapeObjectKind::FunctionBoundCall => SHAPE_KIND_FUNCTION_BOUND_CALL,
-        ShapeObjectKind::FunctionBoundApply => SHAPE_KIND_FUNCTION_BOUND_APPLY,
-        ShapeObjectKind::FunctionBound => SHAPE_KIND_FUNCTION_BOUND,
-        ShapeObjectKind::OrdinaryNativeAlias => SHAPE_KIND_NATIVE_ALIAS,
-    };
-    cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
-}
-
-#[inline]
-fn retire_cached_shape_object_kind(shape_id: u32) {
-    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
-    let entry = &mut cache[shape_kind_cache_slot(shape_id)];
-    if (*entry >> 32) as u32 == shape_id {
-        *entry = 0;
-    }
-}
-
-#[cfg(test)]
-#[inline]
-fn clear_shape_object_kind_cache() {
-    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
-    cache.fill(0);
 }
 
 struct ShapeTableInner {
@@ -2595,17 +2513,11 @@ pub(crate) fn shape_rep_by_id(shape_id: u32) -> u64 {
     }
 }
 
-/// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
-/// cache. The first observation remains the authoritative descriptor lookup_ways;
-/// subsequent observations avoid the hot ShapeId HashMap borrow.
+/// The authoritative kind of a live shape in this agent. Presence and kind
+/// come from the same slab record; retirement needs no separate invalidation.
 #[inline]
 pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> {
-    if let Some(kind) = cached_shape_object_kind(shape_id) {
-        return Some(kind);
-    }
-    let kind = shape_descriptor_by_id(shape_id)?.object_kind;
-    publish_shape_object_kind(shape_id, kind);
-    Some(kind)
+    shape_record_by_id(shape_id).map(ShapeRecordRef::object_kind)
 }
 
 /// Record that a shape is carried by an OLD-generation receiver.
@@ -5268,7 +5180,6 @@ fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed
     };
     #[cfg(feature = "shape-mint-diag")]
     crate::object::shape_mint_census::note_retire(id);
-    retire_cached_shape_object_kind(id);
     if record.has(RECORD_FLAG_FACTS_INDEXED) {
         inner.facts_remove(record.facts_key_with_keys(indexed), id);
     }

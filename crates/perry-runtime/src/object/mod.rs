@@ -607,12 +607,6 @@ pub(crate) struct ObjectHotTables {
     /// and keys_array == null.
     pub(crate) shape_inline_cache:
         std::cell::UnsafeCell<[ShapeCacheEntry; SHAPE_INLINE_CACHE_SIZE]>,
-    /// Pointer-free direct cache for immutable ShapeId object-kind facts.
-    /// ShapeIds are monotone and never reused; descriptor retirement clears a
-    /// matching entry. Keeping this beside the other per-agent shape tables
-    /// avoids borrowing the descriptor HashMap on repeated regular-object
-    /// checks (notably homogeneous Array element stores).
-    pub(crate) shape_kind_cache: std::cell::UnsafeCell<Box<[u64]>>,
     /// Overflow map for shape_ids that collide in the inline cache. Values
     /// are `(keys_array, runtime_shape_id, key_count)` — see
     /// [`ShapeCacheEntry`].
@@ -696,9 +690,6 @@ impl ObjectHotTables {
                     key_count: 0,
                     keys_array: std::ptr::null_mut(),
                 }; SHAPE_INLINE_CACHE_SIZE],
-            ),
-            shape_kind_cache: std::cell::UnsafeCell::new(
-                vec![0; shapes::SHAPE_KIND_CACHE_SIZE].into_boxed_slice(),
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),

@@ -148,7 +148,7 @@ fn resolved_floor_birth_reuses_identity_and_refreshes_prototype_word() {
         }
         let proto_id = crate::object::proto_validity::mark_object_as_prototype(proto as usize)
             .expect("ordinary prototype has an identity");
-        let birth = super::keyless_birth_width(proto_id);
+        let birth = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
         assert_eq!(
             birth.width(),
             0,
@@ -179,7 +179,7 @@ fn resolved_tracking_birth_does_not_reuse_zero_live_bound() {
         let proto = prototype();
         let proto_id = crate::object::proto_validity::mark_object_as_prototype(proto as usize)
             .expect("ordinary prototype has an identity");
-        let birth = super::keyless_birth_width(proto_id);
+        let birth = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
         assert_eq!(birth.width(), TRACKING_WIDTH);
         assert!(super::super::shape_is_keyless_birth_of(
             birth.shape,
@@ -211,7 +211,7 @@ fn retired_resolved_birth_is_reminted_before_publication() {
         }
         let proto_id = crate::object::proto_validity::mark_object_as_prototype(proto as usize)
             .expect("ordinary prototype has an identity");
-        let birth = super::keyless_birth_width(proto_id);
+        let birth = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
         assert_eq!(birth.width(), 0);
         let table = &crate::state::state().shapes;
         // Retire through the production index-removal funnel, as pruning does.
@@ -234,5 +234,96 @@ fn retired_resolved_birth_is_reminted_before_publication() {
             0,
             super::ShapeObjectKind::Ordinary
         ));
+    }
+}
+
+#[test]
+fn prototype_relationship_revalidates_birth_facts_and_presence() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    let proto = prototype();
+    let proto_id = unsafe {
+        crate::object::proto_validity::mark_object_as_prototype(proto as usize)
+            .expect("ordinary prototype has an identity")
+    };
+    let producer = unsafe { super::super::object_shape_stamp(proto) };
+    let resolve = |slots, generation, kind, facts| {
+        super::super::publish_shape_result(super::super::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            slots,
+            generation,
+            kind,
+            proto_id,
+            facts,
+        ))
+    };
+    let ordinary = super::ShapeObjectKind::Ordinary;
+    let id = resolve(0, 0, ordinary, super::super::ReceiverFacts::NONE);
+    assert!(super::birth_record_for_prototype(id, proto_id).is_some());
+    assert!(super::birth_record_for_prototype(id, proto_id + 1).is_none());
+    assert!(super::birth_record_for_prototype(0, proto_id).is_none());
+    for invalid in [
+        resolve(8, 0, ordinary, super::super::ReceiverFacts::NONE),
+        resolve(0, 1, ordinary, super::super::ReceiverFacts::NONE),
+        resolve(
+            0,
+            0,
+            super::ShapeObjectKind::OrdinaryUnmarked,
+            super::super::ReceiverFacts::NONE,
+        ),
+    ] {
+        assert!(super::birth_record_for_prototype(invalid, proto_id).is_none());
+    }
+    let table = &crate::state::state().shapes;
+    super::super::remove_descriptor_and_reverse_indices(&mut table.inner.borrow_mut(), id);
+    assert!(super::birth_record_for_prototype(id, proto_id).is_none());
+    // Leave the prototype shape's real weak relationship naming the retired record.
+    unsafe {
+        (*table.slab().record_ptr(producer).unwrap()).note_created_birth_shape(id);
+    }
+    let birth = super::keyless_birth_width(proto_id, producer);
+    assert_ne!(birth.shape, id);
+    assert!(super::birth_record_for_prototype(birth.shape, proto_id).is_some());
+}
+
+#[test]
+fn prototype_relationship_reads_live_width_and_tracking_count() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let proto = prototype();
+        let proto_id = crate::object::proto_validity::mark_object_as_prototype(proto as usize)
+            .expect("ordinary prototype has an identity");
+        let first = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
+        assert_eq!(first.width(), TRACKING_WIDTH);
+        for _ in 1..TRACKING_BIRTHS {
+            assert_eq!(
+                super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto)).shape,
+                first.shape
+            );
+        }
+        assert_eq!(
+            super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto)).width(),
+            0
+        );
+        let table = &crate::state::state().shapes;
+        let record = table.slab().record_ptr(first.shape).unwrap();
+        (*record).note_descendant_width(13);
+        let grown = super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto));
+        assert_eq!(grown.shape, first.shape);
+        assert_eq!(
+            grown.width(),
+            13,
+            "the prototype shape must never retain the chosen width"
+        );
+        let other = prototype();
+        let other_id = crate::object::proto_validity::mark_object_as_prototype(other as usize)
+            .expect("second prototype has an identity");
+        let changed = super::keyless_birth_width(other_id, super::super::object_shape_stamp(other));
+        assert_ne!(changed.shape, first.shape);
+        assert_eq!(changed.width(), TRACKING_WIDTH);
+        assert_eq!(
+            super::keyless_birth_width(proto_id, super::super::object_shape_stamp(proto)).width(),
+            13
+        );
     }
 }
