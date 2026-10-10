@@ -306,7 +306,7 @@ fn small_and_medium_heap_strings_use_nursery_gc_pages() {
 
     assert_eq!(after, before);
     assert_eq!(unsafe { (*s).byte_len }, data.len() as u32);
-    assert_eq!(unsafe { (*s).flags }, 0);
+    assert_eq!(unsafe { (*s).flags }, STRING_FLAG_WTF8_VALIDATED);
     assert!(crate::arena::pointer_in_nursery(s as usize));
     assert!(!crate::arena::pointer_in_old_gen(s as usize));
 
@@ -328,7 +328,7 @@ fn large_heap_strings_use_old_gc_pages_without_malloc_tracking() {
 
     assert_eq!(after, before);
     assert_eq!(unsafe { (*s).byte_len }, len as u32);
-    assert_eq!(unsafe { (*s).flags }, 0);
+    assert_eq!(unsafe { (*s).flags }, STRING_FLAG_WTF8_VALIDATED);
     assert!(crate::arena::pointer_in_old_gen(s as usize));
     assert!(!crate::arena::pointer_in_nursery(s as usize));
     assert_eq!(string_as_str(s), std::str::from_utf8(&data).unwrap());
@@ -1693,7 +1693,7 @@ fn ascii_fast_path_basic_case_conversion() {
         for out in [lower, upper] {
             unsafe {
                 assert_eq!((*out).utf16_len, (*out).byte_len);
-                assert_eq!((*out).flags, 0);
+                assert_eq!((*out).flags, STRING_FLAG_WTF8_VALIDATED);
             }
         }
     }
