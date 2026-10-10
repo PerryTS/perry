@@ -16,8 +16,8 @@ use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    current_closure_ptr_value, emit_root_nanbox_store_on_block, lower_expr,
-    nanbox_string_inline, unbox_str_handle, FnCtx,
+    current_closure_ptr_value, emit_root_nanbox_store_on_block, lower_expr, nanbox_string_inline,
+    unbox_str_handle, FnCtx,
 };
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I32, I64};

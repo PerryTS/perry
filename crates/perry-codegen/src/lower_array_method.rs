@@ -49,8 +49,8 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    emit_root_nanbox_store_on_block, lower_js_args_array,
-    nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx,
+    emit_root_nanbox_store_on_block, lower_js_args_array, nanbox_pointer_inline,
+    nanbox_string_inline, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::rooting;
