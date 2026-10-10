@@ -5353,7 +5353,7 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
 /// any such array sees is a canonical backing's tip append, past every
 /// published count (`canonical_keys::append_at_tip`); every other writer
 /// copies first. So one index serves every list on it.
-unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
+pub(crate) unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
     crate::value::addr_class::try_read_gc_header(keys as usize).is_some_and(|gc| {
         gc.obj_type == crate::gc::GC_TYPE_ARRAY
             && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0

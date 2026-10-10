@@ -102,3 +102,13 @@ Object.defineProperty(redefined, "replace", { get() { getterCalls++; return 151;
 Object.defineProperty(redefined, "replace", { value: 157, writable: true, enumerable: true, configurable: true });
 console.log("complete-data", rejected, redefined.fixed, redefined.replace, getterCalls,
   Object.keys(redefined).join(","));
+
+// A reflection result owns its properties independently of a source whose
+// key list was edited; later source deletions/appends cannot rename entries.
+const editedSource: any = { a: 1, b: 2, c: 3, e: 5 };
+delete editedSource.b;
+const savedDescriptors: any = Object.getOwnPropertyDescriptors(editedSource);
+delete editedSource.a;
+editedSource.d = 4;
+const savedCopy: any = Object.create(null, savedDescriptors);
+console.log("snapshot-owned", Object.keys(savedCopy).join(","), savedCopy.a, savedCopy.c, savedCopy.e, savedCopy.d);

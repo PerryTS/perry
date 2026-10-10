@@ -26,8 +26,10 @@ pub(crate) unsafe fn ordinary_data_shape(
         return None;
     }
     let shape = shapes::object_shape_descriptor(object)?;
-    (shape.object_kind == shapes::ShapeObjectKind::Ordinary
-        && shape.summary == 0
+    (matches!(
+        shape.object_kind,
+        shapes::ShapeObjectKind::Ordinary | shapes::ShapeObjectKind::OrdinaryUnmarked
+    ) && shape.summary == 0
         && shape.hole_count == 0)
         .then_some((object, shape))
 }
@@ -44,7 +46,10 @@ impl<'scope> OwnNamesSnapshot<'scope> {
             );
             // Public snapshots must sort integer keys first. Reuse their
             // existing ordered builder whenever the shape needs reordering.
-            if !super::keys_contain_array_index(keys) {
+            if shape.object_kind == shapes::ShapeObjectKind::Ordinary
+                && (keys.is_null() || shapes::keys_prefix_is_immutable(keys.arr()))
+                && !super::keys_contain_array_index(keys)
+            {
                 return Self {
                     keys: scope.root_raw_mut_ptr(keys.arr()),
                     count: keys.count(),
@@ -67,11 +72,9 @@ impl<'scope> OwnNamesSnapshot<'scope> {
     }
 
     pub(crate) unsafe fn key(&self, index: u32) -> f64 {
-        f64::from_bits(
-            ObjectKeys::new(self.keys.get_raw_mut_ptr(), self.count)
-                .get(index)
-                .bits(),
-        )
+        self.keys.with_mut_ptr::<crate::ArrayHeader, _>(|keys| {
+            f64::from_bits(ObjectKeys::new(keys, self.count).get(index).bits())
+        })
     }
 
     /// Revalidate the snapshot's shape at every use: decoding a preceding
@@ -104,13 +107,18 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         }
         let result =
             scope.root_raw_mut_ptr(super::alloc_basic::object_alloc_unpublished(0, self.count));
-        let object = result.get_raw_mut_ptr::<ObjectHeader>();
-        shapes::store_kind::premark_plain_ordinary(object);
-        super::set_object_keys_with_live(
-            object,
-            ObjectKeys::new(self.keys.get_raw_mut_ptr(), self.count),
-            self.count,
-        );
+        result.with_mut_ptr::<ObjectHeader, _>(|object| {
+            shapes::store_kind::premark_plain_ordinary(object);
+            // The retained prefix already belongs to a published immutable
+            // shape. Publication interns facts without a nursery allocation.
+            self.keys.with_mut_ptr::<crate::ArrayHeader, _>(|keys| {
+                super::set_object_keys_with_live(
+                    object,
+                    ObjectKeys::new(keys, self.count),
+                    self.count,
+                );
+            });
+        });
         result
     }
 
