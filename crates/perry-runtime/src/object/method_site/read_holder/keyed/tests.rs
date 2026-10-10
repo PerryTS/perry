@@ -247,3 +247,107 @@ fn keyed_native_alias_retains_generic_forwarding() {
         .is_none());
     }
 }
+
+#[test]
+fn region_consumes_keyed_absent_and_inherited_entries() {
+    if !super::super::super::run_with_fresh_worker_gate(
+        "region_consumes_keyed_absent_and_inherited_entries",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = RuntimeHandleScope::new();
+    crate::object::builtin_prototype_value("Object");
+    let x = scope.root_nanbox_f64(atom(b"regionX"));
+    let span = scope.root_nanbox_f64(atom(b"regionSpan"));
+    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+    put(&proto, x.get_nanbox_f64(), 7.0);
+    let mid = inheriting(&scope, &proto);
+    let obj = inheriting(&scope, &mid);
+    let mut slots = [std::ptr::null_mut(); 4];
+    let mut values = [0u64; 2];
+    assert_eq!(
+        obj.with_mut_ptr(|p| unsafe {
+            js_region_holder_read(
+                slots.as_mut_ptr(),
+                boxed(p),
+                [x.get_nanbox_u64(), span.get_nanbox_u64()].as_ptr(),
+                2,
+                values.as_mut_ptr(),
+                1,
+            )
+        }),
+        0
+    );
+    read(&mut slots[0], &obj, x.get_nanbox_f64());
+    read(&mut slots[1], &obj, span.get_nanbox_f64());
+    let mut read_region = || {
+        let keys = [x.get_nanbox_u64(), span.get_nanbox_u64()];
+        obj.with_mut_ptr(|p| unsafe {
+            js_region_holder_read(
+                slots.as_mut_ptr(),
+                boxed(p),
+                keys.as_ptr(),
+                2,
+                values.as_mut_ptr(),
+                1,
+            )
+        })
+    };
+    assert_eq!(
+        read_region(),
+        1,
+        "the region must actually hit, not pass through generic Get"
+    );
+    assert_eq!(read_region(), 1);
+    drop(read_region);
+    assert_eq!(values, [7.0f64.to_bits(), crate::value::TAG_UNDEFINED]);
+    assert_eq!(
+        hit(slots[1], &obj, span.get_nanbox_f64()),
+        Some(crate::value::TAG_UNDEFINED)
+    );
+    put(&mid, span.get_nanbox_f64(), 3.0);
+    assert_eq!(
+        hit(slots[1], &obj, span.get_nanbox_f64()),
+        None,
+        "an intermediate prototype key add invalidates absence"
+    );
+    let keys = [x.get_nanbox_u64(), span.get_nanbox_u64()];
+    read(&mut slots[0], &obj, x.get_nanbox_f64());
+    read(&mut slots[1], &obj, span.get_nanbox_f64());
+    assert_eq!(
+        obj.with_mut_ptr(|p| unsafe {
+            js_region_holder_read(
+                slots.as_mut_ptr(),
+                boxed(p),
+                keys.as_ptr(),
+                2,
+                values.as_mut_ptr(),
+                1,
+            )
+        }),
+        1
+    );
+    assert_eq!(values, [7.0f64.to_bits(), 3.0f64.to_bits()]);
+    put(
+        &obj,
+        x.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+    read(&mut slots[0], &obj, x.get_nanbox_f64());
+    read(&mut slots[1], &obj, span.get_nanbox_f64());
+    assert_eq!(
+        obj.with_mut_ptr(|p| unsafe {
+            js_region_holder_read(
+                slots.as_mut_ptr(),
+                boxed(p),
+                keys.as_ptr(),
+                2,
+                values.as_mut_ptr(),
+                1,
+            )
+        }),
+        0,
+        "non-numeric data refuses before operators"
+    );
+}

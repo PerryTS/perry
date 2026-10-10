@@ -56,7 +56,7 @@ mod prealloc_tdz_path_tests;
 #[cfg(test)]
 mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
-mod region_read_stmts;
+pub(crate) mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
 mod stable_packed_typed_array;

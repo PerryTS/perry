@@ -2799,6 +2799,7 @@ js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters
 js_region_guard_prime	Reenters
+js_region_holder_read	Leaf
 js_region_loop_pack	Leaf
 js_region_loop_prime	Leaf
 js_register_agent_aux_pump	Leaf

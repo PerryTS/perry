@@ -72,6 +72,9 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Some(v) = crate::stmt::region_read_stmts::lower_keyed_get(ctx, expr)? {
+        return Ok(v);
+    }
     // Step 4b: a planned-bare read inside a region's F-body.
     if let Some(v) = crate::stmt::region_loop::try_lower_bare_get(ctx, expr)? {
         return Ok(v);

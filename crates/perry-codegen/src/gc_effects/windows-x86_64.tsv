@@ -2807,6 +2807,7 @@ js_request_new_from_init	Reenters
 js_request_new_from_input	Reenters
 js_request_subclass_init	Reenters
 js_request_text	Reenters
+js_region_holder_read	Leaf
 js_require_json_disk	Reenters
 js_require_object_coercible	Reenters
 js_require_path_module	Reenters

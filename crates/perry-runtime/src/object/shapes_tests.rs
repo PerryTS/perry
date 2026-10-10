@@ -1475,52 +1475,6 @@ mod region_guard_pack_tests {
         );
     }
 
-    #[test]
-    fn read_region_word_carries_identity_f64_bits_in_key_order() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        use crate::object::field_rep::{with_slot_rep, REP_F64};
-        let names = b"n0\0n1\0n2\0n3\0n4";
-        let keys = crate::object::js_build_class_keys_array(
-            0x0C3C_2328,
-            5,
-            names.as_ptr(),
-            names.len() as u32,
-            0,
-        );
-        let rep = with_slot_rep(with_slot_rep(0, 0, REP_F64), 4, REP_F64);
-        let shape = publish_shape_result(shape_descriptor_ensure_with_rep(
-            keys,
-            5,
-            5,
-            0,
-            ShapeObjectKind::Ordinary,
-            0,
-            0x5_12328,
-            ReceiverFacts::NONE,
-            rep,
-            None,
-        ));
-        let word = js_region_guard_pack(
-            shape,
-            5,
-            key_bits("n4"),
-            key_bits("n1"),
-            key_bits("n0"),
-            key_bits("n3"),
-            key_bits("n2"),
-        );
-        assert_ne!(word, REGION_GUARD_WORD_EMPTY);
-        assert_eq!(word as u32, shape);
-        let field = |i: u32| -> u64 { (word >> (32 + 6 * i)) & 63u64 };
-        assert_eq!(
-            [field(0), field(1), field(2), field(3), field(4)],
-            [36, 1, 32, 3, 2]
-        );
-        let plain = shape_for(0x0C3C_2328, names, 5);
-        let any = js_region_guard_pack(plain, 1, key_bits("n0"), 0, 0, 0, 0);
-        assert_eq!((any >> 32) & 32, 0, "Any must not license raw numeric use");
-    }
-
     /// Fails if a key the shape does not own were packed: the region would then
     /// load some other field's slot for it.
     #[test]

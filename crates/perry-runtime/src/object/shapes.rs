@@ -3052,10 +3052,9 @@ static KEEP_JS_SHAPE_ORDINARY_INLINE_SLOT_FOR_KEY: extern "C" fn(u32, u64) -> i3
 /// a live ShapeId, so an unprimed region's shape compare can only miss.
 pub const REGION_GUARD_WORD_EMPTY: u64 = 0xFFFF_FFFF;
 /// Most distinct keys one region word can carry (6 bits each above the id).
-/// Read words use five slot bits plus one identity-F64 bit per key; loop
-/// words retain their six-bit inline/spill field encoding.
 pub const REGION_GUARD_MAX_KEYS: u32 = 5;
 const REGION_GUARD_SLOT_BITS: u32 = 6;
+const REGION_GUARD_SLOT_MAX: i32 = (1 << REGION_GUARD_SLOT_BITS) - 1;
 
 /// Step 4b: pack a region guard word — one ShapeId and the inline slot of each
 /// of the region's keys — or return [`REGION_GUARD_WORD_EMPTY`].
@@ -3066,8 +3065,6 @@ const REGION_GUARD_SLOT_BITS: u32 = 6;
 /// words could tear under a concurrent prime and pair one shape's id with
 /// another shape's slots — a wrong value, silently.
 ///
-/// Each six-bit read field holds a five-bit slot and one identity-F64 bit.
-/// Loop words keep their existing six-bit slot/spill encoding.
 /// Each slot comes from [`js_shape_ordinary_inline_slot_for_key`], which
 /// answers only when slot k provably IS key position k (ordinary kind, no
 /// semantic generation, no tombstones, every key inline). Anything it refuses —
@@ -3092,20 +3089,14 @@ pub extern "C" fn js_region_guard_pack(
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return REGION_GUARD_WORD_EMPTY;
     }
-    let Some(record) = shape_record_by_id(shape_id) else {
-        return REGION_GUARD_WORD_EMPTY;
-    };
-    let rep = record.rep();
     let keys = [k0, k1, k2, k3, k4];
     let mut word = u64::from(shape_id);
     for (i, &key) in keys.iter().enumerate().take(n as usize) {
         let slot = js_shape_ordinary_inline_slot_for_key(shape_id, key);
-        if !(0..32).contains(&slot) {
+        if !(0..=REGION_GUARD_SLOT_MAX).contains(&slot) {
             return REGION_GUARD_WORD_EMPTY;
         }
-        let f64_lane = super::field_rep::slot_rep(rep, slot as u32) == super::field_rep::REP_F64;
-        let field = slot as u64 | if f64_lane { 32 } else { 0 };
-        word |= field << (32 + REGION_GUARD_SLOT_BITS * i as u32);
+        word |= (slot as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
     }
     word
 }

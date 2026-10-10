@@ -1,27 +1,66 @@
-//! Statement-run read regions (#10884, #12328).
-//!
-//! One entry guard per receiver proves all keys are own inline data. Pure
-//! operator trees additionally prove their leaves are Numbers before any
-//! operator or binding executes. F64 identity lanes bypass value tests; Any
-//! lanes test the current carrier. A failed proof lowers the original run in
-//! source order, including short circuiting and getters.
-//!
-//! Lower each original Let exactly once in the generic arm. Its entry alloca
-//! dominates both arms, and its initializer still drives refinement, proofs,
-//! shadow slots and native representation selection. The fast arm writes those
-//! same slots. In particular, do not declare an Any Let without its initializer:
-//! that lost string refinement and caused the documented 4x regression.
+//! Statement reads share the existing keyed holder proof and compact Get fallback.
+//! Proofs run before effects; a miss executes the original initializers in order.
 
 use anyhow::Result;
 use perry_hir::{types::Type, BinaryOp, Expr, LogicalOp, Stmt, UnaryOp};
 use std::collections::HashMap;
 
-use crate::expr::region_guard::{
-    self, emit_miss, emit_number_check, emit_prime, emit_r1, emit_slot_loads, state_globals,
-    MAX_KEYS,
-};
+use crate::expr::region_guard;
 use crate::expr::{lower_expr, FnCtx};
-use crate::types::{DOUBLE, I1, I32};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
+const MAX_KEYS: usize = 4; // The existing keyed holder cache has four ways.
+
+// Compiler-only scope: the original Gets publish into the same keyed sites
+// that the region consumes. No second runtime priming path or state word.
+thread_local! { static KEYED_GETS: std::cell::RefCell<Vec<(u32, String, Vec<String>)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+fn keyed_get_slot(object: &Expr, property: &str) -> Option<(String, usize)> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    KEYED_GETS.with(|v| {
+        v.borrow()
+            .iter()
+            .find(|(r, _, _)| r == id)
+            .and_then(|(_, slot, keys)| {
+                keys.iter()
+                    .position(|k| k == property)
+                    .map(|i| (slot.clone(), i))
+            })
+    })
+}
+pub(crate) fn lower_keyed_get(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    else {
+        return Ok(None);
+    };
+    let Some((slots, i)) = keyed_get_slot(object, property) else {
+        return Ok(None);
+    };
+    let slot = ctx.block().gep(PTR, &slots, &[(I64, &i.to_string())]);
+    let recv = lower_expr(ctx, object)?;
+    let index = ctx.strings.intern(property);
+    let handle = format!("@{}", ctx.strings.entry(index).handle_global);
+    let key = ctx.block().load(DOUBLE, &handle);
+    Ok(Some(ctx.block().call(
+        DOUBLE,
+        "js_dyn_index_get_site",
+        &[(PTR, &slot), (DOUBLE, &recv), (DOUBLE, &key)],
+    )))
+}
+struct KeyedGets;
+impl KeyedGets {
+    fn enter(sites: Vec<(u32, String, Vec<String>)>) -> Self {
+        KEYED_GETS.with(|v| *v.borrow_mut() = sites);
+        Self
+    }
+}
+impl Drop for KeyedGets {
+    fn drop(&mut self) {
+        KEYED_GETS.with(|v| v.borrow_mut().clear());
+    }
+}
 
 #[derive(Clone)]
 struct Receiver<'a> {
@@ -97,6 +136,9 @@ fn collect<'a>(
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if property.starts_with('#') {
+                return None;
+            }
             let Expr::LocalGet(id) = object.as_ref() else {
                 return None;
             };
@@ -228,9 +270,31 @@ fn scan<'a>(stmts: &'a [Stmt], plain: impl Fn(u32, &Type, &Expr) -> bool) -> Opt
 struct Value {
     kind: Kind,
     value: String,
+    nullable: bool,
 }
 
 impl Value {
+    fn undefined(&self, ctx: &mut FnCtx<'_>) -> String {
+        if !self.nullable {
+            return "false".into();
+        }
+        let bits = ctx.block().bitcast_double_to_i64(&self.value);
+        ctx.block()
+            .icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64)
+    }
+    fn numeric(&self, ctx: &mut FnCtx<'_>) -> String {
+        if !self.nullable {
+            return self.value.clone();
+        }
+        let absent = self.undefined(ctx);
+        ctx.block().select(
+            I1,
+            &absent,
+            DOUBLE,
+            &crate::nanbox::double_literal(f64::NAN),
+            &self.value,
+        )
+    }
     fn truth(&self, ctx: &mut FnCtx<'_>) -> String {
         match self.kind {
             Kind::Number => ctx.block().fcmp("one", &self.value, "0.0"),
@@ -248,16 +312,18 @@ impl Value {
 fn fold(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
-    fields: &HashMap<(u32, &str), String>,
+    fields: &HashMap<(u32, &str), Value>,
     locals: &HashMap<u32, Value>,
 ) -> Value {
     let number = |value| Value {
         kind: Kind::Number,
         value,
+        nullable: false,
     };
     let boolean = |value| Value {
         kind: Kind::Boolean,
         value,
+        nullable: false,
     };
     match expr {
         Expr::PropertyGet {
@@ -266,15 +332,15 @@ fn fold(
             let Expr::LocalGet(id) = object.as_ref() else {
                 unreachable!()
             };
-            number(fields[&(*id, property.as_str())].clone())
+            fields[&(*id, property.as_str())].clone()
         }
         Expr::LocalGet(id) => locals[id].clone(),
         Expr::Integer(n) => number(crate::nanbox::double_literal(*n as f64)),
         Expr::Number(n) => number(crate::nanbox::double_literal(*n)),
         Expr::Bool(b) => boolean(b.to_string()),
         Expr::Binary { op, left, right } => {
-            let l = fold(ctx, left, fields, locals).value;
-            let r = fold(ctx, right, fields, locals).value;
+            let l = fold(ctx, left, fields, locals).numeric(ctx);
+            let r = fold(ctx, right, fields, locals).numeric(ctx);
             number(match op {
                 BinaryOp::Add => ctx.block().fadd(&l, &r),
                 BinaryOp::Sub => ctx.block().fsub(&l, &r),
@@ -285,11 +351,28 @@ fn fold(
             })
         }
         Expr::Compare { op, left, right } => {
-            let l = fold(ctx, left, fields, locals).value;
-            let r = fold(ctx, right, fields, locals).value;
-            boolean(crate::stmt::region_loop::numeric_predicate(
-                ctx, *op, &l, &r,
-            ))
+            use perry_hir::CompareOp;
+            let l = fold(ctx, left, fields, locals);
+            let r = fold(ctx, right, fields, locals);
+            let ln = l.numeric(ctx);
+            let rn = r.numeric(ctx);
+            let pred = crate::stmt::region_loop::numeric_predicate(ctx, *op, &ln, &rn);
+            if matches!(
+                op,
+                CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
+            ) {
+                let lu = l.undefined(ctx);
+                let ru = r.undefined(ctx);
+                let both = ctx.block().and(I1, &lu, &ru);
+                boolean(if matches!(op, CompareOp::Eq | CompareOp::LooseEq) {
+                    ctx.block().or(I1, &both, &pred)
+                } else {
+                    let not_both = ctx.block().xor(I1, &both, "true");
+                    ctx.block().and(I1, &not_both, &pred)
+                })
+            } else {
+                boolean(pred)
+            }
         }
         Expr::Unary { op, operand } => {
             let v = fold(ctx, operand, fields, locals);
@@ -298,8 +381,11 @@ fn fold(
                     let truth = v.truth(ctx);
                     boolean(ctx.block().xor(I1, &truth, "true"))
                 }
-                UnaryOp::Neg => number(ctx.block().fneg(&v.value)),
-                UnaryOp::Pos => v,
+                UnaryOp::Neg => {
+                    let n = v.numeric(ctx);
+                    number(ctx.block().fneg(&n))
+                }
+                UnaryOp::Pos => number(v.numeric(ctx)),
                 _ => unreachable!(),
             }
         }
@@ -314,6 +400,7 @@ fn fold(
             };
             Value {
                 kind: l.kind,
+                nullable: l.nullable || r.nullable,
                 value: ctx.block().select(
                     I1,
                     &truth,
@@ -331,18 +418,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, stmts: &[Stmt], run: &StmtRun<'_>) -> R
     region_guard::note_stmt_region(run.reads as u64);
     let start = ctx.current_block;
     let generic = ctx.new_block("region.stmt.generic");
-    let load = ctx.new_block("region.stmt.load");
     let fast = ctx.new_block("region.stmt.fast");
     let merge = ctx.new_block("region.stmt.merge");
     let generic_l = ctx.block_label(generic);
     let fast_l = ctx.block_label(fast);
     let merge_l = ctx.block_label(merge);
 
+    let mut sites = Vec::new();
+    for receiver in &run.receivers {
+        let site = ctx.ic_site_counter;
+        ctx.ic_site_counter += 1;
+        let slot = format!(
+            "@{}_region_holder",
+            crate::expr::inline_cache_global_name(ctx, site)
+        );
+        ctx.typed_parse_rodata.push(format!(
+            "{slot} = private global [4 x ptr] zeroinitializer, align 8"
+        ));
+        sites.push((
+            receiver.id,
+            slot,
+            receiver.keys.iter().map(|k| k.to_string()).collect(),
+        ));
+    }
     // Declare the original bindings ONCE, with their actual initializer facts.
     ctx.current_block = generic;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     {
         let _suppressed = region_guard::Suppressed::enter();
+        let _keyed = KeyedGets::enter(sites.clone());
         for stmt in stmts.iter().take(run.len) {
             super::lower_stmt(ctx, stmt)?;
         }
@@ -365,6 +469,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, stmts: &[Stmt], run: &StmtRun<'_>) -> R
             Value {
                 kind: Kind::Number,
                 value,
+                nullable: false,
             },
         );
     }
@@ -376,36 +481,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, stmts: &[Stmt], run: &StmtRun<'_>) -> R
         .iter()
         .map(|receiver| lower_expr(ctx, &Expr::LocalGet(receiver.id)))
         .collect::<Result<Vec<_>>>()?;
-    let mut entries = Vec::new();
-    for (index, (receiver, recv)) in run.receivers.iter().zip(&receivers).enumerate() {
-        let sites = state_globals(ctx);
-        let next = if index + 1 == run.receivers.len() {
-            load
-        } else {
-            ctx.new_block("region.stmt.receiver")
-        };
-        let next_l = ctx.block_label(next);
-        let miss = ctx.new_block("region.stmt.miss");
-        let prime = ctx.new_block("region.stmt.prime");
-        let miss_l = ctx.block_label(miss);
-        let prime_l = ctx.block_label(prime);
-        let entry = emit_r1(ctx, recv, &sites, &next_l, &miss_l, &generic_l);
-        ctx.current_block = miss;
-        let tries = emit_miss(ctx, &sites, &prime_l, &generic_l);
-        ctx.current_block = prime;
-        emit_prime(ctx, &sites, &entry, &tries, &receiver.keys, &generic_l);
-        entries.push(entry);
-        ctx.current_block = next;
-    }
-    ctx.current_block = load;
     let mut fields = HashMap::new();
-    for (receiver, entry) in run.receivers.iter().zip(&entries) {
-        let values = emit_slot_loads(ctx, entry, receiver.keys.len());
-        for (key, (name, value)) in receiver.keys.iter().zip(values).enumerate() {
-            if run.numeric {
-                emit_number_check(ctx, entry, key, &value, &generic_l);
-            }
-            fields.insert((receiver.id, *name), value);
+    for ((receiver, recv), (_, slot, _)) in run.receivers.iter().zip(&receivers).zip(&sites) {
+        let keys = ctx.func.alloca_entry("[4 x i64]");
+        let out = ctx.func.alloca_entry("[4 x double]");
+        for (i, name) in receiver.keys.iter().enumerate() {
+            let idx = ctx.strings.intern(name);
+            let handle = format!("@{}", ctx.strings.entry(idx).handle_global);
+            let key = ctx.block().load(I64, &handle);
+            let ptr = ctx.block().gep(I64, &keys, &[(I64, &i.to_string())]);
+            ctx.block().store(I64, &key, &ptr);
+        }
+        let ok = ctx.block().call(
+            I32,
+            "js_region_holder_read",
+            &[
+                (PTR, &slot),
+                (DOUBLE, recv),
+                (PTR, &keys),
+                (I32, &receiver.keys.len().to_string()),
+                (PTR, &out),
+                (I32, if run.numeric { "1" } else { "0" }),
+            ],
+        );
+        let hit = ctx.block().icmp_ne(I32, &ok, "0");
+        let next = ctx.new_block("region.stmt.receiver");
+        let next_l = ctx.block_label(next);
+        ctx.block().cond_br(&hit, &next_l, &generic_l);
+        ctx.current_block = next;
+        for (i, name) in receiver.keys.iter().enumerate() {
+            let ptr = ctx.block().gep(DOUBLE, &out, &[(I64, &i.to_string())]);
+            let value = ctx.block().load(DOUBLE, &ptr);
+            fields.insert(
+                (receiver.id, *name),
+                Value {
+                    kind: Kind::Number,
+                    value,
+                    nullable: run.numeric,
+                },
+            );
         }
     }
     ctx.block().br(&fast_l);
@@ -537,18 +651,18 @@ mod tests {
         assert_eq!(run.len, 2, "the call ends the run before the third read");
     }
 
-    /// One word addresses five keys; the sixth distinct key ends the run rather
+    /// Four keyed ways cover a receiver; the fifth distinct key ends the run rather
     /// than silently dropping a read out of it.
     #[test]
-    fn the_sixth_distinct_key_ends_the_run() {
+    fn the_fifth_distinct_key_ends_the_run() {
         let stmts: Vec<Stmt> = ["a", "b", "c", "d", "e", "f"]
             .iter()
             .enumerate()
             .map(|(i, k)| read_let(10 + i as u32, 1, k))
             .collect();
         let run = scan(&stmts, plain_always).unwrap();
-        assert_eq!(run.len, 5);
-        assert_eq!(run.receivers[0].keys.len(), 5);
+        assert_eq!(run.len, 4);
+        assert_eq!(run.receivers[0].keys.len(), 4);
     }
 
     /// Reading into the receiver's own binding would make one guard cover a

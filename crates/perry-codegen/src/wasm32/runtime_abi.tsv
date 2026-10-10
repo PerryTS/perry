@@ -4747,3 +4747,4 @@ perry_updater_record_response	i64	f64
 perry_updater_refresh_due	i64	
 perry_watchos_classes_registered	void	
 setInterval	i64	i64,f64
+js_region_holder_read	i32u	ptr,f64,ptr,i32u,ptr,i32u

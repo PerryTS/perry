@@ -95,16 +95,15 @@ fn ir(body: Vec<Stmt>) -> String {
     String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap()
 }
 fn guards(ir: &str) -> usize {
-    ir.lines()
-        .filter(|line| line.contains("load atomic i64") && line.contains("_region monotonic"))
-        .count()
+    ir.matches("call i32 @js_region_holder_read(").count()
 }
 #[test]
 fn multi_key_read_region_has_one_guard_per_receiver_and_numeric_fast_body() {
     crate::temp_root_coverage::under_both_lowerings(|_| {
         let output = ir(body());
         assert_eq!(guards(&output), 2, "one word/shape guard per receiver");
-        assert_eq!(output.matches("@js_region_guard_prime(ptr ").count(), 2);
+        assert!(!output.contains("call double @js_object_get_field_ic_front"));
+        assert!(output.contains("@js_dyn_index_get"));
         let fast = output.split("region.stmt.fast").last().unwrap();
         assert!(output.contains("fsub double") && output.contains("fadd double"));
         assert!(output.contains("fcmp ogt double"));
@@ -113,8 +112,8 @@ fn multi_key_read_region_has_one_guard_per_receiver_and_numeric_fast_body() {
             "zero and NaN are false for ||"
         );
         assert!(
-            output.contains("region.value.test"),
-            "Any lanes retain a value check"
+            output.contains("select i1"),
+            "undefined converts to canonical NaN only for arithmetic"
         );
         assert!(!fast.split("\n\n").next().unwrap().contains("@js_dynamic"));
     });

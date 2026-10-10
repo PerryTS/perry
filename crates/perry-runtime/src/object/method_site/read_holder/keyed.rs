@@ -425,6 +425,54 @@ unsafe fn miss(
     value
 }
 
+/// A statement run consumes the keyed entries published by its original
+/// source-ordered Gets. Each distinct key keeps its existing four-way site,
+/// so sibling keys do not evict receiver alternatives. Loads only on entry.
+#[no_mangle]
+pub unsafe extern "C" fn js_region_holder_read(
+    slot: *mut *mut KeyedCache,
+    obj_box: f64,
+    keys: *const u64,
+    count: u32,
+    out: *mut u64,
+    numeric: u32,
+) -> u32 {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+        || count == 0
+        || count as usize > WAYS
+        || slot.is_null()
+    {
+        return 0;
+    }
+    let Some(recv) = receiver(obj_box.to_bits()) else {
+        return 0;
+    };
+    let token = (u64::from((*recv).parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+    for i in 0..count as usize {
+        let cache = crate::object::pic_slot_peek(slot.add(i));
+        if cache.is_null() {
+            return 0;
+        }
+        let key = *keys.add(i);
+        let Some(bits) = (*cache)
+            .entries
+            .iter()
+            .find(|e| e.identity_key == key && e.token == token)
+            .and_then(|e| e.read_value(recv))
+        else {
+            return 0;
+        };
+        if numeric != 0
+            && bits != crate::value::TAG_UNDEFINED
+            && bits & 0x7fff_ffff_ffff_ffff >= 0x7ff9_0000_0000_0000
+        {
+            return 0;
+        }
+        *out.add(i) = bits;
+    }
+    1
+}
+
 #[cfg(test)]
 pub(crate) unsafe fn test_answer(
     cache: *const KeyedCache,
