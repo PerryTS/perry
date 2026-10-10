@@ -420,10 +420,31 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                         );
                         return JSValue::from_bits(ctor.to_bits());
                     }
-                    let module = b"buffer.Buffer";
-                    return JSValue::from_bits(
-                        js_create_native_module_namespace(module.as_ptr(), module.len()).to_bits(),
-                    );
+                    // A Node `Buffer` inherits `constructor` from its actual
+                    // [[Prototype]] (`Buffer.prototype`, or a user subclass's
+                    // prototype). Ordinary [[Get]] through that link answers
+                    // the `Buffer` function itself; the namespace object this
+                    // arm used to synthesize is not callable, so axios-style
+                    // `val.constructor.isBuffer(val)` checks failed and
+                    // `buf.constructor === Buffer` was false.
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let receiver_h = scope.root_raw_const_ptr(obj);
+                    let key_h = scope.root_raw_const_ptr(key);
+                    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+                        receiver_h.with_const_ptr(|r: *const ObjectHeader| {
+                            crate::value::js_nanbox_pointer(r as i64)
+                        }),
+                    ));
+                    return receiver_h.with_const_ptr(|receiver: *const ObjectHeader| {
+                        key_h.with_const_ptr(|key: *const crate::StringHeader| {
+                            super::super::prototype_chain::resolve_inherited_field_from_prototype(
+                                receiver as usize,
+                                proto.get_nanbox_u64(),
+                                key,
+                            )
+                            .unwrap_or_else(JSValue::undefined)
+                        })
+                    });
                 }
                 if crate::buffer::is_secret_key(obj as usize) {
                     if key_bytes == b"type" {
