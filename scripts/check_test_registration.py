@@ -66,6 +66,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import posixpath
 import re
 import sys
 from dataclasses import dataclass, field
@@ -184,9 +185,24 @@ def _read_toml_paths(tree: Tree, rel: str, key: str) -> set[str]:
 
 
 _MOD_RE = r"^[^\S\n]*(?:pub(?:\([^)]*\))?[^\S\n]+)?mod[^\S\n]+%s[^\S\n]*[;{]"
+_PATH_MOD_RE = re.compile(
+    r'#\[\s*path\s*=\s*"([^"]+)"\s*\]\s*'
+    r'(?:#\[[^\]]*\]\s*)*'
+    r'(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z_0-9]*\s*;'
+)
 
 
-def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
+def _path_module_targets(source: str, text: str) -> set[str]:
+    """Explicit file modules, resolved relative to their declaring source."""
+    return {
+        posixpath.normpath((Path(source).parent / target).as_posix())
+        for target in _PATH_MOD_RE.findall(text)
+    }
+
+
+def _rust_module_is_declared(
+    tree: Tree, rel: str, visiting: frozenset[str] = frozenset()
+) -> bool:
     """Is `<dir>/<stem>.rs` named by a `mod` declaration that can reach it?
 
     Rust resolves `<dir>/<stem>.rs` as child module `<stem>` of the module
@@ -204,10 +220,15 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
     to the crate root. It is still only a couple of file reads per candidate.
     """
     path = Path(rel)
+    if rel in visiting:
+        return False
+    visiting = visiting | {rel}
     stem = path.stem
     decl = re.compile(_MOD_RE % re.escape(stem), re.M)
     # crates/<crate>/… — stop at the crate directory.
     parts = path.parts
+    if len(parts) == 4 and parts[0] == "crates" and parts[2] == "tests":
+        return True  # Cargo's automatically discovered integration-test root.
     floor = 2 if len(parts) > 2 and parts[0] == "crates" else 0
 
     parent = path.parent
@@ -219,9 +240,8 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
             if decl.search(text):
                 return True
             # `#[path = "…"]` can point at this file under any module name.
-            for target in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', text):
-                if (Path(cand).parent / target).as_posix() == rel:
-                    return True
+            if rel in _path_module_targets(cand, text):
+                return True
         parent = parent.parent
     # A test suite root (`crates/<c>/tests/<suite>.rs`) can pull a file from
     # anywhere under `tests/` with `#[path = "…"] mod name;` — e.g.
@@ -232,9 +252,18 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
         tests_dir = Path(*parts[:3])
         for root in tree.glob((tests_dir / "*.rs").as_posix()):
             text = tree.read(root)
-            for target in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', text):
-                if (Path(root).parent / target).as_posix() == rel:
-                    return True
+            if rel in _path_module_targets(root, text):
+                return True
+    # A registered file module can include a sibling under an unrelated name:
+    # rooted_define_property.rs -> #[path="rooted_array_accessors.rs"] mod
+    # array_rebind. Merely finding a sibling reference is insufficient: the
+    # declaring file must itself be reachable, and cycles do not establish that.
+    for sibling in tree.glob((path.parent / "*.rs").as_posix()):
+        if sibling == rel or sibling in visiting:
+            continue
+        if rel in _path_module_targets(sibling, tree.read(sibling)):
+            if _rust_module_is_declared(tree, sibling, visiting):
+                return True
     return False
 
 
@@ -648,6 +677,42 @@ def _self_test(root: Path) -> int:
             "the inline-`mod` false-positive guard's subject %s is gone; "
             "re-point it at another live one rather than dropping the case" % inline
         )
+
+    # A sibling #[path] file belongs to its declared source module rather than
+    # the directory's mod.rs. The edge must lead back to a real registration.
+    sibling_dir = "crates/perry-runtime/src/gc/tests"
+    child = sibling_dir + "/selftest_path_child.rs"
+    owner = sibling_dir + "/selftest_path_owner.rs"
+    module_root = sibling_dir + "/mod.rs"
+    base = Tree(root).read(module_root)
+    edge = '#[path = "selftest_path_child.rs"]\nmod renamed_child;\n'
+    registered = Tree(root, added=[child, owner], overrides={
+        module_root: base + "\nmod selftest_path_owner;\n",
+        owner: edge,
+    })
+    check("registered sibling path module counts",
+          _rust_module_is_declared(registered, child))
+    unregistered = Tree(root, added=[child, owner], overrides={owner: edge})
+    check("unregistered sibling does not register its path child",
+          not _rust_module_is_declared(unregistered, child))
+    unattached = Tree(root, added=[child, owner], overrides={
+        module_root: base + "\nmod selftest_path_owner;\n",
+        owner: '#[path = "selftest_path_child.rs"]\nfn unrelated() {}\n',
+    })
+    check("path attribute without a file mod does not register",
+          not _rust_module_is_declared(unattached, child))
+    wrong_target = Tree(root, added=[child, owner], overrides={
+        module_root: base + "\nmod selftest_path_owner;\n",
+        owner: '#[path = "some_other_child.rs"]\nmod renamed_child;\n',
+    })
+    check("wrong sibling path does not register",
+          not _rust_module_is_declared(wrong_target, child))
+    cycle = Tree(root, added=[child, owner], overrides={
+        owner: edge,
+        child: '#[path = "selftest_path_owner.rs"]\nmod owner;\n',
+    })
+    check("unreachable path cycle does not register",
+          not _rust_module_is_declared(cycle, child))
 
     # 8. the path matcher does not let `*` cross a directory separator — the bug
     #    that would silently widen every mechanism's candidate set.

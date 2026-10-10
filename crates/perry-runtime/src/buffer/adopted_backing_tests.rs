@@ -18,7 +18,12 @@ fn adopted_vec_keeps_capacity_layout_and_visible_length() {
     bytes.extend_from_slice(&[1, 2, 3]);
     let pointer = bytes.as_ptr();
     let capacity = bytes.capacity();
-    assert_eq!(std::mem::size_of::<backing::Backing>(), 16);
+    // The shipped two-word layout is a compile-time assertion in backing.rs;
+    // a test build carries exactly one extra field, the live counter.
+    assert_eq!(
+        std::mem::size_of::<backing::Backing>(),
+        16 + std::mem::size_of::<std::sync::Arc<std::sync::atomic::AtomicUsize>>()
+    );
     let backing = backing::Backing::from_vec(bytes);
     assert_eq!(backing.data(), pointer as *mut u8);
     assert_eq!(backing.capacity() as usize, capacity);
@@ -61,18 +66,20 @@ fn adopted_response_bytes_survive_views_transfer_gc_and_worker_exit() {
         assert_eq!(data(view) as usize, original);
         *data(view).add(2) = 11;
         crate::gc::js_gc_collect();
-        let source = root.get_raw_mut_ptr::<BufferHeader>();
-        let view = view_root.get_raw_mut_ptr::<BufferHeader>();
-        assert_eq!(*data(view).add(2), 11);
-        assert_eq!(data(source) as usize, original);
-        let message = serialize_message(
-            JSValue::pointer(source.cast()).bits(),
-            &[source as usize],
-            None,
-        )
-        .unwrap();
-        assert!(is_detached_buffer(source as usize));
-        assert_eq!(store::length(view as usize), 0);
+        view_root.with_mut_ptr::<BufferHeader, _>(|view| assert_eq!(*data(view).add(2), 11));
+        root.with_mut_ptr::<BufferHeader, _>(|source| assert_eq!(data(source) as usize, original));
+        let message = root
+            .with_mut_ptr::<BufferHeader, _>(|source| {
+                serialize_message(
+                    JSValue::pointer(source.cast()).bits(),
+                    &[source as usize],
+                    None,
+                )
+            })
+            .unwrap();
+        root.with_mut_ptr::<BufferHeader, _>(|source| assert!(is_detached_buffer(source as usize)));
+        view_root
+            .with_mut_ptr::<BufferHeader, _>(|view| assert_eq!(store::length(view as usize), 0));
         crate::gc::js_gc_collect();
         assert_eq!(backing::LIVE_BACKINGS.load(Ordering::SeqCst), before + 1);
         std::thread::spawn(move || {

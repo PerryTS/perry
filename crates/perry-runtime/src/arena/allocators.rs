@@ -469,6 +469,7 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
         _reserved: 0,
         size: total as u32,
     });
+    // GC_STORE_AUDIT(INIT): initialize the fresh allocation's GC header word.
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);

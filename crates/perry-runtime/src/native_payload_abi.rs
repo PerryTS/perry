@@ -273,9 +273,11 @@ pub unsafe extern "C" fn js_perry_bytes_borrow(value: f64, out: *mut PerryBytes)
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::span(value, false) {
         Ok(span) => {
+            // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
             out.write(PerryBytes {
                 ptr: span.ptr,
                 len: span.len,
@@ -293,10 +295,12 @@ pub unsafe extern "C" fn js_perry_bytes_pin(value: f64, out: *mut PerryBytes) ->
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::pin(value) {
         Ok(pin) => {
             let ticket = Box::new(pin);
+            // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
             out.write(PerryBytes {
                 ptr: ticket.ptr,
                 len: ticket.len,
@@ -327,6 +331,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
     if out.is_null() {
         return bytes_undefined();
     }
+    // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
     out.write(PerryBytes::default());
     let Some(brand) = byte_brand(brand) else {
         return bytes_undefined();
@@ -337,6 +342,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
         _ => return bytes_undefined(),
     };
     let (value, pin) = crate::buffer::bytes::new_bytes(brand, len, init);
+    // GC_STORE_AUDIT(STACK): Writes a caller-owned native byte descriptor, not a JS heap slot; pin tickets retain the backing separately.
     out.write(PerryBytes {
         ptr: pin.ptr,
         len: pin.len,

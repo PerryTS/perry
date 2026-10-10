@@ -53,9 +53,6 @@ use std::sync::{Mutex, OnceLock};
 /// SharedArrayBuffer block) — proven before the header is read.
 #[inline]
 pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
-    if bits < 0x1000 {
-        return None;
-    }
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         return Some((bits & crate::value::POINTER_MASK) as usize);
     }
@@ -663,6 +660,7 @@ pub(crate) fn alloc_inline(brand: u8, capacity: u32, length: u32) -> *mut Buffer
 /// A borrowed span must outlive the returned JS value.
 /// Fresh allocations start with no foreign-data bit, so recycled addresses
 /// cannot inherit a previous owner's native pointer.
+#[cfg(test)]
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
     super::super::store::store_alloc(
         crate::gc::GC_TYPE_BUFFER,
@@ -695,6 +693,7 @@ pub(crate) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut Buffe
         (*ptr).header.capacity = length;
         (*ptr).header.link = 0;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(INIT): Initializes the fresh foreign byte cell's Rust backing owner before publication; no managed edge.
         std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
@@ -948,6 +947,7 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
         header.capacity,
     );
     let data = backing.data();
+    // GC_STORE_AUDIT(POINTER_FREE): Native byte backing metadata; Backing owns Rust bytes, not JS heap references.
     std::ptr::write(
         addr as *mut ForeignBuffer,
         ForeignBuffer {

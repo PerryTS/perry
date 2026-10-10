@@ -33,6 +33,7 @@ mod cycle_state;
 mod dead_owner_side_tables;
 mod debt_pacer;
 mod dirty_page_cache;
+mod dirty_scan_custody;
 mod env_knob_parse;
 mod error_side_tables;
 mod evacuation;
@@ -67,7 +68,6 @@ mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
 mod leaf_marks;
 mod malloc_parent_remembering;
-mod dirty_scan_custody;
 mod map_store;
 mod mark_slot_hoists;
 mod minor_fixed_cost;
@@ -148,5 +148,6 @@ mod buffer_bytes;
 
 mod buffer_b4;
 
+#[cfg(target_os = "linux")]
 mod census_two_mib;
 mod holder_memo;

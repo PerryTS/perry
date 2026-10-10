@@ -226,6 +226,7 @@ pub unsafe extern "C" fn js_perry_payload_buffer_alloc(
 ) -> *mut u8 {
     match PayloadBuffer::alloc(&*owner, len) {
         Some((ptr, len)) => {
+            // GC_STORE_AUDIT(POINTER_FREE): Native allocation length metadata; no JS value or GC heap edge is stored.
             out_len.write(len);
             ptr.as_ptr()
         }
@@ -250,6 +251,7 @@ pub unsafe extern "C" fn js_perry_payload_buffer_grow(
     };
     match PayloadBuffer::grow(&*owner, ptr, len, new_len) {
         Some((ptr, len)) => {
+            // GC_STORE_AUDIT(POINTER_FREE): Native allocation length metadata; no JS value or GC heap edge is stored.
             out_len.write(len);
             ptr.as_ptr()
         }
@@ -270,10 +272,12 @@ pub unsafe extern "C" fn js_perry_payload_buffer_shrink(
     out_len: *mut usize,
 ) -> *mut u8 {
     let Some(ptr) = NonNull::new(ptr) else {
+        // GC_STORE_AUDIT(POINTER_FREE): Native allocation length metadata; no JS value or GC heap edge is stored.
         out_len.write(len);
         return ptr;
     };
     let (ptr, len) = PayloadBuffer::shrink(&*owner, ptr, len, new_len);
+    // GC_STORE_AUDIT(POINTER_FREE): Native allocation length metadata; no JS value or GC heap edge is stored.
     out_len.write(len);
     ptr.as_ptr()
 }
@@ -316,6 +320,7 @@ pub unsafe extern "C" fn js_perry_payload_buffer_hook_alloc(
     let owner = &*(opaque as *const PayloadBufferOwner);
     match PayloadBuffer::alloc(owner, total) {
         Some((ptr, _)) => {
+            // GC_STORE_AUDIT(POINTER_FREE): Native allocation length metadata; no JS value or GC heap edge is stored.
             (ptr.as_ptr() as *mut usize).write(total);
             ptr.as_ptr().add(HOOK_HEADER).cast()
         }

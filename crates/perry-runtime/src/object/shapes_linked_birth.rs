@@ -22,6 +22,7 @@ use super::*;
 /// `obj` is a live, fresh `ObjectHeader` with at least `count` inline slots;
 /// `keys` is a live canonical keys array with `count` keys; nothing
 /// allocates between the caller's slot stores and this call.
+#[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn stamp_linked_final_shape(
     obj: *mut crate::object::ObjectHeader,
     keys: *mut ArrayHeader,
@@ -163,6 +164,8 @@ mod readpath_decl_class_identity_tests {
         crate::object::class_registry::class_decl_prototype_object_root_store(cid, parent);
         crate::object::class_registry::class_decl_prototype_object_root_store(alias, other);
         let holder = crate::object::js_object_alloc(0, 0);
+        // A hand-stamped ordinary shape needs the birth mark a real birth sets.
+        unsafe { crate::object::shapes::store_kind::premark_plain_ordinary(holder) };
         let pid = PROTO_ID_CLASS | u64::from(cid);
         let shape = shape_descriptor_ensure_with_generation(
             std::ptr::null(),

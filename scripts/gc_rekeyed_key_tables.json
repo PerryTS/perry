@@ -74,12 +74,6 @@
       "why": "The #8168 fix: retains on the GC_TYPE_CLOSURE-narrowed predicate over the POINTER_TAG'd closure address (class_registry/gc_roots.rs:530). This helper is the rekey path for both scan_function_class_id_keys_mut and its budgeted twin."
     },
     {
-      "site": "crates/perry-runtime/src/object/descriptor_state/owner_lifecycle.rs::rewrite_descriptor_owner",
-      "table": "state().descriptors.property_descriptors + .accessor_descriptors",
-      "death": "dead_owner:prune_dead_descriptor_owner_entries",
-      "why": "Registered prune retains both maps on !is_dead_owner (object/descriptor_state/owner_lifecycle.rs:34-52); handle-band ids in the same maps are skipped by the probe as unattributable. Both this rekey and the prune it names moved out of descriptor_state.rs in the 2000-line-cap split; the function body is byte-identical apart from its visibility widening to pub(super), so the custody argument is unchanged."
-    },
-    {
       "site": "crates/perry-runtime/src/object/mod.rs::scan_overflow_fields_roots_mut",
       "table": "state().object_hot.overflow_fields",
       "death": "self_pruned:clear_overflow_for_ptr",
@@ -270,6 +264,12 @@
       "table": "UTF16_INDEX_CACHE",
       "death": "dead_owner:prune_dead_utf16_indexes",
       "why": "Four weak string identities are rewritten after relocation and pruned by the registered dead-owner fan-out before copying or mark/sweep can reuse their addresses; pruning also drops the Rust-owned offset vectors."
+    },
+    {
+      "site": "crates/perry-runtime/src/gc/ephemeron.rs::scan_ephemeron_seeds_roots_mut",
+      "table": "EPHEMERON_SEEDS",
+      "death": "self_pruned:clear_seeds",
+      "why": "Cycle-local discovered WeakStorage headers: discover records only objects visited by strong marking. trace reset clears seeds; Ephemerons::absorb takes the vector into collector-owned tables, and weak_ephemerons finish drops all pending table addresses before the relocating minor prelude. The metadata-only rewrite cannot retain a dead mutator owner between cycles."
     }
   ]
 }

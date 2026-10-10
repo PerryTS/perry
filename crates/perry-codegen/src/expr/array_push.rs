@@ -70,10 +70,10 @@ use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
     emit_may_carry_heap_pointer_check, emit_root_nanbox_store_on_block,
-    emit_typed_feedback_register_site,
-    emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
-    lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_typed_feedback_register_site, emit_write_barrier_slot_generation_tested,
+    expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
+    nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 /// Metadata may admit the #7839 append tier because that tier tests the live

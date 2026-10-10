@@ -78,7 +78,7 @@ pub(crate) unsafe fn weak_collection_store_barrier(
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static EPHEMERON_SEEDS: RefCell<Vec<*mut WeakStorage>> = const { RefCell::new(Vec::new()) };
 }
 

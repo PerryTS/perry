@@ -15,7 +15,9 @@ cd "$ROOT"
 echo "==> Building perry (release)…"
 cargo build --release -p perry
 
-PERRY="$ROOT/target/release/perry"
+# Use the artifact directory Cargo just built, including isolated validation
+# targets. Relative CARGO_TARGET_DIR values resolve from ROOT, as Cargo does.
+PERRY="${CARGO_TARGET_DIR:-target}/release/perry"
 if [[ -f "${PERRY}.exe" ]]; then
   PERRY="${PERRY}.exe"
 fi

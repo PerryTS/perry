@@ -109,7 +109,7 @@ struct State {
     timers: HashMap<i64, Timer>,
     events: VecDeque<Event>,
 }
-thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
+crate::perry_thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
 fn would_block(result: i32) -> bool {
     result == -libc::EAGAIN || result == -libc::EWOULDBLOCK || result == -libc::EINTR

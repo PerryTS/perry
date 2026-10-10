@@ -26,7 +26,7 @@
 use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::collections::HashSet;
 
-std::thread_local! {
+crate::perry_thread_local! {
     // Shared backings are never freed today. Attribute each allocation to its
     // creator, once; receiving a shared alias contributes no new bytes.
     static BACKING_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

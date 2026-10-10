@@ -69,7 +69,7 @@
 31 crates/perry-runtime/src/array/iterator.rs
 12 crates/perry-runtime/src/array/push_pop.rs
 12 crates/perry-runtime/src/array/sort.rs
-11 crates/perry-runtime/src/async_hooks.rs
+9 crates/perry-runtime/src/async_hooks.rs
 1 crates/perry-runtime/src/async_hooks/context_snapshots.rs  # moved-from: crates/perry-runtime/src/async_hooks.rs
 5 crates/perry-runtime/src/atomics.rs
 7 crates/perry-runtime/src/builtins/console.rs
@@ -95,17 +95,15 @@
 2 crates/perry-runtime/src/json/stringify_shape_template.rs
 21 crates/perry-runtime/src/json_tape.rs
 26 crates/perry-runtime/src/map.rs
-7 crates/perry-runtime/src/node_stream/async_iterator.rs
 2 crates/perry-runtime/src/node_stream_dispatch.rs
 8 crates/perry-runtime/src/node_stream_iter_helpers.rs
 26 crates/perry-runtime/src/node_stream_pipeline.rs
 7 crates/perry-runtime/src/node_stream_tests.rs
 10 crates/perry-runtime/src/node_stream_tests_extra.rs
-4 crates/perry-runtime/src/node_submodules/mod.rs
 4 crates/perry-runtime/src/node_submodules/test.rs
 3 crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/array_object_ops.rs
-7 crates/perry-runtime/src/object/assign.rs  # moved-from: crates/perry-runtime/src/object/alloc.rs
+6 crates/perry-runtime/src/object/assign.rs  # moved-from: crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
 1 crates/perry-runtime/src/object/cell_meta.rs  # moved-from: crates/perry-runtime/src/object/mod.rs
 3 crates/perry-runtime/src/object/class_registry/construct.rs
@@ -125,8 +123,8 @@
 4 crates/perry-runtime/src/object/native_module.rs
 19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
 24 crates/perry-runtime/src/object/native_module/callable_exports.rs
+2 crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs  # moved-from: crates/perry-runtime/src/object/native_module/callable_exports.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
-2 crates/perry-runtime/src/object/object_ops/define_property.rs
 2 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs
@@ -148,7 +146,7 @@
 3 crates/perry-runtime/src/regex/replace_fn.rs
 41 crates/perry-runtime/src/set.rs
 2 crates/perry-runtime/src/string/append.rs
-7 crates/perry-runtime/src/string/concat.rs
+5 crates/perry-runtime/src/string/concat.rs
 1 crates/perry-runtime/src/string/mod.rs
 7 crates/perry-runtime/src/string/split.rs
 2 crates/perry-runtime/src/symbol/iterator.rs
@@ -156,7 +154,6 @@
 2 crates/perry-runtime/src/timer.rs
 1 crates/perry-runtime/src/typed_feedback.rs
 1 crates/perry-runtime/src/typedarray/construct.rs
-2 crates/perry-runtime/src/typedarray/transform.rs
 4 crates/perry-runtime/src/url/node_compat.rs
 7 crates/perry-runtime/src/url/search_params.rs
 12 crates/perry-runtime/src/util_debuglog.rs
@@ -167,6 +164,4 @@
 6 crates/perry-runtime/src/value/dynamic_arith.rs
 1 crates/perry-runtime/src/value/to_string_primitive.rs  # moved-from: crates/perry-runtime/src/value/to_string.rs
 19 crates/perry-runtime/src/wasi.rs
-4 crates/perry-runtime/src/weakref.rs
 19 crates/perry-runtime/src/webassembly.rs
-2 crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs  # moved-from: crates/perry-runtime/src/object/native_module/callable_exports.rs

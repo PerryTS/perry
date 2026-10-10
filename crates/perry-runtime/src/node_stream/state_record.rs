@@ -345,11 +345,9 @@ fn enumerable_state_sabotage(stream: f64, slot: Slot, value: f64) {
     let obj = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr::<ObjectHeader>(),
-        key,
-        value.get_nanbox_f64(),
-    );
+    obj.with_mut_ptr(|obj| {
+        crate::object::js_object_set_field_by_name(obj, key, value.get_nanbox_f64())
+    });
 }
 
 /// Test seam: every word of `stream`'s record, raw.

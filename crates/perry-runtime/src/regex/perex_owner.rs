@@ -27,6 +27,15 @@ struct ProgramCell {
     // Immediately followed by word_count initialized u32 words.
 }
 
+// The initializer leaves the options in their all-zero representation instead
+// of moving typed `None` values, whose inactive bytes are unspecified. Check
+// this on every target at compile time, so an incompatible option layout or
+// witness change cannot silently turn the cleared fields into other values.
+const _: () = {
+    assert!(unsafe { std::mem::zeroed::<Option<perex::binding::ProgramWitness>>() }.is_none());
+    assert!(unsafe { std::mem::zeroed::<Option<usize>>() }.is_none());
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OwnerError {
     Missing,
@@ -210,13 +219,14 @@ impl<'scope> GcProgram<'scope> {
 /// Clear a freshly allocated program cell's whole payload, then write its
 /// prefix: an empty count-sized cell whose words emission fills.
 ///
-/// The arena hands out recycled bytes uncleared, and `witness: None` and
-/// `registers: None` store only their discriminants, so without the clear the
-/// unused option payloads (and the padding after an odd word count) keep the
-/// previous occupant's words. Nothing reads them, but the whole-heap from-space
-/// scan does, and on tsc they were stale nursery addresses it reported as
-/// offenders in every regex program cell (16 per run, deterministic). The
-/// clear also provides the zeroed words emission requires.
+/// The arena hands out recycled bytes uncleared. The whole-heap from-space
+/// scan reads even the unused option payloads and the padding after an odd
+/// word count, where tsc left stale nursery addresses in every regex program
+/// cell (16 per run, deterministic). Typed `None` writes after clearing can
+/// copy unspecified inactive bytes back over the clear, so the options are
+/// initialized in place by the clear itself; the compile-time checks above
+/// establish that these are valid `None` values. The clear also provides the
+/// zeroed words emission requires.
 ///
 /// # Safety
 /// `cell` must be the payload of a live `GC_TYPE_REGEX_PROGRAM` allocation
@@ -232,8 +242,6 @@ unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
         // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
         cell.cast::<u8>().write_bytes(0, payload);
         std::ptr::addr_of_mut!((*cell).word_count).write(words);
-        std::ptr::addr_of_mut!((*cell).witness).write(None);
-        std::ptr::addr_of_mut!((*cell).registers).write(None);
     }
 }
 
@@ -683,12 +691,20 @@ mod program_cell_tests {
                 clean, dirty,
                 "a program cell for {words} words kept bytes of the memory it was built in"
             );
+            let mut expected = vec![0; dirty.len()];
+            expected[..std::mem::size_of::<usize>()].copy_from_slice(&words.to_ne_bytes());
+            assert_eq!(
+                dirty, expected,
+                "all bytes except the word count must start cleared"
+            );
             unsafe {
                 let cell = dirty.as_ptr().cast::<ProgramCell>();
                 assert_eq!(
                     std::ptr::read_unaligned(std::ptr::addr_of!((*cell).word_count)),
                     words
                 );
+                assert!(std::ptr::read_unaligned(std::ptr::addr_of!((*cell).witness)).is_none());
+                assert!(std::ptr::read_unaligned(std::ptr::addr_of!((*cell).registers)).is_none());
             }
         }
     }

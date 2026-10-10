@@ -3,7 +3,6 @@ use super::super::*;
 use super::support::*;
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_full_two_mib_block_is_censused_by_both_walks() {
     std::thread::spawn(|| {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

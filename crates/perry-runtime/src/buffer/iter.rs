@@ -48,16 +48,15 @@ unsafe fn alloc_iterator(buf_ptr: *mut BufferHeader, kind: i32) -> f64 {
     let handles = crate::gc::RuntimeHandleScope::new();
     let buffer = handles.root_raw_mut_ptr(buf_ptr);
     let obj = handles.root_raw_mut_ptr(js_object_alloc(BUFFER_ITERATOR_CLASS_ID, 3));
-    let obj_ptr = || obj.get_raw_mut_ptr::<ObjectHeader>();
     // Field 0: backing buffer (NaN-boxed pointer).
-    let buf_nan = js_nanbox_pointer(buffer.get_raw_mut_ptr::<BufferHeader>() as i64);
-    js_object_set_field(obj_ptr(), 0, JSValue::from_bits(buf_nan.to_bits()));
+    let buf_nan = buffer.with_mut_ptr::<BufferHeader, _>(|buffer| js_nanbox_pointer(buffer as i64));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 0, JSValue::from_bits(buf_nan.to_bits())));
     // Field 1: cursor index, starts at 0.
-    js_object_set_field(obj_ptr(), 1, JSValue::number(0.0));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 1, JSValue::number(0.0)));
     // Field 2: iterator kind.
-    js_object_set_field(obj_ptr(), 2, JSValue::number(kind as f64));
+    obj.with_mut_ptr(|obj| js_object_set_field(obj, 2, JSValue::number(kind as f64)));
     obj.with_mut_ptr(|it| crate::object::attach_iterator_prototype(it, BUFFER_ITERATOR_CLASS_ID));
-    js_nanbox_pointer(obj_ptr() as i64)
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 /// `buf.values()` — iterator yielding each byte value.

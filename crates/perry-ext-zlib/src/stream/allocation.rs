@@ -136,6 +136,7 @@ impl<T: HookFill> Allocator<T> for BufferAlloc {
         };
         if !T::ZERO_IS_DEFAULT {
             for i in 0..len {
+                // GC_STORE_AUDIT(INIT): Initializes native codec state in an unpublished payload buffer; these Rust codec values contain no JS heap edges.
                 unsafe { ptr.as_ptr().add(i).write(T::default()) };
             }
         }
@@ -160,6 +161,7 @@ impl<T> Placed<T> {
     /// Move `value` into a buffer; `None` when the backing refuses.
     pub(super) fn try_new(owner: &BufferOwner, value: T) -> Option<Self> {
         let mut buffer = Self::buffer(owner)?;
+        // GC_STORE_AUDIT(INIT): Initializes native codec state in an unpublished payload buffer; these Rust codec values contain no JS heap edges.
         unsafe { buffer.as_mut_ptr().cast::<T>().write(value) };
         Some(Self {
             buffer,

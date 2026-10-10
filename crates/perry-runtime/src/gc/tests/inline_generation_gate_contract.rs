@@ -95,8 +95,16 @@ fn neither_gate_skips_a_malloc_parent() {
         captures.as_ptr(),
     ) as usize;
     let flags = header_flags(closure);
-    assert_eq!(flags & GC_FLAG_ARENA, 0, "premise: the closure is a malloc parent");
-    assert_eq!(flags & GC_FLAG_TENURED, 0, "premise: a malloc parent is never TENURED");
+    assert_eq!(
+        flags & GC_FLAG_ARENA,
+        0,
+        "premise: the closure is a malloc parent"
+    );
+    assert_eq!(
+        flags & GC_FLAG_TENURED,
+        0,
+        "premise: a malloc parent is never TENURED"
+    );
     assert!(
         unsafe { crate::gc::newborn_parent_needs_barrier(closure) },
         "the runtime twin must take the barrier for a malloc parent"

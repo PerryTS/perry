@@ -491,7 +491,11 @@ pub extern "C" fn js_weakref_deref(weakref: f64) -> f64 {
     if ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let key_ptr = crate::string::js_string_from_bytes(b"__perry_wr_target".as_ptr(), 17);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(weakref);
+    let (key_ptr, current) = receiver
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_wr_target".as_ptr(), 17));
+    let ptr = js_nanbox_get_pointer(current) as *mut ObjectHeader;
     let val = js_object_get_field_by_name(ptr, key_ptr);
     if val.is_undefined() {
         f64::from_bits(TAG_UNDEFINED)
@@ -515,35 +519,40 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     // #1766: sentinel-name internal slots so `(fr as any).callback` /
     // `.entries` return `undefined` like Node.
     let packed = b"__perry_fr_callback\0__perry_fr_entries\0";
-    let obj = js_object_alloc_with_shape(FINREG_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        FINREG_SHAPE_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ));
+    obj.with_mut_ptr(|obj| {
+        js_object_set_field(
+            obj,
+            FINREG_CALLBACK_FIELD as u32,
+            JSValue::from_bits(callback_handle.get_nanbox_u64()),
+        )
+    });
+    let (entries_arr, current) = obj.across_mut::<ObjectHeader, _>(|| js_array_alloc(0));
     js_object_set_field(
-        obj,
-        FINREG_CALLBACK_FIELD as u32,
-        JSValue::from_bits(callback_handle.get_nanbox_u64()),
-    );
-    let entries_arr = js_array_alloc(0);
-    js_object_set_field(
-        obj,
+        current,
         FINREG_ENTRIES_FIELD as u32,
         JSValue::array_ptr(entries_arr),
     );
     unsafe {
-        (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        (*current).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+        crate::object::shapes::restamp_object_proto_id(current);
     }
-    // #6182: the FinalizationRegistry itself is the registered holder (not its
-    // per-`register()` records). The copied-minor weak pass dispatches on
-    // `CLASS_ID_FINALIZATION_REGISTRY` and walks the registry's entries array
-    // to reach records — the record has no back-reference to its registry or
-    // cleanup callback, so a record-keyed dispatch could not enqueue the
-    // cleanup job (the #6192 automatic-cycle behavior). A registry that is
-    // created but never `.register()`ed processes an empty entries array (a
-    // cheap no-op) and is pruned when it dies.
-    weak_holder_register(obj);
-    obj
+    // Register the holder only after its traced fields and brand are initialized.
+    weak_holder_register(current);
+    current
 }
 
 fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader {
+    // Caller roots keep these values live, but cannot rewrite copied arguments.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let held = scope.root_nanbox_f64(held);
+    let token = scope.root_nanbox_f64(token);
     let packed = b"__perry_fr_target\0__perry_fr_token\0__perry_fr_held\0__perry_fr_pending\0";
     let record = js_object_alloc_with_shape(
         FINREG_RECORD_SHAPE_ID,
@@ -554,17 +563,17 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
     js_object_set_field(
         record,
         FINREG_RECORD_TARGET_FIELD as u32,
-        JSValue::from_bits(target.to_bits()),
+        JSValue::from_bits(target.get_nanbox_u64()),
     );
     js_object_set_field(
         record,
         FINREG_RECORD_TOKEN_FIELD as u32,
-        JSValue::from_bits(token.to_bits()),
+        JSValue::from_bits(token.get_nanbox_u64()),
     );
     js_object_set_field(
         record,
         FINREG_RECORD_HELD_FIELD as u32,
-        JSValue::from_bits(held.to_bits()),
+        JSValue::from_bits(held.get_nanbox_u64()),
     );
     js_object_set_field(
         record,
@@ -668,16 +677,6 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     if reg_ptr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
-    let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
-    let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-    if entries_ptr.is_null() {
-        return f64::from_bits(TAG_FALSE);
-    }
-    let len = js_array_length(entries_ptr) as usize;
-    let mut found = false;
-    // Rebuild the entries array without matching records.
-    let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
     // #7341: `js_string_from_bytes` allocates; pair it with the registry re-read
     // so the pre-collection `reg_ptr` is never nameable.
     let (entries_key, reg_nanbox) = registry_handle
@@ -689,19 +688,22 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
     let len = js_array_length(entries_ptr) as usize;
-    let token_bits = token_handle.get_nanbox_u64();
+    let entries = scope.root_raw_mut_ptr(entries_ptr);
+    let mut found = false;
+    // Rebuild the entries array without matching records.
+    let new_arr_handle = scope.root_raw_mut_ptr(js_array_alloc(len as u32));
     for i in 0..len {
-        let record_val = js_array_get_f64(entries_ptr, i as u32);
+        let record_val = entries.with_mut_ptr(|entries| js_array_get_f64(entries, i as u32));
         let record_ptr = (record_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         if record_ptr.is_null() {
             continue;
         }
         let stored_token = unsafe { object_field_bits(record_ptr, FINREG_RECORD_TOKEN_FIELD) };
-        if stored_token == token_bits {
+        if stored_token == token_handle.get_nanbox_u64() {
             found = true;
             continue;
         }
-        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), record_val);
+        let pushed = new_arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, record_val));
         new_arr_handle.set_raw_mut_ptr(pushed);
     }
     // Replace entries field with the new array.
@@ -709,7 +711,7 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     js_object_set_field(
         reg_ptr,
         FINREG_ENTRIES_FIELD as u32,
-        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+        new_arr_handle.with_mut_ptr(JSValue::array_ptr),
     );
     if found {
         f64::from_bits(TAG_TRUE)
@@ -1282,7 +1284,9 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     if reg_ptr.is_null() {
         return;
     }
-    let entries_key = crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18);
+    let (entries_key, registry) = registry_handle
+        .across_nanbox(|| crate::string::js_string_from_bytes(b"__perry_fr_entries".as_ptr(), 18));
+    let reg_ptr = js_nanbox_get_pointer(registry) as *mut ObjectHeader;
     let entries_val = js_object_get_field_by_name(reg_ptr, entries_key);
     let entries_ptr = (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
     if entries_ptr.is_null() {
@@ -1300,21 +1304,21 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     if entries_ptr.is_null() {
         return;
     }
-    let record_bits = record_handle.get_nanbox_f64().to_bits();
+    let entries = scope.root_raw_mut_ptr(entries_ptr);
     let len = js_array_length(entries_ptr) as usize;
     for i in 0..len {
-        let current = js_array_get_f64(entries_ptr, i as u32);
-        if current.to_bits() == record_bits {
+        let current = entries.with_mut_ptr(|entries| js_array_get_f64(entries, i as u32));
+        if current.to_bits() == record_handle.get_nanbox_u64() {
             continue;
         }
-        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), current);
+        let pushed = new_arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, current));
         new_arr_handle.set_raw_mut_ptr(pushed);
     }
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     js_object_set_field(
         reg_ptr,
         FINREG_ENTRIES_FIELD as u32,
-        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+        new_arr_handle.with_mut_ptr(JSValue::array_ptr),
     );
 }
 

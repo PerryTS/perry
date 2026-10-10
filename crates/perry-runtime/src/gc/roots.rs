@@ -545,6 +545,12 @@ pub(super) fn mark_stack_roots_for_decision(
 /// Handles BOTH NaN-boxed pointers (POINTER_TAG/STRING_TAG/BIGINT_TAG) AND raw I64 pointers.
 /// Raw I64 pointers arise from Perry's `is_array`/`is_string`/`is_pointer`/`is_closure` local
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
+///
+/// Never inlined: this is the conservative root reader the GC call-effects
+/// classifier seeds as a collector (). Its
+/// one caller would otherwise absorb it in release archives, leaving the seed
+/// naming no node. One call per collection that scans the stack.
+#[inline(never)]
 pub(super) fn mark_stack_roots_unchecked(
     valid_ptrs: &ValidPointerSet,
     pin_only_old: bool,

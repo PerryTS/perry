@@ -30,5 +30,5 @@ zstd.workspace = true
 brotli = "9.0"
 
 [dev-dependencies]
-perry-runtime.workspace = true
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }
 perry-ffi = { workspace = true, features = ["runtime-link"] }

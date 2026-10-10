@@ -711,6 +711,18 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     result
 }
 
+/// The malformed-document message for a deep parse that failed. The parse may
+/// have collected and moved the text, so it is read back from its parse root
+/// through the string-value borrow, which reads every string representation.
+#[cold]
+fn rooted_malformed_json_message(text_root: usize) -> String {
+    let text = parse_root_get(text_root);
+    crate::string::with_string_value_bytes(f64::from_bits(text.bits()), |bytes| {
+        malformed_json_message(bytes, crate::json_tape::malformed_offset(bytes))
+    })
+    .expect("deep JSON.parse text is rooted as a string")
+}
+
 // Shared cold fallback for preflight admission and rejected tape builds.
 #[cold]
 unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue {
@@ -721,12 +733,7 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     let text_root = parse_root_push(JSValue::string_ptr(text as *mut StringHeader));
     let result = try_parse_deep_iterative(text, len);
     let message = if result.is_none() {
-        let moved = parse_root_get(text_root).as_string_ptr();
-        let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
-            bytes,
-            crate::json_tape::malformed_offset(bytes),
-        ))
+        Some(rooted_malformed_json_message(text_root))
     } else {
         None
     };
@@ -746,12 +753,7 @@ unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<J
     let text_root = parse_root_push(JSValue::string_ptr(text as *mut StringHeader));
     let result = try_parse_deep_iterative(text, len);
     let message = if result.is_none() {
-        let moved = parse_root_get(text_root).as_string_ptr();
-        let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
-            bytes,
-            crate::json_tape::malformed_offset(bytes),
-        ))
+        Some(rooted_malformed_json_message(text_root))
     } else {
         None
     };

@@ -68,22 +68,38 @@ fn recursive_initializer_is_rejected_without_poisoning_other_keys() {
 }
 #[test]
 fn aligned_values_are_released_at_worker_exit() {
-    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    // The drops run on the workers, so the counter is this test's own value,
+    // handed to each worker's value at birth (no process-global sink).
+    std::thread_local! {
+        static COUNTER: Cell<Option<std::sync::Arc<AtomicUsize>>> = const { Cell::new(None) };
+    }
     #[repr(align(4096))]
-    struct Aligned(u8);
+    struct Aligned(u8, std::sync::Arc<AtomicUsize>);
     impl Drop for Aligned {
         fn drop(&mut self) {
             assert_eq!(self.0, 41);
-            DROPS.fetch_add(1, Ordering::SeqCst);
+            self.1.fetch_add(1, Ordering::SeqCst);
         }
     }
-    static ALIGNED: LocalKey<Aligned> = LocalKey::new(|| Aligned(41));
+    static ALIGNED: LocalKey<Aligned> = LocalKey::new(|| {
+        Aligned(
+            41,
+            COUNTER
+                .with(|c| c.take())
+                .expect("worker hands over the counter"),
+        )
+    });
+    let drops = std::sync::Arc::new(AtomicUsize::new(0));
     for _ in 0..32 {
-        std::thread::spawn(|| ALIGNED.with(|v| assert_eq!((v as *const _ as usize) % 4096, 0)))
-            .join()
-            .unwrap();
+        let drops = std::sync::Arc::clone(&drops);
+        std::thread::spawn(move || {
+            COUNTER.with(|c| c.set(Some(drops)));
+            ALIGNED.with(|v| assert_eq!((v as *const _ as usize) % 4096, 0))
+        })
+        .join()
+        .unwrap();
     }
-    assert_eq!(DROPS.load(Ordering::SeqCst), 32);
+    assert_eq!(drops.load(Ordering::SeqCst), 32);
 }
 
 #[test]

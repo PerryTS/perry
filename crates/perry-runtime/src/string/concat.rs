@@ -696,12 +696,15 @@ fn concat_byte_parts(mut l: ConcatPart, mut r: ConcatPart) -> f64 {
             let scope = crate::gc::RuntimeHandleScope::new();
             let left = scope.root_string_ptr(l.owner);
             let right = scope.root_string_ptr(r.owner);
-            let storage = string_storage_alloc(total_blen);
+            // Both operands are reloaded after the collecting allocation.
+            let ((storage, left_ptr), right_ptr) = right.across_const::<StringHeader, _>(|| {
+                left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen))
+            });
             if !l.owner.is_null() {
-                l.data = string_data(left.get_raw_const_ptr::<StringHeader>());
+                l.data = string_data(left_ptr);
             }
             if !r.owner.is_null() {
-                r.data = string_data(right.get_raw_const_ptr::<StringHeader>());
+                r.data = string_data(right_ptr);
             }
             storage
         }
@@ -794,13 +797,10 @@ pub extern "C" fn js_string_concat(
             let scope = crate::gc::RuntimeHandleScope::new();
             let left = scope.root_string_ptr(a);
             let right = scope.root_string_ptr(b);
-            let (ptr, data) = string_storage_alloc(total_blen);
-            (
-                ptr,
-                data,
-                left.get_raw_const_ptr::<StringHeader>(),
-                right.get_raw_const_ptr::<StringHeader>(),
-            )
+            let (((ptr, data), a), b) = right.across_const::<StringHeader, _>(|| {
+                left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen))
+            });
+            (ptr, data, a, b)
         }
     };
 

@@ -105,17 +105,18 @@ fn side_tables_hold(owner: usize, syms: [usize; 3]) -> [bool; 3] {
 
 /// #11471 / #11696. Since #11682 an ordinary object's symbol properties live
 /// on the object itself (its shape's keys and its slots), so they die with
-/// the thread's heap and the address-keyed side tables never see them. Owners
-/// that are not ordinary objects (arrays here, and a class's static symbol
-/// members) still use `SYMBOL_PROPERTIES` / `SYMBOL_PROPERTY_ATTRS` /
-/// `SYMBOL_ACCESSOR_PROPERTIES`, and a dead thread's entries there must be
-/// released at thread exit. The test proves both halves are live: the table
-/// entries exist while the thread lives (and the ordinary object's are on the
-/// object, NOT in the tables), and the table entries are gone after `join`.
+/// the thread's heap and the address-keyed side tables never see them. Arrays
+/// and a class's static symbol members now store theirs on the owner too
+/// (the array and the class's function object), so a dead thread can leave
+/// nothing behind in `SYMBOL_PROPERTIES` / `SYMBOL_PROPERTY_ATTRS` /
+/// `SYMBOL_ACCESSOR_PROPERTIES` for any of the three owners. The test proves
+/// the stores happened while the thread lived, on the owners and not in the
+/// tables, and that the tables still hold nothing for those addresses after
+/// `join`.
 #[test]
 fn thread_exit_releases_the_threads_symbol_side_table_entries() {
     const STATIC_SYMBOL_CLASS: u32 = 0x0B11_4711;
-    let ((holder, class_owner, obj, syms), alive, on_object, obj_in_tables) =
+    let ((holder, class_owner, obj, syms), owners, on_object, in_tables) =
         std::thread::spawn(|| {
             use perry_runtime::symbol as s;
             let scope = RuntimeHandleScope::new();
@@ -156,20 +157,21 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
             let obj = obj.get_raw_mut_ptr::<u8>() as usize;
             let class_owner = s::class_static_symbol_owner_for_test(STATIC_SYMBOL_CLASS);
             let syms = syms().map(addr_of);
-            let held = side_tables_hold(holder, syms);
-            let alive = [
-                held[0],
-                held[1],
-                held[2],
-                s::symbol_property_tables_hold_for_test(class_owner, syms[0]).0,
-            ];
+            let owners = (
+                syms.map(|sym| s::symbol_on_object_for_test(holder, sym)),
+                s::symbol_on_object_for_test(class_owner, syms[0]),
+            );
             let on_object = syms.map(|sym| s::symbol_on_object_for_test(obj, sym));
-            let obj_in_tables = side_tables_hold(obj, syms);
+            let in_tables = (
+                side_tables_hold(holder, syms),
+                s::symbol_property_tables_hold_for_test(class_owner, syms[0]).0,
+                side_tables_hold(obj, syms),
+            );
             (
                 (holder, class_owner, obj, syms),
-                alive,
+                owners,
                 on_object,
-                obj_in_tables,
+                in_tables,
             )
         })
         .join()
@@ -177,8 +179,9 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
 
     use perry_runtime::symbol as s;
     assert_eq!(
-        alive, [true; 4],
-        "every table entry must exist while its thread lives"
+        owners,
+        ([Some(false), Some(false), Some(true)], Some(false)),
+        "while the thread lives, the array's symbol value, attrs and accessor and the class's static symbol member live on their owners"
     );
     assert_eq!(
         on_object,
@@ -186,8 +189,9 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         "an ordinary object's symbol value, attrs and accessor live on the object"
     );
     assert_eq!(
-        obj_in_tables, [false; 3],
-        "an ordinary object's symbol properties must not also be in the side tables"
+        in_tables,
+        ([false; 3], false, [false; 3]),
+        "symbol properties stored on their owners must not also be in the side tables"
     );
     assert_eq!(
         side_tables_hold(holder, syms),

@@ -879,6 +879,7 @@ pub(crate) unsafe fn try_cached_accessor(
 }
 
 /// Validate the accessor pair without invoking observable user code.
+#[cfg(any(test, feature = "regex-engine"))]
 #[inline]
 unsafe fn accessor_entry_pair(recv: *const ObjectHeader, c: &PicCache) -> Option<usize> {
     let kind = c[HOLDER_KIND] as u64;

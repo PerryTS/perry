@@ -282,14 +282,16 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
     let buf = super::pool::copy(len);
     super::store::set_length(buf as usize, len);
     let result = roots.root_raw_mut_ptr(buf);
-    for i in 0..len {
-        let value = source.with_const_ptr::<crate::object::ObjectHeader, _>(|obj| {
-            crate::object::js_object_get_index_polymorphic(obj as i64, i as f64)
-        });
-        let byte = buffer_byte_from_js_value(value);
-        js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
-    }
-    Some(result.get_raw_mut_ptr())
+    let (_, out) = result.across_mut(|| {
+        for i in 0..len {
+            let value = source.with_const_ptr::<crate::object::ObjectHeader, _>(|obj| {
+                crate::object::js_object_get_index_polymorphic(obj as i64, i as f64)
+            });
+            let byte = buffer_byte_from_js_value(value);
+            result.with_mut_ptr(|result| js_buffer_set(result, i as i32, byte as i32));
+        }
+    });
+    Some(out)
 }
 
 unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
@@ -649,14 +651,18 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                     len,
                     super::store::Init::Uninit,
                 ));
-                super::store::set_length(result.get_raw_mut_ptr::<BufferHeader>() as usize, len);
-                for i in 0..len as usize {
-                    let value = source
-                        .with_const_ptr(|src| crate::typedarray::js_typed_array_get(src, i as i32));
-                    let byte = buffer_byte_from_js_value(value);
-                    js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
-                }
-                let dst = result.get_raw_mut_ptr();
+                result.with_mut_ptr::<BufferHeader, _>(|result| {
+                    super::store::set_length(result as usize, len)
+                });
+                let (_, dst) = result.across_mut(|| {
+                    for i in 0..len as usize {
+                        let value = source.with_const_ptr(|src| {
+                            crate::typedarray::js_typed_array_get(src, i as i32)
+                        });
+                        let byte = buffer_byte_from_js_value(value);
+                        result.with_mut_ptr(|result| js_buffer_set(result, i as i32, byte as i32));
+                    }
+                });
 
                 return dst;
             }
@@ -1138,40 +1144,42 @@ pub extern "C" fn js_buffer_fill_value_range(
                 .to_vec()
         })
     });
-    super::bytes::no_gc(|scope| unsafe {
-        let current = target.get_raw_mut_ptr::<BufferHeader>();
-        let Ok(dst) =
-            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(current as i64), scope)
-        else {
-            return;
-        };
-        let clamp = |x: i32| {
-            if x < 0 {
-                (dst.len() as i64 + x as i64).max(0) as usize
-            } else {
-                (x as usize).min(dst.len())
+    let (_, target) = target.across_mut(|| {
+        super::bytes::no_gc(|scope| unsafe {
+            let current = target.with_mut_ptr::<BufferHeader, _>(|target| {
+                crate::value::js_nanbox_pointer(target as i64)
+            });
+            let Ok(dst) = super::bytes::bytes_mut(current, scope) else {
+                return;
+            };
+            let clamp = |x: i32| {
+                if x < 0 {
+                    (dst.len() as i64 + x as i64).max(0) as usize
+                } else {
+                    (x as usize).min(dst.len())
+                }
+            };
+            let start = clamp(start);
+            let end = clamp(end);
+            if start >= end {
+                return;
             }
-        };
-        let start = clamp(start);
-        let end = clamp(end);
-        if start >= end {
-            return;
-        }
-        let dst = &mut dst[start..end];
-        if let Some(byte) = byte {
-            dst.fill(byte);
-            return;
-        }
-        let src = source.as_deref().unwrap_or(&[]);
-        if src.is_empty() {
-            dst.fill(0);
-            return;
-        }
-        for (i, byte) in dst.iter_mut().enumerate() {
-            *byte = src[i % src.len()];
-        }
+            let dst = &mut dst[start..end];
+            if let Some(byte) = byte {
+                dst.fill(byte);
+                return;
+            }
+            let src = source.as_deref().unwrap_or(&[]);
+            if src.is_empty() {
+                dst.fill(0);
+                return;
+            }
+            for (i, byte) in dst.iter_mut().enumerate() {
+                *byte = src[i % src.len()];
+            }
+        })
     });
-    target.get_raw_mut_ptr()
+    target
 }
 
 /// Allocate an uninitialized buffer
@@ -1302,22 +1310,22 @@ fn js_buffer_concat_impl(
                 super::bytes::bytes_mut(crate::value::js_nanbox_pointer(result as i64), scope)
                     .unwrap();
             dst.fill(0);
-            let arr_data =
-                crate::array::array_elements_ptr(array_root.get_raw_const_ptr::<ArrayHeader>())
-                    as *const f64;
-            let mut offset = 0;
-            for i in 0..len {
-                let raw = strip_nanbox((*arr_data.add(i)).to_bits());
-                let source =
-                    super::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)
-                        .unwrap_or(&[]);
-                let count = source.len().min(total_size.saturating_sub(offset));
-                if count == 0 {
-                    continue;
+            array_root.with_const_ptr::<ArrayHeader, _>(|array| {
+                let arr_data = crate::array::array_elements_ptr(array) as *const f64;
+                let mut offset = 0;
+                for i in 0..len {
+                    let raw = strip_nanbox((*arr_data.add(i)).to_bits());
+                    let source =
+                        super::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)
+                            .unwrap_or(&[]);
+                    let count = source.len().min(total_size.saturating_sub(offset));
+                    if count == 0 {
+                        continue;
+                    }
+                    dst[offset..offset + count].copy_from_slice(&source[..count]);
+                    offset += count;
                 }
-                dst[offset..offset + count].copy_from_slice(&source[..count]);
-                offset += count;
-            }
+            });
         });
 
         result

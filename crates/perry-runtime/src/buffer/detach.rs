@@ -206,7 +206,9 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
     if copy_len > 0 {
         super::bytes::no_gc(|scope| unsafe {
             let src = super::bytes::bytes(
-                crate::value::js_nanbox_pointer(source.get_raw_mut_ptr::<BufferHeader>() as i64),
+                source.with_mut_ptr::<BufferHeader, _>(|source| {
+                    crate::value::js_nanbox_pointer(source as i64)
+                }),
                 scope,
             )
             .unwrap();

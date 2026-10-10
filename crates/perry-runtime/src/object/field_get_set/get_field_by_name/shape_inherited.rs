@@ -31,8 +31,7 @@ pub(super) unsafe fn get(
     // Only a branded intrinsic needs this pre-fallback CLASS route: the old
     // class-id band test excluded it. Do not scan a declaration's own keys
     // again or replace its admitted read with a generic prototype walk.
-    if (super::super::super::shapes::PROTO_ID_CLASS
-        ..super::super::super::shapes::PROTO_ID_UNIQUE)
+    if (super::super::super::shapes::PROTO_ID_CLASS..super::super::super::shapes::PROTO_ID_UNIQUE)
         .contains(&pid)
         && record.weak_collection_brand().is_none()
     {

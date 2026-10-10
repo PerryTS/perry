@@ -13,7 +13,9 @@ table comparison) over them. It asserts:
     Reenters, and the table check reports it as UNSAFE drift (the #11522
     shape) -- so a green real run is evidence, not an absence of checking;
   * a named seed that matches nothing, and a violated `forbid` premise, both
-    fail the run instead of passing vacuously.
+    fail the run instead of passing vacuously;
+  * the production conservative stack-root seed taints callers even when the
+    optional post-copy stale-pointer diagnostic has been compiled away.
 
 Run: python3 scripts/gc_call_effects/callgraph.py --self-test
 Needs clang, llvm-ar, llvm-objdump, llvm-nm and llvm-cxxfilt (LLVM 22).
@@ -31,9 +33,26 @@ import callgraph as cg  # noqa: E402
 
 FIXTURE = r"""
 typedef int (*fp)(int);
+#ifdef __APPLE__
+#define RUST_SYMBOL(name) "_" name
+#else
+#define RUST_SYMBOL(name) name
+#endif
 volatile int fixture_sink;
 int js_proxy_get(int x) { fixture_sink = x; return x ^ 0x5a; }
 void fixture_collect(void) { __asm__ volatile("" ::: "memory"); }
+void fixture_stack_scan(void)
+    __asm__(RUST_SYMBOL("_ZN13perry_runtime2gc5roots26mark_stack_roots_uncheckedE"));
+void fixture_stack_scan(void) { __asm__ volatile("" ::: "memory"); }
+#ifndef OMIT_DIAGNOSTIC
+void fixture_diagnostic_scan(void)
+    __asm__(RUST_SYMBOL("_ZN13perry_runtime2gc17native_stack_scan21run_native_stack_scanE"));
+void fixture_diagnostic_scan(void) { __asm__ volatile("" ::: "memory"); }
+int diagnostic_scan_helper(int x) { fixture_diagnostic_scan(); return x + 1; }
+#else
+int diagnostic_scan_helper(int x) { return x + 1; }
+#endif
+int conservative_scan_helper(int x) { fixture_stack_scan(); return x + 1; }
 void js_throw(void) { js_proxy_get(1); }
 extern int unknown_external(int);
 extern void *memcpy(void *, const void *, unsigned long);
@@ -90,6 +109,8 @@ EXPECTED = {
     "chain_helper": "Reenters",
     "indirect_helper": "Reenters",
     "extern_helper": "Reenters",
+    "conservative_scan_helper": "AllocOnly",
+    "diagnostic_scan_helper": "Leaf",
 }
 
 TARGETS = {
@@ -99,7 +120,7 @@ TARGETS = {
 }
 
 
-def build_archive(tmp: str, triple: str, tag: str, plant: bool) -> str:
+def build_archive(tmp: str, triple: str, tag: str, plant: bool, diagnostic: bool = True) -> str:
     clang = cg.find_tool("clang")
     ar = cg.find_tool("llvm-ar")
     src = os.path.join(tmp, f"fixture_{tag}.c")
@@ -107,7 +128,8 @@ def build_archive(tmp: str, triple: str, tag: str, plant: bool) -> str:
         fh.write(FIXTURE.replace("PLANT", "x = js_proxy_get(x);" if plant else ""))
     obj = os.path.join(tmp, f"fixture_{tag}.o")
     lib = os.path.join(tmp, f"libfixture_{tag}.a")
-    subprocess.run([clang, "-target", triple, "-O2", "-ffunction-sections", "-fno-inline",
+    flags = [] if diagnostic else ["-DOMIT_DIAGNOSTIC"]
+    subprocess.run([clang, "-target", triple, *flags, "-O2", "-ffunction-sections", "-fno-inline",
                     "-fno-builtin", "-c", src, "-o", obj], check=True)
     if os.path.exists(lib):
         os.remove(lib)
@@ -130,8 +152,24 @@ def load_rules_text(tmp: str, text: str) -> list:
 
 def main() -> int:
     failures: list[str] = []
+    if subprocess.run(["bash", os.path.join(HERE, "regen_test.sh")], check=False).returncode:
+        failures.append("regen.sh isolated archive-path regression failed")
     with tempfile.TemporaryDirectory(prefix="gc-call-effects-selftest-") as tmp:
         rules = load_rules_text(tmp, RULES)
+        # Exercise the production conservative-root rule against real archive
+        # symbols. The optional post-copy diagnostic has no collector role and
+        # may be absent in production; the stack reader must still taint callers.
+        scan_rules = [r for r in cg.load_rules(os.path.join(HERE, "seeds.txt"))
+                      if r.kind == "collector" and
+                      (r("perry_runtime::gc::roots::mark_stack_roots_unchecked") or
+                       r("perry_runtime::gc::native_stack_scan::run_native_stack_scan"))]
+        if not scan_rules:
+            failures.append("production rules have no conservative stack-root seed")
+        # Rule liveness is keyed by source line: keep the fixture and production
+        # rule ids distinct when combining these independently loaded files.
+        for i, r in enumerate(scan_rules, len(rules) + 1000):
+            r.line = i
+        rules += scan_rules
         per_format = {}
         for tag, triple in TARGETS.items():
             lib = build_archive(tmp, triple, tag, plant=False)
@@ -147,6 +185,21 @@ def main() -> int:
                                 f"switch case of the fixture is vacuous")
             if res.stats["dead_rules"]:
                 failures.append(f"{tag}: unexpected dead rules {res.stats['dead_rules']}")
+
+            scan_unsafe, _ = cg.compare({"conservative_scan_helper": "Leaf"}, res.cls)
+            if not any(n == "conservative_scan_helper" for n, _, _ in scan_unsafe):
+                failures.append(f"{tag}: a Leaf summary for a conservative root reader "
+                                "was not UNSAFE")
+
+            # The Linux release archives omit the optional diagnostic. Seed
+            # liveness and conservative-root coverage must survive that shape.
+            no_diag = build_archive(tmp, triple, tag + "-no-diagnostic", plant=False,
+                                    diagnostic=False)
+            _, no_diag_res = classify(no_diag, rules)
+            if no_diag_res.stats["dead_rules"] or \
+                    no_diag_res.cls.get("conservative_scan_helper") != "AllocOnly":
+                failures.append(f"{tag}: missing diagnostic invalidated the conservative "
+                                f"stack-root seed: {no_diag_res.stats['dead_rules']}")
 
             # SABOTAGE: plant the #11522 shape into the Leaf helper.
             planted = build_archive(tmp, triple, tag + "-planted", plant=True)
@@ -164,6 +217,7 @@ def main() -> int:
             # A seed that seeds nothing must fail, not pass vacuously.
             dead_rules = load_rules_text(tmp, RULES + "js exact no_such_symbol_anywhere -- a "
                                          "deliberately dead seed for the self-test\n")
+            dead_rules += scan_rules
             _, res3 = classify(lib, dead_rules)
             if not res3.stats["dead_rules"]:
                 failures.append(f"{tag}: a seed matching nothing was not reported dead")
@@ -171,6 +225,7 @@ def main() -> int:
             # A violated forbid premise must be reported.
             forbid_rules = load_rules_text(tmp, RULES + "forbid exact unknown_external -- a "
                                            "deliberately violated premise for the self-test\n")
+            forbid_rules += scan_rules
             _, res4 = classify(lib, forbid_rules)
             if not res4.stats["forbidden_calls"]:
                 failures.append(f"{tag}: a violated forbid premise was not reported")
@@ -191,7 +246,7 @@ def main() -> int:
             print("  " + f, file=sys.stderr)
         return 1
     print(f"gc_call_effects self-test passed: {len(EXPECTED)} fixture helpers x "
-          f"{len(TARGETS)} object formats, planted #11522 shape caught, dead seed and "
+          f"{len(TARGETS)} object formats, absent diagnostic covered, planted #11522 shape caught, dead seed and "
           f"forbid premise enforced", file=sys.stderr)
     return 0
 

@@ -1,6 +1,14 @@
 //! #11319: an exiting thread releases its entries in perry-runtime's
 //! process-global closure side tables.
 //!
+//! Those tables are gone: a closure's own properties, deleted-key marks and
+//! static prototype now live in its own property bag and state record, traced
+//! edges of the closure, so they die with the thread's heap. The closure test
+//! below therefore proves the three stores happen while the thread lives and
+//! does not probe the dead address afterwards: `is_closure_ptr` reads the
+//! candidate before proving ownership, and this test binary unmaps a dead
+//! thread's blocks.
+//!
 //! Those tables outlive the thread that inserted an entry, while the young log
 //! naming the entry is thread-local and the owner's arena block goes back to
 //! the allocator at thread exit. A left-behind entry therefore read, once
@@ -19,6 +27,9 @@ extern "C" fn probe_thunk(
 }
 
 const PROP: &str = "__perry_11319_thread_exit_probe";
+/// Deleting a key also removes its own value, so the deleted-key entry is
+/// recorded under a second key: the live-thread premise needs all three.
+const DELETED: &str = "__perry_11319_thread_exit_deleted";
 
 #[test]
 fn thread_exit_releases_the_threads_closure_side_table_entries() {
@@ -34,7 +45,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         // closure, and the side tables follow a moved owner to its new key.
         let owner = || closure.get_raw_mut_ptr::<perry_runtime::ClosureHeader>() as usize;
         c::closure_set_dynamic_prop(owner(), PROP, 7.0);
-        c::closure_mark_key_deleted(owner(), PROP);
+        c::closure_mark_key_deleted(owner(), DELETED);
         let proto_bits = perry_runtime::JSValue::pointer(
             proto.get_raw_mut_ptr::<perry_runtime::ArrayHeader>() as *const u8,
         )
@@ -43,7 +54,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         // The subject must be live before the thread exits, or the absence
         // asserted below proves nothing.
         let set_while_alive = c::closure_has_own_dynamic_prop(owner(), PROP)
-            && c::closure_is_key_deleted(owner(), PROP)
+            && c::closure_is_key_deleted(owner(), DELETED)
             && c::closure_static_prototype(owner()).is_some();
         (owner(), set_while_alive)
     })
@@ -54,18 +65,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         set_while_alive,
         "the entries must exist while their thread lives"
     );
-    assert!(
-        !perry_runtime::closure::closure_has_own_dynamic_prop(owner, PROP),
-        "a dead thread's closure props outlived its heap"
-    );
-    assert!(
-        !perry_runtime::closure::closure_is_key_deleted(owner, PROP),
-        "a dead thread's deleted-key entry outlived its heap"
-    );
-    assert!(
-        perry_runtime::closure::closure_static_prototype(owner).is_none(),
-        "a dead thread's static-prototype entry outlived its heap"
-    );
+    assert_ne!(owner, 0, "the probe closure must have been allocated");
 }
 
 // #11471: one file per audited group of process-global tables.

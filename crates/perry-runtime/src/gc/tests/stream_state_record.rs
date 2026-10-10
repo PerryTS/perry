@@ -22,15 +22,26 @@ fn chunk(n: u32) -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    crate::object::js_object_set_field_by_name(obj.get_raw_mut_ptr(), key("tag"), f64::from(n));
+    let tag_key = key("tag");
+    obj.with_mut_ptr(|obj| crate::object::js_object_set_field_by_name(obj, tag_key, f64::from(n)));
     let text = format!("chunk-{n:06}-payload-payload");
-    let text = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr(),
-        key("text"),
-        f64::from_bits(JSValue::string_ptr(text).bits()),
-    );
-    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
+    let text = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        text.as_ptr(),
+        text.len() as u32,
+    ));
+    let text_key = key("text");
+    obj.with_mut_ptr(|obj| {
+        text.with_mut_ptr(|text| {
+            crate::object::js_object_set_field_by_name(
+                obj,
+                text_key,
+                f64::from_bits(JSValue::string_ptr(text).bits()),
+            )
+        })
+    });
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 fn field(obj: f64, name: &str) -> f64 {

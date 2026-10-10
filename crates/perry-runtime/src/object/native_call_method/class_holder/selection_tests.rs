@@ -277,24 +277,22 @@ fn s7b_selection_parent_getter_preserves_outer_selection_and_inner_reprojection(
             crate::fn_info!(redirecting_prototype_getter, 0),
             0,
         ));
-        crate::object::descriptor_state::set_accessor_descriptor(
-            parent.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            "prototype".to_string(),
-            crate::object::descriptor_state::AccessorDescriptor {
-                get: crate::value::js_nanbox_pointer(
-                    getter.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                )
-                .to_bits(),
-                set: 0,
-            },
-        );
-        registry::parent_static::register_class_parent_dynamic(
-            b,
-            crate::value::js_nanbox_pointer(
-                parent.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            ),
-            false,
-        );
+        parent.with_mut_ptr::<crate::closure::ClosureHeader, _>(|parent| {
+            crate::object::descriptor_state::set_accessor_descriptor(
+                parent as usize,
+                "prototype".to_string(),
+                crate::object::descriptor_state::AccessorDescriptor {
+                    get: getter.with_mut_ptr::<crate::closure::ClosureHeader, _>(|getter| {
+                        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+                    }),
+                    set: 0,
+                },
+            );
+        });
+        let parent_value = parent.with_mut_ptr::<crate::closure::ClosureHeader, _>(|parent| {
+            crate::value::js_nanbox_pointer(parent as i64)
+        });
+        registry::parent_static::register_class_parent_dynamic(b, parent_value, false);
         crate::object::js_register_class_generic_origin(a, b);
         REDIRECT.with(|state| state.set((a, b, c, d, 0)));
         // The built-instance consumer names unredirected raw B at birth.
@@ -303,32 +301,29 @@ fn s7b_selection_parent_getter_preserves_outer_selection_and_inner_reprojection(
             0 => assert_eq!(registry::class_method_slot_owner(a, "m"), Some(c)),
             1 => assert_eq!(
                 registry::class_method_slot_value(a, "m"),
-                crate::object::class_object_own_field_bytes(
-                    cp.get_raw_const_ptr::<ObjectHeader>(),
-                    b"m"
-                )
-                .map(f64::to_bits)
+                cp.with_const_ptr(|cp| crate::object::class_object_own_field_bytes(cp, b"m"))
+                    .map(f64::to_bits)
             ),
             2 => assert!(crate::object::class_has_own_method(a, "m")),
-            3 => assert_eq!(
-                unsafe { class_instance_prototype_built(recv.get_raw_mut_ptr::<ObjectHeader>()) },
-                cp.get_raw_const_ptr::<ObjectHeader>()
-            ),
+            3 => {
+                let built =
+                    recv.with_mut_ptr(|recv| unsafe { class_instance_prototype_built(recv) });
+                cp.with_const_ptr(|cp| assert_eq!(built, cp));
+            }
             _ => unreachable!(),
         }
         assert!(
             REDIRECT.with(|state| state.get().4) > 0,
             "the parent getter actually redirected both aliases"
         );
-        assert_eq!(
-            registry::class_decl_prototype_object(a).cast_const(),
-            dp.get_raw_const_ptr::<ObjectHeader>(),
-            "a later call selects the new outer edge"
-        );
-        assert_eq!(
-            registry::class_decl_prototype_object(b).cast_const(),
-            cp.get_raw_const_ptr::<ObjectHeader>(),
-            "the inner projection observes the getter's mutation"
-        );
+        let selected = registry::class_decl_prototype_object(a).cast_const();
+        dp.with_const_ptr(|dp| assert_eq!(selected, dp, "a later call selects the new outer edge"));
+        let selected = registry::class_decl_prototype_object(b).cast_const();
+        cp.with_const_ptr(|cp| {
+            assert_eq!(
+                selected, cp,
+                "the inner projection observes the getter's mutation"
+            )
+        });
     }
 }

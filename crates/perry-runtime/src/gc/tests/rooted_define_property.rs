@@ -56,20 +56,6 @@ fn register_handle_scanner() {
     );
 }
 
-fn register_descriptor_cache_scanners() {
-    // CopyingNurseryTestGuard clears production scanner registration and
-    // suppresses lazy gc_init. These fixtures build ordinary shapes and fresh
-    // reflection records; their shared keys caches and authoritative shape
-    // descriptors must mark/rewrite their raw array edges, just as in gc_init.
-    // A handle keeps the receiver live but cannot refresh a cache's key pointer.
-    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
-}
-
 fn string_value(text: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     f64::from_bits(string_bits(ptr as usize))
@@ -436,28 +422,22 @@ fn descriptor_snapshot_collection_keeps_heap_value_and_accessor_after_copying() 
             crate::fn_info!(snapshot_late_moving_getter, 0),
             3,
         ));
-        crate::closure::js_closure_set_capture_f64(
-            late.get_raw_mut_ptr(),
-            0,
-            first.get_nanbox_f64(),
-        );
-        crate::closure::js_closure_set_capture_f64(
-            late.get_raw_mut_ptr(),
-            1,
-            accessor.get_nanbox_f64(),
-        );
-        crate::closure::js_closure_set_capture_f64(
-            late.get_raw_mut_ptr(),
-            2,
-            second.get_nanbox_f64(),
-        );
+        late.with_mut_ptr(|late| {
+            crate::closure::js_closure_set_capture_f64(late, 0, first.get_nanbox_f64())
+        });
+        late.with_mut_ptr(|late| {
+            crate::closure::js_closure_set_capture_f64(late, 1, accessor.get_nanbox_f64())
+        });
+        late.with_mut_ptr(|late| {
+            crate::closure::js_closure_set_capture_f64(late, 2, second.get_nanbox_f64())
+        });
         let late_bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
         crate::object::js_object_set_property_key(
             late_bag.get_nanbox_f64(),
             string_value("get"),
-            crate::value::js_nanbox_pointer(
-                late.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            ),
+            late.with_const_ptr::<crate::closure::ClosureHeader, _>(|late| {
+                crate::value::js_nanbox_pointer(late as i64)
+            }),
         );
         crate::object::js_object_set_property_key(
             late_bag.get_nanbox_f64(),
@@ -536,9 +516,9 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
                     let receiver = scope.root_nanbox_f64(if arguments {
                         let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
                         object_value(crate::object::js_arguments_object_alloc(
-                            crate::value::js_nanbox_pointer(
-                                args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
-                            ),
+                            args.with_const_ptr::<crate::array::ArrayHeader, _>(|args| {
+                                crate::value::js_nanbox_pointer(args as i64)
+                            }),
                             f64::from_bits(crate::value::TAG_UNDEFINED),
                             0,
                         ))
@@ -685,7 +665,7 @@ fn descriptor_snapshot_public_raw_and_tagged_operands_move_during_key_conversion
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
-    register_descriptor_cache_scanners();
+    register_object_model_root_scanners_for_tests();
     unsafe {
         for reflect in [false, true] {
             for raw_receiver in [false, true] {
@@ -761,7 +741,7 @@ fn descriptor_snapshot_collection_raw_and_tagged_operands_move_during_decode() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
-    register_descriptor_cache_scanners();
+    register_object_model_root_scanners_for_tests();
     unsafe {
         for raw_target in [false, true] {
             for raw_properties in [false, true] {
@@ -805,7 +785,7 @@ fn descriptor_snapshot_typed_array_legacy_receivers_keep_bags_through_moving_key
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_handle_scanner();
-    register_descriptor_cache_scanners();
+    register_object_model_root_scanners_for_tests();
     unsafe {
         for representation in 0..3 {
             let scope = RuntimeHandleScope::new();
@@ -829,7 +809,9 @@ fn descriptor_snapshot_typed_array_legacy_receivers_keep_bags_through_moving_key
                 method.get_nanbox_f64(),
             );
             let address =
-                receiver.get_raw_mut_ptr::<crate::typedarray::TypedArrayHeader>() as usize;
+                receiver.with_const_ptr::<crate::typedarray::TypedArrayHeader, _>(|receiver| {
+                    receiver as usize
+                });
             let input = match representation {
                 0 => crate::value::js_nanbox_pointer(address as i64),
                 1 => f64::from_bits(address as u64),
@@ -851,9 +833,10 @@ fn descriptor_snapshot_typed_array_legacy_receivers_keep_bags_through_moving_key
             );
             assert!(GETTER_COPIED_OBJECTS.with(|count| count.get()) > 0);
             assert_ne!(addr_of(bag.get_nanbox_f64()), bag_before);
-            let current = crate::value::js_nanbox_pointer(
-                receiver.get_raw_mut_ptr::<crate::typedarray::TypedArrayHeader>() as i64,
-            );
+            let current =
+                receiver.with_const_ptr::<crate::typedarray::TypedArrayHeader, _>(|receiver| {
+                    crate::value::js_nanbox_pointer(receiver as i64)
+                });
             assert_eq!(read_property(current, "normalized_key"), 9.0);
         }
     }

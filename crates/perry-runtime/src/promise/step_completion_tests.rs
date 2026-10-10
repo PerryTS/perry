@@ -105,19 +105,23 @@ fn direct_step_forwards_an_abrupt_completion_before_the_next_job() {
             observer.with_mut_ptr(|c| crate::closure::js_closure_set_capture_ptr(c, 0, p as i64));
         });
         let context = crate::async_context::capture_context();
-        crate::promise::TASK_QUEUE.with(|queue| {
-            queue
-                .borrow_mut()
-                .push_back(crate::promise::Task::AsyncStep(
-                    step.get_raw_mut_ptr(),
-                    0.0,
-                    promise.get_raw_mut_ptr(),
-                    false,
-                    context,
-                    std::ptr::null_mut(),
-                    0,
-                    0,
-                ));
+        step.with_mut_ptr(|step| {
+            promise.with_mut_ptr(|promise| {
+                crate::promise::TASK_QUEUE.with(|queue| {
+                    queue
+                        .borrow_mut()
+                        .push_back(crate::promise::Task::AsyncStep(
+                            step,
+                            0.0,
+                            promise,
+                            false,
+                            context,
+                            std::ptr::null_mut(),
+                            0,
+                            0,
+                        ));
+                });
+            })
         });
         observer.with_mut_ptr(|c: *mut ClosureHeader| {
             crate::promise::enqueue_queue_microtask(c as i64)

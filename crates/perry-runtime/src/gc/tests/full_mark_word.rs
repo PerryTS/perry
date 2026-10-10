@@ -378,11 +378,8 @@ fn external_old_cache(sabotage: bool) {
             );
             let string = child as *const crate::StringHeader;
             let len = (*string).byte_len as usize;
-            let expected = std::slice::from_raw_parts(
-                (string as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                len,
-            )
-            .to_vec();
+            let expected =
+                std::slice::from_raw_parts(crate::string::string_data(string), len).to_vec();
             clear_marks();
             for _ in 0..2 {
                 let before = *cache;

@@ -7,6 +7,28 @@ extern "C" fn pending_step(_: *const ClosureHeader, _: JsThis, _: f64) -> f64 {
     js_nanbox_pointer(crate::promise::js_promise_new() as i64)
 }
 
+/// A queue entry built from rooted handles. Nothing allocates while the
+/// scoped pointers are alive, so no pointer outlives the borrow.
+fn queued_request(
+    original: &crate::gc::RuntimeHandle<'_>,
+    original_throw: &crate::gc::RuntimeHandle<'_>,
+    arg: f64,
+    promise: &crate::gc::RuntimeHandle<'_>,
+    kind: RequestKind,
+) -> AsyncGeneratorRequest {
+    original.with_mut_ptr(|original| {
+        original_throw.with_mut_ptr(|original_throw| {
+            promise.with_mut_ptr(|promise| AsyncGeneratorRequest {
+                original,
+                original_throw,
+                arg,
+                promise,
+                kind,
+            })
+        })
+    })
+}
+
 fn scanned_roots() -> Vec<u64> {
     let mut roots = Vec::new();
     let mut mark = |value: f64| roots.push(value.to_bits());
@@ -90,13 +112,13 @@ fn pending_step_completes_and_drains_before_the_next_job() {
                 states.push(AsyncGeneratorQueueState {
                     active: true,
                     completed: false,
-                    queue: VecDeque::from([AsyncGeneratorRequest {
-                        original: step.get_raw_mut_ptr(),
-                        original_throw: step.get_raw_mut_ptr(),
-                        arg: 0.0,
-                        promise: queued.get_raw_mut_ptr(),
-                        kind: RequestKind::NextOrThrow,
-                    }]),
+                    queue: VecDeque::from([queued_request(
+                        &step,
+                        &step,
+                        0.0,
+                        &queued,
+                        RequestKind::NextOrThrow,
+                    )]),
                 });
                 states.len()
             });
@@ -150,13 +172,7 @@ fn immediate_step_drains_a_long_queue_in_the_same_turn() {
                 active: true,
                 completed: false,
                 queue: (0..8192)
-                    .map(|_| AsyncGeneratorRequest {
-                        original: step.get_raw_mut_ptr(),
-                        original_throw: step.get_raw_mut_ptr(),
-                        arg: 0.0,
-                        promise: queued.get_raw_mut_ptr(),
-                        kind: RequestKind::NextOrThrow,
-                    })
+                    .map(|_| queued_request(&step, &step, 0.0, &queued, RequestKind::NextOrThrow))
                     .collect(),
             });
             states.len()
@@ -205,13 +221,13 @@ fn front_request_is_settled_before_resuming_the_next_request() {
             states.push(AsyncGeneratorQueueState {
                 active: true,
                 completed: false,
-                queue: VecDeque::from([AsyncGeneratorRequest {
-                    original: step.get_raw_mut_ptr(),
-                    original_throw: step.get_raw_mut_ptr(),
-                    arg: 0.0,
-                    promise: queued.get_raw_mut_ptr(),
-                    kind: RequestKind::NextOrThrow,
-                }]),
+                queue: VecDeque::from([queued_request(
+                    &step,
+                    &step,
+                    0.0,
+                    &queued,
+                    RequestKind::NextOrThrow,
+                )]),
             });
             states.len()
         });
@@ -306,13 +322,13 @@ fn rejected_return_closes_suspended_start_before_draining() {
             states.push(AsyncGeneratorQueueState {
                 active: true,
                 completed: false,
-                queue: VecDeque::from([AsyncGeneratorRequest {
-                    original: next.get_raw_mut_ptr(),
-                    original_throw: throw.get_raw_mut_ptr(),
-                    arg: 0.0,
-                    promise: queued.get_raw_mut_ptr(),
-                    kind: RequestKind::NextOrThrow,
-                }]),
+                queue: VecDeque::from([queued_request(
+                    &next,
+                    &throw,
+                    0.0,
+                    &queued,
+                    RequestKind::NextOrThrow,
+                )]),
             });
             states.len()
         });

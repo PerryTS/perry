@@ -9,7 +9,16 @@ pub(crate) struct Backing {
     data: *mut u8,
     capacity: u32,
     alignment: u32,
+    // A transferred allocation is freed on its receiver thread, but must
+    // debit the same test counter that its source thread incremented.
+    #[cfg(test)]
+    live_counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
+
+// The shipped layout is two words. Checked at compile time in every
+// non-test build; a test build adds only the counter field above.
+#[cfg(not(test))]
+const _: () = assert!(std::mem::size_of::<Backing>() == 16);
 
 // Exclusive ownership crosses the queue; no JS access remains after detach.
 unsafe impl Send for Backing {}
@@ -22,11 +31,15 @@ impl Backing {
             handle_alloc_error(layout);
         }
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 8,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -37,11 +50,15 @@ impl Backing {
             handle_alloc_error(layout);
         }
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 8,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -57,11 +74,15 @@ impl Backing {
         let capacity = bytes.capacity() as u32;
         std::mem::forget(bytes);
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 1,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -92,13 +113,16 @@ impl Drop for Backing {
                 .expect("buffer backing layout");
         unsafe { dealloc(self.data, layout) };
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.live_counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 #[cfg(test)]
-pub(crate) static LIVE_BACKINGS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    pub(crate) static LIVE_BACKINGS: std::sync::Arc<std::sync::atomic::AtomicUsize> =
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+}
 
 /// A single-use transfer in the serialized tree. During the private writer
 /// walk it names a source; commit removes that address before publication.
@@ -253,7 +277,7 @@ mod tests {
             .join()
             .unwrap();
         }
-        assert_eq!(source_root.get_raw_mut_ptr::<BufferHeader>(), source);
+        source_root.with_mut_ptr::<BufferHeader, _>(|current| assert_eq!(current, source));
         assert_eq!(count(), before, "worker exit must release received backing");
     }
 
@@ -261,7 +285,7 @@ mod tests {
     fn backing_outlives_its_allocating_worker() {
         let _guard = setup();
         let before = count();
-        let (message, original) = std::thread::spawn(|| {
+        let (message, original, owner_counter) = std::thread::spawn(|| {
             let source = js_array_buffer_new(1024 * 1024);
             let original = byte_address(source);
             unsafe {
@@ -275,16 +299,26 @@ mod tests {
                 )
                 .unwrap()
             };
-            (message, original)
+            (message, original, std::sync::Arc::clone(&LIVE_BACKINGS))
         })
         .join()
         .unwrap();
+        assert_eq!(
+            owner_counter.load(Ordering::SeqCst),
+            1,
+            "message must retain the exited worker's backing"
+        );
         let scope = RuntimeHandleScope::new();
         let root = scope.root_nanbox_u64(unsafe { deserialize_nanbox_on_current_thread(&message) });
         let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
         assert_eq!(byte_address(received), original);
         assert_eq!(crate::buffer::js_buffer_get(received, 0), 81);
         crate::buffer::detach_array_buffer(received as usize);
+        assert_eq!(
+            owner_counter.load(Ordering::SeqCst),
+            0,
+            "receiver detach must release the allocating worker's backing"
+        );
         assert_eq!(count(), before);
     }
 
@@ -375,9 +409,9 @@ mod tests {
         }
         .is_err());
         assert!(!crate::buffer::is_detached_buffer(source as usize));
-        assert_eq!(byte_address(root.get_raw_mut_ptr::<BufferHeader>()), data);
+        assert_eq!(root.with_mut_ptr(|root| byte_address(root)), data);
         assert_eq!(
-            crate::buffer::js_buffer_get(root.get_raw_mut_ptr::<BufferHeader>(), 0),
+            root.with_mut_ptr(|root| crate::buffer::js_buffer_get(root, 0)),
             123
         );
         crate::buffer::detach_array_buffer(source as usize);

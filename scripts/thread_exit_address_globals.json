@@ -1419,24 +1419,6 @@
    "hook": "release_closure_side_table_owners_in_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "PERRY_TA_KIND_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); Arena::drop clears every slot naming a freed block with a compare-exchange (#11463/#11467).",
-   "hook": "invalidate_caches_in_range"
-  },
-  {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "INLINE_OWNING_U32_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; cleared for freed blocks by the same Arena::drop call (#11467).",
-   "hook": "invalidate_caches_in_range"
-  },
-  {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
    "names": [
     "LIVE"
@@ -1493,14 +1475,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Survivor count of the previous copying minor, used only to pre-size worklist vectors (capped at SURVIVOR_ESTIMATE_CAP); a count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/copying.rs",
-   "names": [
-    "PREVIOUS_DIRTY_COVERED_ESTIMATE"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Previous minor's dirty-scan covered-set size used to pre-size the next one; a capped count."
   },
   {
    "file": "crates/perry-runtime/src/node_vm.rs",
@@ -1856,15 +1830,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/store/layout.rs",
-   "names": [
-    "PERRY_U8_INLINE_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Inline Uint8Array address cache read by codegen guards; each slot is compare-exchanged to 0 at thread exit if it names freed memory.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/gc/heap_budget.rs",
@@ -3601,15 +3566,6 @@
    "why": "Process-wide byte total of pooled free arena blocks (a size counter for the pool cap), not an address."
   },
   {
-   "file": "crates/perry-runtime/src/buffer/own_props.rs",
-   "names": [
-    "PROPS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Buffer expando records keyed by buffer address; records whose buffer or any stored value is freed are dropped at thread exit.",
-   "hook": "release_buffer_own_props_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/ios_game_loop.rs",
    "names": [
     "CONNECTED_SCENE"
@@ -3875,6 +3831,40 @@
    ],
    "verdict": "no_heap_address",
    "why": "Test-only observed AgentId from the retire hook; AgentId is a monotonic numeric agent identity, never a heap address. per_test_global isolates the assertion on the retiring worker thread."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/region/reservation.rs",
+   "names": [
+    "INITIAL",
+    "RESERVATION"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "INITIAL owns the process-lifetime boxed Reservation; RESERVATION points at that same Box, published once by initialized(). These addresses name Rust metadata, not GC payload. Persistent descriptors classify region payload only while their MAPPED publication bit is live; unmap retires that bit before replacing the payload mapping."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/region/reservation.rs",
+   "names": [
+    "SERIAL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic incarnation counter; serial() shifts its scalar sequence number to encode descriptor publication, never a payload or metadata address."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/region.rs",
+   "names": [
+    "REGIONS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "hook": "unmap",
+   "why": "Non-Linux mapped-region extent registry. Every physical block destruction goes through region::unmap, which removes its start address before dealloc; Arena::drop destroys blocks through that same funnel. Pooled blocks remain mapped and registered until their actual destruction."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/backing.rs",
+   "names": [
+    "LIVE_BACKINGS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "cfg(test) per_test_global Arc<AtomicUsize> owns a Rust allocator allocation containing only a live-backing count, never a GC or arena pointer. Each test Backing retains a clone of its creating test counter and decrements that same Arc on drop even after transfer or source-thread exit; receiver-thread teardown cannot leave an arena address in the counter. Arc ownership retains the numeric counter until its last backing/test witness drops."
   }
  ]
 }

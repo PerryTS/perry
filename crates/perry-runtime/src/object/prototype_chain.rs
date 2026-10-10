@@ -1575,7 +1575,7 @@ mod readpath_null_tests {
             "the live null edge must be authoritative even for a synthetic class"
         );
         let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
-        unsafe {
+        {
             object::js_object_set_field_by_name(prototype, key, 42.0);
             assert!(object::js_object_get_field_by_name(instance, key).is_undefined());
         }

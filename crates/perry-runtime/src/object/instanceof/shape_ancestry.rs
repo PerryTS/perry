@@ -54,8 +54,9 @@ pub(crate) unsafe fn class_shape_reaches(
     // Only an explicit physical link needs the target's concrete object.
     let mut builtin_target = None;
     for _ in 0..128 {
-        let obj = current.get_raw_mut_ptr::<ObjectHeader>();
-        let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        let Some(header) = current.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::value::addr_class::try_read_gc_header(obj as usize)
+        }) else {
             return false;
         };
         if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
@@ -81,13 +82,13 @@ pub(crate) unsafe fn class_shape_reaches(
             if !target.is_null() && next == target {
                 return true;
             }
-            if next == current.get_raw_mut_ptr::<ObjectHeader>() {
+            if current.with_mut_ptr::<ObjectHeader, _>(|current| next == current) {
                 return false;
             }
             current.set_raw_mut_ptr(next);
             continue;
         }
-        let Some(record) = shapes::object_shape_record(obj) else {
+        let Some(record) = current.with_const_ptr(|obj| shapes::object_shape_record(obj)) else {
             return false;
         };
         let identity = record.proto_id();
@@ -125,7 +126,7 @@ pub(crate) unsafe fn class_shape_reaches(
             if next.is_null() {
                 return false;
             }
-            if next == obj {
+            if current.with_mut_ptr::<ObjectHeader, _>(|current| next == current) {
                 return false;
             }
             current.set_raw_mut_ptr(next);
@@ -135,8 +136,7 @@ pub(crate) unsafe fn class_shape_reaches(
             return false;
         }
         let target = physical_target(&scope, &mut builtin_target, want, build);
-        let obj = current.get_raw_mut_ptr::<ObjectHeader>();
-        let bits = shapes::object_prototype_word(obj);
+        let bits = current.with_const_ptr(|obj| shapes::object_prototype_word(obj));
         let v = crate::JSValue::from_bits(bits);
         if !v.is_pointer() {
             return false;
@@ -145,7 +145,7 @@ pub(crate) unsafe fn class_shape_reaches(
         if !target.is_null() && next == target {
             return true;
         }
-        if next == obj {
+        if current.with_mut_ptr::<ObjectHeader, _>(|current| next == current) {
             return false;
         }
         current.set_raw_mut_ptr(next);

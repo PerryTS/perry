@@ -72,7 +72,8 @@ fn ranged_byte_copy_retains_source_and_counts_typed_elements() {
         let scope = RuntimeHandleScope::new();
         let size = crate::typedarray::elem_size_for_kind(kind);
         let source = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(kind, 4));
-        let input = bits(source.get_raw_mut_ptr::<crate::typedarray::TypedArrayHeader>());
+        let input =
+            source.with_const_ptr::<crate::typedarray::TypedArrayHeader, _>(|source| bits(source));
         bytes::no_gc(|scope| unsafe {
             for (index, byte) in bytes::bytes_mut(input, scope)
                 .unwrap()
@@ -89,12 +90,17 @@ fn ranged_byte_copy_retains_source_and_counts_typed_elements() {
             (3.0, 99.0, 3 * size, size),
             (99.0, undefined, 4 * size, 0),
         ] {
+            // Re-read for every allocating copy; the previous copy may move source.
+            let input = source
+                .with_const_ptr::<crate::typedarray::TypedArrayHeader, _>(|source| bits(source));
             let out = buffer::js_buffer_copy_bytes_from(input, offset, length);
             let out = scope.root_raw_mut_ptr(out);
             bytes::no_gc(|scope| {
-                let actual =
-                    bytes::bytes(bits(out.get_raw_mut_ptr::<buffer::BufferHeader>()), scope)
-                        .unwrap();
+                let actual = bytes::bytes(
+                    out.with_const_ptr::<buffer::BufferHeader, _>(|out| bits(out)),
+                    scope,
+                )
+                .unwrap();
                 let expected: Vec<u8> = (expected_start..expected_start + expected_len)
                     .map(|i| (i + 37) as u8)
                     .collect();
@@ -265,11 +271,14 @@ fn typed_find_last_retains_receiver_callback_and_bigint_candidate() {
                 4,
             ));
             for i in 0..4 {
-                crate::typedarray::set_bigint_lane_bits(source.get_raw_mut_ptr(), i, 37 + i as u64);
+                source.with_mut_ptr(|source| {
+                    crate::typedarray::set_bigint_lane_bits(source, i, 37 + i as u64)
+                });
             }
-            let callback =
-                crate::closure::js_closure_alloc(crate::fn_info!(collect_in_typed_find, 3), 0);
-            (source.get_raw_mut_ptr(), callback)
+            let (callback, source) = source.across_mut(|| {
+                crate::closure::js_closure_alloc(crate::fn_info!(collect_in_typed_find, 3), 0)
+            });
+            (source, callback)
         };
         let before = gc_total_collection_count();
         if find_index {
@@ -362,18 +371,23 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
         64 * 1024,
         buffer::store::Init::Uninit,
     ));
-    let owner = owner.get_raw_mut_ptr::<buffer::BufferHeader>();
-    unsafe {
+    owner.with_mut_ptr::<buffer::BufferHeader, _>(|owner| unsafe {
         crate::buffer::store::set_length(owner as usize, 64 * 1024);
-    }
-    assert!(!buffer::is_foreign_backed_buffer(owner as usize));
-    let first = bytes::pin(bits(owner)).unwrap();
-    let second = bytes::pin(bits(owner)).unwrap();
+        assert!(!buffer::is_foreign_backed_buffer(owner as usize));
+    });
+    let first = owner
+        .with_const_ptr::<buffer::BufferHeader, _>(|owner| bytes::pin(bits(owner)))
+        .unwrap();
+    let second = owner
+        .with_const_ptr::<buffer::BufferHeader, _>(|owner| bytes::pin(bits(owner)))
+        .unwrap();
     unsafe {
         std::ptr::write_bytes(first.as_mut_ptr(), 37, first.len());
     }
-    buffer::detach_array_buffer(owner as usize);
-    assert!(buffer::is_detached_buffer(owner as usize));
+    owner.with_mut_ptr::<buffer::BufferHeader, _>(|owner| {
+        buffer::detach_array_buffer(owner as usize);
+        assert!(buffer::is_detached_buffer(owner as usize));
+    });
     let check = |pin: &bytes::Pinned| unsafe {
         assert!(
             std::slice::from_raw_parts(pin.as_ptr(), pin.len())
@@ -385,6 +399,7 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     check(&first);
     drop(first);
     check(&second);
+    #[cfg(target_os = "linux")]
     let data = second.as_ptr();
     drop(second);
     #[cfg(target_os = "linux")]
@@ -423,7 +438,7 @@ fn detached_bit_and_nested_pin_count_do_not_overlap() {
 fn large_concat_and_nested_views_preserve_one_visible_window() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _force = ForcedEvacuationTestGuard::on();
-    let (nested, owner) = {
+    let owner = {
         let handles = RuntimeHandleScope::new();
         let array = handles.root_raw_mut_ptr(crate::array::js_array_alloc(300));
         let (part, pin) = bytes::new_bytes(Brand::Buffer, 18_000, Init::Uninit);
@@ -431,32 +446,32 @@ fn large_concat_and_nested_views_preserve_one_visible_window() {
             std::ptr::write_bytes(pin.as_mut_ptr(), 0x25, pin.len());
         }
         for _ in 0..300 {
-            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), part);
+            let grown = array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, part));
+            array.set_raw_mut_ptr(grown);
         }
-        let concat = buffer::js_buffer_concat(array.get_raw_mut_ptr());
+        let concat = array.with_mut_ptr(|array| buffer::js_buffer_concat(array));
         let concat = handles.root_raw_mut_ptr(concat);
-        let view = buffer::js_buffer_slice(concat.get_raw_mut_ptr(), 4, 5_400_000);
+        let view = concat.with_mut_ptr(|concat| buffer::js_buffer_slice(concat, 4, 5_400_000));
         let view = handles.root_raw_mut_ptr(view);
-        let nested =
-            handles.root_raw_mut_ptr(buffer::js_buffer_slice(view.get_raw_mut_ptr(), 4, 12));
+        let nested = handles
+            .root_raw_mut_ptr(view.with_mut_ptr(|view| buffer::js_buffer_slice(view, 4, 12)));
         assert_eq!(
-            buffer::buffer_backing_array_buffer(
-                concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
-            ),
-            buffer::buffer_backing_array_buffer(
-                nested.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
-            )
+            concat.with_mut_ptr::<buffer::BufferHeader, _>(|concat| {
+                buffer::buffer_backing_array_buffer(concat as usize)
+            }),
+            nested.with_mut_ptr::<buffer::BufferHeader, _>(|nested| {
+                buffer::buffer_backing_array_buffer(nested as usize)
+            })
         );
         let holder = crate::array::js_array_alloc(1);
         crate::array::js_array_push_f64(
             holder,
-            bits(nested.get_raw_mut_ptr::<buffer::BufferHeader>()),
+            nested.with_const_ptr::<buffer::BufferHeader, _>(|nested| bits(nested)),
         );
         js_shadow_slot_set(0, ptr_bits(holder as usize));
-        (
-            nested.get_raw_mut_ptr::<buffer::BufferHeader>(),
-            concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize,
-        )
+        // Byte-cell owners are old-arena allocations; retain this identity solely
+        // to verify that the holder edge kept the owner alive after all handles drop.
+        concat.with_const_ptr::<buffer::BufferHeader, _>(|concat| concat as usize)
     };
     let before = gc_total_collection_count();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -464,15 +479,19 @@ fn large_concat_and_nested_views_preserve_one_visible_window() {
     assert!(gc_total_collection_count() > before);
     let _ =
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    // The holder itself can move: read its rewritten shadow slot after both collections.
+    let holder =
+        (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    let nested = crate::array::js_array_get_f64(holder, 0);
     assert!(
         unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }.is_some(),
         "the nested view must retain its concat owner without a separate owner root"
     );
     assert_eq!(
-        buffer::js_buffer_read_uint32_be(bits(nested), 0),
+        buffer::js_buffer_read_uint32_be(nested, 0),
         0x25252525_u32 as f64
     );
-    bytes::no_gc(|scope| assert_eq!(bytes::bytes(bits(nested), scope).unwrap(), &[0x25; 8]));
+    bytes::no_gc(|scope| assert_eq!(bytes::bytes(nested, scope).unwrap(), &[0x25; 8]));
 }
 
 #[test]

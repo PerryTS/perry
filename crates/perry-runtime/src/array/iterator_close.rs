@@ -150,7 +150,9 @@ mod tests {
     use super::*;
     use crate::{closure, object, string, value};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+    }
     extern "C" fn returns_object(
         _closure: *const closure::ClosureHeader,
         _this: closure::JsThis,

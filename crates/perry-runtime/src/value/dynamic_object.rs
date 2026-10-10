@@ -264,10 +264,12 @@ pub extern "C" fn js_value_length_property_key_ic_f64(
         return length;
     }
     let bits = receiver.get_nanbox_f64().to_bits();
-    crate::object::js_object_get_field_by_name_f64(
-        bits as *const crate::object::ObjectHeader,
-        key.get_raw_const_ptr(),
-    )
+    key.with_const_ptr(|key| {
+        crate::object::js_object_get_field_by_name_f64(
+            bits as *const crate::object::ObjectHeader,
+            key,
+        )
+    })
 }
 
 fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheSlot) -> f64 {
@@ -872,19 +874,11 @@ mod length_handle_band_tests {
                 "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
             );
 
-            // GC_STORE_AUDIT(POINTER_FREE): TypedArrayHeader is
-            // length/capacity/kind/elem_size/_pad numerics with no pointer
-            // field, and the destination is this test's own private anonymous
-            // mmap page rather than arena-managed memory, so the store creates
-            // no heap edge for the collector to trace.
-            std::ptr::write(
-                ptr,
-                crate::typedarray::TypedArrayHeader {
-                    length: 37,
-                    capacity: 37,
-                    link: 0,
-                },
-            );
+            // The byte-cell layout is private to the store; its own
+            // initializer writes length/capacity 37 and a null link into this
+            // test's private anonymous mmap page (not arena-managed memory),
+            // so no heap edge is created.
+            crate::buffer::store::initialize_shared_block(ptr, 37);
 
             assert_eq!(
                 js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),

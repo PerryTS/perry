@@ -594,9 +594,10 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
         }
         let mut total = 0usize;
         unsafe {
-            let len = crate::array::js_array_length(buffers.get_raw_const_ptr());
+            let len = buffers.with_const_ptr(|buffers| crate::array::js_array_length(buffers));
             for i in 0..len {
-                let value = crate::array::js_array_get_f64(buffers.get_raw_const_ptr(), i);
+                let value =
+                    buffers.with_const_ptr(|buffers| crate::array::js_array_get_f64(buffers, i));
                 let buf = buffer_ptr_from_value(value);
                 if buf.is_null() {
                     continue;
@@ -689,9 +690,10 @@ pub(crate) fn writev_sync_inner(fd: i32, buffers_value: f64, position_value: f64
             let _ = file.seek(SeekFrom::Start(pos));
         }
         let mut total = 0usize;
-        let len = crate::array::js_array_length(buffers.get_raw_const_ptr());
+        let len = buffers.with_const_ptr(|buffers| crate::array::js_array_length(buffers));
         for i in 0..len {
-            let value = crate::array::js_array_get_f64(buffers.get_raw_const_ptr(), i);
+            let value =
+                buffers.with_const_ptr(|buffers| crate::array::js_array_get_f64(buffers, i));
             let buf = buffer_ptr_from_value(value);
             if buf.is_null() {
                 continue;

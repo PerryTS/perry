@@ -82,25 +82,36 @@ gh() {
   case "$*" in
     *'/commits?'*) printf '%s\n%s\n' "$SHA" "$BASE" ;;
     *'/compare/'*) printf '{"status":"ahead","behind_by":0,"base_commit":{"sha":"%s"},"merge_base_commit":{"sha":"%s"},"files":[{"filename":"changelog.d/fix.md","status":"added"}]}' "$BASE" "$BASE" ;;
-    *'/jobs?'*) echo full-suite-gate ;;
+    *'/runs/55/jobs?'*) echo '{"jobs":[{"name":"simctl-tests / simctl","status":"completed","conclusion":"success"}]}' ;;
+    *'/jobs?'*) echo '{"jobs":[{"name":"full-suite-gate","conclusion":"success"}]}' ;;
     *'/git/ref/heads/'*) echo "$SHA" ;;
-    'workflow run simctl-tests.yml'*) echo dispatched ;;
-    *'simctl-tests.yml/runs?'*'per_page=1'*) echo 0 ;;
-    *'simctl-tests.yml/runs?'*) echo '{"workflow_runs":[{"status":"completed","conclusion":"success","html_url":"sim-success"}]}' ;;
-    *"head_sha=$BASE"*) echo '{"workflow_runs":[{"id":42,"status":"completed","conclusion":"success","html_url":"test-success"}]}' ;;
+    'workflow run compiler-runtime.yml'*) touch "$DISPATCHED"; echo dispatched ;;
+    *'compiler-runtime.yml/runs?'*)
+      if [ -e "$DISPATCHED" ]; then
+        printf '{"workflow_runs":[{"id":55,"head_sha":"%s","status":"completed","conclusion":"success","html_url":"sim-success"}]}' "$SHA"
+      else echo '{"workflow_runs":[]}'
+      fi ;;
+    *"head_sha=$BASE"*) printf '{"workflow_runs":[{"id":42,"head_sha":"%s","status":"completed","conclusion":"success","html_url":"test-success"}]}' "$BASE" ;;
     *"head_sha=$SHA"*) echo '{"workflow_runs":[]}' ;;
     *) echo "unexpected gh call: $*" >&2; return 1 ;;
   esac
 }
 sleep() { echo 'unexpected wait' >&2; exit 99; }
 '''
+            # The simulator gate fetches jobs from a Python subprocess too.
+            # Give both the shell and that subprocess the same offline CLI.
+            gh_cli = Path(tmp) / 'gh'
+            gh_cli.write_text('#!/usr/bin/env bash\n' + stub + '\ngh "$@"\n')
+            gh_cli.chmod(0o755)
             result = shell(stub + source, env={'CALLS': str(log), 'SHA': SHA, 'BASE': BASE,
+                'DISPATCHED': str(Path(tmp) / 'dispatched'),
+                'PATH': tmp + os.pathsep + os.environ['PATH'],
                 'MODE': 'cut-release', 'REF_NAME': 'release/test', 'REPO': 'test/repo'})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             calls = log.read_text()
-            self.assertIn('workflow run simctl-tests.yml', calls)
+            self.assertIn('workflow run compiler-runtime.yml --ref release/test -R test/repo -f suite=simctl-tests', calls)
             self.assertNotIn('workflow run test.yml', calls)
-            sim_queries = [c for c in calls.splitlines() if 'simctl-tests.yml/runs?' in c]
+            sim_queries = [c for c in calls.splitlines() if 'compiler-runtime.yml/runs?' in c]
             self.assertEqual(len(sim_queries), 2)
             self.assertTrue(all('head_sha=' + SHA in c for c in sim_queries), calls)
 

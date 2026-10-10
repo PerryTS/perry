@@ -37,19 +37,15 @@ pub(crate) unsafe fn mark_all_keys(
     let obj_addr = obj as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
-        if !key_val.is_string() {
+        if !key_val.is_any_string() {
             continue;
         }
-        let stored_key = key_val.as_string_ptr();
-        if stored_key.is_null() {
+        let Some(Some(key_str)) =
+            crate::string::with_string_value_bytes(f64::from_bits(key_val.bits()), |bytes| {
+                std::str::from_utf8(bytes).ok().map(str::to_owned)
+            })
+        else {
             continue;
-        }
-        let name_ptr = (stored_key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let name_len = (*stored_key).byte_len as usize;
-        let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-        let key_str = match std::str::from_utf8(name_bytes) {
-            Ok(s) => s.to_string(),
-            Err(_) => continue,
         };
         // Start from existing attrs (or default `{w:true, e:true, c:true}`) and clear bits.
         let mut attrs =

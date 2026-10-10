@@ -289,9 +289,13 @@ and Proxy-chain witnesses (four tests total). Main's source file is restored
 by a trap after the failure proof.
 
 All six previously Node-matching weak-area files still match. The new
-72-line behavior matrix matches Node on fix both normally and under
-`PERRY_GC_STRESS_SEED=7 PERRY_GC_STRESS_RATE=1 PERRY_GC_TRACE=1`:
-57 actual copying minors move **38,421 objects**. The existing
+72-line behavior matrix matches Node on fix normally and in the recorded
+instrumented run: 57 actual copying minors move **38,421 objects**. The
+recorded command used retired stress-seed and stress-rate names without live
+parsers, so those results establish moving-collection coverage but do not
+establish seeded schedule coverage. To verify the current schedule, rerun
+with `PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_TRACE=1`
+and check its schedule and copying-minor counters. The existing
 `test_issue_2656_weakref_finalization_gc.ts` differs from Node on both arms;
 it is not a newly matching file or a newly introduced mismatch.
 

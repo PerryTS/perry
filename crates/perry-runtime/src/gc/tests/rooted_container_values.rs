@@ -55,13 +55,11 @@ fn opaque_record_writes_preserve_inline_and_overflow_edges_when_they_move() {
     for i in 0..32 {
         let name = format!("field{i}");
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        unsafe {
-            crate::object::js_object_set_field_by_name(
-                crate::value::js_nanbox_get_pointer(record.get_nanbox_f64()) as *mut _,
-                key,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-            );
-        }
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(record.get_nanbox_f64()) as *mut _,
+            key,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
     }
     let obj = crate::value::js_nanbox_get_pointer(record.get_nanbox_f64())
         as *mut crate::object::ObjectHeader;

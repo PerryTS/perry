@@ -10,6 +10,7 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
     let _protection =
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
+    register_object_model_root_scanners_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     for index in [0, 1, 2] {
         let source = r#"[{"id":0,"nested":{"value":"heap value zero"}},{"id":1,"nested":{"value":"heap value one"}},{"id":2,"nested":{"value":"heap value two"}}]"#;
@@ -89,6 +90,7 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
     let _protection =
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
+    register_object_model_root_scanners_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let source = br#"[1,"tail after getter"]"#;
     let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
@@ -148,6 +150,7 @@ fn json_grown_array_getter_flags_live_head_and_survives_movement() {
     let _protection =
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
+    register_object_model_root_scanners_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     let source = br#"[1,"tail after getter"]"#;
     let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
@@ -277,6 +280,7 @@ fn assert_record_children_move(cold: bool, escaped: bool) {
     let _protection =
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
+    register_object_model_root_scanners_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let text: &[u8] = if escaped {

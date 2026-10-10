@@ -25,13 +25,18 @@ pub fn typed_array_to_array(ta: *const TypedArrayHeader) -> *mut crate::array::A
         let len = crate::typedarray::element_length(ta);
         let result = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len));
         let value = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
-        for i in 0..len as usize {
-            // BigInt element reads allocate: resolve each rooted receiver and
-            // result again after the read instead of retaining a slot pointer.
-            value.set_nanbox_f64(load_at(source.get_raw_const_ptr(), i));
-            crate::array::js_array_push_f64(result.get_raw_mut_ptr(), value.get_nanbox_f64());
-        }
-        result.get_raw_mut_ptr()
+        let (_, result_ptr) = result.across_mut(|| {
+            for i in 0..len as usize {
+                // BigInt element reads allocate: resolve each rooted receiver and
+                // result again after the read instead of retaining a slot pointer.
+                value.set_nanbox_f64(source.with_const_ptr(|source| load_at(source, i)));
+                let pushed = result.with_mut_ptr(|result| {
+                    crate::array::js_array_push_f64(result, value.get_nanbox_f64())
+                });
+                result.set_raw_mut_ptr(pushed);
+            }
+        });
+        result_ptr
     }
 }
 
@@ -121,22 +126,36 @@ unsafe fn bigint_lane_compare(
     b_bits: u64,
     signed: bool,
 ) -> std::cmp::Ordering {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let box_lane = |bits: u64| -> f64 {
+    let mut box_lane = |bits: u64| -> f64 {
         if signed {
             crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(bits as i64) as i64)
         } else {
             crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(bits) as i64)
         }
     };
+    bigint_lane_compare_with_boxer(site, comparator, a_bits, b_bits, &mut box_lane)
+}
+
+pub(crate) unsafe fn bigint_lane_compare_with_boxer(
+    site: crate::closure::DirectCall2,
+    comparator: *const ClosureHeader,
+    a_bits: u64,
+    b_bits: u64,
+    mut box_lane: impl FnMut(u64) -> f64,
+) -> std::cmp::Ordering {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // Root before either operand box can collect; the caller's address is a snapshot.
+    let comparator = scope.root_raw_const_ptr(comparator);
     let a_handle = scope.root_nanbox_f64(box_lane(a_bits));
     let b_handle = scope.root_nanbox_f64(box_lane(b_bits));
-    let r = site.call(
-        comparator,
-        crate::closure::plain_call_receiver(),
-        a_handle.get_nanbox_f64(),
-        b_handle.get_nanbox_f64(),
-    );
+    let r = comparator.with_const_ptr(|comparator| {
+        site.call(
+            comparator,
+            crate::closure::plain_call_receiver(),
+            a_handle.get_nanbox_f64(),
+            b_handle.get_nanbox_f64(),
+        )
+    });
     if r < 0.0 {
         std::cmp::Ordering::Less
     } else if r > 0.0 {
@@ -166,13 +185,7 @@ unsafe fn sorted_bigint_lanes(
     let cmp_site = crate::closure::DirectCall2::resolve(comparator);
     let mut lanes: Vec<u64> = std::slice::from_raw_parts(data_ptr(ta) as *const u64, len).to_vec();
     lanes.sort_by(|&a, &b| {
-        bigint_lane_compare(
-            cmp_site,
-            cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
-            a,
-            b,
-            signed,
-        )
+        cmp_handle.with_const_ptr(|cmp| bigint_lane_compare(cmp_site, cmp, a, b, signed))
     });
     lanes
 }
@@ -205,8 +218,9 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
             // comparator-triggered GC relocated it.
             let scope = crate::gc::RuntimeHandleScope::new();
             let ta_handle = scope.root_raw_mut_ptr(ta_clean);
-            let lanes = sorted_bigint_lanes(ta_clean, len, kind == KIND_BIGINT64, comparator);
-            let ta_cur = ta_handle.get_raw_mut_ptr::<TypedArrayHeader>();
+            let (lanes, ta_cur) = ta_handle.across_mut::<TypedArrayHeader, _>(|| {
+                sorted_bigint_lanes(ta_clean, len, kind == KIND_BIGINT64, comparator)
+            });
             for (i, bits) in lanes.into_iter().enumerate() {
                 set_bigint_lane_bits(ta_cur, i as i32, bits);
             }
@@ -242,10 +256,12 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
                 std::cmp::Ordering::Equal
             }
         });
-        for (i, v) in buf.into_iter().enumerate() {
-            js_typed_array_set(ta_handle.get_raw_mut_ptr(), i as i32, v);
-        }
-        ta_handle.get_raw_mut_ptr()
+        let (_, current) = ta_handle.across_mut(|| {
+            for (i, v) in buf.into_iter().enumerate() {
+                ta_handle.with_mut_ptr(|ta| js_typed_array_set(ta, i as i32, v));
+            }
+        });
+        current
     }
 }
 
@@ -381,7 +397,7 @@ pub extern "C" fn js_typed_array_with(
             let value = if i as i64 == idx {
                 replacement.get_nanbox_f64()
             } else {
-                js_typed_array_get(source.get_raw_const_ptr(), i as i32)
+                source.with_const_ptr(|source| js_typed_array_get(source, i as i32))
             };
             // BigInt reads may allocate. The output pin retains its owner,
             // and the next source read uses the current rooted receiver.
@@ -408,10 +424,13 @@ pub extern "C" fn js_typed_array_find_last(
         .then(|| scope.root_raw_const_ptr(ta));
     #[cfg(not(test))]
     let receiver = Some(scope.root_raw_const_ptr(ta));
-    let current = || {
-        receiver
-            .as_ref()
-            .map_or(ta, |root| root.get_raw_const_ptr())
+    let read = |i| match receiver.as_ref() {
+        Some(root) => root.with_const_ptr(|ta| js_typed_array_get(ta, i)),
+        None => js_typed_array_get(ta, i),
+    };
+    let receiver_value = || match receiver.as_ref() {
+        Some(root) => root.with_const_ptr(|ta| ta_receiver_value(ta)),
+        None => ta_receiver_value(ta),
     };
     let callback = scope.root_raw_const_ptr(callback);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -420,16 +439,19 @@ pub extern "C" fn js_typed_array_find_last(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback.get_raw_const_ptr());
+        let cb_site =
+            callback.with_const_ptr(|callback| crate::closure::DirectCall3::resolve(callback));
         for i in (0..len).rev() {
-            candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
-            let r = cb_site.call(
-                callback.get_raw_const_ptr(),
-                crate::closure::plain_call_receiver(),
-                candidate.get_nanbox_f64(),
-                i as f64,
-                ta_receiver_value(current()),
-            );
+            candidate.set_nanbox_f64(read(i as i32));
+            let r = callback.with_const_ptr(|callback| {
+                cb_site.call(
+                    callback,
+                    crate::closure::plain_call_receiver(),
+                    candidate.get_nanbox_f64(),
+                    i as f64,
+                    receiver_value(),
+                )
+            });
             if crate::value::js_is_truthy(r) != 0 {
                 return candidate.get_nanbox_f64();
             }
@@ -454,10 +476,13 @@ pub extern "C" fn js_typed_array_find_last_index(
         .then(|| scope.root_raw_const_ptr(ta));
     #[cfg(not(test))]
     let receiver = Some(scope.root_raw_const_ptr(ta));
-    let current = || {
-        receiver
-            .as_ref()
-            .map_or(ta, |root| root.get_raw_const_ptr())
+    let read = |i| match receiver.as_ref() {
+        Some(root) => root.with_const_ptr(|ta| js_typed_array_get(ta, i)),
+        None => js_typed_array_get(ta, i),
+    };
+    let receiver_value = || match receiver.as_ref() {
+        Some(root) => root.with_const_ptr(|ta| ta_receiver_value(ta)),
+        None => ta_receiver_value(ta),
     };
     let callback = scope.root_raw_const_ptr(callback);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -466,16 +491,19 @@ pub extern "C" fn js_typed_array_find_last_index(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback.get_raw_const_ptr());
+        let cb_site =
+            callback.with_const_ptr(|callback| crate::closure::DirectCall3::resolve(callback));
         for i in (0..len).rev() {
-            candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
-            let r = cb_site.call(
-                callback.get_raw_const_ptr(),
-                crate::closure::plain_call_receiver(),
-                candidate.get_nanbox_f64(),
-                i as f64,
-                ta_receiver_value(current()),
-            );
+            candidate.set_nanbox_f64(read(i as i32));
+            let r = callback.with_const_ptr(|callback| {
+                cb_site.call(
+                    callback,
+                    crate::closure::plain_call_receiver(),
+                    candidate.get_nanbox_f64(),
+                    i as f64,
+                    receiver_value(),
+                )
+            });
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }

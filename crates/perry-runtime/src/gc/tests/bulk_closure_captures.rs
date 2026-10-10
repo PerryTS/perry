@@ -200,13 +200,11 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert!(trace.copying_nursery.copied_objects > 0);
     let first = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::closure::ClosureHeader;
-    let second = second_root.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+    let second_bits =
+        second_root.with_const_ptr(|second| crate::closure::js_closure_get_capture_bits(second, 0));
     let first_cell = (crate::closure::js_closure_get_capture_bits(first, 0) & POINTER_MASK)
         as *mut crate::r#box::Box;
-    assert_eq!(
-        first_cell as i64,
-        (crate::closure::js_closure_get_capture_bits(second, 0) & POINTER_MASK) as i64
-    );
+    assert_eq!(first_cell as i64, (second_bits & POINTER_MASK) as i64);
     crate::r#box::js_box_set(first_cell, 99.0);
     assert_eq!(crate::r#box::js_box_get(first_cell), 99.0);
 }
