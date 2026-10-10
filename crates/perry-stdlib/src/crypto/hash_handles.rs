@@ -151,9 +151,9 @@ pub enum HashState {
     Sha1(Sha1),
     Sha224(Sha224),
     Sha256(Sha256),
-    // The context owns the algorithm as well as the words. SHA-384 and
-    // SHA-512 share the provider already used by TLS, with one state shape.
-    Sha2Wide(ring::digest::Context),
+    // The context owns the words, partial block and digest length. Both
+    // wide algorithms and their HMACs use one CPU-dispatched provider.
+    Sha2Wide(super::wide_digest::Context),
     Sha512_256(Sha512_256),
     Shake128(Shake128),
     Shake256(Shake256),
@@ -176,12 +176,12 @@ pub(super) unsafe fn new_hash_state_or_throw(
         "sha1" | "sha-1" => HashState::Sha1(Sha1::new()),
         "sha224" | "sha-224" => HashState::Sha224(Sha224::new()),
         "sha256" | "sha-256" => HashState::Sha256(Sha256::new()),
-        "sha384" | "sha-384" => {
-            HashState::Sha2Wide(ring::digest::Context::new(&ring::digest::SHA384))
-        }
-        "sha512" | "sha-512" => {
-            HashState::Sha2Wide(ring::digest::Context::new(&ring::digest::SHA512))
-        }
+        "sha384" | "sha-384" => HashState::Sha2Wide(super::wide_digest::Context::new(
+            super::wide_digest::Algorithm::Sha384,
+        )),
+        "sha512" | "sha-512" => HashState::Sha2Wide(super::wide_digest::Context::new(
+            super::wide_digest::Algorithm::Sha512,
+        )),
         "sha512-256" | "sha512_256" | "sha-512-256" => HashState::Sha512_256(Sha512_256::new()),
         "shake128" | "shake-128" => HashState::Shake128(Shake128::default()),
         "shake256" | "shake-256" => HashState::Shake256(Shake256::default()),
@@ -252,7 +252,7 @@ pub enum HmacState {
     Sha1(hmac::Hmac<Sha1>),
     Sha224(hmac::Hmac<Sha224>),
     Sha256(hmac::Hmac<Sha256>),
-    Sha2Wide(ring::hmac::Context),
+    Sha2Wide(super::wide_digest::HmacContext),
     Sha512_256(hmac::Hmac<Sha512_256>),
     Md5(hmac::Hmac<Md5>),
 }
@@ -295,11 +295,13 @@ unsafe fn new_hmac_state(alg_ptr: i64, key_ptr: i64) -> Option<HmacState> {
             Ok(m) => HmacState::Sha256(m),
             Err(_) => return None,
         },
-        "sha384" | "sha-384" => HmacState::Sha2Wide(ring::hmac::Context::with_key(
-            &ring::hmac::Key::new(ring::hmac::HMAC_SHA384, &key),
+        "sha384" | "sha-384" => HmacState::Sha2Wide(super::wide_digest::HmacContext::new(
+            super::wide_digest::Algorithm::Sha384,
+            &key,
         )),
-        "sha512" | "sha-512" => HmacState::Sha2Wide(ring::hmac::Context::with_key(
-            &ring::hmac::Key::new(ring::hmac::HMAC_SHA512, &key),
+        "sha512" | "sha-512" => HmacState::Sha2Wide(super::wide_digest::HmacContext::new(
+            super::wide_digest::Algorithm::Sha512,
+            &key,
         )),
         "sha512-256" | "sha512_256" | "sha-512-256" => {
             match hmac::Hmac::<Sha512_256>::new_from_slice(&key) {
