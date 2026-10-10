@@ -118,6 +118,7 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
     // Walk the actual prototype objects; their shapes own all accessors.
     let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
     let mut depth = 0u32;
+    let mut previous = 0usize;
     loop {
         depth += 1;
         if depth > 64 {
@@ -151,6 +152,15 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
         } else {
             return true;
         };
+        // A prototype that answers itself is a cycle, and a cycle has only
+        // the conservative answer the depth bound above gives it. Give it on
+        // the first repeat: an fs stream (whose [[Prototype]] resolves to the
+        // stream itself) otherwise paid 64 prototype resolutions on every
+        // property store, ~7 ms per stream (#10544).
+        if p == previous {
+            return true;
+        }
+        previous = p;
         if crate::array::object_prototype_addr_matches(p) {
             // Reached the canonical Object.prototype: per-key check, then done.
             return object_proto_may_intercept_key(key);
