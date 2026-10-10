@@ -38,9 +38,14 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
     let writable = writable_methods();
     let methods: Vec<(&'static str, StubFn)> = match kind {
         StreamProto::Readable => readable.to_vec(),
+        // The base hook is a runtime builtin: the constructor's subclass-hook
+        // capture (`user_hook`) skips builtins, so an inherited base body is
+        // never mistaken for a subclass override. Without the flag
+        // `class P extends PassThrough {}` captured this throwing body as its
+        // transform and lost PassThrough's identity transform.
         StreamProto::Transform => vec![(
             "_transform",
-            crate::fn_info!(ns_transform3, 3; with_declared(3)),
+            crate::fn_info!(ns_transform3, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
         )],
         // `_write` is the user's hook, not a prototype method the runtime
         // calls: a prototype `_write` would read as a subclass override.
