@@ -1,38 +1,19 @@
-// A for-of over an array must stop keeping its source reachable once the
-// loop completes, by exhaustion, break or throw, even while the frame that ran
-// it stays live. Each source is reachable only through the loop; the frame
-// then collects and asks the source's WeakRef. Node cannot force a collection
-// without --expose-gc, so there the released check is vacuous.
-declare function gc(): void;
-const canCollect = typeof gc === "function";
-
+// A for-of over an array must run to the same sums and control flow in every
+// exit kind: exhaustion, break, throw and labeled break, each from a live
+// frame. Whether the source is released afterwards is a collector property,
+// not an output the engines share (V8 may keep it in the frame), so that
+// check lives in crates/perry/tests/array_record_released_after_exit.rs.
 const box: { [k: string]: any[] | undefined } = {};
-const probes: { [k: string]: WeakRef<any[]> } = {};
 for (const kind of ["normal", "break", "throw", "labeled"]) {
   const source: any[] = [];
   for (let i = 0; i < 2000; i++) source.push({ i, kind });
   box[kind] = source;
-  probes[kind] = new WeakRef(source);
 }
 
 function take(kind: string): any[] {
   const source = box[kind]!;
   box[kind] = undefined;
   return source;
-}
-
-function churn() {
-  let junk: any[] = [];
-  for (let i = 0; i < 20000; i++) {
-    junk.push({ i });
-    if (junk.length > 100) junk = [];
-  }
-}
-
-function released(kind: string): boolean {
-  churn();
-  if (canCollect) gc();
-  return canCollect ? probes[kind].deref() === undefined : true;
 }
 
 function consume(kind: string): string {
@@ -61,8 +42,7 @@ function consume(kind: string): string {
       }
     }
   }
-  // This frame is still live and the loop is done.
-  return kind + " " + sum + " released: " + released(kind);
+  return kind + " " + sum + " taken: " + (box[kind] === undefined);
 }
 
 async function main() {
