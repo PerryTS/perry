@@ -110,6 +110,9 @@ fn root_walk_rewrites(kind: ProbeSlot, bits: u64, valid_ptrs: &ValidPointerSet) 
 /// decoder, so a call site that stops using the shared decoder fails here too.
 #[test]
 fn mutable_root_mark_and_rewrite_accept_the_same_word_forms() {
+    // Release decoding of every word form, including a subnormal number equal
+    // to a live address, which verification reports as a bare-address producer.
+    let _release = PreciseRootVerificationOff::new();
     let _guard = GcTestIsolationGuard::new();
     let _scan = ConservativeScanDisabledGuard::new();
     // This test hand-builds its own collector state: a `ValidPointerSet`

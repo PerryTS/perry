@@ -41,6 +41,33 @@ pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, us
     }
 }
 
+/// The owner of an address's arena region, answered by region metadata only;
+/// no header or payload is read. Linux consults the reservation descriptor;
+/// other platforms (and synthetic test ranges) consult this thread's page map,
+/// which can prove only `Current`.
+#[inline(always)]
+pub(crate) fn classify_region_ownership(addr: usize) -> RegionOwnership {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(ownership) = crate::arena::region::reservation::region_ownership(addr) {
+            return ownership;
+        }
+    }
+
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        RegionOwnership::Outside
+    }
+    #[cfg(any(not(target_os = "linux"), test))]
+    {
+        if legacy_classify_heap_generation(addr) == HeapGeneration::Unknown {
+            RegionOwnership::Outside
+        } else {
+            RegionOwnership::Current
+        }
+    }
+}
+
 pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGeneration> {
     #[cfg(target_os = "linux")]
     {

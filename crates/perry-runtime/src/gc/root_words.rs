@@ -5,9 +5,11 @@
 //! A numeric JSValue whose bits happen to equal a heap address is never a root.
 //!
 //! Precise roots keep their producer-declared encoding. Before touching a
-//! header, marking checks current-heap ownership using live arena and malloc
-//! metadata; process-global providers can also emit another agent's roots.
-//! This ownership check does not infer a word's type or use a census snapshot.
+//! header, admission asks the arena region descriptor who owns the address
+//! (one descriptor read). Outside every arena region the object's own header
+//! is the authority: an ARENA header there is not this heap's object, and any
+//! other header is a malloc or process-lifetime cell of this heap. Admission
+//! never infers a word's type, consults a census snapshot or walks a registry.
 
 use super::*;
 
@@ -134,26 +136,131 @@ impl PreciseRoot {
     }
 }
 
-/// A decoded root may belong to another collector when its provider is
-/// process-global. Consult live ownership metadata before any header access,
-/// including for post-census births and generations outside the census.
+/// Verification of the precise-root contract: always on in unit tests (a test
+/// can turn it off to observe the release path), and behind
+/// `PERRY_GC_VERIFY_MARK` in instrumented builds.
 #[inline]
-pub(super) fn owns_precise_root_addr(addr: usize) -> bool {
-    if crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown {
-        return true;
+pub(super) fn precise_root_verification() -> bool {
+    #[cfg(test)]
+    {
+        PRECISE_ROOT_VERIFICATION.with(std::cell::Cell::get)
     }
-    // An unowned candidate need not point into an allocation, so compute the
-    // candidate address without in-bounds pointer arithmetic or dereferencing it.
-    let header = addr.wrapping_sub(GC_HEADER_SIZE) as *const GcHeader;
-    super::malloc::gc_malloc_header_is_owned(header)
+    #[cfg(not(test))]
+    {
+        super::gc_verify_mark_enabled()
+    }
 }
 
-/// Mark a root whose producer supplied its representation. The object's own
-/// header is authoritative after confirming that this collector owns it.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PRECISE_ROOT_VERIFICATION: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(true) };
+}
+
+/// The JSValue-root contract (#12271): with conservative scanning off, a
+/// global, temp, handle or statepoint root declared as a JSValue holds a tagged
+/// JSValue; a raw pointer needs a declared raw kind. An untagged word naming
+/// one of this heap's objects is a producer that stored a bare address, so
+/// the object is unrooted. Checked under verification when the slot is
+/// registered and whenever a collector reads it. Address-shaped numbers that
+/// name no object of this heap (denormal doubles) stay numbers.
+#[inline]
+pub(super) fn verify_jsvalue_root_word(bits: u64, source: &str) {
+    // Only an address-shaped word can name an object; test that before the
+    // verification switch so a numeric root word costs one range compare.
+    if (BARE_ADDR_MIN..=POINTER_MASK).contains(&bits) && precise_root_verification() {
+        verify_bare_address_root_word(bits as usize, source);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn verify_bare_address_root_word(addr: usize, source: &str) {
+    let names_object = match crate::arena::classify_region_ownership(addr) {
+        crate::arena::RegionOwnership::Current => true,
+        crate::arena::RegionOwnership::OtherHeap => false,
+        crate::arena::RegionOwnership::Outside => {
+            addr % 8 == 0
+                && super::malloc::gc_malloc_header_is_local(
+                    addr.wrapping_sub(GC_HEADER_SIZE) as *const GcHeader
+                )
+        }
+    };
+    assert!(
+        !names_object,
+        "untagged heap address {addr:#x} in a JSValue {source} root: the producer must store a tagged JSValue or declare a raw root"
+    );
+}
+
+/// A root that is neither this heap's object nor provably another live heap's
+/// is a producer bug: a mis-typed, stale or foreign word. Verification aborts
+/// before any header write; release leaves the header untouched.
+#[cold]
+#[inline(never)]
+fn invalid_precise_root(addr: usize, why: &str) -> Option<*mut GcHeader> {
+    if precise_root_verification() {
+        #[cfg(target_os = "linux")]
+        let region = crate::arena::region_classify(addr).map(|r| {
+            let this_thread = r.thread == crate::tls_hot::thread_identity();
+            (r.kind, r.space, this_thread, r.base, r.end)
+        });
+        #[cfg(not(target_os = "linux"))]
+        let region: Option<()> = None;
+        panic!(
+            "invalid precise root header: {addr:#x} ({why}); region (kind, space, this thread, base, end): {region:?}"
+        );
+    }
+    None
+}
+
+/// Admit a decoded precise root before any header write: the header this
+/// collector may mark, pin or relocate, or `None`.
 ///
-/// Invalid local typed roots are producer bugs. Instrumented verification and
-/// unit tests validate the header before changing its color. The evacuation
-/// verifier checks that root slots do not retain moved addresses.
+/// O(1). The arena region descriptor answers first. A live region of another
+/// thread is that thread's heap (a Worker's, or a zero-copy transferred cell),
+/// so its root is dropped silently and its header is never read. Outside every arena region the header decides: an ARENA
+/// header there is a producer bug; any other header is a malloc or
+/// process-lifetime cell of this heap. Verification also checks the header's
+/// structure, and that an unmarked header outside the arena is one of this
+/// agent's malloc allocations.
+#[inline]
+pub(super) fn admit_precise_root_addr(addr: usize) -> Option<*mut GcHeader> {
+    let outside = match crate::arena::classify_region_ownership(addr) {
+        crate::arena::RegionOwnership::Current => false,
+        crate::arena::RegionOwnership::OtherHeap => return None,
+        crate::arena::RegionOwnership::Outside => true,
+    };
+    unsafe {
+        let header = header_from_user_ptr(addr as *const u8);
+        let flags = (*header).gc_flags;
+        if outside && flags & GC_FLAG_ARENA != 0 {
+            return invalid_precise_root(addr, "arena header outside this heap's regions");
+        }
+        if precise_root_verification() {
+            if !(gc_type_info((*header).obj_type).is_some()
+                && (*header).size as usize >= GC_HEADER_SIZE)
+            {
+                return invalid_precise_root(addr, "malformed header");
+            }
+            // A marked header needs no write. An unmarked one outside the
+            // arena must be this heap's own malloc allocation.
+            if outside
+                && flags & GC_FLAG_MARKED == 0
+                && !super::malloc::gc_malloc_header_is_local(header)
+            {
+                return invalid_precise_root(addr, "not this heap's allocation");
+            }
+        }
+        Some(header)
+    }
+}
+
+/// Mark a root whose producer supplied its representation. After admission
+/// the object's own header is authoritative.
+///
+/// Invalid typed roots are producer bugs; admission reports them under
+/// verification. The evacuation verifier checks that root slots do not retain
+/// moved addresses.
 #[inline]
 pub(crate) fn mark_precise_root(root: PreciseRoot, valid_ptrs: &ValidPointerSet) -> bool {
     mark_precise_root_in_scope(root, valid_ptrs, None)
@@ -168,6 +275,9 @@ pub(super) fn mark_precise_root_in_scope(
     write_scope: Option<bool>,
 ) -> bool {
     let Some(addr) = root.address() else {
+        if let PreciseRoot::JSValue(bits) = root {
+            verify_jsvalue_root_word(bits, "scanned");
+        }
         return false;
     };
     // A tagged handle is a root of its provider's JSValue edges, not a GC
@@ -178,43 +288,30 @@ pub(super) fn mark_precise_root_in_scope(
         }
         return false;
     }
-    if !owns_precise_root_addr(addr) {
+    // A minor shades only this heap's nursery. That region test is itself an
+    // ownership proof, so a root write outside it costs no further lookup.
+    if write_scope == Some(true) && !crate::arena::pointer_in_nursery(addr) {
         return false;
     }
-    unsafe {
-        let header = header_from_user_ptr(addr as *const u8);
-        let flags = (*header).gc_flags;
-        // This is a structural header check, not snapshot membership:
-        // owners may publish births after the census or in generations the
-        // current collection does not enumerate. Evacuation verification
-        // separately rejects slots left pointing at moved objects.
-        #[cfg(test)]
-        assert!(
-            gc_type_info((*header).obj_type).is_some() && (*header).size as usize >= GC_HEADER_SIZE,
-            "invalid precise root header: {addr:#x}"
-        );
-        #[cfg(all(not(test), perry_gc_instruments))]
-        if super::gc_verify_mark_enabled() {
-            assert!(
-                gc_type_info((*header).obj_type).is_some()
-                    && (*header).size as usize >= GC_HEADER_SIZE,
-                "invalid precise root header: {addr:#x}"
-            );
-        }
-        if let Some(nursery_only) = write_scope {
-            if flags & GC_FLAG_FORWARDED != 0
-                || (nursery_only && !crate::arena::pointer_in_nursery(addr))
-            {
-                return false;
-            }
-        }
-        if flags & GC_FLAG_MARKED != 0 || super::pin::pinned_counts_as_marked(flags) {
-            return false;
-        }
-        (*header).gc_flags = flags | GC_FLAG_MARKED;
-        push_mark_seed(header);
-        true
+    let Some(header) = admit_precise_root_addr(addr) else {
+        return false;
+    };
+    unsafe { mark_admitted_root_header(header, write_scope.is_some()) }
+}
+
+/// Shade an admitted header. A root write never re-shades a forwarding alias.
+#[inline]
+pub(super) unsafe fn mark_admitted_root_header(header: *mut GcHeader, root_write: bool) -> bool {
+    let flags = (*header).gc_flags;
+    if root_write && flags & GC_FLAG_FORWARDED != 0 {
+        return false;
     }
+    if flags & GC_FLAG_MARKED != 0 || super::pin::pinned_counts_as_marked(flags) {
+        return false;
+    }
+    (*header).gc_flags = flags | GC_FLAG_MARKED;
+    push_mark_seed(header);
+    true
 }
 
 /// Decode a JSValue root, never accepting a numeric bit pattern as an address.

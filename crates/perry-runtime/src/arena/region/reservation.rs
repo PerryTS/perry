@@ -1,7 +1,7 @@
 //! One reservation; descriptors remain readable after payload retirement.
 //! Classification copies facts, never pins payload or remote bitmap storage.
 use super::{Kind, ALIGN};
-use crate::arena::{HeapGeneration, HeapSpace};
+use crate::arena::{HeapGeneration, HeapSpace, RegionOwnership};
 use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Mutex, OnceLock};
 const MAX_PAYLOAD: usize = 1 << 40;
@@ -197,6 +197,29 @@ fn owned_descriptor(addr: usize) -> Option<(&'static Descriptor, u64)> {
         return None;
     }
     Some((d, word))
+}
+
+/// Who owns the active region containing `addr`, from its descriptor alone.
+/// `None` when the address is outside the reservation, or its region is not a
+/// published live space. The heap and its collector belong to the native
+/// thread that published the space (the same identity `owned_descriptor`
+/// checks); the descriptor's agent tag is not consulted, so a zero-copy
+/// transferred cell or a pump thread's allocation is never this collector's.
+#[inline(always)]
+pub(crate) fn region_ownership(addr: usize) -> Option<RegionOwnership> {
+    let r = existing()?;
+    let d = r.descriptor(r.slot(addr)?);
+    let word = d.publication.load(SeqCst);
+    if word & (MAPPED | UPDATING) != MAPPED || decode_space(word) == HeapSpace::Unknown {
+        return None;
+    }
+    Some(
+        if d.thread.load(SeqCst) == crate::tls_hot::thread_identity() {
+            RegionOwnership::Current
+        } else {
+            RegionOwnership::OtherHeap
+        },
+    )
 }
 
 #[inline(always)]
