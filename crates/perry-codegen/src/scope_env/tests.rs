@@ -377,3 +377,45 @@ fn writes_before_every_capture_need_no_cell() {
     late_write.push(Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(6.0)))));
     assert!(crate::boxed_vars::collect_boxed_vars(&late_write).contains(&1));
 }
+
+pub(super) fn pointer_scope_store_ir() -> String {
+    let mut body = wide_body(2);
+    // Keep both bindings pointer-capable, and make the closure perform a
+    // pointer store instead of the numeric updates used by the grouping test.
+    for stmt in &mut body {
+        if let Stmt::Let { id, ty, init, .. } = stmt {
+            if *id == 10 || *id == 11 {
+                *ty = Type::Any;
+                *init = Some(Expr::String("before".into()));
+            }
+            if *id == 9 {
+                if let Some(Expr::Closure { body, .. }) = init {
+                    *body = vec![
+                        Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::LocalGet(11)))),
+                        Stmt::Return(Some(Expr::LocalGet(10))),
+                    ];
+                }
+            }
+        }
+    }
+    let mut module = module_with(body);
+    group_scope_boxes(&mut module);
+    let ir = compile_ir(&module);
+    assert!(
+        ir.contains("call i64 @js_scope_alloc("),
+        "probe must use a scope"
+    );
+    ir
+}
+
+#[test]
+fn pointer_scope_stores_use_the_shared_inline_barrier_filter() {
+    let ir = pointer_scope_store_ir();
+    crate::expr::barrier_stem_census_tests::verify_stem_ir(
+        &ir,
+        "scope_set",
+        crate::expr::barrier_stem_census_tests::StemKind::ValueAndGenerationTested,
+    )
+    .expect("scope store must keep both inline gates and its precise barrier");
+    assert!(!ir.contains("call void @js_write_barrier("));
+}
