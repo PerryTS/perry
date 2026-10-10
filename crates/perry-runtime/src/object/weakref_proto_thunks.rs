@@ -45,8 +45,7 @@
 
 use super::*;
 use crate::weakref::{
-    js_finreg_register, js_finreg_unregister, js_weakmap_delete, js_weakmap_get, js_weakmap_has,
-    js_weakmap_set, js_weakref_deref, js_weakset_add, CLASS_ID_FINALIZATION_REGISTRY,
+    js_finreg_register, js_finreg_unregister, js_weakref_deref, CLASS_ID_FINALIZATION_REGISTRY,
     CLASS_ID_WEAKMAP, CLASS_ID_WEAKREF, CLASS_ID_WEAKSET,
 };
 
@@ -86,38 +85,32 @@ pub unsafe fn try_weak_method_dispatch(
     } else {
         &[]
     };
-    // #5834: dispatch regardless of arg count, padding missing positions with
-    // `undefined` — mirrors calling the real thunks reflectively. Arity-gating
-    // these arms let `s.add()` (zero args) fall through to a no-op, skipping
-    // `js_weakset_add`'s CanBeHeldWeakly check entirely (it must throw
-    // `TypeError` since `undefined` cannot be held weakly).
-    //
-    // Also gate each method by the receiver's actual class: `"set"`/`"get"`
-    // only exist on WeakMap, `"add"` only on WeakSet, `"deref"` only on
-    // WeakRef, `"register"`/`"unregister"` only on FinalizationRegistry
-    // (`"has"`/`"delete"` are shared by WeakMap and WeakSet). Without this a
-    // WeakMap receiver could reach `js_weakset_add` for a `.add(...)` call (and
-    // vice versa) instead of falling through to the ordinary property lookup,
-    // which correctly resolves the missing method to `undefined` and throws
-    // `TypeError: ... is not a function`.
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let arg = |i: usize| args.get(i).copied().unwrap_or(undef);
-    let result = match (method_name, class_id) {
-        ("set", CLASS_ID_WEAKMAP) => js_weakmap_set(receiver, arg(0), arg(1)),
-        ("add", CLASS_ID_WEAKSET) => js_weakset_add(receiver, arg(0)),
-        ("get", CLASS_ID_WEAKMAP) => js_weakmap_get(receiver, arg(0)),
-        ("has", CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET) => js_weakmap_has(receiver, arg(0)),
-        ("delete", CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET) => js_weakmap_delete(receiver, arg(0)),
-        // #7947: `deref` / `register` / `unregister` previously existed only as
-        // the name-keyed HIR fold, so every receiver shape it could not name
-        // threw `TypeError: deref is not a function`.
-        ("deref", CLASS_ID_WEAKREF) => js_weakref_deref(receiver),
-        ("register", CLASS_ID_FINALIZATION_REGISTRY) => {
-            js_finreg_register(receiver, arg(0), arg(1), arg(2))
-        }
-        ("unregister", CLASS_ID_FINALIZATION_REGISTRY) => js_finreg_unregister(receiver, arg(0)),
-        _ => return None,
-    };
+    // Keep this legacy dispatcher's method admission, but resolve its body
+    // through ordinary Get. Dispatching directly by the method name ignored
+    // a replacement or getter on the prototype on every site miss.
+    if !matches!(
+        (method_name, class_id),
+        ("set" | "get", CLASS_ID_WEAKMAP)
+            | ("add", CLASS_ID_WEAKSET)
+            | ("has" | "delete", CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET)
+            | ("deref", CLASS_ID_WEAKREF)
+            | ("register" | "unregister", CLASS_ID_FINALIZATION_REGISTRY)
+    ) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(receiver);
+    let arguments: Vec<_> = args.iter().map(|&arg| scope.root_nanbox_f64(arg)).collect();
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let object =
+        crate::JSValue::from_bits(recv.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();
+    let value = crate::object::js_object_get_field_by_name(object, key);
+    let args: Vec<_> = arguments.iter().map(|arg| arg.get_nanbox_f64()).collect();
+    let result = crate::closure::call_value(
+        f64::from_bits(value.bits()),
+        crate::closure::JsThis::from_f64(recv.get_nanbox_f64()),
+        &args,
+    );
     Some(result)
 }
 

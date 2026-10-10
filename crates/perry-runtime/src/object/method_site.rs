@@ -326,7 +326,7 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
 /// rather than a `OnceLock<bool>`: `OnceLock` initialises through a `dyn`
 /// closure whose vtable is load-time relocations in every program that links
 /// the miss path.
-fn stats_report_enabled() -> bool {
+pub(crate) fn stats_report_enabled() -> bool {
     per_test_global! {
         static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     }
@@ -342,6 +342,7 @@ fn stats_report_enabled() -> bool {
     {
         if on {
             extern "C" fn report() {
+                super::dynamic_key_read::census::report();
                 let (a, b, c) = method_site_stats();
                 let mut refused = String::new();
                 for (i, n) in SITE_REFUSED.iter().enumerate() {
@@ -1719,10 +1720,12 @@ unsafe fn prime_inherited(
     // methods are real slots of that object (class prototypes hold function
     // objects of their bodies, with ConstFn lanes), so the entry is the same
     // holder entry as for any receiver.
-    let class_id = (*obj).class_id;
-    let class_instance = class_id != 0
-        && class_id < super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
-        && !super::is_anon_shape_class_id(class_id);
+    // Reserved native classes use the same CLASS identity as declarations.
+    // The shape, rather than the allocation's class-id band, selects the link.
+    let class_instance = super::shapes::shape_proto_id(super::shapes::object_shape_stamp(obj))
+        .is_some_and(|pid| {
+            (super::shapes::PROTO_ID_CLASS..super::shapes::PROTO_ID_UNIQUE).contains(&pid)
+        });
     // The caller already proved the receiver lacks the name. Only the
     // holder's resolved slot can carry its descriptor facts.
     let class_holder = if class_instance {
@@ -1806,6 +1809,10 @@ pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
 #[cfg(all(test, feature = "regex-engine"))]
 #[path = "method_site/regex_split_tests.rs"]
 mod regex_split_tests;
+
+#[cfg(test)]
+#[path = "method_site/weak_identity_tests.rs"]
+mod weak_identity_tests;
 
 #[cfg(test)]
 mod constfn_tests {
