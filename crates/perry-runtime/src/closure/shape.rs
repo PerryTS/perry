@@ -116,7 +116,7 @@ pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::Runtime
 crate::perry_thread_local! {
     /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
     /// then the FunctionDictionary id (0 = not minted yet).
-    static BASE_SHAPES: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
+    static BASE_SHAPES: std::cell::Cell<[u32; 7]> = const { std::cell::Cell::new([0; 7]) };
     /// This agent's class-constructor ShapeId (0 = not minted yet). Its own
     /// cell: the base-shape array is copied on every closure birth.
     static CLASS_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -163,7 +163,7 @@ fn base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
     // One element read in place: every closure birth and every function
     // receiver test asks for one of these ids, and copying the whole array
     // out of the cell per call showed up at ~3% of Zod.
-    // SAFETY: a plain `[u32; 5]` read through the agent's own cell; nothing
+    // SAFETY: a plain `[u32; 7]` read through the agent's own cell; nothing
     // else holds a reference into it.
     let id = BASE_SHAPES.with(|c| unsafe { (*c.as_ptr())[index] });
     if id != 0 {
@@ -236,6 +236,24 @@ pub(crate) fn is_class_info(info: *const super::JsFunctionInfo) -> bool {
 /// The ShapeId a fresh closure of the body `info` describes is born with.
 #[inline]
 pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
+    // Only the bound-function sentinel can carry the resolved layouts.
+    // Ordinary bodies need one code admission, not both layout comparisons.
+    if unsafe { info.as_ref() }.is_some_and(|body| body.code == super::BOUND_FUNCTION_FUNC_PTR) {
+        if std::ptr::eq(info, &super::dispatch::bound_intrinsic::CALL_INFO) {
+            return base_slot(
+                5,
+                ShapeObjectKind::FunctionBoundCall,
+                INTRINSIC_SERIAL_FUNCTION,
+            );
+        }
+        if std::ptr::eq(info, &super::dispatch::bound_intrinsic::APPLY_INFO) {
+            return base_slot(
+                6,
+                ShapeObjectKind::FunctionBoundApply,
+                INTRINSIC_SERIAL_FUNCTION,
+            );
+        }
+    }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
         Some(info) => FunctionProtoKind::of_body(info),
@@ -260,7 +278,7 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
     debug_assert!(
         id == function_dictionary_shape()
             || id == function_class_shape()
-            || shapes::shape_object_kind_by_id(id) == Some(ShapeObjectKind::Function),
+            || shapes::shape_object_kind_by_id(id).is_some_and(ShapeObjectKind::is_function_layout),
         "a closure carries a Function, FunctionDictionary or class shape: {id:#x}"
     );
     // The class shape is sticky and implies the class info,
@@ -333,7 +351,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                         let current = (*closure).shape_id;
                         if current != base
                             && shapes::shape_descriptor_by_id(current).is_some_and(|f| {
-                                f.object_kind == ShapeObjectKind::Function
+                                f.object_kind == shapes::shape_object_kind_by_id(base).unwrap()
                                     && f.keys == d.keys
                                     && f.logical_key_count == d.logical_key_count
                                     && f.live_inline_slot_count == d.live_inline_slot_count
@@ -350,7 +368,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 d.logical_key_count,
                                 d.live_inline_slot_count,
                                 0,
-                                ShapeObjectKind::Function,
+                                shapes::shape_object_kind_by_id(base).unwrap(),
                                 proto_id,
                                 // The bag's brands are the closure's (#11791).
                                 shapes::ReceiverFacts::of_descriptor(
@@ -400,7 +418,7 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
 /// object carries.
 #[inline]
 pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
-    // SAFETY: a plain `[u32; 5]` read through the agent's own cell; nothing
+    // SAFETY: a plain `[u32; 7]` read through the agent's own cell; nothing
     // else holds a reference into it.
     BASE_SHAPES.with(|c| unsafe {
         let ids = &*c.as_ptr();
@@ -420,7 +438,7 @@ fn keyed_shape_verdict(id: u32) -> u8 {
         return cached.1;
     }
     let over_function_prototype = shapes::shape_descriptor_by_id(id).is_some_and(|d| {
-        d.object_kind == ShapeObjectKind::Function && d.proto_id == INTRINSIC_SERIAL_FUNCTION
+        d.object_kind.is_function_layout() && d.proto_id == INTRINSIC_SERIAL_FUNCTION
     });
     let mask = if over_function_prototype {
         VERDICT_KNOWN
@@ -468,7 +486,7 @@ fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
     let Some(descriptor) = shapes::shape_descriptor_by_id(id) else {
         return false;
     };
-    if descriptor.object_kind != ShapeObjectKind::Function
+    if !descriptor.object_kind.is_function_layout()
         || descriptor.proto_id != INTRINSIC_SERIAL_FUNCTION
     {
         return false;
@@ -551,7 +569,7 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: u32) -> u32
     let Some(descriptor) = shapes::shape_descriptor_by_id(id) else {
         return PROTOTYPE_SLOT_UNKNOWN;
     };
-    if descriptor.object_kind != ShapeObjectKind::Function {
+    if !descriptor.object_kind.is_function_layout() {
         return PROTOTYPE_SLOT_UNKNOWN;
     }
     if descriptor.keys == 0 || descriptor.logical_key_count == 0 {

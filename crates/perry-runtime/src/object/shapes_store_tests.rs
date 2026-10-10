@@ -46,10 +46,21 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::OrdinaryUnmarked,
         ShapeObjectKind::OrdinaryNumericProof,
         ShapeObjectKind::NativeNamespace,
+        ShapeObjectKind::FunctionBoundCall,
+        ShapeObjectKind::FunctionBoundApply,
     ] {
+        assert_eq!(kind as u8, kind.code() as u8, "kind cache decoding ordinal");
         assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
-        let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);
+        let mut r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0)
+            .with_summary(crate::object::key_attrs::SUMMARY_KEY_BITS);
+        assert_eq!(r.summary(), crate::object::key_attrs::SUMMARY_KEY_BITS);
         assert_eq!(r.object_kind(), kind);
+        for births in [0, 1, 7, 8, 15, 16, u32::MAX] {
+            r.set_tracked_births(births);
+            assert_eq!(r.tracked_births(), births.min(15));
+            assert_eq!(r.object_kind(), kind, "birth count overlaps kind");
+            assert_eq!(r.summary(), 0x1F, "birth count overlaps summary");
+        }
         for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
             if other != kind {
                 assert!(!r.facts_match(0x1000, 1, 1, 0, other, 0));

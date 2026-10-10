@@ -86,7 +86,7 @@ fn forty_dynamic_comparisons_classify_once_and_share_the_slow_call() {
 }
 
 #[test]
-fn reassignment_declines_hoisting() {
+fn reassignment_before_the_graph_still_classifies_once() {
     let ir = ir(
         chain(4),
         vec![Stmt::Expr(Expr::LocalSet(
@@ -94,8 +94,26 @@ fn reassignment_declines_hoisting() {
             Box::new(Expr::String("11".into())),
         ))],
     );
+    assert!(ir.contains("cmpgraph."), "{ir}");
+    assert_eq!(ir.matches("call double @js_rel_ge(").count(), 1, "{ir}");
+    assert_eq!(ir.matches("sitofp i32").count(), 1, "{ir}");
+}
+
+#[test]
+fn assignment_inside_the_graph_declines_hoisting() {
+    let ir = ir(
+        Expr::Logical {
+            op: LogicalOp::Or,
+            left: Box::new(comparison(CompareOp::Ge, 100.0)),
+            right: Box::new(Expr::Compare {
+                op: CompareOp::Ge,
+                left: Box::new(Expr::LocalSet(1, Box::new(Expr::Number(200.0)))),
+                right: Box::new(Expr::Number(100.0)),
+            }),
+        },
+        vec![],
+    );
     assert!(!ir.contains("cmpgraph."), "{ir}");
-    assert_eq!(ir.matches("call double @js_rel_ge(").count(), 4, "{ir}");
 }
 
 #[test]
