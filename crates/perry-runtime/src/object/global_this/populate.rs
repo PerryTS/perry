@@ -524,6 +524,22 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
                 unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
             }
+            // These ordinary native receivers carry CLASS identities, just
+            // like declared-class instances. Publish the intrinsic holder in
+            // the identity's GC-traced word when it becomes available.
+            let weak_class = match name {
+                "WeakMap" => Some(crate::weakref::CLASS_ID_WEAKMAP),
+                "WeakSet" => Some(crate::weakref::CLASS_ID_WEAKSET),
+                "WeakRef" => Some(crate::weakref::CLASS_ID_WEAKREF),
+                "FinalizationRegistry" => Some(crate::weakref::CLASS_ID_FINALIZATION_REGISTRY),
+                _ => None,
+            };
+            if let Some(class) = weak_class {
+                crate::object::shapes::write_identity_word(
+                    crate::object::shapes::PROTO_ID_CLASS | u64::from(class),
+                    crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
+                );
+            }
             // After the fit (its live-bound transition keeps no ConstFn
             // lane): the shape names the builtin exec and test bodies, as an
             // ordinary key-add of those function objects would. The holder

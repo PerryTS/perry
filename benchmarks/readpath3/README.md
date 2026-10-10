@@ -1,0 +1,5 @@
+Readpath3 witnesses use one million operations. Build the compiler and both static runtime wrappers on Linux, then run `taskset -c 0-55 python3 scripts/perf_readpath3.py --hostdir <lane> --label <checkpoint>`. The driver compares every checksum with Node, then measures five alternating-order instruction samples with diagnostics off, CPUs 0–55 and `setarch -R`. Compilation uses the explicitly built runtime and `--no-auto-optimize`.
+
+`wm-*` takes the receiver from `any[]`, preventing constructor inference from replacing the method site with a native call. `wm-direct-*` uses its matching `wm-direct-base` as the native-operation reference. `wm-own-*` stores the same intrinsic thunk as an own method, controlling for its body and brand checks. The inherited-minus-own difference isolates holder-site overhead.
+
+`m7s` already takes a sized shape (about 72 instructions/op), so C2 is omitted. `m7s-computed` is an all-string control for the remaining IIFE spill path, which the missread round 2 work owns. `check_readpath3_gaps.py` records Node differential results for selected gap sources. Neither driver installs dependencies or builds Rust.

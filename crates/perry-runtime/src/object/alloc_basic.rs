@@ -146,7 +146,10 @@ pub(crate) fn object_alloc_branded(class_id: u32, brand: u64) -> *mut ObjectHead
         0,
         shapes::ShapeObjectKind::Ordinary,
         0,
-        shapes::class_proto_id(class_id),
+        // Intrinsic classes retain their exact CLASS identity. The vtable
+        // classifier used by class_proto_id treats reserved native ids as
+        // anonymous literals, which would publish DEFAULT instead.
+        shapes::PROTO_ID_CLASS | u64::from(class_id),
         0,
         super::field_rep::REP_ANY,
         &[brand],

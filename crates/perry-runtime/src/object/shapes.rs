@@ -4560,7 +4560,17 @@ pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHead
     if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == 0 {
         return 0;
     }
-    transition_object_shape_prototype(obj, object_proto_id(obj), object_prototype_word(obj));
+    let proto_id = object_proto_id(obj);
+    let recorded = object_prototype_word(obj);
+    // A class-id rewrite on an instance has no recorded prototype word.
+    // Its bare CLASS identity already owns the materialized holder; zero
+    // here means the implicit link, not a request to clear that holder.
+    let bits = if recorded == 0 && (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
+        shapes_prototype::identity_prototype_word(proto_id)
+    } else {
+        recorded
+    };
+    transition_object_shape_prototype(obj, proto_id, bits);
     // A `class_id` rewrite is also an F-A input (charter step 3, R4): a
     // prototype transition re-derives it, but an unchanged prototype
     // identity mints nothing, so re-derive explicitly.
