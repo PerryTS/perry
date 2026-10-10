@@ -44,7 +44,7 @@ pub fn event_emitter_prototype_value(export: &str) -> f64 {
     crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The site memo for a constructor's own `prototype` in its property
     /// bag (`closure::props`): the bag words on which it is an own plain
     /// data slot.
@@ -242,7 +242,7 @@ fn own_plain_data(obj: f64, name: &[u8]) -> bool {
     unsafe { crate::object::own_descriptors_skip_key(addr, key) }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// `new EventEmitter()`'s birth memo: the ShapeId the last full birth
     /// ended on (the state keys at slots 0..3, linked to the prototype). A
     /// later birth replays it when the record still names those facts for

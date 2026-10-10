@@ -7,10 +7,9 @@ inline-offset | perry-ext-ethers | 2
 inline-offset | perry-ext-http | 1
 inline-offset | perry-ext-net | 1
 inline-offset | perry-ext-nodemailer | 1
-inline-offset | perry-ext-zlib | 3
 inline-offset | perry-ffi | 3
-inline-offset | perry-runtime | 331
-inline-offset | perry-stdlib | 26
+inline-offset | perry-runtime | 329
+inline-offset | perry-stdlib | 23
 inline-offset | perry-updater | 5
 reader-helper | perry-ext-ethers | 1
 reader-helper | perry-runtime | 13

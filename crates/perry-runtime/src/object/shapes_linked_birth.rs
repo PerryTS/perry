@@ -22,6 +22,7 @@ use super::*;
 /// `obj` is a live, fresh `ObjectHeader` with at least `count` inline slots;
 /// `keys` is a live canonical keys array with `count` keys; nothing
 /// allocates between the caller's slot stores and this call.
+#[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn stamp_linked_final_shape(
     obj: *mut crate::object::ObjectHeader,
     keys: *mut ArrayHeader,

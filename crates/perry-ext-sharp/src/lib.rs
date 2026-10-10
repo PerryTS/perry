@@ -92,19 +92,22 @@ unsafe fn read_background(opts: f64) -> image::Rgba<u8> {
 /// # Safety
 /// `input_bits` is the raw NaN-box bits of a JS string or Buffer value.
 unsafe fn decode_image_from_value(input_bits: i64) -> Option<DynamicImage> {
-    let ptr = js_get_string_pointer_unified(f64::from_bits(input_bits as u64));
-    if ptr == 0 {
+    let roots = TransientRootScope::enter();
+    let ptr = roots.root_addr(js_get_string_pointer_unified(f64::from_bits(
+        input_bits as u64,
+    )));
+    if ptr.get() == 0 {
         return None;
     }
-    if js_buffer_is_buffer(ptr) != 0 {
+    if js_buffer_is_buffer(ptr.get()) != 0 {
         perry_ffi::bytes::no_gc(|scope| {
-            let bytes = read_buffer_bytes(ptr as *const BufferHeader, scope)?;
+            let bytes = read_buffer_bytes(ptr.get() as *const BufferHeader, scope)?;
             image::load_from_memory(bytes).ok()
         })
     } else if JsValue::from_bits(input_bits as u64).is_pointer() {
         None // object/array — not a valid input
     } else {
-        let path = read_string(JsString::from_raw(ptr as *mut StringHeader))?;
+        let path = read_string(JsString::from_raw(ptr.get() as *mut StringHeader))?;
         let bytes = std::fs::read(path).ok()?;
         image::load_from_memory(&bytes).ok()
     }
@@ -308,13 +311,16 @@ unsafe fn create_image_from_input(input: f64) -> Option<DynamicImage> {
 /// `input_bits` must be the raw NaN-box bits of a supported JS input value.
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
-    let ptr = js_get_string_pointer_unified(f64::from_bits(input_bits as u64));
-    if ptr == 0 {
+    let roots = TransientRootScope::enter();
+    let ptr = roots.root_addr(js_get_string_pointer_unified(f64::from_bits(
+        input_bits as u64,
+    )));
+    if ptr.get() == 0 {
         return -1;
     }
-    if js_buffer_is_buffer(ptr) != 0 {
+    if js_buffer_is_buffer(ptr.get()) != 0 {
         return perry_ffi::bytes::no_gc(|scope| {
-            match read_buffer_bytes(ptr as *const BufferHeader, scope) {
+            match read_buffer_bytes(ptr.get() as *const BufferHeader, scope) {
                 Some(bytes) => decode_image_bytes(bytes),
                 None => -1,
             }
@@ -332,7 +338,7 @@ pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
             None => -1,
         };
     }
-    match read_string(JsString::from_raw(ptr as *mut StringHeader)) {
+    match read_string(JsString::from_raw(ptr.get() as *mut StringHeader)) {
         Some(path) => open_image_path(path),
         None => -1,
     }
@@ -779,6 +785,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
                     let format = fmt_name(out_format).to_string();
                     let size = bytes.len() as u64;
                     promise.resolve_with(move || {
+                        let roots = TransientRootScope::enter();
                         let (packed, shape_id) =
                             build_object_shape(&["format", "width", "height", "channels", "size"]);
                         let obj = unsafe {
@@ -789,18 +796,39 @@ pub unsafe extern "C" fn js_sharp_to_file(
                                 packed.len() as u32,
                             )
                         };
+                        let obj =
+                            roots.root_nanbox(f64::from_bits(JsValue::from_object_ptr(obj).bits()));
                         unsafe {
+                            let format_value = roots.root_nanbox(f64::from_bits(
+                                JsValue::from_string_ptr(alloc_string(&format).as_raw()).bits(),
+                            ));
                             js_object_set_field(
-                                obj,
+                                JsValue::from_bits(obj.get().to_bits()).as_pointer(),
                                 0,
-                                JsValue::from_string_ptr(alloc_string(&format).as_raw()),
+                                JsValue::from_bits(format_value.get().to_bits()),
                             );
-                            js_object_set_field(obj, 1, JsValue::from_number(width as f64));
-                            js_object_set_field(obj, 2, JsValue::from_number(height as f64));
-                            js_object_set_field(obj, 3, JsValue::from_number(channels as f64));
-                            js_object_set_field(obj, 4, JsValue::from_number(size as f64));
+                            js_object_set_field(
+                                JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                                1,
+                                JsValue::from_number(width as f64),
+                            );
+                            js_object_set_field(
+                                JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                                2,
+                                JsValue::from_number(height as f64),
+                            );
+                            js_object_set_field(
+                                JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                                3,
+                                JsValue::from_number(channels as f64),
+                            );
+                            js_object_set_field(
+                                JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                                4,
+                                JsValue::from_number(size as f64),
+                            );
                         }
-                        JsValue::from_object_ptr(obj)
+                        JsValue::from_bits(obj.get().to_bits())
                     });
                 }
                 Err(e) => promise.reject_string(&format!("Failed to save image: {}", e)),
@@ -862,29 +890,53 @@ pub extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
             let format = fmt_name(sharp.format).to_string();
             let space = space.to_string();
             promise.resolve_with(move || {
+                let roots = TransientRootScope::enter();
                 let (packed, shape_id) = build_object_shape(&[
                     "format", "width", "height", "channels", "space", "hasAlpha",
                 ]);
                 let obj = unsafe {
                     js_object_alloc_with_shape(shape_id, 6, packed.as_ptr(), packed.len() as u32)
                 };
+                let obj = roots.root_nanbox(f64::from_bits(JsValue::from_object_ptr(obj).bits()));
                 unsafe {
+                    let format_value = roots.root_nanbox(f64::from_bits(
+                        JsValue::from_string_ptr(alloc_string(&format).as_raw()).bits(),
+                    ));
+                    let space_value = roots.root_nanbox(f64::from_bits(
+                        JsValue::from_string_ptr(alloc_string(&space).as_raw()).bits(),
+                    ));
                     js_object_set_field(
-                        obj,
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
                         0,
-                        JsValue::from_string_ptr(alloc_string(&format).as_raw()),
+                        JsValue::from_bits(format_value.get().to_bits()),
                     );
-                    js_object_set_field(obj, 1, JsValue::from_number(width as f64));
-                    js_object_set_field(obj, 2, JsValue::from_number(height as f64));
-                    js_object_set_field(obj, 3, JsValue::from_number(channels as f64));
                     js_object_set_field(
-                        obj,
-                        4,
-                        JsValue::from_string_ptr(alloc_string(&space).as_raw()),
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                        1,
+                        JsValue::from_number(width as f64),
                     );
-                    js_object_set_field(obj, 5, JsValue::from_bool(has_alpha));
+                    js_object_set_field(
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                        2,
+                        JsValue::from_number(height as f64),
+                    );
+                    js_object_set_field(
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                        3,
+                        JsValue::from_number(channels as f64),
+                    );
+                    js_object_set_field(
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                        4,
+                        JsValue::from_bits(space_value.get().to_bits()),
+                    );
+                    js_object_set_field(
+                        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+                        5,
+                        JsValue::from_bool(has_alpha),
+                    );
                 }
-                JsValue::from_object_ptr(obj)
+                JsValue::from_bits(obj.get().to_bits())
             });
         } else {
             promise.reject_string("Invalid sharp handle");

@@ -49,17 +49,19 @@ pub(crate) use shapes_last_key_rollback::{
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
 mod shapes_prototype;
+#[cfg(feature = "regex-engine")]
+pub(crate) use shapes_linked_birth::stamp_linked_final_shape;
 pub(crate) use shapes_linked_birth::{
     complete_layout_generation, declaration_parent_identity, mutation_generation,
-    pristine_declaration_holder, stamp_linked_final_shape, stamp_linked_final_shape_requested,
+    pristine_declaration_holder, stamp_linked_final_shape_requested,
 };
+#[cfg(all(test, feature = "regex-engine"))]
+#[path = "regex_direct_admission_tests.rs"]
+mod regex_direct_admission_tests;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
-#[cfg(all(test, feature = "regex-engine"))]
-#[path = "regex_direct_admission_tests.rs"]
-mod regex_direct_admission_tests;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]

@@ -237,6 +237,7 @@ pub(crate) struct Snapshot {
     pub(crate) payload_cells: bool,
 }
 impl Snapshot {
+    #[cfg(test)]
     pub(crate) fn generation(self) -> HeapGeneration {
         generation_for_space(self.space)
     }
@@ -251,6 +252,7 @@ impl Snapshot {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn is_current_thread(self) -> bool {
         self.thread == crate::tls_hot::thread_identity()
     }

@@ -689,19 +689,19 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
     let len = js_array_length(entries_ptr) as usize;
-    let token_bits = token_handle.get_nanbox_u64();
+    let entries = scope.root_raw_mut_ptr(entries_ptr);
     for i in 0..len {
-        let record_val = js_array_get_f64(entries_ptr, i as u32);
+        let record_val = entries.with_mut_ptr(|entries| js_array_get_f64(entries, i as u32));
         let record_ptr = (record_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         if record_ptr.is_null() {
             continue;
         }
         let stored_token = unsafe { object_field_bits(record_ptr, FINREG_RECORD_TOKEN_FIELD) };
-        if stored_token == token_bits {
+        if stored_token == token_handle.get_nanbox_u64() {
             found = true;
             continue;
         }
-        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), record_val);
+        let pushed = new_arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, record_val));
         new_arr_handle.set_raw_mut_ptr(pushed);
     }
     // Replace entries field with the new array.
@@ -709,7 +709,7 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     js_object_set_field(
         reg_ptr,
         FINREG_ENTRIES_FIELD as u32,
-        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+        new_arr_handle.with_mut_ptr(JSValue::array_ptr),
     );
     if found {
         f64::from_bits(TAG_TRUE)
@@ -1300,21 +1300,21 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
     if entries_ptr.is_null() {
         return;
     }
-    let record_bits = record_handle.get_nanbox_f64().to_bits();
+    let entries = scope.root_raw_mut_ptr(entries_ptr);
     let len = js_array_length(entries_ptr) as usize;
     for i in 0..len {
-        let current = js_array_get_f64(entries_ptr, i as u32);
-        if current.to_bits() == record_bits {
+        let current = entries.with_mut_ptr(|entries| js_array_get_f64(entries, i as u32));
+        if current.to_bits() == record_handle.get_nanbox_u64() {
             continue;
         }
-        let pushed = js_array_push_f64(new_arr_handle.get_raw_mut_ptr(), current);
+        let pushed = new_arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, current));
         new_arr_handle.set_raw_mut_ptr(pushed);
     }
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     js_object_set_field(
         reg_ptr,
         FINREG_ENTRIES_FIELD as u32,
-        JSValue::array_ptr(new_arr_handle.get_raw_mut_ptr()),
+        new_arr_handle.with_mut_ptr(JSValue::array_ptr),
     );
 }
 
@@ -1348,15 +1348,17 @@ fn weak_collection_new(shape: u32, class: u32) -> *mut ObjectHeader {
     let obj = js_object_alloc_with_shape(shape, 0, std::ptr::null(), 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    unsafe {
-        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = class;
-        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
-    }
-    storage::initialize(
-        f64::from_bits(JSValue::pointer(obj.get_raw_mut_ptr::<ObjectHeader>().cast()).bits()),
-        class,
-    );
-    obj.get_raw_mut_ptr()
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+        (*obj).class_id = class;
+        crate::object::shapes::restamp_object_proto_id(obj);
+    });
+    let (_, current) = obj.across_mut(|| {
+        let value = obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            f64::from_bits(JSValue::pointer(obj.cast()).bits())
+        });
+        storage::initialize(value, class);
+    });
+    current
 }
 
 #[no_mangle]

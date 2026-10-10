@@ -177,7 +177,7 @@ pub(crate) fn burst_boundary() -> bool {
     true
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static BURST_BOUNDARY: Cell<bool> = const { Cell::new(false) };
     static COLLECTOR_STEP: Cell<bool> = const { Cell::new(false) };
 }

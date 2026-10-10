@@ -148,13 +148,6 @@ impl CopyingNurseryPreflight {
             );
         });
     }
-
-    pub(super) unsafe fn scan_slot(&mut self, slot: *const u64) {
-        if slot.is_null() {
-            return;
-        }
-        self.check_bits_with_reason(*slot, CopiedMinorFallbackReason::PinnedYoungTransitive);
-    }
 }
 
 pub(super) struct CopyingNurseryCollector {
@@ -188,7 +181,7 @@ pub(super) struct CopyingNurseryCollector {
     /// mid-cycle to create one.
     ///
     /// So this is a proof, not a heuristic: three whole passes over the
-    /// surviving cohort's slots (`visit_slot_with_parent`'s re-decode +
+    /// surviving cohort's slots (`visit_mutable_slot_with_parent`'s re-decode +
     /// remember, `rebuild_evacuated_old_to_young_remembered_set`, and
     /// `restore_surviving_dirty_coverage`) can only insert nothing, and are
     /// skipped. `debug_assert_no_remembering_possible` re-derives the premise at

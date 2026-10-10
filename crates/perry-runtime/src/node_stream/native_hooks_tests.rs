@@ -737,7 +737,7 @@ fn trace_way(way: u8, chunks: &[Vec<u8>]) -> (Vec<u8>, Vec<String>) {
             let done = closure0(crate::fn_info!(on_named, 0), &[name("pipeline-done")]);
             args = crate::array::js_array_push_f64(args, done);
             let args = scope.root_raw_mut_ptr(args);
-            js_node_stream_pipeline(args.get_raw_mut_ptr::<crate::array::ArrayHeader>());
+            args.with_mut_ptr(|args| js_node_stream_pipeline(args));
             for c in chunks {
                 js_node_stream_method_push(
                     handle(src.get_nanbox_f64()),

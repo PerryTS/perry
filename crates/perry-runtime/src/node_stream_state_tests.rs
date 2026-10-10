@@ -290,11 +290,8 @@ fn writable_state_view_reads_live_stream_state() {
 fn object_mode_reads_the_record() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-    js_object_set_field_by_name(
-        opts.get_raw_mut_ptr(),
-        hidden_key(b"objectMode"),
-        f64::from_bits(TAG_TRUE),
-    );
+    let mode_key = hidden_key(b"objectMode");
+    opts.with_mut_ptr(|opts| js_object_set_field_by_name(opts, mode_key, f64::from_bits(TAG_TRUE)));
     let stream = scope.root_nanbox_f64(js_node_stream_duplex_new(
         opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
     ));
@@ -346,14 +343,16 @@ fn default_high_water_mark_uses_the_resolved_mode() {
     let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let getter =
         scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(counted_object_mode, 0), 1));
-    js_closure_set_capture_f64(getter.get_raw_mut_ptr(), 0, 0.0);
+    getter.with_mut_ptr(|getter| js_closure_set_capture_f64(getter, 0, 0.0));
     let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let get_key = hidden_key(b"get");
-    js_object_set_field_by_name(
-        descriptor.get_raw_mut_ptr(),
-        get_key,
-        getter.with_mut_ptr(|p: *mut u8| box_pointer(p)),
-    );
+    descriptor.with_mut_ptr(|descriptor| {
+        js_object_set_field_by_name(
+            descriptor,
+            get_key,
+            getter.with_mut_ptr(|p: *mut u8| box_pointer(p)),
+        )
+    });
     crate::object::js_object_define_property(
         opts.with_mut_ptr(|p: *mut u8| box_pointer(p)),
         f64::from_bits(JSValue::string_ptr(hidden_key(b"objectMode")).bits()),

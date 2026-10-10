@@ -16,15 +16,19 @@ pub(crate) unsafe fn copy_lane(
     _scope: &crate::buffer::bytes::NoGc<'_>,
 ) {
     match size {
+        // GC_STORE_AUDIT(POINTER_FREE): Copies one integer lane into exclusive native storage under the no-GC byte scope, not a JS value.
         1 => dest.write((&*source.cast::<AtomicU8>()).load(Relaxed)),
         2 => dest
             .cast::<u16>()
+            // GC_STORE_AUDIT(POINTER_FREE): Copies one integer lane into exclusive native storage under the no-GC byte scope, not a JS value.
             .write((&*source.cast::<AtomicU16>()).load(Relaxed)),
         4 => dest
             .cast::<u32>()
+            // GC_STORE_AUDIT(POINTER_FREE): Copies one integer lane into exclusive native storage under the no-GC byte scope, not a JS value.
             .write((&*source.cast::<AtomicU32>()).load(Relaxed)),
         8 => dest
             .cast::<u64>()
+            // GC_STORE_AUDIT(POINTER_FREE): Copies one integer lane into exclusive native storage under the no-GC byte scope, not a JS value.
             .write((&*source.cast::<AtomicU64>()).load(Relaxed)),
         _ => unreachable!("typed element width"),
     }

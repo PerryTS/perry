@@ -1327,38 +1327,44 @@ fn ensure_export_singleton(
     let allocated = if submod.key == "readline_promises" && export.name == "Interface" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(allocated);
-        // Reuse readline's imported decorator without pinning its parent
-        // machinery from the always-linked submodule value resolver.
-        if let Some(attach) = crate::object::nm_attach_lookup("readline") {
-            let value = ctor
-                .with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64));
-            unsafe {
-                attach(
-                    "InterfacePromises",
-                    value,
-                    crate::value::js_nanbox_get_pointer(value) as usize,
-                );
+        let (_, current) = ctor.across_mut(|| {
+            // Reuse readline's imported decorator without pinning its parent
+            // machinery from the always-linked submodule value resolver.
+            if let Some(attach) = crate::object::nm_attach_lookup("readline") {
+                let value = ctor.with_mut_ptr(|p: *mut ClosureHeader| {
+                    crate::value::js_nanbox_pointer(p as i64)
+                });
+                unsafe {
+                    attach(
+                        "InterfacePromises",
+                        value,
+                        crate::value::js_nanbox_get_pointer(value) as usize,
+                    );
+                }
             }
-        }
-        ctor.get_raw_mut_ptr()
+        });
+        current
     } else {
         allocated
     };
     let allocated = if submod.key == "trace_events" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let allocated_handle = scope.root_raw_mut_ptr(allocated);
-        crate::object::set_bound_native_closure_name(
-            allocated_handle.get_raw_mut_ptr(),
-            export.name,
-        );
-        crate::object::set_builtin_closure_length(
-            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            crate::closure::info_arity(&export.info).unwrap_or(0),
-        );
-        crate::object::set_builtin_closure_non_constructable(
-            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-        );
-        allocated_handle.get_raw_mut_ptr()
+        allocated_handle.with_mut_ptr(|allocated| {
+            crate::object::set_bound_native_closure_name(allocated, export.name)
+        });
+        allocated_handle.with_mut_ptr::<ClosureHeader, _>(|allocated| {
+            crate::object::set_builtin_closure_length(
+                allocated as usize,
+                crate::closure::info_arity(&export.info).unwrap_or(0),
+            )
+        });
+        let (_, allocated) = allocated_handle.across_mut(|| {
+            allocated_handle.with_mut_ptr::<ClosureHeader, _>(|allocated| {
+                crate::object::set_builtin_closure_non_constructable(allocated as usize)
+            })
+        });
+        allocated
     } else if let Some(decorated) = maybe_decorate_test_export(submod, export, key_name, allocated)
     {
         decorated

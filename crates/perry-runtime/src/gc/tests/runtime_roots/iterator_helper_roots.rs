@@ -115,9 +115,9 @@ unsafe fn source(length: f64, payload: f64) -> f64 {
             b"length" => length,
             _ => payload.get_nanbox_f64(),
         };
-        crate::object::js_object_set_field_by_name(obj.get_raw_mut_ptr(), key, value);
+        obj.with_mut_ptr(|obj| crate::object::js_object_set_field_by_name(obj, key, value));
     }
-    boxed(obj.get_raw_mut_ptr())
+    obj.with_mut_ptr(|obj| boxed(obj))
 }
 
 extern "C" fn moving_map(c: *const ClosureHeader, _this: JsThis, x: f64) -> f64 {
@@ -125,7 +125,7 @@ extern "C" fn moving_map(c: *const ClosureHeader, _this: JsThis, x: f64) -> f64 
     let c = scope.root_raw_const_ptr(c);
     // Read a capture before collecting: a stale callback address from the
     // source step must not silently fall back to yielding x unchanged.
-    let offset = crate::closure::js_closure_get_capture_f64(c.get_raw_const_ptr(), 0);
+    let offset = c.with_const_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 0));
     record(7);
     move_nursery();
     x + offset
@@ -170,22 +170,26 @@ extern "C" fn moving_flat_map(_c: *const ClosureHeader, _this: JsThis, x: f64) -
         let scope = RuntimeHandleScope::new();
         let iterable = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
         let key = crate::string::intern_ascii_literal(b"payload");
-        crate::object::js_object_set_field_by_name(iterable.get_raw_mut_ptr(), key, x * 10.0);
+        iterable.with_mut_ptr(|iterable| {
+            crate::object::js_object_set_field_by_name(iterable, key, x * 10.0)
+        });
         let factory = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::closure::js_closure_alloc(crate::fn_info!(moving_iterator_factory, 0), 0) as i64,
         ));
         let symbol = crate::symbol::well_known_symbol("iterator");
         crate::symbol::js_object_set_symbol_property(
-            boxed(iterable.get_raw_mut_ptr()),
+            iterable.with_mut_ptr(|iterable| boxed(iterable)),
             crate::value::js_nanbox_pointer(symbol as i64),
             factory.get_nanbox_f64(),
         );
         assert_eq!(
-            crate::object::js_object_get_field(iterable.get_raw_mut_ptr(), 0).to_number(),
+            iterable.with_mut_ptr(
+                |iterable| crate::object::js_object_get_field(iterable, 0).to_number()
+            ),
             x * 10.0,
             "named payload must survive the symbol-property install"
         );
-        boxed(iterable.get_raw_mut_ptr())
+        iterable.with_mut_ptr(|iterable| boxed(iterable))
     }
 }
 
@@ -573,7 +577,7 @@ extern "C" fn moving_iterator_getter(c: *const ClosureHeader, this: JsThis) -> f
     record(6);
     move_nursery();
     assert_eq!(this.get_nanbox_f64().to_bits(), js_shadow_slot_get(0));
-    crate::closure::js_closure_get_capture_f64(c.get_raw_const_ptr(), 0)
+    c.with_const_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 0))
 }
 
 extern "C" fn moving_get_iterator_factory(_c: *const ClosureHeader, this: JsThis) -> f64 {
@@ -616,7 +620,9 @@ fn get_iterator_refreshes_receiver_after_moving_symbol_getter() {
         let scope = RuntimeHandleScope::new();
         let iterable = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
         let key = crate::string::intern_ascii_literal(b"payload");
-        crate::object::js_object_set_field_by_name(iterable.get_raw_mut_ptr(), key, 73.0);
+        iterable.with_mut_ptr(|iterable| {
+            crate::object::js_object_set_field_by_name(iterable, key, 73.0)
+        });
         let factory = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
             crate::fn_info!(moving_get_iterator_factory, 0),
             0,
@@ -625,20 +631,27 @@ fn get_iterator_refreshes_receiver_after_moving_symbol_getter() {
             crate::fn_info!(moving_iterator_getter, 0),
             1,
         ));
-        crate::closure::js_closure_set_capture_f64(
-            getter.get_raw_const_ptr::<ClosureHeader>().cast_mut(),
-            0,
-            crate::value::js_nanbox_pointer(factory.get_raw_const_ptr::<ClosureHeader>() as i64),
-        );
+        getter.with_mut_ptr(|getter| {
+            crate::closure::js_closure_set_capture_f64(
+                getter,
+                0,
+                factory.with_const_ptr::<ClosureHeader, _>(|factory| {
+                    crate::value::js_nanbox_pointer(factory as i64)
+                }),
+            )
+        });
         let symbol = crate::symbol::well_known_symbol("iterator");
         crate::symbol::set_symbol_accessor_property(
-            boxed(iterable.get_raw_mut_ptr()),
+            iterable.with_mut_ptr(|iterable| boxed(iterable)),
             crate::value::js_nanbox_pointer(symbol as i64),
-            crate::value::js_nanbox_pointer(getter.get_raw_const_ptr::<ClosureHeader>() as i64)
+            getter
+                .with_const_ptr::<ClosureHeader, _>(|getter| {
+                    crate::value::js_nanbox_pointer(getter as i64)
+                })
                 .to_bits(),
             TAG_UNDEFINED,
         );
-        let before = boxed(iterable.get_raw_mut_ptr());
+        let before = iterable.with_mut_ptr(|iterable| boxed(iterable));
         js_shadow_slot_set(0, before.to_bits());
         let iterator = crate::symbol::js_get_iterator(before);
         assert_relocated(crate::value::js_nanbox_get_pointer(before) as usize);
@@ -669,16 +682,17 @@ fn get_iterator_fallback_follows_both_moving_symbol_lookups() {
                 crate::fn_info!(moving_missing_iterator, 0),
                 1,
             ));
-            crate::closure::js_closure_set_capture_f64(
-                getter.get_raw_const_ptr::<ClosureHeader>().cast_mut(),
-                0,
-                event,
-            );
+            getter.with_mut_ptr(|getter| {
+                crate::closure::js_closure_set_capture_f64(getter, 0, event)
+            });
             let symbol = crate::symbol::well_known_symbol(name);
             crate::symbol::set_symbol_accessor_property(
                 iterator.get_nanbox_f64(),
                 crate::value::js_nanbox_pointer(symbol as i64),
-                crate::value::js_nanbox_pointer(getter.get_raw_const_ptr::<ClosureHeader>() as i64)
+                getter
+                    .with_const_ptr::<ClosureHeader, _>(|getter| {
+                        crate::value::js_nanbox_pointer(getter as i64)
+                    })
                     .to_bits(),
                 TAG_UNDEFINED,
             );

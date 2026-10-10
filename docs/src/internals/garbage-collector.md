@@ -24,8 +24,12 @@ trees; code generation's root lowering lives in
 
 ## Collection paths
 
-New GC-managed allocations normally enter 1 MiB nursery blocks
-<!-- gc-fact: BLOCK_SIZE = 1024 * 1024 in crates/perry-runtime/src/arena/block.rs -->.
+New GC-managed allocations normally enter nursery blocks. On Linux, block
+size follows the region alignment
+<!-- gc-fact: BLOCK_SIZE = super::region::ALIGN in crates/perry-runtime/src/arena/block.rs -->,
+which is 2 MiB
+<!-- gc-fact: ALIGN = 2 * 1024 * 1024 in crates/perry-runtime/src/arena/region.rs -->.
+Other targets use 1 MiB blocks.
 A collection can take one of three paths:
 
 1. **Copying minor.** At a precise safepoint, live young objects are copied,
@@ -425,7 +429,7 @@ policy is `scripts/ci_plan.py`). The GC-specific coverage is split deliberately:
 | root-holder custody, GC-knob drift, and this page's path/number claims | `test.yml` → `lint` | yes (via `pr-gate`) |
 | runtime unit suite and `run_memory_stability_tests.sh` four-mode matrix | `test.yml` → `cargo-test` | yes (via `pr-gate`; the PR tier is diff-scoped, the sweep/full tiers run the workspace) |
 | GC × representation-selection matrix, rooting-bug instruments, write-barrier stress | `test.yml` → `gc-stress` | yes (via `pr-gate`; PR subset on PRs, full matrix in the sweep) |
-| emitted root dominance, including native statepoint IR | `gc-root-dominance.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
+| emitted root dominance, including native statepoint IR | `gc.yml` (`gc-root-dominance` suite) | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
 | pinned collector counters/RSS/wall matrix | `gc-ratchet.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
 | thread-local mechanism/policy budget | `tls-budget.yml` | not branch-required; PR arm opt-in via `run-extended-tests`, six-hourly on `main` |
 

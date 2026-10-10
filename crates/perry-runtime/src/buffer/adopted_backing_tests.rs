@@ -61,18 +61,20 @@ fn adopted_response_bytes_survive_views_transfer_gc_and_worker_exit() {
         assert_eq!(data(view) as usize, original);
         *data(view).add(2) = 11;
         crate::gc::js_gc_collect();
-        let source = root.get_raw_mut_ptr::<BufferHeader>();
-        let view = view_root.get_raw_mut_ptr::<BufferHeader>();
-        assert_eq!(*data(view).add(2), 11);
-        assert_eq!(data(source) as usize, original);
-        let message = serialize_message(
-            JSValue::pointer(source.cast()).bits(),
-            &[source as usize],
-            None,
-        )
-        .unwrap();
-        assert!(is_detached_buffer(source as usize));
-        assert_eq!(store::length(view as usize), 0);
+        view_root.with_mut_ptr::<BufferHeader, _>(|view| assert_eq!(*data(view).add(2), 11));
+        root.with_mut_ptr::<BufferHeader, _>(|source| assert_eq!(data(source) as usize, original));
+        let message = root
+            .with_mut_ptr::<BufferHeader, _>(|source| {
+                serialize_message(
+                    JSValue::pointer(source.cast()).bits(),
+                    &[source as usize],
+                    None,
+                )
+            })
+            .unwrap();
+        root.with_mut_ptr::<BufferHeader, _>(|source| assert!(is_detached_buffer(source as usize)));
+        view_root
+            .with_mut_ptr::<BufferHeader, _>(|view| assert_eq!(store::length(view as usize), 0));
         crate::gc::js_gc_collect();
         assert_eq!(backing::LIVE_BACKINGS.load(Ordering::SeqCst), before + 1);
         std::thread::spawn(move || {

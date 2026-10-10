@@ -173,7 +173,9 @@ mod tests {
             0
         );
 
-        static GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        crate::per_test_global! {
+            static GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        }
         extern "C" fn getter(
             _closure: *const crate::closure::ClosureHeader,
             _this: crate::closure::JsThis,

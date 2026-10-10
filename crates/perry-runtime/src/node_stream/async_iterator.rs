@@ -691,8 +691,7 @@ fn settle_iterator_return_value(value: f64) {
 }
 
 pub(super) fn call_source_iterator_return(stream: f64) {
-    let Some(source_iterator) = get_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY)
-    else {
+    let Some(source_iterator) = get_hidden_value(stream, READABLE_SOURCE_ITERATOR_KEY) else {
         return;
     };
     let returned = unsafe {
@@ -725,10 +724,9 @@ extern "C" fn ns_readable_iterator_next(
     let stream = scope.root_nanbox_f64(stream);
 
     if !readable_chunks_nonempty(stream.get_nanbox_f64()) {
-        if let Some(source_iterator) = get_hidden_value(
-            stream.get_nanbox_f64(),
-            READABLE_SOURCE_ITERATOR_KEY,
-        ) {
+        if let Some(source_iterator) =
+            get_hidden_value(stream.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY)
+        {
             let source_iterator = scope.root_nanbox_f64(source_iterator);
             let next = match catch_pipeline_throw(|| unsafe {
                 crate::object::js_native_call_method(
@@ -766,13 +764,21 @@ extern "C" fn ns_readable_iterator_next(
                 1,
             );
             let rejected = scope.root_raw_mut_ptr(rejected);
-            js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            return box_pointer(crate::promise::js_promise_then(
-                promise.get_raw_mut_ptr(),
-                fulfilled.get_raw_mut_ptr(),
-                rejected.get_raw_mut_ptr(),
-            ) as *const u8);
+            fulfilled.with_mut_ptr(|closure| {
+                js_closure_set_capture_f64(closure, 0, iterator.get_nanbox_f64())
+            });
+            rejected.with_mut_ptr(|closure| {
+                js_closure_set_capture_f64(closure, 0, iterator.get_nanbox_f64())
+            });
+            return promise.with_mut_ptr(|promise| {
+                fulfilled.with_mut_ptr(|fulfilled| {
+                    rejected.with_mut_ptr(|rejected| {
+                        box_pointer(
+                            crate::promise::js_promise_then(promise, fulfilled, rejected).cast(),
+                        )
+                    })
+                })
+            });
         }
     }
 
@@ -814,9 +820,9 @@ extern "C" fn ns_readable_iterator_next(
     // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
     let promise = scope.root_raw_mut_ptr(promise);
-    iterator_push_pending(iterator.get_nanbox_f64(), promise.get_raw_mut_ptr());
+    promise.with_mut_ptr(|promise| iterator_push_pending(iterator.get_nanbox_f64(), promise));
     resume_iterator_source(stream.get_nanbox_f64());
-    box_pointer(promise.get_raw_const_ptr())
+    promise.with_const_ptr(|promise| box_pointer(promise))
 }
 
 extern "C" fn ns_readable_iterator_return(
@@ -846,13 +852,20 @@ extern "C" fn ns_readable_iterator_return(
             crate::fn_info!(ns_readable_iterator_return_after_pull, 1; with_declared(1)),
             1,
         ));
-        js_closure_set_capture_f64(continuation.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-        return box_pointer(crate::promise::js_promise_then(
-            crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
-                as *mut crate::promise::Promise,
-            continuation.get_raw_mut_ptr(),
-            continuation.get_raw_mut_ptr(),
-        ) as *const u8);
+        continuation.with_mut_ptr(|closure| {
+            js_closure_set_capture_f64(closure, 0, iterator.get_nanbox_f64())
+        });
+        return continuation.with_mut_ptr(|continuation| {
+            box_pointer(
+                crate::promise::js_promise_then(
+                    crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
+                        as *mut crate::promise::Promise,
+                    continuation,
+                    continuation,
+                )
+                .cast(),
+            )
+        });
     }
     let already_done = iterator_is_done(iterator.get_nanbox_f64());
     let attached = has_truthy_hidden(
@@ -1117,7 +1130,11 @@ pub(crate) fn mark_foreign_readable_ended(stream: f64) {
         STREAM_END_EMITTED_KEY,
         f64::from_bits(TAG_TRUE),
     );
-    set_hidden_value(stream.get_nanbox_f64(), STREAM_ENDED_KEY, f64::from_bits(TAG_TRUE));
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        STREAM_ENDED_KEY,
+        f64::from_bits(TAG_TRUE),
+    );
     for (key, bits) in [
         (b"readable".as_slice(), TAG_FALSE),
         (b"readableEnded".as_slice(), TAG_TRUE),

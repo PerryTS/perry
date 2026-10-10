@@ -19,9 +19,9 @@ fn placement_capacity_and_native_output_copies() {
         let collections = crate::gc::byte_store_test_collection_count();
         crate::gc::js_gc_collect();
         assert!(crate::gc::byte_store_test_collection_count() > collections);
-        let value = f64::from_bits(
-            JSValue::pointer(root.get_raw_mut_ptr::<super::super::BufferHeader>().cast()).bits(),
-        );
+        let value = f64::from_bits(root.with_mut_ptr::<super::super::BufferHeader, _>(|root| {
+            JSValue::pointer(root.cast()).bits()
+        }));
         super::super::bytes::no_gc(|proof| {
             assert_eq!(super::super::bytes::bytes(value, proof).unwrap(), body)
         });
@@ -40,7 +40,7 @@ fn large_concat_uses_native_store_and_preserves_buffer_identity() {
     let array_root = scope.root_raw_mut_ptr(array);
     crate::array::js_array_push(array, JSValue::pointer(part.cast()));
     let count = super::super::backing::LIVE_BACKINGS.load(std::sync::atomic::Ordering::SeqCst);
-    let concat = super::super::js_buffer_concat(array_root.get_raw_mut_ptr());
+    let concat = array_root.with_mut_ptr(|array| super::super::js_buffer_concat(array));
     let concat_root = scope.root_raw_mut_ptr(concat);
     assert_eq!(
         super::super::backing::LIVE_BACKINGS.load(std::sync::atomic::Ordering::SeqCst),
@@ -62,16 +62,15 @@ fn large_concat_uses_native_store_and_preserves_buffer_identity() {
     crate::gc::js_gc_collect();
     assert!(crate::gc::byte_store_test_collection_count() > collections);
     assert_eq!(
-        unsafe { *super::super::buffer_data(view_root.get_raw_mut_ptr()) },
+        view_root.with_mut_ptr(|view| unsafe { *super::super::buffer_data(view) }),
         17
     );
     assert_eq!(
-        unsafe { (*concat_root.get_raw_mut_ptr::<super::super::BufferHeader>()).length },
+        concat_root
+            .with_mut_ptr::<super::super::BufferHeader, _>(|concat| unsafe { (*concat).length }),
         len as u32
     );
-    assert!(!part_root
-        .get_raw_mut_ptr::<super::super::BufferHeader>()
-        .is_null());
+    assert!(part_root.with_mut_ptr::<super::super::BufferHeader, _>(|part| !part.is_null()));
 }
 
 #[test]
@@ -94,13 +93,16 @@ fn every_typed_owner_uses_native_placement_and_header_length() {
             *body.last_mut().unwrap() = 91;
         });
         crate::gc::js_gc_collect();
-        let typed = root.get_raw_mut_ptr::<super::super::BufferHeader>();
-        assert_eq!(unsafe { length(typed as usize) }, 8192);
-        super::super::bytes::no_gc(|proof| {
-            let body =
-                super::super::bytes::bytes(crate::value::js_nanbox_pointer(typed as i64), proof)
-                    .unwrap();
-            assert_eq!(body[body.len() - 1], 91);
+        root.with_mut_ptr::<super::super::BufferHeader, _>(|typed| {
+            assert_eq!(unsafe { length(typed as usize) }, 8192);
+            super::super::bytes::no_gc(|proof| {
+                let body = super::super::bytes::bytes(
+                    crate::value::js_nanbox_pointer(typed as i64),
+                    proof,
+                )
+                .unwrap();
+                assert_eq!(body[body.len() - 1], 91);
+            });
         });
     }
 }
@@ -212,13 +214,18 @@ fn native_typed_transfer_preserves_owner_byte_extent() {
             *original.add(byte_len - 1) = 91;
             let ab = crate::typedarray_view::js_typed_array_backing_buffer(typed);
             let ab_root = scope.root_raw_mut_ptr(ab);
-            let message = crate::thread::serialize_message(
-                JSValue::pointer(root.get_raw_mut_ptr::<u8>()).bits(),
-                &[ab_root.get_raw_mut_ptr::<u8>() as usize],
-                None,
-            )
-            .unwrap();
-            assert_eq!(length(root.get_raw_mut_ptr::<u8>() as usize), 0);
+            let message = root
+                .with_mut_ptr::<u8, _>(|root| {
+                    ab_root.with_mut_ptr::<u8, _>(|ab| {
+                        crate::thread::serialize_message(
+                            JSValue::pointer(root).bits(),
+                            &[ab as usize],
+                            None,
+                        )
+                    })
+                })
+                .unwrap();
+            assert_eq!(root.with_mut_ptr::<u8, _>(|root| length(root as usize)), 0);
             let received = scope.root_nanbox_u64(
                 crate::thread::deserialize_nanbox_on_current_thread(&message),
             );
@@ -263,12 +270,13 @@ fn structured_clone_copies_native_typed_owners_before_detach() {
                 "structuredClone must make a new typed owner"
             );
             assert!(super::super::header::has_owned_backing(addr));
-            let ab = crate::typedarray_view::js_typed_array_backing_buffer(root.get_raw_mut_ptr());
+            let ab = root
+                .with_mut_ptr(|root| crate::typedarray_view::js_typed_array_backing_buffer(root));
             super::super::detach_array_buffer(ab as usize);
             crate::gc::js_gc_collect();
             let addr =
                 JSValue::from_bits(clone.get_nanbox_f64().to_bits()).as_pointer::<u8>() as usize;
-            assert_eq!(length(root.get_raw_mut_ptr::<u8>() as usize), 0);
+            assert_eq!(root.with_mut_ptr::<u8, _>(|root| length(root as usize)), 0);
             assert_eq!(length(addr), 8192);
             assert_eq!(owner_byte_length(addr), byte_len);
             assert_eq!(*data(addr), 37);

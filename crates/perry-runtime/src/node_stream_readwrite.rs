@@ -110,10 +110,7 @@ fn is_private_key(key: *const crate::string::StringHeader) -> bool {
     unsafe {
         let len = (*key).byte_len as usize;
         len >= PRIVATE.len()
-            && std::slice::from_raw_parts(
-                (key as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
-                PRIVATE.len(),
-            ) == PRIVATE
+            && std::slice::from_raw_parts(crate::string::string_data(key), PRIVATE.len()) == PRIVATE
     }
 }
 
@@ -263,16 +260,20 @@ fn define_internal_field(
     let value = scope.root_nanbox_f64(value);
     // SAFETY: both are rooted; each call re-reads them from the handles.
     unsafe {
-        crate::object::object_ops::ensure_key_in_keys_array_with_entry(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            entry,
-        );
-        crate::object::object_ops::define_property_force_store_value(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            value.get_nanbox_f64(),
-        );
+        obj.with_mut_ptr(|obj| {
+            key.with_const_ptr(|key| {
+                crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, key, entry)
+            })
+        });
+        obj.with_mut_ptr(|obj| {
+            key.with_const_ptr(|key| {
+                crate::object::object_ops::define_property_force_store_value(
+                    obj,
+                    key,
+                    value.get_nanbox_f64(),
+                )
+            })
+        });
     }
 }
 
@@ -1443,7 +1444,7 @@ pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
         let grown = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, byte as f64));
         out.set_raw_mut_ptr(grown);
     }
-    box_pointer(out.get_raw_const_ptr())
+    out.with_const_ptr(|out| box_pointer(out))
 }
 
 fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
@@ -1602,7 +1603,7 @@ pub(super) fn append_string_ptr_bytes(ptr: *const crate::StringHeader, out: &mut
     }
     unsafe {
         let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let data = crate::string::string_data(ptr);
         out.extend_from_slice(std::slice::from_raw_parts(data, len));
     }
 }

@@ -408,9 +408,9 @@ pub extern "C" fn js_buffer_set_from_value(
             let copied = super::bytes::no_gc(|_| {
                 let src = super::bytes::span(source_value, false)?;
                 let dst = super::bytes::span(
-                    crate::value::js_nanbox_pointer(
-                        target_root.get_raw_mut_ptr::<BufferHeader>() as i64
-                    ),
+                    target_root.with_mut_ptr::<BufferHeader, _>(|target| {
+                        crate::value::js_nanbox_pointer(target as i64)
+                    }),
                     true,
                 )?;
                 if source_len > src.len
@@ -441,9 +441,9 @@ pub extern "C" fn js_buffer_set_from_value(
             );
             let written = super::bytes::no_gc(|scope| {
                 super::bytes::bytes_mut(
-                    crate::value::js_nanbox_pointer(
-                        target_root.get_raw_mut_ptr::<BufferHeader>() as i64
-                    ),
+                    target_root.with_mut_ptr::<BufferHeader, _>(|target| {
+                        crate::value::js_nanbox_pointer(target as i64)
+                    }),
                     scope,
                 )
                 .map(|dst| {
@@ -524,7 +524,9 @@ pub(crate) fn buffer_slice_copy(
         super::store::set_length(result as usize, length);
         super::bytes::no_gc(|scope| {
             let src = super::bytes::bytes(
-                crate::value::js_nanbox_pointer(source.get_raw_const_ptr::<BufferHeader>() as i64),
+                source.with_const_ptr::<BufferHeader, _>(|source| {
+                    crate::value::js_nanbox_pointer(source as i64)
+                }),
                 scope,
             )
             .unwrap();

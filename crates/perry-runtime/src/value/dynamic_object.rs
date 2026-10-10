@@ -264,10 +264,12 @@ pub extern "C" fn js_value_length_property_key_ic_f64(
         return length;
     }
     let bits = receiver.get_nanbox_f64().to_bits();
-    crate::object::js_object_get_field_by_name_f64(
-        bits as *const crate::object::ObjectHeader,
-        key.get_raw_const_ptr(),
-    )
+    key.with_const_ptr(|key| {
+        crate::object::js_object_get_field_by_name_f64(
+            bits as *const crate::object::ObjectHeader,
+            key,
+        )
+    })
 }
 
 fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheSlot) -> f64 {

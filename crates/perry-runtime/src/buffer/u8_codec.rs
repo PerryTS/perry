@@ -133,7 +133,9 @@ unsafe fn read_written_object(read: usize, written: usize) -> f64 {
     obj.with_mut_ptr(|obj| js_object_set_field_by_name(obj, read_key, read as f64));
     let written_key = crate::string::js_string_from_bytes(b"written".as_ptr(), 7);
     obj.with_mut_ptr(|obj| js_object_set_field_by_name(obj, written_key, written as f64));
-    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 /// Read the `alphabet` option ("base64" | "base64url") from an options object.

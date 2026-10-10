@@ -728,8 +728,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     # S4 literals and dynamic construction share the same ordinary birth.
     literal_runtime = (ROOT / "crates/perry-runtime/src/regex/literal.rs").read_text()
-    require_code(function_body(literal_runtime, "js_regexp_literal"),
+    literal_entry = function_body(literal_runtime, "js_regexp_literal")
+    require_code(literal_entry, r"inline_birth\s*\(", "literal inline receiver birth")
+    require_code(literal_entry, r"literal_birth\s*\(", "literal fallback receiver birth")
+    require_code(function_body(literal_runtime, "literal_birth"),
                  r"super::instance::new\s*\(", "literal ordinary receiver birth")
+    inline_literal = function_body(literal_runtime, "inline_birth")
+    require_code(inline_literal, r"GC_TYPE_OBJECT", "literal inline ordinary object kind")
+    require_code(inline_literal, r"re\.cast::<u64>\(\)\.write\(header_word\)",
+                 "literal inline birth installs its shape header")
     require_code(function_body(literal_runtime, "literal_miss"),
                  r"perex_construct::new_data\s*\(", "literal immutable data construction")
     regexp_alloc = function_body(regex_construct, "new")
@@ -747,7 +754,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     prepare = function_body(clean[instance_path], "prepare_shape")
     for body, pattern, label in (
         (instance, r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "single ordinary birth"),
-        (instance, r"prepare_shape\s*\(\s*scope\s*,\s*&receiver\s*\)", "canonical birth on miss"),
+        (instance, r"prepare_shape\s*\(\s*receiver\s*\)", "canonical birth on miss"),
         (prepare, r"MATCHER_READ\.with\(\|site\|\s*site\.birth_key\(\)\)", "qualified intrinsic matcher key"),
         (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
         (prepare, r"stamp_linked_final_shape\s*\([\s\S]*?proto_id", "ordinary prototype link"),

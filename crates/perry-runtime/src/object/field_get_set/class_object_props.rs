@@ -138,7 +138,7 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             }
         }
     };
-    finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
+    class.with_mut_ptr(|class| finish_class_evaluation_prototype(class, parent_proto))
 }
 
 pub(crate) unsafe fn finish_class_evaluation_prototype(

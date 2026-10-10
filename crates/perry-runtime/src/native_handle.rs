@@ -81,7 +81,7 @@ const _: () = assert!(std::mem::size_of::<NativeHandleHeader>() == CELL_SIZE);
 pub(crate) fn current_thread_id() -> u64 {
     // Cached per thread: a Rust-payload method checks it on every call, and
     // hashing `std::thread::current().id()` clones an `Arc` and runs SipHash.
-    std::thread_local! {
+    crate::perry_thread_local! {
         static CURRENT_THREAD_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     }
     #[cold]

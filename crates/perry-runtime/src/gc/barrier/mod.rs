@@ -175,7 +175,7 @@ pub(super) unsafe fn scan_dirty_slot_with_layout(
 /// Returns whether the scan was COMPLETE for the object (#9754): every pointer
 /// slot it owns lies on a dirty page AND inside its own allocation. For such
 /// an object the per-slot re-remembering the copying minor does in
-/// `visit_slot_with_parent` is exactly what the post-cycle
+/// `visit_mutable_slot_with_parent` is exactly what the post-cycle
 /// `restore_surviving_dirty_coverage` re-derives — the same child predicate on
 /// the same post-visit value, and the same `external` verdict (an in-body slot
 /// of an old parent is not external under either the page rule used here or

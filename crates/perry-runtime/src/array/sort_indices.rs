@@ -63,6 +63,7 @@ pub(super) fn sort_indices(
             // The shifted range ends at i + 1 <= len and can overlap.
             unsafe {
                 let order_ptr = order.as_mut_ptr();
+                // GC_STORE_AUDIT(POINTER_FREE): Copies only u32 permutation indices in private Rust slices; source JS values remain rooted by the caller.
                 std::ptr::copy(order_ptr.add(lo), order_ptr.add(lo + 1), i - lo);
                 *order_ptr.add(lo) = key;
             }
@@ -126,6 +127,7 @@ fn merge_at(
     // The pending runs are adjacent nonempty partitions of the entry
     // buffers. Their integer cursors cannot be mutated by the comparator.
     unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): Copies only u32 permutation indices in private Rust slices; source JS values remain rooted by the caller.
         std::ptr::copy_nonoverlapping(
             order.as_ptr().add(start),
             scratch.as_mut_ptr().add(start),
@@ -167,6 +169,7 @@ fn merge_at(
             // gallop_prefix returns at most remaining.len(); thus
             // dest + take <= right and both copied ranges are in bounds.
             unsafe {
+                // GC_STORE_AUDIT(POINTER_FREE): Copies only u32 permutation indices in private Rust slices; source JS values remain rooted by the caller.
                 std::ptr::copy_nonoverlapping(
                     scratch.as_ptr().add(left),
                     order.as_mut_ptr().add(dest),
@@ -187,6 +190,7 @@ fn merge_at(
             // memmove semantics. take <= end - right and dest < right.
             unsafe {
                 let order_ptr = order.as_mut_ptr();
+                // GC_STORE_AUDIT(POINTER_FREE): Copies only u32 permutation indices in private Rust slices; source JS values remain rooted by the caller.
                 std::ptr::copy(order_ptr.add(right), order_ptr.add(dest), take);
             }
             right += take;
@@ -199,6 +203,7 @@ fn merge_at(
     // separate mutable slice arguments establish that the buffers do not
     // overlap. The integer scratch allocation never moves during JS calls.
     unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): Copies only u32 permutation indices in private Rust slices; source JS values remain rooted by the caller.
         std::ptr::copy_nonoverlapping(
             scratch.as_ptr().add(left),
             order.as_mut_ptr().add(dest),

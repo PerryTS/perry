@@ -462,13 +462,12 @@ pub extern "C" fn js_class_evaluation_object_with_prototype(
     } else {
         Some(parent_proto.get_nanbox_f64().to_bits())
     };
-    unsafe {
-        super::class_object_props::finish_class_evaluation_prototype(
-            class.get_raw_mut_ptr(),
-            prototype,
-        );
-    }
-    class.get_raw_mut_ptr::<ObjectHeader>() as i64
+    let (_, current) = class.across_mut::<ObjectHeader, _>(|| unsafe {
+        class.with_mut_ptr(|class| {
+            super::class_object_props::finish_class_evaluation_prototype(class, prototype)
+        });
+    });
+    current as i64
 }
 
 fn class_evaluation_object_impl(

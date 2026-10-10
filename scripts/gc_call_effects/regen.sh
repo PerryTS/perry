@@ -17,17 +17,20 @@ cd "$ROOT"
 target="${1:?usage: regen.sh <linux-x86_64|macos-aarch64|windows-x86_64> [--check]}"
 mode="${2:-}"
 unset RUSTFLAGS
+# Cargo resolves a relative CARGO_TARGET_DIR from this repository, which is
+# also our working directory. Keep archive selection beside the build output.
+target_dir="${CARGO_TARGET_DIR:-target}"
 case "$target" in
   linux-x86_64)
     # Same command as test.yml's gap-suite-build, whose archives the CI leg reuses.
     build=(cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
-    libdir="target/release"; libs=(libperry_runtime.a libperry_stdlib.a) ;;
+    libdir="$target_dir/release"; libs=(libperry_runtime.a libperry_stdlib.a) ;;
   macos-aarch64)
     build=(cargo build --release -p perry-runtime-static -p perry-stdlib-static)
-    libdir="target/release"; libs=(libperry_runtime.a libperry_stdlib.a) ;;
+    libdir="$target_dir/release"; libs=(libperry_runtime.a libperry_stdlib.a) ;;
   windows-x86_64)
     build=(cargo xwin build --release --target x86_64-pc-windows-msvc -p perry-runtime-static -p perry-stdlib-static)
-    libdir="target/x86_64-pc-windows-msvc/release"; libs=(perry_runtime.lib perry_stdlib.lib) ;;
+    libdir="$target_dir/x86_64-pc-windows-msvc/release"; libs=(perry_runtime.lib perry_stdlib.lib) ;;
   *) echo "regen.sh: unknown target $target" >&2; exit 2 ;;
 esac
 libdir="${GC_EFFECTS_LIB_DIR:-$libdir}"

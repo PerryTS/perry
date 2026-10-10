@@ -68,7 +68,9 @@ fn recursive_initializer_is_rejected_without_poisoning_other_keys() {
 }
 #[test]
 fn aligned_values_are_released_at_worker_exit() {
-    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    crate::per_test_global! {
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+    }
     #[repr(align(4096))]
     struct Aligned(u8);
     impl Drop for Aligned {

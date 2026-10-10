@@ -298,7 +298,9 @@ pub(crate) fn class_method_declaration_value(
             );
         });
     }
-    crate::value::js_nanbox_pointer(f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64)
+    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f| {
+        crate::value::js_nanbox_pointer(f as i64)
+    })
 }
 
 pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, home: f64) -> f64 {

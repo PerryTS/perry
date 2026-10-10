@@ -23,7 +23,9 @@ fn read(receiver: &crate::gc::RuntimeHandle<'_>, name: &[u8]) -> JSValue {
 fn slow_read(receiver: &crate::gc::RuntimeHandle<'_>, name: &[u8]) -> JSValue {
     let scope = crate::gc::RuntimeHandleScope::new();
     let name = scope.root_raw_const_ptr(key(name));
-    super::get_field_by_name::test_get_past_data_probe(ptr(receiver), name.get_raw_const_ptr())
+    name.with_const_ptr(|name| {
+        super::get_field_by_name::test_get_past_data_probe(ptr(receiver), name)
+    })
 }
 
 #[test]
@@ -39,7 +41,7 @@ fn ordinary_named_misses_skip_all_exotic_probes() {
         // Give the receiver a keys view so an absent lookup reaches the
         // full shared tail, including the final URLSearchParams probe.
         let own = scope.root_raw_const_ptr(key(b"own"));
-        js_object_set_field_by_name(ptr(receiver), own.get_raw_const_ptr(), 21.0);
+        own.with_const_ptr(|own| js_object_set_field_by_name(ptr(receiver), own, 21.0));
         let descriptor = unsafe {
             super::super::shapes::object_shape_descriptor(ptr(receiver))
                 .expect("test premise: the receiver has a shape")
@@ -62,12 +64,16 @@ fn ordinary_named_misses_skip_all_exotic_probes() {
         );
         let name = scope.root_raw_const_ptr(key(b"probeGateMissing"));
         let obj = ptr(receiver);
-        let name = name.get_raw_const_ptr::<crate::StringHeader>();
         let before = super::exotic_named_read::ordinary_probe_counts();
-        assert!(
-            get_field_by_name_tail::get_field_by_name_object_tail_with_kind(obj, name, Some(false))
-                .is_undefined()
-        );
+        assert!(name
+            .with_const_ptr(
+                |name| get_field_by_name_tail::get_field_by_name_object_tail_with_kind(
+                    obj,
+                    name,
+                    Some(false)
+                )
+            )
+            .is_undefined());
         let after = super::exotic_named_read::ordinary_probe_counts();
         assert!(
             after[2] > before[2],

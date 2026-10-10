@@ -6,10 +6,8 @@ use super::*;
 pub(super) fn pull(stream: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
-    let Some(source) = get_hidden_value(
-        stream.get_nanbox_f64(),
-        READABLE_SOURCE_ITERATOR_KEY,
-    ) else {
+    let Some(source) = get_hidden_value(stream.get_nanbox_f64(), READABLE_SOURCE_ITERATOR_KEY)
+    else {
         return false;
     };
     let source = scope.root_nanbox_f64(source);
@@ -66,13 +64,15 @@ pub(super) fn pull(stream: f64) -> bool {
         crate::fn_info!(next_rejected, 1; with_declared(1)),
         1,
     ));
-    js_closure_set_capture_f64(fulfill.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    js_closure_set_capture_f64(reject.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    crate::promise::js_promise_attach_handlers(
-        promise.get_raw_mut_ptr(),
-        fulfill.get_raw_mut_ptr(),
-        reject.get_raw_mut_ptr(),
-    );
+    fulfill.with_mut_ptr(|closure| js_closure_set_capture_f64(closure, 0, stream.get_nanbox_f64()));
+    reject.with_mut_ptr(|closure| js_closure_set_capture_f64(closure, 0, stream.get_nanbox_f64()));
+    promise.with_mut_ptr(|promise| {
+        fulfill.with_mut_ptr(|fulfill| {
+            reject.with_mut_ptr(|reject| {
+                crate::promise::js_promise_attach_handlers(promise, fulfill, reject)
+            })
+        })
+    });
     true
 }
 
@@ -95,16 +95,20 @@ extern "C" fn next_fulfilled(
     let done_key = scope.root_string_ptr(hidden_key(b"done"));
     let value_key = scope.root_string_ptr(hidden_key(b"value"));
     let step = object_ptr_from_value(result.get_nanbox_f64()).map(|obj| {
-        let done = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            done_key.get_raw_const_ptr(),
-        );
+        let done = done_key.with_const_ptr(|key| {
+            crate::object::js_object_get_field_by_name_f64(
+                obj as *const crate::object::ObjectHeader,
+                key,
+            )
+        });
         let done = crate::value::js_is_truthy(done) != 0;
         let obj = object_ptr_from_value(result.get_nanbox_f64()).unwrap();
-        let value = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            value_key.get_raw_const_ptr(),
-        );
+        let value = value_key.with_const_ptr(|key| {
+            crate::object::js_object_get_field_by_name_f64(
+                obj as *const crate::object::ObjectHeader,
+                key,
+            )
+        });
         (done, value)
     });
     let Some((done, value)) = step else {
@@ -134,11 +138,11 @@ extern "C" fn next_fulfilled(
         set_hidden_value(
             stream.get_nanbox_f64(),
             hidden_chunks_key(),
-            box_pointer(chunks.get_raw_const_ptr()),
+            chunks.with_const_ptr(|chunks| box_pointer(chunks)),
         );
         initialize_readable_from_buffered_length(
             stream.get_nanbox_f64(),
-            box_pointer(chunks.get_raw_const_ptr()),
+            chunks.with_const_ptr(|chunks| box_pointer(chunks)),
         );
     }
     if done && !readable_chunks_nonempty(stream.get_nanbox_f64()) {

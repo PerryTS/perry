@@ -9,15 +9,15 @@ fn stream_literal_key_is_canonical_and_survives_gc() {
     let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
     let atom = crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0);
     assert_eq!(
-        key.get_raw_mut_ptr::<crate::StringHeader>(),
-        atom,
+        key.with_mut_ptr::<crate::StringHeader, _>(|key| key == atom),
+        true,
         "stream literal must use the canonical atom"
     );
     crate::gc::js_gc_collect();
     let after = crate::node_stream::hidden_key_for_test(bytes);
     assert_eq!(
-        after,
-        key.get_raw_mut_ptr::<crate::StringHeader>(),
+        key.with_mut_ptr::<crate::StringHeader, _>(|key| key == after),
+        true,
         "canonical key must survive collection"
     );
 }

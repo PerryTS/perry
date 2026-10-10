@@ -65,6 +65,7 @@ struct PageGenerationRange {
 }
 
 impl PageGenerationRange {
+    #[cfg(any(not(target_os = "linux"), test))]
     #[inline]
     fn contains(self, addr: usize) -> bool {
         addr >= self.base && addr < self.end
@@ -78,6 +79,7 @@ enum PageGenerationSlot {
 }
 
 impl PageGenerationSlot {
+    #[cfg(any(not(target_os = "linux"), test))]
     #[inline]
     fn find(&self, addr: usize) -> Option<PageGenerationRange> {
         match self {
@@ -105,6 +107,7 @@ impl PageGenerationSlot {
     }
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 #[derive(Clone, Copy)]
 struct PageGenerationCache {
     key: usize,
@@ -112,6 +115,7 @@ struct PageGenerationCache {
     valid: bool,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl PageGenerationCache {
     const fn empty() -> Self {
         Self {
@@ -143,14 +147,17 @@ impl PageGenerationCache {
 // command path took (`classify_heap_generation_uncached`) but the longer
 // linear scan cost every barrier and array-receiver classification more than
 // that — an 8.6% regression on the same row (0/7 pairs). Keep the scan short.
+#[cfg(any(not(target_os = "linux"), test))]
 const PAGE_GENERATION_CACHE_WAYS: usize = 4;
 
 mod compact;
 use compact::{page_count, PageObjects};
 mod storage;
 use storage::{PageMap, PageMetaMap};
+#[cfg(any(not(target_os = "linux"), test))]
 mod page_class;
 mod sweep_tally;
+#[cfg(any(not(target_os = "linux"), test))]
 pub(crate) use page_class::*;
 pub(crate) use sweep_tally::{
     old_object_single_page, old_page_account_swept_tally, OldPageSweepTally,
@@ -241,6 +248,7 @@ thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    #[cfg(any(not(target_os = "linux"), test))]
     static PAGE_GENERATION_CACHE: UnsafeCell<PageGenerationCacheSet> =
         const { UnsafeCell::new(PageGenerationCacheSet::empty()) };
 }
@@ -283,7 +291,16 @@ thread_local! {
 
 /// Address of this thread's `PAGE_GENERATION_CACHE`.
 pub(crate) fn page_generation_cache_hot_addr() -> *mut u8 {
-    PAGE_GENERATION_CACHE.with(|c| c.get() as *mut u8)
+    #[cfg(any(not(target_os = "linux"), test))]
+    {
+        PAGE_GENERATION_CACHE.with(|c| c.get() as *mut u8)
+    }
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        // Linux classifies from its reservation; no cache accessor runs there.
+        // Keep the reserved HotTls field without allocating an unused cache.
+        std::ptr::null_mut()
+    }
 }
 
 /// Address of this thread's `PAGE_GENERATIONS`.
@@ -293,6 +310,7 @@ pub(crate) fn page_generations_hot_addr() -> *mut u8 {
 
 /// [`PAGE_GENERATION_CACHE`] without a TLS resolution — see `crate::tls_hot`.
 #[inline(always)]
+#[cfg(any(not(target_os = "linux"), test))]
 fn hot_page_generation_cache() -> *mut PageGenerationCacheSet {
     // SAFETY: the slot is filled from `page_generation_cache_hot_addr` above,
     // and `tls_hot::tests::cached_addresses_match_thread_locals` asserts the
@@ -302,6 +320,7 @@ fn hot_page_generation_cache() -> *mut PageGenerationCacheSet {
 
 /// [`PAGE_GENERATIONS`] without a TLS resolution — see `crate::tls_hot`.
 #[inline(always)]
+#[cfg(any(not(target_os = "linux"), test))]
 fn hot_page_generations() -> &'static RefCell<PageGenerationMap> {
     // SAFETY: as above, paired with `page_generations_hot_addr`.
     unsafe { &*(crate::tls_hot::hot().page_generations as *const RefCell<PageGenerationMap>) }
@@ -331,8 +350,14 @@ pub(crate) fn generation_page_base(page: usize) -> usize {
 fn invalidate_generation_cache() {
     // Every way, not one — a stale way is exactly what this guards against.
     // SAFETY: thread-local, single-threaded.
+    #[cfg(any(not(target_os = "linux"), test))]
     PAGE_GENERATION_CACHE.with(|cache| unsafe { (*cache.get()).invalidate() });
 }
+
+// Linux production uses reservation classification and never records a cache
+// lookup; there is no legacy cache report to emit.
+#[cfg(all(target_os = "linux", not(test)))]
+pub(crate) fn page_class_table_report() {}
 
 fn register_old_block_pages(base: usize, size: usize) {
     if base == 0 || size == 0 {

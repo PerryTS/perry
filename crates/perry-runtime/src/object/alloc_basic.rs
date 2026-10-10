@@ -202,7 +202,7 @@ fn object_alloc_with_parent_impl<const PREMARK_PLAIN: bool, const BORN_NULL: boo
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// One memo at this allocation site, validated against all birth facts
     /// on every use. A polymorphic allocation misses and replaces the memo;
     /// there is no count/kind-indexed table.

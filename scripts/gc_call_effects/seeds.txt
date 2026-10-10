@@ -25,7 +25,7 @@ collector regex ^perry_runtime::gc::gc_collect_(minor|full) -- the minor and ful
 collector regex ^perry_runtime::gc::copying::run_copied_minor_attempt -- the copying (moving) minor
 collector contains gc::roots::stack_maps::visit_stack_map_root_slots -- reads (and rewrites) the native frame roots of every generated frame: the chokepoint every precise collection passes
 collector contains gc::roots::mark_mutable_root_slots -- the mutable-root marking walk (frames, shadow stack, registered scanners) of every precise collection
-collector regex ^perry_runtime::gc::native_stack_scan:: -- the conservative native-stack scan (the valve / OldReclaim / emergency arms)
+collector regex ^perry_runtime::gc::roots::mark_stack_roots_(unchecked|for_decision)$ -- the conservative root-reading scan (the valve / OldReclaim / emergency arms); native_stack_scan is instead the optional post-collection stale-pointer diagnostic, which can disappear from production archives
 collector regex ^<*perry_runtime::gc::cycle::registered_root_scan:: -- a budgeted cycle's RootScan subphase, reachable from a mutator assist (RFC arm A-assist)
 collector regex ^perry_runtime::gc::(mod::)?gc_try_emergency_reclaim -- emergency full collection when a block reservation fails (RFC arm A-emerg)
 poll exact js_gc_collect -- explicit gc(): a declared poll (RFC D1), never cut

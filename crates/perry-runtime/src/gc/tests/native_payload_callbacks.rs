@@ -663,14 +663,18 @@ fn runtime_callback_slots_never_call_an_accessor() {
     let arr = scope.root_nanbox_f64(np::callbacks(value.get_nanbox_f64(), &FAMILY));
     let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 1));
     let get = crate::string::intern_ascii_literal(b"get");
-    crate::object::js_object_set_field_by_name(desc.get_raw_mut_ptr(), get, cb.get_nanbox_f64());
+    desc.with_mut_ptr(|desc| {
+        crate::object::js_object_set_field_by_name(desc, get, cb.get_nanbox_f64())
+    });
     let key = scope.root_string_ptr(crate::string::intern_ascii_literal(b"0"));
     crate::object::js_object_define_property(
         arr.get_nanbox_f64(),
-        crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
-        crate::value::js_nanbox_pointer(
-            desc.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
-        ),
+        key.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::value::js_nanbox_string(key as i64)
+        }),
+        desc.with_mut_ptr::<crate::object::ObjectHeader, _>(|desc| {
+            crate::value::js_nanbox_pointer(desc as i64)
+        }),
     );
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
     CALLS.store(0, Ordering::SeqCst);
@@ -685,9 +689,9 @@ fn runtime_callback_slots_never_call_an_accessor() {
         value.get_nanbox_f64(),
         &FAMILY,
         b"callbacks",
-        crate::value::js_nanbox_pointer(
-            desc.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
-        ),
+        desc.with_mut_ptr::<crate::object::ObjectHeader, _>(|desc| {
+            crate::value::js_nanbox_pointer(desc as i64)
+        }),
     );
     assert_eq!(
         unsafe { np::callback_from_link(link, 0) }.to_bits(),
@@ -736,9 +740,9 @@ fn native_call_reuses_catch_refreshes_roots_and_pops() {
                 Err(())
             );
             assert_eq!(crate::gc::runtime_handle_stack_savepoint(), handles);
-            assert!(!object
-                .get_raw_mut_ptr::<crate::object::ObjectHeader>()
-                .is_null());
+            assert!(
+                object.with_mut_ptr::<crate::object::ObjectHeader, _>(|object| !object.is_null())
+            );
             let cached = &*(*(cell(link) as *mut np::NativeCallbackCell)).catch;
             assert_eq!(
                 cached.captures(),
@@ -774,9 +778,9 @@ fn native_call_cached_new_target_moves_before_later_throw() {
     let returns = scope.root_nanbox_f64(closure(crate::fn_info!(returns, 0)));
     let throws = scope.root_nanbox_f64(closure(crate::fn_info!(clears_new_target_and_throws, 0)));
     let target = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-    let before = crate::value::js_nanbox_pointer(
-        target.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
-    );
+    let before = target.with_mut_ptr::<crate::object::ObjectHeader, _>(|target| {
+        crate::value::js_nanbox_pointer(target as i64)
+    });
     let old_target = scope.root_nanbox_f64(crate::object::js_new_target_set(before));
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
     let guard = unsafe { np::enter_link(link) }.unwrap();
@@ -788,9 +792,9 @@ fn native_call_cached_new_target_moves_before_later_throw() {
             );
             let trace = collect_minor_trace(GcTriggerKind::MallocCount);
             assert!(trace.copying_nursery.eligible);
-            let moved = crate::value::js_nanbox_pointer(
-                target.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
-            );
+            let moved = target.with_mut_ptr::<crate::object::ObjectHeader, _>(|target| {
+                crate::value::js_nanbox_pointer(target as i64)
+            });
             assert_ne!(before.to_bits(), moved.to_bits());
             // The live new.target cell need not be registered in this fixture:
             // restore it to its correct moved value before the second callback.
@@ -890,7 +894,7 @@ fn callback_cell_slot_resolves_array_growth_before_gc_rewrite() {
     });
     assert_ne!(
         original.to_bits() & POINTER_MASK,
-        grown.get_raw_mut_ptr::<crate::array::ArrayHeader>() as u64
+        grown.with_mut_ptr::<crate::array::ArrayHeader, _>(|grown| grown as u64)
     );
     assert_eq!(
         unsafe { *np::callback_slot_address(cell(link)).unwrap() },

@@ -193,16 +193,6 @@ pub(super) fn panic_stale_forwarded_reference(
     panic_stale_forwarded_reference_detailed(verifier, surface, slot_addr, old_bits, new_bits);
 }
 
-/// In-place rewrite helper: read `*slot`, run it through
-/// `try_rewrite_value`, write back if a rewrite was produced.
-#[inline]
-pub(super) unsafe fn rewrite_slot(slot: *mut u64, valid_ptrs: &ValidPointerSet) {
-    let bits = *slot;
-    if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-        *slot = new_bits;
-    }
-}
-
 #[inline]
 pub(super) unsafe fn rewrite_mutable_slot(slot: GcMutableSlot, valid_ptrs: &ValidPointerSet) {
     if let Some(bits) = try_rewrite_value(slot.read(), valid_ptrs) {
@@ -210,6 +200,7 @@ pub(super) unsafe fn rewrite_mutable_slot(slot: GcMutableSlot, valid_ptrs: &Vali
     }
 }
 
+#[cfg(test)]
 #[inline]
 pub(super) unsafe fn verify_slot(
     slot: *const u64,
@@ -407,7 +398,7 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
 ///
 /// #9754: `covered` names the objects the cycle's own dirty scan visited
 /// COMPLETELY (every pointer slot on a dirty page and inside the body —
-/// `scan_dirty_object_slots`). For those, `visit_slot_with_parent` already
+/// `scan_dirty_object_slots`). For those, `visit_mutable_slot_with_parent` already
 /// re-remembered every slot whose post-visit child still needs tracking with
 /// the same predicate this walk applies, so re-walking them can only re-insert
 /// pages the sticky restore just inserted. They are skipped; the walk is then

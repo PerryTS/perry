@@ -486,9 +486,7 @@ mod ffi_sso_header_tests {
                 let string = addr as *const crate::string::StringHeader;
                 let bytes = unsafe {
                     std::slice::from_raw_parts(
-                        string
-                            .cast::<u8>()
-                            .add(std::mem::size_of::<crate::string::StringHeader>()),
+                        crate::string::string_data(string),
                         (*string).byte_len as usize,
                     )
                 };

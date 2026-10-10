@@ -9,6 +9,10 @@ pub(crate) struct Backing {
     data: *mut u8,
     capacity: u32,
     alignment: u32,
+    // A transferred allocation is freed on its receiver thread, but must
+    // debit the same test counter that its source thread incremented.
+    #[cfg(test)]
+    live_counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 // Exclusive ownership crosses the queue; no JS access remains after detach.
@@ -22,11 +26,15 @@ impl Backing {
             handle_alloc_error(layout);
         }
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 8,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -37,11 +45,15 @@ impl Backing {
             handle_alloc_error(layout);
         }
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 8,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -57,11 +69,15 @@ impl Backing {
         let capacity = bytes.capacity() as u32;
         std::mem::forget(bytes);
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let live_counter = std::sync::Arc::clone(&LIVE_BACKINGS);
+        #[cfg(test)]
+        live_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             data,
             capacity,
             alignment: 1,
+            #[cfg(test)]
+            live_counter,
         }
     }
 
@@ -92,13 +108,16 @@ impl Drop for Backing {
                 .expect("buffer backing layout");
         unsafe { dealloc(self.data, layout) };
         #[cfg(test)]
-        LIVE_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.live_counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 #[cfg(test)]
-pub(crate) static LIVE_BACKINGS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+crate::per_test_global! {
+    pub(crate) static LIVE_BACKINGS: std::sync::Arc<std::sync::atomic::AtomicUsize> =
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+}
 
 /// A single-use transfer in the serialized tree. During the private writer
 /// walk it names a source; commit removes that address before publication.
@@ -253,7 +272,7 @@ mod tests {
             .join()
             .unwrap();
         }
-        assert_eq!(source_root.get_raw_mut_ptr::<BufferHeader>(), source);
+        source_root.with_mut_ptr::<BufferHeader, _>(|current| assert_eq!(current, source));
         assert_eq!(count(), before, "worker exit must release received backing");
     }
 
@@ -375,9 +394,9 @@ mod tests {
         }
         .is_err());
         assert!(!crate::buffer::is_detached_buffer(source as usize));
-        assert_eq!(byte_address(root.get_raw_mut_ptr::<BufferHeader>()), data);
+        assert_eq!(root.with_mut_ptr(|root| byte_address(root)), data);
         assert_eq!(
-            crate::buffer::js_buffer_get(root.get_raw_mut_ptr::<BufferHeader>(), 0),
+            root.with_mut_ptr(|root| crate::buffer::js_buffer_get(root, 0)),
             123
         );
         crate::buffer::detach_array_buffer(source as usize);

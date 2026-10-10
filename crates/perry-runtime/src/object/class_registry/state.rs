@@ -802,8 +802,7 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     prototype.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
         crate::object::proto_validity::mark_object_as_prototype(proto as usize)
     });
-    let proto_ptr = prototype.get_raw_mut_ptr::<ObjectHeader>();
-    link_decl_prototype_object(class_id, proto_ptr);
+    prototype.with_mut_ptr(|proto| link_decl_prototype_object(class_id, proto));
 }
 
 /// Publish the birth's rooted holder before installing its members: building
@@ -1455,7 +1454,7 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
     // never prime there).
     let members = class_prototype_member_names(class_id).len() as u32;
     let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, members + 1));
-    if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
+    if proto.with_mut_ptr::<ObjectHeader, _>(|proto| proto.is_null()) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // Materializing a declared class's prototype object is not prototype

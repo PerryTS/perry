@@ -325,14 +325,8 @@ fn requeue_front(stream: f64, records: *const crate::array::ArrayHeader, from: u
     );
     let mut merged = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - from));
     for i in from..len {
-        let value = crate::array::js_array_get_f64(
-            records.get_raw_const_ptr::<crate::array::ArrayHeader>(),
-            i,
-        );
-        let grown = crate::array::js_array_push_f64(
-            merged.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-            value,
-        );
+        let value = records.with_const_ptr(|records| crate::array::js_array_get_f64(records, i));
+        let grown = merged.with_mut_ptr(|merged| crate::array::js_array_push_f64(merged, value));
         merged = scope.root_raw_mut_ptr(grown);
     }
     let later_raw = raw_ptr_from_value(later.get_nanbox_f64());
@@ -343,17 +337,15 @@ fn requeue_front(stream: f64, records: *const crate::array::ArrayHeader, from: u
                 raw_ptr_from_value(later.get_nanbox_f64()) as *const crate::array::ArrayHeader,
                 i,
             );
-            let grown = crate::array::js_array_push_f64(
-                merged.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-                value,
-            );
+            let grown =
+                merged.with_mut_ptr(|merged| crate::array::js_array_push_f64(merged, value));
             merged = scope.root_raw_mut_ptr(grown);
         }
     }
     set_hidden_value(
         s.get_nanbox_f64(),
         hidden_writable_buffered_key(),
-        box_pointer(merged.get_raw_const_ptr::<crate::array::ArrayHeader>() as *const u8),
+        merged.with_const_ptr::<crate::array::ArrayHeader, _>(|merged| box_pointer(merged.cast())),
     );
 }
 
@@ -491,8 +483,8 @@ pub(super) fn readable_maybe_read_more(stream: f64) {
     if rlen >= hwm {
         return;
     }
-    if let Some(held) = get_hidden_value(stream, TRANSFORM_HELD_CALLBACK_KEY)
-        .filter(|v| is_callable_value(*v))
+    if let Some(held) =
+        get_hidden_value(stream, TRANSFORM_HELD_CALLBACK_KEY).filter(|v| is_callable_value(*v))
     {
         set_internal_value(
             stream,
