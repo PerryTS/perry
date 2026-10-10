@@ -330,8 +330,8 @@ enum ActiveReceiverData {
 /// Active materialised receiver descriptors for one function lowering.
 ///
 /// A hoisted byte-cell access proof for one local and one brand set. It holds
-/// the exact receiver bits it was resolved for and is revalidated at its next
-/// use when those bits differ or when an executed call dirtied it (the
+/// the rooted receiver it was resolved for and is revalidated at its next
+/// use when that receiver differs or when an executed call dirtied it (the
 /// call-emission choke point in `LlBlock`). Buffer-family cells and their
 /// native backing are non-moving, so a clean proof's data and length stay
 /// exact until a call can detach, resize or rebind the owner.
@@ -350,10 +350,8 @@ pub(crate) struct ByteViewParamAccess {
     /// `i8` proof state: 0 = dirty (every executed call stores it), 1 = valid,
     /// 2 = resolved but not admitted (the runtime arm serves it).
     pub valid_slot: String,
-    /// The full NaN-box bits of the receiver the proof was resolved for.
-    pub bits_slot: String,
-    /// A parameter that is never reassigned: one receiver per invocation, so
-    /// the proof needs no receiver comparison.
+    /// A parameter or immutable lexical binding. Each declaration dirties
+    /// its proof, so there is no receiver change while the proof is clean.
     pub fixed_receiver: bool,
     pub brands: Vec<u8>,
 }
@@ -389,6 +387,20 @@ impl ReceiverDescriptorTable {
     ) {
         self.byte_view_params
             .insert((receiver, access.brands.clone()), access);
+    }
+
+    /// A lexical binding creates a new receiver even when its initializer
+    /// is a pure read. Reuse the proof's existing dirty state; an immutable
+    /// binding then needs no identity comparison until its next declaration.
+    pub(crate) fn byte_receiver_binding(&mut self, receiver: u32, immutable: bool) -> Vec<String> {
+        self.byte_view_params
+            .iter_mut()
+            .filter(|((id, _), _)| *id == receiver)
+            .map(|(_, access)| {
+                access.fixed_receiver = immutable;
+                access.valid_slot.clone()
+            })
+            .collect()
     }
 
     /// The proof installed for `receiver` with exactly `brands`.

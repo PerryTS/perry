@@ -71,7 +71,6 @@ pub(super) fn install_loop_access(
         data_slot: ctx.func.alloca_entry(I64),
         length_slot: ctx.func.alloca_entry(I32),
         valid_slot: state_slot,
-        bits_slot: ctx.func.alloca_entry(I64),
         fixed_receiver: false,
         brands: brands.to_vec(),
     };
@@ -83,8 +82,6 @@ pub(super) fn install_loop_access(
         .entry_allocas_push_store(I32, "0", &access.length_slot);
     ctx.func
         .entry_allocas_push_store(I8, "0", &access.valid_slot);
-    ctx.func
-        .entry_allocas_push_store(I64, "0", &access.bits_slot);
     #[cfg(test)]
     let skip_dirty = std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("call_dirty");
     #[cfg(not(test))]
@@ -112,8 +109,6 @@ fn refresh_param(
     let miss_l = ctx.block_label(miss);
     let done_l = ctx.block_label(done);
     ctx.block().store(DOUBLE, boxed, &access.receiver_root_slot);
-    let bits = ctx.block().bitcast_double_to_i64(boxed);
-    ctx.block().store(I64, &bits, &access.bits_slot);
     let resolved = resolve(ctx, boxed, &access.brands, &miss_l);
     // Writes need no per-store frozen test while the proof is clean: freezing
     // is a call, and a call dirties the proof.
@@ -172,7 +167,10 @@ pub(crate) fn revalidate(
         "true".to_string()
     } else {
         let bits = ctx.block().bitcast_double_to_i64(boxed);
-        let proven = ctx.block().load(I64, &access.bits_slot);
+        // The receiver already has a precise root. Read its current value
+        // instead of retaining a second, unrooted copy of its address bits.
+        let receiver = ctx.block().load(DOUBLE, &access.receiver_root_slot);
+        let proven = ctx.block().bitcast_double_to_i64(&receiver);
         ctx.block().icmp_eq(I64, &bits, &proven)
     };
     let hit = ctx.block().and(I1, &valid, &same);
@@ -899,3 +897,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "byte_cell_identity_tests.rs"]
+mod rooted_identity_tests;

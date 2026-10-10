@@ -85,6 +85,7 @@ second. It is the "assert the gate can fail" arm, and CI runs it next to the
 real corpus.
 """
 import argparse
+from pathlib import Path
 import contextlib
 import io
 import json
@@ -4269,11 +4270,14 @@ entry.0:
 # split: over-approximating the closure can only move a hit from `unrooted` to
 # `stale`, never out of the report.
 
-# `ptrtoint ptr addrspace(1) %s to i64` -- a GC reference leaving the domain
-# RS4GC tracks. Everything downstream of it is a raw integer LLVM will not
-# relocate, which is precisely why Perry's NaN-boxed representation is exposed
-# here: a JSValue spends most of its life as a `double`, not as a pointer.
-UNMASK_RE = re.compile(r"=\s*ptrtoint\s+ptr\s+addrspace\(1\)\s+%([\w.$]+)\s+to\b")
+# A GC reference leaving the tracked domain as ordinary integer bits. The
+# tied-register identity crosses the same boundary as ptrtoint; its result
+# remains untracked even though its input is a managed pointer.
+GC_WORD_PROJECTION = (
+    r'(?:ptrtoint\s+|call\s+i64\s+asm\s+"",\s*"=r,0"\s*\()'
+    r'ptr\s+addrspace\(1\)\s+%([\w.$]+)(?:\s+to\b|\))'
+)
+UNMASK_RE = re.compile(r"=\s*" + GC_WORD_PROJECTION)
 # The reverse: a raw word re-entering the tracked domain.
 REMASK_RE = re.compile(r"=\s*inttoptr\s+\S+\s+%([\w.$]+)\s+to\s+ptr\s+addrspace\(1\)")
 
@@ -4309,7 +4313,7 @@ AS1_DEF_RE = re.compile(
     # a `%.N = phi ptr addrspace(1) [ ... ]`. Exactly the dead-alternative
     # failure `--audit-alloc-re` exists for, in a different regex.
     r"|(?:phi|select|freeze)\s+ptr\s+addrspace\(1\)"
-    r"|(?:call|invoke)\s+[^%@]*\bptr\s+addrspace\(1\)\s+[@%(]"
+    r'|(?:call|invoke)\s+[^%@"]*\bptr\s+addrspace\(1\)\s+[@%(]'
     r"|(?:load|getelementptr)\s+[^%@]*\bptr\s+addrspace\(1\)[,\s]"
     r")")
 
@@ -4914,7 +4918,8 @@ _SP_SEED = ("  %gcseed.tok = call token (i64, i32, ptr, i32, i32, ...) "
 # pointer is the shape with the least ambiguity about whether a non-report
 # would be correct behaviour.
 _SP_SEED_SRC_RE = re.compile(
-    r"^\s*%([\w.$]+)\s*=\s*ptrtoint\s+ptr\s+addrspace\(1\)\s+%[\w.$]+\s+to\s+i64\s*$")
+    r"^\s*%([\w.$]+)\s*=\s*" + GC_WORD_PROJECTION
+    + r"(?:(?=\s+i64\s*$)|(?<=\)))")
 
 
 def _sp_seed_sites(lines):
@@ -4948,16 +4953,21 @@ def _sp_seed_sites(lines):
                           if LABEL_RE.match(lines[k]) or lines[k].startswith("}")),
                          fn_hi)
         use_at = None
+        aliases = {reg}
         for j in range(i + 1, block_end):
             text = lines[j]
             if (STATEPOINT_MARK in text or RELOCATE_MARK in text
                     or any(rc in text for rc in ROOTING_CALLS)):
                 use_at = None
                 break
-            if not uses(text, {reg}):
+            if not uses(text, aliases):
                 continue
             probe = Insn(text, "seed", 0)
-            if is_transparent(probe) or probe.result == reg:
+            if is_transparent(probe):
+                if probe.result:
+                    aliases.add(probe.result)
+                continue
+            if probe.result == reg:
                 continue
             use_at = j
             break
@@ -5353,6 +5363,9 @@ def statepoint_self_test():
         ("  %raw = ptrtoint ptr addrspace(1) %s to i64", False,
          "the cast OUT of it -- an i64, which LLVM does not relocate. "
          "Classifying it tracked would silence the entire mode"),
+        ('  %raw = call i64 asm "", "=r,0"(ptr addrspace(1) %s)', False,
+         "the managed pointer is the INPUT; the ordinary i64 result is "
+         "not tracked and must not silence a stale use"),
     ):
         if bool(AS1_DEF_RE.match(text)) != want:
             print(f"self-test FAIL: AS1_DEF_RE should{'' if want else ' not'} "
@@ -5395,6 +5408,81 @@ def statepoint_self_test():
             with open(p, "w") as fh:
                 fh.write(text)
             paths[name] = p
+
+        # Keep the original checker's coverage of narrow integer casts.
+        # A 32-bit projection extended back to a word is still stale after
+        # collection; the i64-only seeder must not mistake it for a word.
+        narrow_text = Path(paths["stale"]).read_text()
+        narrow_text = re.sub(
+            r"(%raw = ptrtoint[^\n]+)to i64", r"\1to i32", narrow_text)
+        narrow_text = narrow_text.replace(
+            "  %r = call double",
+            "  %raw.wide = zext i32 %raw to i64\n  %r = call double")
+        narrow_text = narrow_text.replace("i64 %raw,", "i64 %raw.wide,")
+        narrow = os.path.join(td, "sp_narrow_stale.ll")
+        Path(narrow).write_text(narrow_text)
+        narrow_hits = _scan_statepoints([narrow], moving_only=True)
+        if len(narrow_hits) != 1 or narrow_hits[0].kind_class != "stale":
+            print("self-test FAIL: narrow ptrtoint lost its stale use",
+                  file=sys.stderr)
+            ok = False
+        if _SP_SEED_SRC_RE.match(
+                "  %raw = ptrtoint ptr addrspace(1) %s to i32"):
+            print("self-test FAIL: narrow ptrtoint is not an i64 seed",
+                  file=sys.stderr)
+            ok = False
+
+        # The production root reload uses a tied register instead of a
+        # redundant ptrtoint. It must retain both hazard classes, the safe
+        # control and the real-corpus seeder's ability to fail.
+        for name, want in (("unrooted", "unrooted"), ("stale", "stale"),
+                           ("reloaded", None)):
+            text = Path(paths[name]).read_text()
+            text = re.sub(
+                r"ptrtoint ptr addrspace\(1\) (%[\w.$]+) to i64",
+                r'call i64 asm "", "=r,0"(ptr addrspace(1) \1)',
+                text,
+            )
+            typed = os.path.join(td, "sp_typed_" + name + ".ll")
+            Path(typed).write_text(text)
+            hits = _scan_statepoints([typed], moving_only=True)
+            if (want is None and hits) or (want is not None and
+                    (len(hits) != 1 or hits[0].kind_class != want)):
+                print(f"self-test FAIL: typed reload {name}: "
+                      f"{[(h.kind_class, h.kind) for h in hits]}",
+                      file=sys.stderr)
+                ok = False
+            if name == "reloaded":
+                if seeded_statepoint_test([typed], True, 1):
+                    print("self-test FAIL: typed reload seeder went dark",
+                          file=sys.stderr)
+                    ok = False
+
+        # Production reloads feed a mask or bitcast before their first real
+        # use. The mutator must carry those aliases forward, otherwise its
+        # synthetic direct-use control passes while the real corpus goes dark.
+        for projection in (
+            "  %raw.mask = and i64 %raw, 281474976710655\n"
+            "  %raw.alias = xor i64 %raw.mask, 0",
+            "  %raw.box = bitcast i64 %raw to double\n"
+            "  %raw.alias = bitcast double %raw.box to i64",
+        ):
+            text = Path(paths["reloaded"]).read_text()
+            text = re.sub(
+                r"ptrtoint ptr addrspace\(1\) (%[\w.$]+) to i64",
+                r'call i64 asm "", "=r,0"(ptr addrspace(1) \1)', text)
+            text = text.replace("  %r = call double", projection +
+                                "\n  %r = call double")
+            text = text.replace("i64 %raw, i64 0)", "i64 %raw.alias, i64 0)")
+            aliased = os.path.join(td, "sp_typed_alias.ll")
+            Path(aliased).write_text(text)
+            if _scan_statepoints([aliased], moving_only=True):
+                print("self-test FAIL: clean typed alias control", file=sys.stderr)
+                ok = False
+            if seeded_statepoint_test([aliased], True, 1):
+                print("self-test FAIL: typed alias seeder went dark",
+                      file=sys.stderr)
+                ok = False
 
         # --- the two classes, and the control -----------------------------
         for name, want_class in (("unrooted", "unrooted"), ("stale", "stale")):

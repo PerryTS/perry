@@ -1001,3 +1001,8 @@ test_gap_gc_regexp_direct_birth
 
 # Numeric for-of source custody across moving collections.
 test_gap_array_record_numeric_poll_refresh
+# Typed root reloads and rooted byte-view identity under moving collection.
+test_gap_rs4gc_root_launder_budget
+test_gap_rs4gc_capture_reload_budget
+test_gap_gc_byte_view_rooted_identity
+test_gap_gc_byte_view_binding_identity
