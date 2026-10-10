@@ -795,7 +795,7 @@ impl Hash for MapPtrKey {
             // with raw pointer-bit patterns of other key kinds.
             0xB16_1247u32.hash(state);
             unsafe {
-                (*big).limbs.hash(state);
+                crate::bigint::BigIntHeader::all_limbs(big).hash(state);
             }
             return;
         }

@@ -704,7 +704,9 @@ fn descriptors_property_names_and_bigint_words_round_trip() {
     );
     assert_eq!(name_count, 1);
 
-    let words = [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210];
+    let mut words = vec![0u64; 33];
+    words[0] = 0x0123_4567_89ab_cdef;
+    words[32] = 0xfedc_ba98_7654_3210;
     let mut bigint = std::ptr::null_mut();
     assert_eq!(
         unsafe { napi_create_bigint_words(env, 0, words.len(), words.as_ptr(), &mut bigint) },
@@ -724,8 +726,8 @@ fn descriptors_property_names_and_bigint_words_round_trip() {
         },
         NapiStatus::Ok
     );
-    assert_eq!(count, 2);
-    let mut output = [0u64; 2];
+    assert_eq!(count, words.len());
+    let mut output = vec![0u64; words.len()];
     assert_eq!(
         unsafe {
             napi_get_value_bigint_words(env, bigint, &mut sign, &mut count, output.as_mut_ptr())

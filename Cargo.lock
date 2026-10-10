@@ -5381,6 +5381,8 @@ dependencies = [
  "mimalloc",
  "node-semver",
  "notify",
+ "num-bigint",
+ "num-traits",
  "perex",
  "perry-abi",
  "perry-base64",

@@ -137,16 +137,27 @@ fn bigint_replicas_preserve_sign_zero_and_every_limb() {
         for (i, limb) in wide.iter_mut().enumerate() {
             *limb = 0x0123_4567_89AB_CDEF ^ (i as u64);
         }
-        for limbs in [[0u64; BIGINT_LIMBS], negative, wide] {
+        let mut extended = vec![0u64; 33];
+        extended[0] = 7;
+        extended[32] = 1; // 2^2048 + 7
+        let mut extended_negative = vec![u64::MAX; 33];
+        extended_negative[32] = u64::MAX - 1;
+        for limbs in [
+            vec![0u64; BIGINT_LIMBS],
+            negative.to_vec(),
+            wide.to_vec(),
+            extended,
+            extended_negative,
+        ] {
             let b = binding(TAG_UNDEFINED);
-            let owner_ptr = bigint::bigint_alloc_with_limbs(limbs);
+            let owner_ptr = bigint::bigint_alloc_with_limbs(&limbs);
             let owner_value = BIGINT_TAG | (owner_ptr as u64 & POINTER_MASK);
             publish(&b, owner_value);
             let local = read(&b, agent_cache());
             assert_eq!(local & !POINTER_MASK, BIGINT_TAG);
             assert_ne!(local, owner_value);
             let local_ptr = (local & POINTER_MASK) as *const BigIntHeader;
-            assert_eq!((*local_ptr).limbs, limbs);
+            assert_eq!(crate::bigint::BigIntHeader::all_limbs(local_ptr), limbs);
         }
     }
 }

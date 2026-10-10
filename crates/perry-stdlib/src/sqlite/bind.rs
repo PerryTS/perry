@@ -127,7 +127,7 @@ pub(crate) fn bigint_to_i64(ptr: *const BigIntHeader) -> Option<i64> {
     if ptr.is_null() {
         return None;
     }
-    let limbs = unsafe { (*ptr).limbs };
+    let limbs = unsafe { BigIntHeader::all_limbs(ptr) };
     let lo = limbs[0];
     let fill = if (lo >> 63) == 0 { 0 } else { u64::MAX };
     if limbs[1..].iter().all(|limb| *limb == fill) {

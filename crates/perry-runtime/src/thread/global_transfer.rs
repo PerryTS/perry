@@ -70,7 +70,7 @@ enum LeafRecord {
         bytes: Box<[u8]>,
     },
     BigInt {
-        limbs: [u64; BIGINT_LIMBS],
+        limbs: Vec<u64>,
     },
 }
 
@@ -105,9 +105,9 @@ unsafe fn leaf_record_from_owned(bits: u64) -> Option<LeafRecord> {
         BIGINT_TAG => {
             let ptr = bigint::clean_bigint_ptr(payload as *const BigIntHeader);
             let limbs = if ptr.is_null() {
-                [0u64; BIGINT_LIMBS]
+                vec![0u64; BIGINT_LIMBS]
             } else {
-                (*ptr).limbs
+                crate::bigint::BigIntHeader::all_limbs(ptr).to_vec()
             };
             Some(LeafRecord::BigInt { limbs })
         }
@@ -138,7 +138,7 @@ unsafe fn materialize(record: &LeafRecord) -> u64 {
             STRING_TAG | (header as u64 & POINTER_MASK)
         }
         LeafRecord::BigInt { limbs } => {
-            let ptr = bigint::bigint_alloc_with_limbs(*limbs);
+            let ptr = bigint::bigint_alloc_with_limbs(limbs);
             BIGINT_TAG | (ptr as u64 & POINTER_MASK)
         }
     }

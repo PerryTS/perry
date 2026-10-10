@@ -35,7 +35,12 @@ unsafe fn pointer_address(value: f64) -> usize {
             0
         } else {
             let bigint = &*(raw as usize as *const crate::bigint::BigIntHeader);
-            if bigint.limbs[1..].iter().any(|&limb| limb != 0) {
+            if crate::bigint::BigIntHeader::all_limbs(
+                raw as usize as *const crate::bigint::BigIntHeader,
+            )[1..]
+                .iter()
+                .any(|&limb| limb != 0)
+            {
                 throw_type("ptr bigint is outside the native pointer range");
             }
             bigint.limbs[0] as usize

@@ -674,6 +674,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                 std::ptr::write(
                     ptr as *mut crate::bigint::BigIntHeader,
                     crate::bigint::BigIntHeader {
+                        limb_count: crate::bigint::BIGINT_LIMBS,
                         limbs: [0; crate::bigint::BIGINT_LIMBS],
                     },
                 );

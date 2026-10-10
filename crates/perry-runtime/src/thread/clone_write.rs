@@ -257,9 +257,9 @@ impl Writer<'_> {
         if tag == BIGINT_TAG {
             let ptr = bigint::clean_bigint_ptr((bits & POINTER_MASK) as *const BigIntHeader);
             if ptr.is_null() {
-                return SerializedValue::BigInt([0u64; BIGINT_LIMBS]);
+                return SerializedValue::BigInt(vec![0u64; BIGINT_LIMBS]);
             }
-            return SerializedValue::BigInt((*ptr).limbs);
+            return SerializedValue::BigInt(crate::bigint::BigIntHeader::all_limbs(ptr).to_vec());
         }
         if tag == POINTER_TAG {
             return self.pointer(bits);

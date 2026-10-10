@@ -349,8 +349,7 @@ pub extern "C" fn js_ethers_format_units(
 
     unsafe {
         // Read the BigInt value - fixed 256-bit (4 limbs)
-        let bigint = &*bigint_ptr;
-        let limbs = &bigint.limbs;
+        let limbs = BigIntHeader::all_limbs(bigint_ptr);
 
         // Convert to big integer string (always positive in current impl)
         let value_str = limbs_to_string(limbs);
@@ -396,16 +395,13 @@ pub extern "C" fn js_ethers_parse_units(
     }
 }
 
-/// Number of limbs in BigIntHeader (must match perry-runtime)
-const BIGINT_LIMBS: usize = perry_runtime::bigint::BIGINT_LIMBS;
-
 /// Convert limbs (little-endian u64 array) to decimal string
-fn limbs_to_string(limbs: &[u64; BIGINT_LIMBS]) -> String {
+fn limbs_to_string(limbs: &[u64]) -> String {
     if limbs.iter().all(|&x| x == 0) {
         return "0".to_string();
     }
 
-    let mut work = *limbs;
+    let mut work = limbs.to_vec();
     let mut digits = Vec::with_capacity(155); // max digits for 512-bit
 
     while !is_zero(&work) {
@@ -419,16 +415,16 @@ fn limbs_to_string(limbs: &[u64; BIGINT_LIMBS]) -> String {
 }
 
 /// Check if limbs are zero
-fn is_zero(limbs: &[u64; BIGINT_LIMBS]) -> bool {
+fn is_zero(limbs: &[u64]) -> bool {
     limbs.iter().all(|&x| x == 0)
 }
 
 /// Divide limbs (little-endian) by 10, return remainder
-fn div_by_10(limbs: &mut [u64; BIGINT_LIMBS]) -> u8 {
+fn div_by_10(limbs: &mut [u64]) -> u8 {
     let mut remainder: u128 = 0;
 
     // Process from most significant to least significant limb
-    for i in (0..BIGINT_LIMBS).rev() {
+    for i in (0..limbs.len()).rev() {
         let current = (remainder << 64) | (limbs[i] as u128);
         limbs[i] = (current / 10) as u64;
         remainder = current % 10;

@@ -20,15 +20,13 @@
 //! constructors, arithmetic ops, string-radix parsing) wait until
 //! a real wrapper demands them.
 
-use crate::{BigIntHeader, BIGINT_LIMBS};
+use crate::BigIntHeader;
 
 extern "C" {
     /// Parse a decimal-string representation into a fresh
     /// `BigIntHeader` allocated in the runtime arena. Negative
     /// values are encoded in two's complement across all
-    /// `BIGINT_LIMBS` u64 limbs. Invalid UTF-8 / non-decimal
-    /// characters fall back to zero (matching perry-stdlib's
-    /// existing convention).
+    /// its variable-length u64 limbs. Invalid decimal syntax throws.
     fn js_bigint_from_string(data: *const u8, len: u32) -> *mut BigIntHeader;
 }
 
@@ -45,7 +43,7 @@ pub fn alloc_bigint_from_str(decimal: &str) -> *mut BigIntHeader {
     unsafe { js_bigint_from_string(decimal.as_ptr(), decimal.len() as u32) }
 }
 
-/// Read the raw 16-limb little-endian array out of a runtime-
+/// Read all little-endian two's-complement limbs out of a runtime-
 /// allocated `BigIntHeader`. Returns `None` on a null pointer.
 ///
 /// ```ignore
@@ -56,15 +54,14 @@ pub fn alloc_bigint_from_str(decimal: &str) -> *mut BigIntHeader {
 ///     }
 /// }
 /// ```
-pub fn read_bigint_limbs(ptr: *const BigIntHeader) -> Option<[u64; BIGINT_LIMBS]> {
+pub fn read_bigint_limbs(ptr: *const BigIntHeader) -> Option<Vec<u64>> {
     if ptr.is_null() {
         return None;
     }
     // SAFETY: caller's contract — `ptr` is a valid runtime-allocated
     // BigIntHeader. The struct layout is `#[repr(C)]` and the limbs
-    // field is the only field, so the read-by-value never touches
-    // unaligned memory.
-    Some(unsafe { (*ptr).limbs })
+    // prefix and trailing words are contiguous and aligned.
+    Some(unsafe { BigIntHeader::all_limbs(ptr).to_vec() })
 }
 
 #[cfg(all(test, feature = "runtime-link"))]
@@ -89,6 +86,16 @@ mod tests {
         for &l in &limbs {
             assert_eq!(l, 0);
         }
+    }
+
+    #[test]
+    fn upper_words_are_preserved() {
+        let text = format!("0x1{}", "0".repeat(512));
+        let p = alloc_bigint_from_str(&text);
+        let words = read_bigint_limbs(p).unwrap();
+        assert_eq!(words.len(), 33);
+        assert!(words[..32].iter().all(|word| *word == 0));
+        assert_eq!(words[32], 1);
     }
 
     #[test]

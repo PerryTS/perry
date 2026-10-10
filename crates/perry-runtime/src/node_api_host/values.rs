@@ -1219,7 +1219,7 @@ pub unsafe extern "C" fn napi_get_value_bigint_int64(
         }
         Err(status) => return set_status(env, status, "value is not a live handle"),
     };
-    let limbs = (*pointer).limbs;
+    let limbs = crate::bigint::BigIntHeader::all_limbs(pointer);
     let low = limbs[0] as i64;
     let fill = if low < 0 { u64::MAX } else { 0 };
     *result = low;
@@ -1248,7 +1248,7 @@ pub unsafe extern "C" fn napi_get_value_bigint_uint64(
         }
         Err(status) => return set_status(env, status, "value is not a live handle"),
     };
-    let limbs = (*pointer).limbs;
+    let limbs = crate::bigint::BigIntHeader::all_limbs(pointer);
     *result = limbs[0];
     *lossless = limbs[1..].iter().all(|limb| *limb == 0);
     ok(env)

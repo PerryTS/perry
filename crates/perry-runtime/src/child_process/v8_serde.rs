@@ -407,7 +407,7 @@ impl Serializer {
         } else {
             ptr
         };
-        let nbytes = crate::bigint::BIGINT_LIMBS * 8;
+        let nbytes = unsafe { (*mag_ptr).limb_count * 8 };
         let be_buf = crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32);
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()

@@ -103,11 +103,11 @@ fn runtime_bigint_bytes(value: &JSValue) -> Vec<u8> {
         if ptr.is_null() {
             return Vec::new();
         }
-        let limbs = (*ptr).limbs;
-        if limbs[perry_runtime::bigint::BIGINT_LIMBS - 1] & (1u64 << 63) != 0 {
+        let limbs = perry_runtime::bigint::BigIntHeader::all_limbs(ptr);
+        if limbs[limbs.len() - 1] & (1u64 << 63) != 0 {
             return Vec::new();
         }
-        let mut bytes = Vec::with_capacity(perry_runtime::bigint::BIGINT_LIMBS * 8);
+        let mut bytes = Vec::with_capacity(limbs.len() * 8);
         for limb in limbs.iter().rev() {
             bytes.extend_from_slice(&limb.to_be_bytes());
         }

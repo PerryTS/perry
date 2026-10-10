@@ -119,8 +119,27 @@ pub struct BufferHeader {
 /// Header for a runtime-allocated BigInt.
 #[repr(C)]
 pub struct BigIntHeader {
-    /// Fixed little-endian 1024-bit limb storage.
+    /// Total number of words, including those following the inline prefix.
+    pub limb_count: usize,
+    /// Inline little-endian two's-complement prefix.
     pub limbs: [u64; BIGINT_LIMBS],
+}
+
+impl BigIntHeader {
+    /// Borrow the complete little-endian two's-complement payload.
+    ///
+    /// # Safety
+    /// `ptr` must identify a live allocation containing `limb_count`
+    /// words, including any words following the inline prefix. That allocation
+    /// must remain live and immutable for the returned borrow.
+    pub unsafe fn all_limbs<'a>(ptr: *const Self) -> &'a [u64] {
+        unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!((*ptr).limbs).cast::<u64>(),
+                (*ptr).limb_count,
+            )
+        }
+    }
 }
 
 /// Header for a runtime-allocated JS closure (a function object). Mirrors
