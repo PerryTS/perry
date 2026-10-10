@@ -675,16 +675,18 @@ fn char_code_at_on_a_proven_string_receiver_emits_the_inline_ascii_read() {
 }
 
 #[test]
-fn char_code_at_on_an_unproven_receiver_keeps_the_runtime_lowering() {
-    // The negative control. An `any`-typed receiver may be a user object with
-    // its own `charCodeAt`, so neither the static Number claim nor the inline
-    // header read is admissible — and this assertion is what makes the two
-    // tests above meaningful rather than tautological (both would pass on a
-    // build that fired the fast path unconditionally).
+fn char_code_at_on_an_unproven_receiver_keeps_a_guarded_runtime_miss() {
+    // A tag-proven String uses the shared checked emitter. The non-string
+    // arm can still call a user method returning BigInt, so its result must
+    // not acquire an unconditional static Number claim.
     let ir = hash_loop_ir(Type::Any);
     assert!(
-        !ir.contains("cca.fast"),
-        "an unproven receiver must not read a StringHeader inline:\n{ir}"
+        ir.contains("anystr.string") && ir.contains("anystr.generic") && ir.contains("cca.fast"),
+        "an unproven receiver must guard the inline StringHeader read:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
+        "the non-string miss must keep ordinary method semantics:\n{ir}"
     );
     assert!(
         ir.contains("call double @js_dynamic_bitxor"),
