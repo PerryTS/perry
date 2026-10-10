@@ -12,10 +12,10 @@ The largest entry points among the requested concat/slice/search/character/numer
 | --- | --- | ---: | ---: |
 | tsc | coerce 0.43%; index_to_i32 0.26%; last_index_of_from and char_code_at 0.13% each | 0.55% / 0.26% | 0.77% |
 | qs parse | index_of_from, index_to_i32, concat 0.36% each | 0.31% / 0.88% | 1.24% |
-| qs stringify | concat 1.03%; concat_chain 0.90%; concat_box 0.73% | 0.50% / 0.05% | 0.50% |
+| qs stringify | concat 1.03%; concat_chain 0.90%; concat_box 0.73% | 0.50% / unsampled | 0.50% |
 | Commander | concat_chain 0.31%; concat_box and index_of_from 0.16% each | 1.25% / 0.78% | 0.94% |
 | Effect | concat_value 0.09%; from_bytes_with_capacity 0.31% | 0.31% / 0.13% | 1.25% |
-| Fastify | coerce 0.19%; pool_atom and from_bytes_with_capacity 0.14% each | 0.47% / 0.03% | 1.24% |
+| Fastify | coerce 0.19%; pool_atom and from_bytes_with_capacity 0.14% each | 0.47% / 0.10% | 1.24% |
 
 Operation labels abbreviate their `js_string_` prefix. Fastify also samples `atom_lookup` at 0.46%; that identity mechanism is unchanged. The from_utf8 column includes consumers outside these builtins.
 
