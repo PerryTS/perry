@@ -1,60 +1,100 @@
 //! Static `globalThis` constructor/function metadata.
 
-/// JS built-in constructor names exposed on `globalThis`. Pre-populated by
-/// the singleton init in `js_get_global_this` so libraries that read these
-/// off the global (lodash's `var Array = context.Array; var arrayProto =
-/// Array.prototype`, the same `(globalThis as any).X` read shape) see a
-/// non-undefined backing object. Codegen mirrors this list in
-/// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
-/// `globalThis.<Name>` should route through the singleton instead of the
-/// legacy `0.0` no-value placeholder.
-pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
-    "Array",
-    "Object",
-    "String",
-    "Number",
-    "Boolean",
-    "Function",
-    "RegExp",
-    "Date",
-    "Error",
-    "TypeError",
-    "RangeError",
-    "SyntaxError",
-    "ReferenceError",
-    "EvalError",
-    "URIError",
-    "AggregateError",
-    "Symbol",
-    "Promise",
-    "Map",
-    "Set",
-    "WeakMap",
-    "WeakSet",
-    "WeakRef",
-    "Proxy",
-    "BigInt",
-    "Uint8Array",
-    "Int8Array",
-    "Uint16Array",
-    "Int16Array",
-    "Uint32Array",
-    "Int32Array",
-    "Float16Array",
-    "Float32Array",
-    "Float64Array",
-    "Uint8ClampedArray",
-    "BigInt64Array",
-    "BigUint64Array",
-    "ArrayBuffer",
-    "SharedArrayBuffer",
-    "DataView",
-    "TextEncoder",
-    "TextDecoder",
-    "TextEncoderStream",
-    "TextDecoderStream",
-    "CompressionStream",
-    "DecompressionStream",
+use super::global_this::*;
+
+const NOOP_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
+    crate::fn_info!(global_this_builtin_noop_thunk, 1);
+const TYPED_ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
+    crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0));
+const CONSTRUCT_ONLY_INFO: *const crate::closure::JsFunctionInfo =
+    crate::fn_info!(construct_only_builtin_call_thunk, 0);
+const WEBCRYPTO_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
+    crate::fn_info!(webcrypto_illegal_constructor_thunk, 0);
+
+/// A builtin's own declaration, including the CLASS identity of its instances
+/// when its prototype occupies a class identity word. As with a member's
+/// `JsFunctionInfo::flags`, installation consumes the declared fact; the
+/// public name only labels the property that exposes the builtin.
+#[derive(Clone, Copy)]
+pub(crate) struct BuiltinConstructorDeclaration {
+    pub name: &'static str,
+    pub info: &'static crate::closure::JsFunctionInfo,
+    pub prototype_class: Option<u32>,
+    pub prototype_serial: Option<u64>,
+}
+
+macro_rules! builtin_constructors {
+    ($($name:literal => $info:expr $(; class $class:expr)? $(; serial $serial:expr)?),* $(,)?) => {
+        /// Builtin declarations, in the order captured by shared constructor bodies.
+        pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[BuiltinConstructorDeclaration] = &[
+            $(BuiltinConstructorDeclaration {
+                name: $name,
+                // SAFETY: fn_info! returns its own static immutable record.
+                info: unsafe { &*$info },
+                prototype_class: builtin_constructors!(@optional $($class)?),
+                prototype_serial: builtin_constructors!(@optional $($serial)?),
+            },)*
+        ];
+    };
+    (@optional $class:expr) => { Some($class) };
+    (@optional) => { None };
+}
+
+// JS built-in constructor declarations exposed on `globalThis`. Pre-populated by
+// the singleton init in `js_get_global_this` so libraries that read these
+// off the global (lodash's `var Array = context.Array; var arrayProto =
+// Array.prototype`, the same `(globalThis as any).X` read shape) see a
+// non-undefined backing object. Codegen mirrors this list in
+// `perry-codegen/src/expr.rs::is_global_this_builtin_name` to decide when
+// `globalThis.<Name>` should route through the singleton instead of the
+// legacy `0.0` no-value placeholder.
+builtin_constructors! {
+    "Array" => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)),
+    "Object" => NOOP_CONSTRUCTOR_INFO,
+    "String" => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)),
+    "Number" => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)),
+    "Boolean" => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)),
+    "Function" => crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION,
+    "RegExp" => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)),
+    "Date" => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)),
+    "Error" => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)),
+    "TypeError" => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)),
+    "RangeError" => crate::fn_info!(range_error_constructor_call_thunk, 1; with_declared(1)),
+    "SyntaxError" => crate::fn_info!(syntax_error_constructor_call_thunk, 1; with_declared(1)),
+    "ReferenceError" => crate::fn_info!(reference_error_constructor_call_thunk, 1; with_declared(1)),
+    "EvalError" => crate::fn_info!(eval_error_constructor_call_thunk, 1; with_declared(1)),
+    "URIError" => crate::fn_info!(uri_error_constructor_call_thunk, 1; with_declared(1)),
+    "AggregateError" => NOOP_CONSTRUCTOR_INFO,
+    "Symbol" => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)),
+    "Promise" => crate::fn_info!(promise_constructor_call_thunk, 1),
+    "Map" => crate::fn_info!(map_constructor_call_thunk, 1),
+    "Set" => crate::fn_info!(set_constructor_call_thunk, 1),
+    "WeakMap" => crate::fn_info!(weak_map_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKMAP,
+    "WeakSet" => crate::fn_info!(weak_set_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKSET,
+    "WeakRef" => crate::fn_info!(weak_ref_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKREF,
+    "Proxy" => NOOP_CONSTRUCTOR_INFO,
+    "BigInt" => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)),
+    "Uint8Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Int8Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Uint16Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Int16Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Uint32Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Int32Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Float16Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Float32Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Float64Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "Uint8ClampedArray" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "BigInt64Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "BigUint64Array" => TYPED_ARRAY_CONSTRUCTOR_INFO,
+    "ArrayBuffer" => CONSTRUCT_ONLY_INFO,
+    "SharedArrayBuffer" => CONSTRUCT_ONLY_INFO,
+    "DataView" => CONSTRUCT_ONLY_INFO,
+    "TextEncoder" => NOOP_CONSTRUCTOR_INFO,
+    "TextDecoder" => NOOP_CONSTRUCTOR_INFO,
+    "TextEncoderStream" => NOOP_CONSTRUCTOR_INFO,
+    "TextDecoderStream" => NOOP_CONSTRUCTOR_INFO,
+    "CompressionStream" => NOOP_CONSTRUCTOR_INFO,
+    "DecompressionStream" => NOOP_CONSTRUCTOR_INFO,
     // The three core Web Streams constructors. Perry implements them (codegen
     // lowers `new ReadableStream(…)` and `x instanceof ReadableStream`, and the
     // class has an id), but the NAMES were never registered here or in codegen's
@@ -63,43 +103,43 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     // globalThis` was false, whereas Node exposes all three as functions.
     // Libraries feature-detect precisely that (`typeof ReadableStream !==
     // "undefined" ? … : …`) when deciding how to consume a `fetch()` body.
-    "ReadableStream",
-    "WritableStream",
-    "TransformStream",
-    "Navigator",
-    "URL",
-    "URLSearchParams",
-    "URLPattern",
-    "AbortController",
-    "AbortSignal",
-    "EventTarget",
-    "Crypto",
-    "CryptoKey",
-    "SubtleCrypto",
-    "Event",
-    "CustomEvent",
-    "DOMException",
-    "FormData",
-    "Blob",
-    "File",
-    "Headers",
-    "Request",
-    "Response",
-    "MessageChannel",
-    "MessagePort",
-    "BroadcastChannel",
-    "Storage",
-    "WebSocket",
-    "FinalizationRegistry",
+    "ReadableStream" => NOOP_CONSTRUCTOR_INFO,
+    "WritableStream" => NOOP_CONSTRUCTOR_INFO,
+    "TransformStream" => NOOP_CONSTRUCTOR_INFO,
+    "Navigator" => NOOP_CONSTRUCTOR_INFO,
+    "URL" => NOOP_CONSTRUCTOR_INFO,
+    "URLSearchParams" => NOOP_CONSTRUCTOR_INFO,
+    "URLPattern" => crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2)),
+    "AbortController" => NOOP_CONSTRUCTOR_INFO,
+    "AbortSignal" => NOOP_CONSTRUCTOR_INFO,
+    "EventTarget" => NOOP_CONSTRUCTOR_INFO,
+    "Crypto" => WEBCRYPTO_CONSTRUCTOR_INFO,
+    "CryptoKey" => WEBCRYPTO_CONSTRUCTOR_INFO,
+    "SubtleCrypto" => WEBCRYPTO_CONSTRUCTOR_INFO,
+    "Event" => NOOP_CONSTRUCTOR_INFO,
+    "CustomEvent" => NOOP_CONSTRUCTOR_INFO,
+    "DOMException" => NOOP_CONSTRUCTOR_INFO,
+    "FormData" => NOOP_CONSTRUCTOR_INFO,
+    "Blob" => crate::fn_info!(global_this_blob_thunk, 2; with_declared(2)),
+    "File" => crate::fn_info!(global_this_file_thunk, 3; with_declared(3)),
+    "Headers" => crate::fn_info!(global_this_headers_thunk, 1; with_declared(1)),
+    "Request" => crate::fn_info!(global_this_request_thunk, 2; with_declared(2)),
+    "Response" => crate::fn_info!(global_this_response_thunk, 2; with_declared(2)),
+    "MessageChannel" => crate::fn_info!(crate::messaging::js_message_channel_constructor_call_error, 0; with_declared(0)),
+    "MessagePort" => crate::fn_info!(crate::messaging::js_message_port_constructor_call_error, 0; with_declared(0)),
+    "BroadcastChannel" => crate::fn_info!(crate::messaging::js_broadcast_channel_constructor_call_error, 1; with_declared(1)),
+    "Storage" => crate::fn_info!(crate::web_storage::storage_constructor_illegal, 0; with_declared(0)),
+    "WebSocket" => NOOP_CONSTRUCTOR_INFO,
+    "FinalizationRegistry" => NOOP_CONSTRUCTOR_INFO; class crate::weakref::CLASS_ID_FINALIZATION_REGISTRY,
     // #2875: TC39 explicit-resource-management globals. Backed by the
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
     // real `new DisposableStack()` / `new SuppressedError(...)` flow through
     // codegen's `lower_builtin_new` to the dedicated runtime ctors.
-    "DisposableStack",
-    "AsyncDisposableStack",
-    "SuppressedError",
-    "Buffer",
-];
+    "DisposableStack" => NOOP_CONSTRUCTOR_INFO,
+    "AsyncDisposableStack" => NOOP_CONSTRUCTOR_INFO,
+    "SuppressedError" => NOOP_CONSTRUCTOR_INFO,
+    "Buffer" => NOOP_CONSTRUCTOR_INFO,
+}
 
 /// Is `name` one of the built-in CONSTRUCTORS installed on `globalThis`?
 ///
@@ -116,7 +156,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
 /// [`builtin_constructor_spec_length`] below grew to cover them, so the
 /// distinction has to be stated rather than inferred.
 pub(crate) fn is_global_this_builtin_constructor_name(name: &str) -> bool {
-    GLOBAL_THIS_BUILTIN_CONSTRUCTORS.contains(&name)
+    GLOBAL_THIS_BUILTIN_CONSTRUCTORS
+        .iter()
+        .any(|decl| decl.name == name)
 }
 
 /// #3655: spec `length` (declared-parameter count) for each built-in

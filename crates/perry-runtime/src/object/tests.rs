@@ -23,7 +23,7 @@ fn call_method_depth_drop_is_idempotent_after_exception_restore() {
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     let identity = GLOBAL_THIS_BUILTIN_CONSTRUCTORS
         .iter()
-        .position(|n| *n == name)
+        .position(|decl| decl.name == name)
         .unwrap();
     let closure_ptr = crate::closure::js_closure_alloc(
         crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
@@ -1379,7 +1379,8 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
 
     let mut with_recorded_length = 0usize;
     let mut offenders: Vec<String> = Vec::new();
-    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+    for declaration in GLOBAL_THIS_BUILTIN_CONSTRUCTORS {
+        let name = declaration.name;
         let ctor_raw = test_global_this_builtin_constructor_value(name);
         let ctor = JSValue::from_bits(ctor_raw.to_bits());
         assert!(
