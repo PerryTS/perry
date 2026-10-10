@@ -1,0 +1,3 @@
+Fix exported class-expression variable declarations using a different class identity from their forward constructor references. Ordinary and exported declarators now share the existing class-binding lowering rule, including parent registration, static initialization and lexical inner names. This fixes Effect 4.0.2 `Schema.Union` and `Schema.Literals` constructing nodes without their fields and prototype methods.
+
+Add dependency-free reductions and a matrix covering declarations/expressions, exported bindings, initialized/uninitialized fields, inheritance and methods, plus a lowering regression test for forward constructor identity.

@@ -626,6 +626,21 @@ pub(crate) fn lower_module_decl(
                         if super::ambient::declarator_binds_nothing(var_decl, decl) {
                             continue;
                         }
+                        if lower_class_expression_declarator(
+                            ctx,
+                            module,
+                            decl,
+                            var_decl.kind != ast::VarDeclKind::Const,
+                            var_decl.kind == ast::VarDeclKind::Var,
+                        )? {
+                            let name = get_binding_name(&decl.name)?;
+                            module.exports.push(Export::Named {
+                                local: name.clone(),
+                                exported: name.clone(),
+                            });
+                            module.exported_objects.push(name);
+                            continue;
+                        }
                         if is_destructuring_pattern(&decl.name) {
                             let mut names = Vec::new();
                             collect_binding_names(&decl.name, &mut names);
