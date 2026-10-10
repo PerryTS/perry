@@ -1742,3 +1742,18 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
         }
     }
 }
+
+#[test]
+fn missing_http_archive_explains_installed_and_source_options() {
+    let emitted = BTreeSet::from(["js_ext_http_nm_install".to_string()]);
+    let diagnostics = missing_ext_archive_diagnostics(&emitted, &HashSet::new(), &[], None);
+    assert_eq!(diagnostics.len(), 1);
+    let message = &diagnostics[0];
+    assert!(message.contains("installed Perry"), "{message}");
+    assert!(message.contains("matching extension archive"), "{message}");
+    assert!(message.contains("PERRY_WORKSPACE_ROOT"), "{message}");
+    assert!(
+        message.contains("-p perry-stdlib-static -p perry-ext-http"),
+        "{message}"
+    );
+}
