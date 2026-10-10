@@ -131,7 +131,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // so these are populated before the subclass iterations consume them.
     let mut error_ctor_bits: Option<u64> = None;
     let mut error_proto_bits: Option<u64> = None;
-    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
+    for (identity_index, name) in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied().enumerate() {
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
             let name_key =
@@ -266,9 +266,29 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             }
             _ => crate::fn_info!(global_this_builtin_noop_thunk, 1),
         };
-        let closure_ptr = crate::closure::js_closure_alloc(info, 0);
+        // A shared body needs its intrinsic declaration as immutable input.
+        // The existing capture storage owns the scalar; no table or public
+        // property lookup participates in constructor identity.
+        let shared_identity =
+            super::super::class_registry::shared_global_builtin_constructor_body(unsafe {
+                (*info).code
+            }
+                as usize);
+        let captures = if shared_identity {
+            1 | crate::closure::NO_THIS_REBIND_FLAG
+        } else {
+            0
+        };
+        let closure_ptr = crate::closure::js_closure_alloc(info, captures);
         if closure_ptr.is_null() {
             continue;
+        }
+        if shared_identity {
+            crate::closure::js_closure_set_capture_bits(
+                closure_ptr,
+                0,
+                JSValue::int32(identity_index as i32 + 1).bits(),
+            );
         }
         // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
         // on the constructor closure so rebound usage like

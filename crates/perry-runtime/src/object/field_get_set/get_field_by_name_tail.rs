@@ -931,14 +931,14 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 // date-fns / drizzle / lodash duck-typing path:
                 // `arr.constructor === Array`, `new arr.constructor(...)`,
                 // etc. expect a non-undefined function-typed value that
-                // refers back to the global `Array` constructor. Resolve
-                // through the singleton so this returns the same closure
-                // pointer as the bare `Array` identifier.
+                // refers back to the intrinsic Array constructor. Read the
+                // prototype's actual property, independently of its global
+                // binding and including user prototype mutations.
                 if key_bytes == b"constructor" {
                     // An own `constructor` expando (`arr.constructor = Foo`)
                     // shadows the intrinsic — observable via ArraySpeciesCreate
                     // (map/filter/slice/splice/concat) and reflection. Only fall
-                    // back to the global `Array` when there is no own write.
+                    // back to the inherited property when there is no own write.
                     if let Some(v) = own_data_field_by_name(obj, key) {
                         return v;
                     }
@@ -949,8 +949,11 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     if let Some(v) = super::array_retargeted_proto::array_constructor_slot(obj) {
                         return v;
                     }
-                    let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-                    return JSValue::from_bits(v.to_bits());
+                    return super::accessors::array_prototype_property_value(
+                        "constructor",
+                        obj as usize,
+                    )
+                    .unwrap_or_else(JSValue::undefined);
                 }
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(index) = super::super::canonical_array_index(name) {
@@ -1019,8 +1022,11 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
                 }
                 if key_bytes == b"constructor" {
-                    let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-                    return JSValue::from_bits(v.to_bits());
+                    return super::accessors::array_prototype_property_value(
+                        "constructor",
+                        obj as usize,
+                    )
+                    .unwrap_or_else(JSValue::undefined);
                 }
             }
             // Any other property access force-materializes, then

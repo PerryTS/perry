@@ -8,8 +8,8 @@
 //! false for every non-class constructor, in every import form, while
 //! `ns.Plain`, `const A = Plain` and the same check inside `lib.js` all worked.
 //!
-//! The builtin case is the other half: `x instanceof Date` must NOT grow a
-//! value, because the reserved class id is what brand-checks a native Date.
+//! Global RHS operands retain their value so replacement and deletion of
+//! a global binding remain observable.
 
 use super::*;
 
@@ -50,7 +50,7 @@ fn imported_binding_instanceof_rhs_carries_its_value() {
 }
 
 #[test]
-fn builtin_instanceof_rhs_stays_a_static_name() {
+fn global_instanceof_rhs_carries_its_value() {
     let rhs = instanceof_rhs_value(
         r#"
             export function check(x: unknown) { return x instanceof Date; }
@@ -58,8 +58,8 @@ fn builtin_instanceof_rhs_stays_a_static_name() {
         "check",
     );
     assert!(
-        rhs.is_none(),
-        "an unshadowed builtin RHS must keep the reserved-class-id check: {rhs:?}"
+        matches!(&rhs, Some(Expr::PropertyGet { property, .. }) if property == "Date"),
+        "a global RHS must read the live binding: {rhs:?}"
     );
 }
 

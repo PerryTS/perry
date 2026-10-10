@@ -52,8 +52,8 @@ pub(crate) fn emit_global_value_installs(ctx: &mut FnCtx<'_>, name: &str) {
 /// every evaluation. Reassigning the global (`globalThis.Object = X`) is a
 /// store to that object, so the next read sees it: the slot is loaded on
 /// every hit, and a key added or deleted changes the ShapeId.
-pub(crate) fn lower_global_builtin_read(ctx: &mut FnCtx<'_>, name: &str) -> Result<String> {
-    let global = Expr::Call {
+fn global_object_expr() -> Expr {
+    Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_get_global_this".to_string(),
             param_types: Vec::new(),
@@ -62,8 +62,16 @@ pub(crate) fn lower_global_builtin_read(ctx: &mut FnCtx<'_>, name: &str) -> Resu
         args: Vec::new(),
         type_args: Vec::new(),
         byte_offset: 0,
-    };
-    super::lower_generic_property_get(ctx, &global, name, 0)
+    }
+}
+
+pub(crate) fn lower_global_builtin_read(ctx: &mut FnCtx<'_>, name: &str) -> Result<String> {
+    super::generic_dispatch::lower_global_property_get(ctx, &global_object_expr(), name, true)
+}
+
+/// `typeof` of a global reference permits an absent binding.
+pub(crate) fn lower_optional_global_read(ctx: &mut FnCtx<'_>, name: &str) -> Result<String> {
+    super::generic_dispatch::lower_global_property_get(ctx, &global_object_expr(), name, false)
 }
 
 pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> Result<String> {

@@ -602,8 +602,9 @@ pub(crate) fn function_prototype_inherited_get(
 /// closure SET path in `object::field_set_by_name`, so
 /// `Object.defineProperty(Function.prototype, k, {get,set})` round-trips
 /// through `boundFn.k = v` the same way it does through `boundFn.k`. A
-/// re-entrancy guard covers the recursion through `builtin_prototype_value`
-/// (which reads `Function.prototype` via `closure_get_dynamic_prop` itself).
+/// The intrinsic is published at realm bootstrap. Warm resolution is a root
+/// load; cold bootstrap reads only the constructor's `prototype` property,
+/// which this fallback excludes, so it cannot reenter the fallback.
 pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Option<usize> {
     if matches!(
         prop,
@@ -620,21 +621,12 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
     {
         return None;
     }
-    crate::perry_thread_local! {
-        static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
-            const { std::cell::Cell::new(false) };
-    }
-    let reentrant = IN_FN_PROTO_FALLBACK.with(|c| c.replace(true));
-    if reentrant {
-        return None;
-    }
     // THIS realm's %Function.prototype% (the memoized intrinsic), not whatever
     // `globalThis.Function` names now. It is 0 while the realm global has not
     // been built: %Function.prototype% does not exist yet, so no descriptor
     // can sit on it — and asking must not build the realm global (defining a
     // static on %Object% or a class function object would otherwise do so).
     let proto_ptr = crate::array::function_prototype_addr();
-    IN_FN_PROTO_FALLBACK.with(|c| c.set(false));
     if proto_ptr == 0 || proto_ptr == ptr || is_closure_ptr(proto_ptr) {
         return None;
     }

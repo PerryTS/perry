@@ -129,17 +129,30 @@ fn value_addr(value: f64) -> usize {
     crate::value::addr_class::object_ref_addr(value)
 }
 
-fn recorded_prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool> {
-    let addr = value_addr(value);
+fn recorded_prototype_instanceof_builtin(
+    value: &crate::gc::RuntimeHandle<'_>,
+    name: &str,
+    constructor: Option<&crate::gc::RuntimeHandle<'_>>,
+) -> Option<bool> {
+    let addr = value_addr(value.get_nanbox_f64());
     if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
         return None;
     }
-    prototype_instanceof_builtin(value, name)
+    prototype_instanceof_builtin(value, name, constructor)
 }
 
-fn prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool> {
+fn prototype_instanceof_builtin(
+    value: &crate::gc::RuntimeHandle<'_>,
+    name: &str,
+    constructor: Option<&crate::gc::RuntimeHandle<'_>>,
+) -> Option<bool> {
+    if let Some(constructor) = constructor {
+        return Some(ordinary_has_instance_prototype_walk_rooted(
+            value,
+            constructor,
+        ));
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
     let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
         name.as_ptr(),
         name.len(),
@@ -147,9 +160,9 @@ fn prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool> {
     if !value_is_callable(constructor.get_nanbox_f64()) {
         return None;
     }
-    Some(ordinary_has_instance_prototype_walk(
-        value.get_nanbox_f64(),
-        constructor.get_nanbox_f64(),
+    Some(ordinary_has_instance_prototype_walk_rooted(
+        value,
+        &constructor,
     ))
 }
 
@@ -174,59 +187,6 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
     }
 }
 
-/// v0.5.749: dynamic instanceof — `value instanceof type` where the
-/// type is a runtime value (function arg holding a class ref). Extracts
-/// the class_id from the INT32 NaN-tag (top16=0x7FFE) and dispatches to
-/// `js_instanceof`. Returns FALSE for non-class-ref type values (matches
-/// JS spec: `1 instanceof 2` throws, but Perry returns false defensively).
-/// Refs #420 / #618 followup.
-#[no_mangle]
-/// Map a builtin constructor VALUE (the `ClosureHeader`-backed function installed
-/// on `globalThis`) back to the class id that codegen passes to `js_instanceof`
-/// for the static `x instanceof <Identifier>` form.
-///
-/// Only the natively-backed builtins need this: their instances are handles
-/// (stream / fetch registries), not heap objects with a real prototype chain, so
-/// `js_instanceof` brand-checks them via the kind probes rather than a chain walk.
-/// Heap-backed builtins already resolve through the class-id / prototype paths.
-fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
-    let closure =
-        crate::value::js_nanbox_get_pointer(type_ref) as *const crate::closure::ClosureHeader;
-    if closure.is_null() {
-        return None;
-    }
-    if !crate::closure::is_closure_ptr(closure as usize) {
-        return None;
-    }
-    let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
-    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let (ptr, len) = crate::string::str_bytes_from_jsvalue(name_value, &mut scratch)?;
-    if ptr.is_null() {
-        return None;
-    }
-    let name =
-        std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
-    let class_id = match name {
-        "ReadableStream" => 0xFFFF_0060,
-        "WritableStream" => 0xFFFF_0061,
-        "TransformStream" => 0xFFFF_0062,
-        "Response" => 0xFFFF_0028,
-        "Request" => 0xFFFF_0029,
-        "Headers" => 0xFFFF_002A,
-        "Blob" => 0xFFFF_0026,
-        "File" => 0xFFFF_002F,
-        _ => return None,
-    };
-    // The name alone is forgeable (`function Response() {}` in user code).
-    // Require IDENTITY with the builtin constructor installed on
-    // `globalThis`: only the genuine builtin value brand-checks instances.
-    let global_ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    if crate::value::js_nanbox_get_pointer(global_ctor) as usize != closure as usize {
-        return None;
-    }
-    Some(class_id)
-}
-
 /// Runtime class id for a globalThis built-in constructor *name*.
 ///
 /// Reference-type global constructors used as runtime values (e.g.
@@ -243,6 +203,16 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
 /// Returns 0 for names without a runtime class id.
 pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
     match name {
+        // Shared-body declaration identities use this same mapping; the
+        // separate writable-name/global-object recovery ladder is gone.
+        "ReadableStream" => 0xFFFF0060,
+        "WritableStream" => 0xFFFF0061,
+        "TransformStream" => 0xFFFF0062,
+        "Response" => 0xFFFF0028,
+        "Request" => 0xFFFF0029,
+        "Headers" => 0xFFFF002A,
+        "Blob" => 0xFFFF0026,
+        "File" => 0xFFFF002F,
         "Map" => 0xFFFF0022,
         "Set" => 0xFFFF0023,
         // #5834: kept in sync with the reserved ids in
@@ -367,6 +337,16 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
 /// synthetic class-id shortcut, which is stamped at construction and misses a
 /// prototype installed via `Fn.prototype = Object.create(Base.prototype)`.
 fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let type_ref = scope.root_nanbox_f64(type_ref);
+    ordinary_has_instance_prototype_walk_rooted(&value, &type_ref)
+}
+
+fn ordinary_has_instance_prototype_walk_rooted(
+    value: &crate::gc::RuntimeHandle<'_>,
+    type_ref: &crate::gc::RuntimeHandle<'_>,
+) -> bool {
     extern "C" {
         fn js_object_get_prototype_of(obj_value: f64) -> f64;
     }
@@ -391,18 +371,19 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     // earlier fast paths: a dynamic `1.5 instanceof Number` / `instanceof
     // Object` reached this walk, ToObject-wrapped the number and matched.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let type_ref = scope.root_nanbox_f64(type_ref);
     {
-        let jv = crate::value::JSValue::from_bits(value.get_nanbox_f64().to_bits());
+        // These tag/header predicates are Leaf. One current operand read
+        // covers this region; refresh the handle after any later [[Get]].
+        let current = value.get_nanbox_f64();
+        let jv = crate::value::JSValue::from_bits(current.to_bits());
         if jv.is_null()
             || jv.is_undefined()
             || jv.is_bool()
             || jv.is_int32()
             || jv.is_any_string()
             || jv.is_bigint()
-            || (jv.is_number() && value_addr(value.get_nanbox_f64()) == 0)
-            || unsafe { crate::symbol::js_is_symbol(value.get_nanbox_f64()) != 0 }
+            || (jv.is_number() && value_addr(current) == 0)
+            || unsafe { crate::symbol::js_is_symbol(current) != 0 }
         {
             return false;
         }
@@ -415,28 +396,86 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
             9,
         )
     };
-    let target = proto_identity_addr(proto);
-    if target == 0 {
+    let target = scope.root_nanbox_f64(proto);
+    if proto_identity_addr(target.get_nanbox_f64()) == 0 {
         return false; // non-object `.prototype` can never be on the chain
     }
+    // A live shape's terminal link is already the complete chain. Read the
+    // actual RHS prototype first, then compare DEFAULT against the realm's
+    // immutable Object.prototype; NULL has no links. Physical/class links
+    // still use the collecting walk below.
+    if let Some(matches) =
+        terminal_prototype_matches(value.get_nanbox_f64(), target.get_nanbox_f64())
+    {
+        return matches;
+    }
     // Walk `value`'s real [[Prototype]] chain looking for identity with P.
-    let mut cur = unsafe { js_object_get_prototype_of(value.get_nanbox_f64()) };
+    let cur = scope.root_nanbox_f64(unsafe { js_object_get_prototype_of(value.get_nanbox_f64()) });
     let mut depth = 0usize;
     while depth < 100_000 {
-        if crate::value::JSValue::from_bits(cur.to_bits()).is_null() {
+        // Identity/tag tests do not collect. These snapshots end at the
+        // getPrototypeOf call below; the next iteration refreshes both roots.
+        let current = cur.get_nanbox_f64();
+        if crate::value::JSValue::from_bits(current.to_bits()).is_null() {
             return false;
         }
-        let cur_addr = proto_identity_addr(cur);
+        let cur_addr = proto_identity_addr(current);
         if cur_addr == 0 {
             return false;
         }
-        if cur_addr == target {
+        let target_value = target.get_nanbox_f64();
+        if cur_addr == proto_identity_addr(target_value) {
             return true;
         }
-        cur = unsafe { js_object_get_prototype_of(cur) };
+        if let Some(matches) = terminal_prototype_matches(current, target_value) {
+            return matches;
+        }
+        let next = unsafe { js_object_get_prototype_of(current) };
+        cur.set_nanbox_f64(next);
         depth += 1;
     }
     false
+}
+
+/// Complete, callback-free answers from a terminal live shape. The target is
+/// the evaluated RHS prototype, never recovered from a writable global name.
+#[inline]
+fn terminal_prototype_matches(value: f64, target: f64) -> Option<bool> {
+    match terminal_prototype_id(value)? {
+        crate::object::shapes::PROTO_ID_NULL => Some(false),
+        crate::object::shapes::PROTO_ID_DEFAULT => {
+            let object_prototype = crate::array::object_prototype_addr_if_resolved();
+            (object_prototype != 0).then(|| proto_identity_addr(target) == object_prototype)
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// The live ordinary shape's complete terminal link. Exotic receivers and
+/// class/native namespace objects still need their representation's dispatch.
+#[inline]
+fn terminal_prototype_id(value: f64) -> Option<u64> {
+    let addr = value_addr(value);
+    if !unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+    {
+        return None;
+    }
+    let record =
+        unsafe { crate::object::shapes::object_shape_record(addr as *const ObjectHeader) }?;
+    use crate::object::shapes::{ShapeObjectKind, PROTO_ID_DEFAULT, PROTO_ID_NULL};
+    let proto_id = record.proto_id();
+    if !matches!(proto_id, PROTO_ID_DEFAULT | PROTO_ID_NULL) {
+        return None;
+    }
+    if !matches!(
+        record.object_kind(),
+        ShapeObjectKind::Ordinary | ShapeObjectKind::OrdinaryUnmarked | ShapeObjectKind::Dictionary
+    ) || record.weak_collection_brand().is_some()
+    {
+        return None;
+    }
+    Some(proto_id)
 }
 
 /// Normalize a value to its heap-pointer address for prototype identity

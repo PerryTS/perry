@@ -63,7 +63,11 @@ pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f
             }
         }
     }
-    let name = value_to_lossy_string(name_handle.get_nanbox_f64());
+    throw_missing_global(name_handle.get_nanbox_f64())
+}
+
+fn throw_missing_global(name_value: f64) -> ! {
+    let name = value_to_lossy_string(name_value);
     let msg = format!("{} is not defined", name);
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_referenceerror_new(msg_str);
@@ -264,3 +268,59 @@ pub extern "C" fn js_global_get_optional(name_value: f64) -> f64 {
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+/// Environment-record adapter for an ordinary read-site miss. Resolve
+/// HasBinding before Get: an undefined-returning getter runs once, including
+/// one that deletes its own global property while it runs.
+fn global_binding_scope<'scope>(
+    scope: &'scope crate::gc::RuntimeHandleScope,
+    obj: f64,
+    key: *const crate::StringHeader,
+) -> (
+    crate::gc::RuntimeHandle<'scope>,
+    crate::gc::RuntimeHandle<'scope>,
+) {
+    let receiver = scope.root_nanbox_f64(obj);
+    let name = scope.root_string_ptr(key);
+    let present = name.with_const_ptr(|key: *const crate::StringHeader| {
+        crate::object::js_object_has_property(
+            receiver.get_nanbox_f64(),
+            crate::value::js_nanbox_string(key as i64),
+        )
+    });
+    if crate::value::js_is_truthy(present) == 0 {
+        name.with_const_ptr(|key: *const crate::StringHeader| {
+            throw_missing_global(crate::value::js_nanbox_string(key as i64));
+        });
+    }
+    (receiver, name)
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn js_global_get_field_ic_slow(
+    obj_handle: i64,
+    key: *const crate::StringHeader,
+    cache_slot: *mut crate::object::PicCacheSlot,
+    packed: *const std::sync::atomic::AtomicU64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (receiver, name) =
+        global_binding_scope(&scope, crate::value::js_nanbox_pointer(obj_handle), key);
+    name.with_const_ptr(|key| {
+        crate::object::field_get_set::js_object_get_field_ic_slow(
+            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()),
+            key,
+            cache_slot,
+            packed,
+        )
+    })
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GLOBAL_GET_FIELD_IC_SLOW: extern "C-unwind" fn(
+    i64,
+    *const crate::StringHeader,
+    *mut crate::object::PicCacheSlot,
+    *const std::sync::atomic::AtomicU64,
+) -> f64 = js_global_get_field_ic_slow;

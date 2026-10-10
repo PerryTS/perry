@@ -35,6 +35,10 @@ pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
     } else {
         crate::builtins::js_number_coerce(index)
     };
+    // Rust's saturating float-to-int conversion supplies exactly this
+    // helper's ToIntegerOrInfinity + i32 clamp: truncate toward zero, NaN
+    // to zero, infinities/out-of-range values to the nearest endpoint.
+    // Calling libm trunc first repeats work the conversion already does.
     n as i32
 }
 

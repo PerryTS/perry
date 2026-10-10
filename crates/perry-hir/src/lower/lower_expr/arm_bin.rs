@@ -59,29 +59,6 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                 }
             }
         }
-        // WeakRef / FinalizationRegistry: pre-scan tracks local
-        // constructor results explicitly, so common `local instanceof
-        // WeakRef|FinalizationRegistry` checks can be folded at
-        // lowering time when we recognise the receiver.
-        if let ast::Expr::Ident(class_ident) = bin.right.as_ref() {
-            let class_name = class_ident.sym.as_ref();
-            // #6233: only fold when the RHS really is the GLOBAL WeakRef /
-            // FinalizationRegistry — a user `class WeakRef {}` (or a local/
-            // function/import of that name) shadows the global, and its
-            // instances must take the generic instanceof path below.
-            if (class_name == "WeakRef" || class_name == "FinalizationRegistry")
-                && !ctx.shadows_unqualified_global(class_name)
-            {
-                if let ast::Expr::Ident(left_ident) = bin.left.as_ref() {
-                    let local_name = left_ident.sym.to_string();
-                    let is_match = (class_name == "WeakRef"
-                        && ctx.weakref_locals.contains(&local_name))
-                        || (class_name == "FinalizationRegistry"
-                            && ctx.finreg_locals.contains(&local_name));
-                    return Ok(Expr::Bool(is_match));
-                }
-            }
-        }
         let expr = Box::new(lower_expr(ctx, &bin.left)?);
         // Right side can be an identifier (ClassName) or member expression (Module.ClassName)
         let ty = match bin.right.as_ref() {
@@ -158,16 +135,17 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                 // keeps the static class-id check for imported classes.
                 // #11142: a per-evaluation class declaration's own name
                 // inside its body is that evaluation's class object.
-                if ctx.lookup_local(name).is_some()
+                // A global environment binding is mutable just like a local.
+                // Keep static ids only for actual declared classes; all other
+                // identifiers retain normal lexical/global value resolution.
+                if ctx.lookup_class(name).is_none()
+                    || ctx.lookup_local(name).is_some()
                     || crate::lower_decl::fresh_class_decl_self_binding(ctx, name).is_some()
                     || ctx.lookup_func(name).is_some()
                     || ctx.lookup_native_module(name).is_some()
                     || ctx.lookup_imported_func(name).is_some()
                 {
-                    match lower_expr(ctx, &bin.right) {
-                        Ok(e) => Some(Box::new(e)),
-                        Err(_) => None,
-                    }
+                    Some(Box::new(lower_expr(ctx, &bin.right)?))
                 } else {
                     None
                 }
