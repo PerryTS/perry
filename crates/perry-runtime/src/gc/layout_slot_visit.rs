@@ -163,12 +163,18 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = shape_keys_edge {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+        visit(
+            GcMutableSlotDescriptor::Slot(GcMutableSlot::runtime_root(slot))
+                .with_layout(HeapChildSlotReadKind::Prefix),
+        );
     }
     // The receiver's [[Prototype]] when its shape names it: the identity's
     // shared word, marked through like the keys word.
     if let Some(slot) = shape_prototype_edge {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+        visit(
+            GcMutableSlotDescriptor::Slot(GcMutableSlot::runtime_root(slot))
+                .with_layout(HeapChildSlotReadKind::Prefix),
+        );
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {
         let descriptor = if matches!((*header).obj_type, GC_TYPE_OBJECT | GC_TYPE_CLOSURE) {

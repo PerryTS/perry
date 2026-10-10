@@ -114,13 +114,8 @@ use root_words::*;
 pub(crate) use root_words::{mark_precise_root, PreciseRoot};
 mod layout;
 mod layout_slot_visit;
-use layout_slot_visit::*;
-/// #8112: the one question the remembered set asks about the shape table's
-/// shared keys word. Its own file because both `barrier/mod.rs` (1995 lines)
-/// and `cycle.rs` (1991) are at the 2000-line cap.
-mod shape_keys_edge;
 pub use layout::*;
-use shape_keys_edge::slot_is_shared_shape_keys_word;
+use layout_slot_visit::*;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;

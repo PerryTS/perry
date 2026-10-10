@@ -1599,7 +1599,10 @@ pub(super) fn run_copied_minor_attempt(
         trace.old_pages = crate::arena::old_page_summary();
     }
     let remembered_restore_phase_start = PhaseDiag::start(&phase_diag);
+    let clear_start = trace_phase_start(trace);
     remembered_set_clear();
+    trace_phase_record(trace, "remembered_set_clear", clear_start);
+    let restore_start = trace_phase_start(trace);
     collector.sticky.restore();
     if !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
@@ -1607,6 +1610,7 @@ pub(super) fn run_copied_minor_attempt(
         // the last line before the kill is the answer.
         crate::arena::page_class_table_report();
     }
+    trace_phase_record(trace, "remembered_set_restore", restore_start);
     if let Some(diag) = phase_diag.as_mut() {
         diag.record(
             Phase::RememberedSetYoungLogs,
