@@ -313,6 +313,25 @@ pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
 /// No header size or payload ABI changes, and no second validity authority.
 pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
+/// Complete a successful checked regex binding's header proof. Legacy byte
+/// producers may have counted WTF-8 without deriving the surrogate flag; the
+/// newly shared proof must certify that flag too before permitting `&str`.
+#[cfg(feature = "regex-engine")]
+pub(crate) unsafe fn mark_wtf8_validated(s: *mut StringHeader) {
+    let lone = (*s).byte_len != (*s).utf16_len
+        && bytes_have_lone_surrogate(slice::from_raw_parts(
+            string_data(s),
+            (*s).byte_len as usize,
+        ));
+    (*s).flags = ((*s).flags & !STRING_FLAG_HAS_LONE_SURROGATES)
+        | STRING_FLAG_WTF8_VALIDATED
+        | if lone {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
+}
+
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=WTF8_VALIDATED (shared).
 #[no_mangle]

@@ -2,6 +2,24 @@
 //! Unknown input is the negative control for every combining writer.
 use super::*;
 
+#[cfg(feature = "regex-engine")]
+#[test]
+fn checked_regex_binding_certifies_a_legacy_headers_surrogate_metadata() {
+    let bytes = [0xed, 0xa0, 0x80];
+    // Negative control: a producer supplied the exact length but no encoding
+    // or surrogate proof. Regex's checked binding can establish both together.
+    let s = js_string_from_bytes_known_utf16(bytes.as_ptr(), 3, 1, 0);
+    assert!(!carries(s));
+    let bound = perex::binding::BoundSubject::new(&bytes[..]).unwrap();
+    assert_eq!(bound.with_view(|view| view.len_utf16()).unwrap(), 1);
+    unsafe {
+        mark_wtf8_validated(s);
+    }
+    assert!(carries(s));
+    assert!(unsafe { header_str_checked(s) }.is_none());
+    assert_ne!(unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+}
+
 fn heap(text: &str) -> *mut StringHeader {
     js_string_from_str(text)
 }

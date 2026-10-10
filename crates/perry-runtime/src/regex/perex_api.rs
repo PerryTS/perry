@@ -211,7 +211,7 @@ pub(crate) fn bind_heap_subject_observed(
     // `HeapSubject::new` already wrote this header's refcount, so it is writable.
     let bound = bind_counted(owner, utf16_len, validated, || {
         input.with_const_ptr::<StringHeader, _>(|s| unsafe {
-            (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
+            crate::string::mark_wtf8_validated(s as *mut StringHeader);
         })
     })?;
     Ok((bound, identity))
