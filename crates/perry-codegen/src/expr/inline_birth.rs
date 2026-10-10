@@ -2,6 +2,15 @@
 use super::FnCtx;
 use crate::types::{I64, I8, PTR};
 
+mod shared;
+pub(crate) use shared::{class, empty_array};
+
+/// A codegen ABI fact, shared by definitions, split declarations and calls.
+/// PreserveMost moves register saves into the shared slow/color routine.
+pub(crate) fn calling_convention(name: &str) -> Option<&'static str> {
+    matches!(name, "perry_birth_class" | "perry_birth_empty_array").then_some("preserve_mostcc")
+}
+
 pub(super) const BIRTH_FLAGS_OFFSET: &str = "24";
 pub(super) const BIRTH_SEEDS_OFFSET: &str = "32";
 

@@ -59,24 +59,34 @@ fn the_birth_rep_is_f64_for_exactly_the_fields_written_before_any_observation() 
     assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys"), "i64 0");
 }
 
-/// (c) + (d): the inline allocation birth-fills the `F64` lanes the mint
-/// declared with +0.0 (`store i64 0`), and the all-`Any` twin fills them with
-/// `undefined`: one decision drives the mint and the fill.
+/// (c) + (d): the shared initializer receives the exact rep the mint declared.
+/// Its bounded two-bit lane walk selects +0.0 for F64 and undefined for Any.
 #[test]
 fn the_inline_allocation_fills_exactly_the_minted_f64_lanes() {
-    let undefined = format!("store i64 {}, ptr", crate::nanbox::TAG_UNDEFINED_I64);
     let declared = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
     let late = emit(&early_module());
-    let fill = |ir: &str| {
-        (
-            ir.matches("store i64 0, ptr").count(),
-            ir.matches(undefined.as_str()).count(),
-        )
-    };
-    let (zeros, undef) = fill(&declared);
-    let (late_zeros, late_undef) = fill(&late);
-    assert!(
-        zeros >= late_zeros + 2 && late_undef >= undef + 2,
-        "declared: {zeros} zero / {undef} undefined fills; undeclared: {late_zeros} / {late_undef}\n{declared}"
-    );
+    for (ir, expected) in [(&declared, "i64 5"), (&late, "i64 0")] {
+        assert_eq!(mint_rep(ir, "js_object_shape_id_for_class_keys"), expected);
+        let calls: Vec<_> = ir
+            .lines()
+            .filter(|l| l.contains("call preserve_mostcc i64 @perry_birth_class("))
+            .collect();
+        assert!(
+            calls.len() >= 2,
+            "both fast and slow birth arms must be live"
+        );
+        for call in calls {
+            let args = call.split_once(')').unwrap().0;
+            assert_eq!(args.rsplit_once(", ").unwrap().1, expected, "{call}");
+        }
+        assert!(ir.contains("%lane = and i64 %lanes, 3"));
+        assert!(ir.contains("%f64 = icmp eq i64 %lane, 1"));
+        assert!(ir.contains(&format!(
+            "%default = select i1 %f64, i64 0, i64 {}",
+            crate::nanbox::TAG_UNDEFINED_I64
+        )));
+        assert!(ir.contains("%remaining = lshr i64 %lanes, 2"));
+        assert!(ir.contains("%slots_more = icmp ult i64 %j_next, %slots"));
+        assert!(ir.contains("store i64 %default, ptr %typed_slot"));
+    }
 }

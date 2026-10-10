@@ -40,6 +40,8 @@ fn split_corpus(text: &str) -> (String, Vec<String>) {
             .join(", ");
         let calling_convention = if parsed.preserve_none {
             format!("{} ", crate::inst::PRESERVE_NONE_CC)
+        } else if parsed.preserve_most {
+            "preserve_mostcc ".into()
         } else {
             String::new()
         };
@@ -844,4 +846,59 @@ fn dropping_native_asm_memory_effect_turns_roundtrip_red() {
         .unwrap();
     assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
     assert!(!child.status.success());
+}
+
+#[test]
+fn preserve_most_constructs_on_define_call_and_invoke() {
+    let ctx = Context::create();
+    let skeleton = "declare i32 @perry_eh_personality(i32, i32, i64, ptr, ptr)\n";
+    let module = crate::inprocess::parse_ir_text(&ctx, skeleton, "preserve_most_skel")
+        .expect("skeleton parses");
+    let fns = [
+        "define linkonce_odr preserve_mostcc double @callee$birth(i32 %arg0) {\n\
+         entry.0:\n\
+         \x20 %r1 = sitofp i32 %arg0 to double\n\
+         \x20 ret double %r1\n\
+         }\n",
+        "define double @caller(double %arg0) {\n\
+         entry.0:\n\
+         \x20 %r1 = call preserve_mostcc double @callee$birth(i32 7)\n\
+         \x20 ret double %r1\n\
+         }\n",
+        "define double @trycaller(double %arg0) personality ptr @perry_eh_personality {\n\
+         entry.0:\n\
+         \x20 %r1 = invoke preserve_mostcc double @callee$birth(i32 7) to label %eh.cont1 \
+         unwind label %lpad.0\n\
+         eh.cont1:\n\
+         \x20 ret double %r1\n\
+         lpad.0:\n\
+         \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
+         \x20 ret double 0.0\n\
+         }\n",
+    ];
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).expect("predeclare");
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let printed = module.print_to_string().to_string();
+    assert!(
+        printed.contains("define linkonce_odr preserve_mostcc double @\"callee$birth\"")
+            || printed.contains("define linkonce_odr preserve_mostcc double @callee$birth"),
+        "function value lost its calling convention:\n{printed}"
+    );
+    assert_eq!(
+        printed.matches("call preserve_mostcc double").count(),
+        1,
+        "call site lost its calling convention:\n{printed}"
+    );
+    assert_eq!(
+        printed.matches("invoke preserve_mostcc double").count(),
+        1,
+        "invoke site lost its calling convention:\n{printed}"
+    );
 }

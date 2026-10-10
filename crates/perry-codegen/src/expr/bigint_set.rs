@@ -579,38 +579,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callback,
             initial,
         } => {
-            let rooted_operands: [&perry_hir::Expr; 2] = [array, callback];
-            let (rooted_values, rooted_group) =
-                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
-            let arr_box = rooted_values[0].clone();
-            let cb_box = rooted_values[1].clone();
-            let (has_init, init_d) = if let Some(init_expr) = initial {
-                let v = lower_expr(ctx, init_expr)?;
-                ("1".to_string(), v)
-            } else {
-                ("0".to_string(), "0x7FF8000000000000".to_string()) // NaN bits won't actually be used
-            };
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            // The initial value is evaluated after the callback and can
+            // allocate. Validation is another collecting window: hold all
+            // three operands and read each below its last collection point.
+            let mut rooted_group = crate::rooting::open_rooted_group(3);
+            rooted_group.lower(ctx, array, true)?;
+            rooted_group.lower(ctx, callback, true)?;
+            if let Some(init_expr) = initial {
+                rooted_group.lower(ctx, init_expr, true)?;
+            }
+            let cb_box = rooted_group.reread(ctx, 1)?;
             // #4091: throw TypeError for a non-callable callback before iterating.
-            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-            // Convert literal NaN bits to a double via bitcast — but the
-            // string above isn't valid LLVM. Use a real NaN literal instead.
-            let init_use = if has_init == "1" {
-                init_d
+            let cb_handle =
+                ctx.block()
+                    .call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
+            let arr_box = rooted_group.reread(ctx, 0)?;
+            let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+            let (has_init, init_use) = if initial.is_some() {
+                ("1", rooted_group.reread(ctx, 2)?)
             } else {
-                // LLVM treats `0x7FF8000000000000` as a hex double literal
-                // when written as `0x7FF8000000000000` — but the safe way
-                // is to just use `0x7FF8000000000000` via the IR's hex
-                // form for doubles. Use plain `0.0` since it's unused.
-                "0.0".to_string()
+                ("0", "0.0".to_string())
             };
             let runtime_fn = if matches!(expr, Expr::ArrayReduceRight { .. }) {
                 "js_array_reduce_right"
             } else {
                 "js_array_reduce"
             };
-            let rooted_result = blk.call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 runtime_fn,
                 &[

@@ -26,7 +26,8 @@
 //! its `!contains("@js_shadow_slot_bind")` is true of every program (hazard 4:
 //! the gate ran, its subject did not). Since #7876 every class-key cache also
 //! has one function-lifetime bind; that negative asserts there is exactly that
-//! one bind rather than no bind anywhere in the function.
+//! one bind on the legacy allocator. Inline births have no class-key cache,
+//! so their inert construction must have zero binds.
 //!
 //! The rest of this file is lowering-INDEPENDENT and deliberately unpinned.
 //!
@@ -415,8 +416,43 @@ fn ir_for_new(name: &str, args: Vec<Expr>) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+// Class births can be a legacy runtime call or a fast/slow pair merged by
+// a phi. Select the completed instance, never an argument object allocation.
+fn class_allocation(line: &str) -> bool {
+    line.contains("call ")
+        && (line.contains("@js_object_alloc_class") || line.contains("@perry_birth_class("))
+}
+
+fn instance_result(f: &str) -> String {
+    let defs: std::collections::HashMap<_, _> = f
+        .lines()
+        .filter_map(|l| l.trim().split_once(" = "))
+        .collect();
+    // Both incoming VALUES must be class births; block labels are not values.
+    for (reg, rhs) in &defs {
+        if rhs.starts_with("phi i64 ") {
+            let incoming: Vec<_> = rhs
+                .split('[')
+                .skip(1)
+                .filter_map(|arm| arm.split_once(',').map(|(v, _)| v.trim()))
+                .collect();
+            if incoming.len() == 2
+                && incoming
+                    .iter()
+                    .all(|v| defs.get(v).is_some_and(|def| class_allocation(def)))
+            {
+                return reg.to_string();
+            }
+        }
+    }
+    f.lines()
+        .find(|l| class_allocation(l))
+        .and_then(|l| l.trim().split_once(" = ").map(|(r, _)| r.to_string()))
+        .unwrap_or_else(|| panic!("the instance allocation:\n{f}"))
+}
+
 /// Constructor arguments are all lowered before the instance is allocated, and
-/// that allocation always collects — so every heap-valued argument must be
+/// the slow allocation can collect — so every heap-valued argument must be
 /// rooted, and re-read after the allocation.
 ///
 /// The rooting must also be interleaved with the lowering, not appended after
@@ -461,10 +497,12 @@ fn constructor_arguments_are_rooted_across_the_instance_allocation() {
     );
 
     // …and every argument is still rooted across the INSTANCE allocation, then
-    // re-read below it. That call is the one that always collects.
+    // re-read below it. The slow birth call is the collecting arm.
     let instance_alloc = f
         .lines()
-        .position(|l| l.contains("call i64 @js_object_alloc_class_inline_keys"))
+        .enumerate()
+        .filter_map(|(i, l)| class_allocation(l).then_some(i))
+        .last()
         .unwrap_or_else(|| panic!("the instance allocation:\n{f}"));
     assert!(
         traffic
@@ -474,6 +512,19 @@ fn constructor_arguments_are_rooted_across_the_instance_allocation() {
         "the arguments must be re-read from their slots AFTER the instance \
          allocation — a register held across it names from-space (#6969):\n{f}"
     );
+    for (_, arg) in &arg_allocs {
+        let slot = slot_holding(f, arg).expect("each constructor argument must be rooted");
+        let events = &traffic[&slot];
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SlotEvent::Store { line, .. } if *line < instance_alloc))
+                && events
+                    .iter()
+                    .any(|e| matches!(e, SlotEvent::Load { line, .. } if *line > instance_alloc)),
+            "argument {arg} must be stored before and reloaded after the collecting birth:\n{f}"
+        );
+    }
     // The scope cut comes after the arguments are consumed — per SLOT. A
     // module-wide "last load before any clear" would be answered by an
     // unrelated named local's slot, which is the class of mistake this whole
@@ -546,7 +597,14 @@ fn registered_root_operands_are_reloaded_rather_than_rooted() {
     );
 
     let alloc = ir
-        .find("call i64 @js_object_alloc_class_inline_keys")
+        .lines()
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len() + 1;
+            Some((start, line))
+        })
+        .filter_map(|(offset, line)| class_allocation(line).then_some(offset))
+        .last()
         .expect("the instance allocation");
     assert!(
         loads[0] < alloc && loads.iter().any(|&l| l > alloc),
@@ -1089,7 +1147,7 @@ fn module_with_new_running_ctor(name: &str) -> Module {
 /// a *rooted* slot holding a dangling pointer, read back later as
 /// "TypeError: value is not a function".
 ///
-/// Sabotage check: drop the `reload_instance` call in `lower_new_impl_inner`
+/// Negative control: drop the `reload_instance` call in `lower_new_impl_inner`
 /// and the re-read disappears from between the allocation and the override.
 #[test]
 fn the_new_instance_is_rooted_across_the_constructor_body() {
@@ -1108,11 +1166,7 @@ fn the_new_instance_is_rooted_across_the_constructor_body() {
     // below the block that re-reads the root.
 
     // 1. The allocation's result reaches a rooted slot immediately.
-    let inst_reg = f
-        .lines()
-        .find(|l| l.contains("call i64 @js_object_alloc_class"))
-        .and_then(|l| l.trim().split_once(" = ").map(|(r, _)| r.to_string()))
-        .unwrap_or_else(|| panic!("the instance allocation:\n{f}"));
+    let inst_reg = instance_result(f);
     assert!(
         slot_holding(f, &inst_reg).is_some(),
         "the instance {inst_reg} must be rooted as soon as it is allocated, \
@@ -1168,7 +1222,7 @@ fn a_class_that_runs_no_user_code_emits_no_instance_root() {
 /// `the_new_instance_is_rooted_across_the_constructor_body` could not see it:
 /// that test walks the FIRST operand, which is the re-read one.
 ///
-/// Sabotage check: restore the `store double %obj_box, ptr %ctor_result_slot`
+/// Negative control: restore the `store double %obj_box, ptr %ctor_result_slot`
 /// seed in `lower_new_impl_inner` and this fails.
 #[test]
 fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
@@ -1255,7 +1309,7 @@ fn the_inline_ctor_result_slot_never_carries_an_instance_address() {
 /// `js_shadow_slot_bind` records `slot_ptrs[idx] = alloca`, so evacuation
 /// rewrites it in place.
 ///
-/// Sabotage check: drop the `root_entry_alloca` call in `lower_new_impl_inner`
+/// Negative control: drop the `root_entry_alloca` call in `lower_new_impl_inner`
 /// and no bind names the `this` slot.
 #[test]
 fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
@@ -1270,6 +1324,56 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
     .expect("LLVM IR should be UTF-8");
     let f = init_ir(&ir);
 
+    assert_inline_instance_homes_bound(f);
+    // Negative control on real emitted IR: remove just the inline `this`
+    // bind, leaving the pooled temporary and class-key binds intact.
+    let temp = slot_holding(f, &instance_result(f)).expect("positive assertion found a root");
+    let homes = instance_homes(f);
+    let this_home = homes
+        .iter()
+        .find(|home| **home != temp)
+        .expect("inline this home");
+    let broken = f
+        .lines()
+        .filter(|l| {
+            !(l.contains("@js_shadow_slot_bind(")
+                && l.trim_end().ends_with(&format!("ptr {this_home})")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(broken, f, "negative control must remove a live bind");
+    assert!(
+        std::panic::catch_unwind(|| assert_inline_instance_homes_bound(&broken)).is_err(),
+        "the instance-home assertion accepted a missing shadow bind"
+    );
+}
+
+fn instance_homes(f: &str) -> Vec<String> {
+    let instance = instance_result(f);
+    let instance_home = slot_holding(f, &instance)
+        .unwrap_or_else(|| panic!("the birthed instance {instance} has no root:\n{f}"));
+    // Check every home holding this instance, including the separate inline
+    // constructor `this` home. Removing that bind must not be masked by the
+    // caller's still-bound temporary root.
+    let mut homes = vec![instance_home];
+    for slot in slot_traffic(f).keys() {
+        let isolated = f
+            .lines()
+            .filter(|l| {
+                !l.trim().starts_with("store ")
+                    || l.contains(&format!(", ptr {slot},"))
+                    || l.trim().ends_with(&format!(", ptr {slot}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if slot_holding(&isolated, &instance).is_some() && !homes.contains(slot) {
+            homes.push(slot.clone());
+        }
+    }
+    homes
+}
+
+fn assert_inline_instance_homes_bound(f: &str) {
     // `this` is read by the field-initializer store; find the slot it loads
     // from by taking the alloca that a `js_shadow_slot_bind` names AND that is
     // stored with a nanboxed instance. Simpler and stronger: assert that every
@@ -1286,100 +1390,59 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
         "expected at least one js_shadow_slot_bind in:\n{f}"
     );
 
-    // The instance's register: walk each `store double|i64 %X, ptr %S`
-    // backwards through the bit-level nanbox ops to see whether `%X` was
-    // produced by an object allocation. That is the `this` slot.
-    let def_of: std::collections::HashMap<&str, &str> = f
-        .lines()
-        .filter_map(|l| l.trim_start().split_once(" = "))
-        .map(|(r, rhs)| (r.trim(), rhs))
-        .collect();
-    fn reaches_alloc(
-        reg: &str,
-        def_of: &std::collections::HashMap<&str, &str>,
-        depth: usize,
-    ) -> bool {
-        if depth == 0 {
-            return false;
-        }
-        let Some(rhs) = def_of.get(reg) else {
-            return false;
-        };
-        if rhs.contains("@js_object_alloc") {
-            return true;
-        }
-        // Only follow bit-level identity producers, exactly as the dominance
-        // checker's `provenance` does; anything else is a different value.
-        if !(rhs.starts_with("or i64")
-            || rhs.starts_with("bitcast")
-            || rhs.starts_with("inttoptr")
-            || rhs.starts_with("ptrtoint"))
-        {
-            return false;
-        }
-        rhs.split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
-            .filter(|w| w.starts_with('%'))
-            .any(|w| reaches_alloc(w, def_of, depth - 1))
-    }
-
-    let this_slot = f
-        .lines()
-        .find_map(|l| {
-            // A pooled temporary root stores a raw pointer with an `i64`
-            // access and a JSValue with a `double` access.
-            let l = l.trim_start();
-            let (val, rest) = l
-                .strip_prefix("store double ")
-                .or_else(|| l.strip_prefix("store i64 "))
-                .filter(|v| v.starts_with('%'))?
-                .split_once(", ")?;
-            let slot = rest.strip_prefix("ptr ")?.trim();
-            reaches_alloc(val.trim(), &def_of, 8).then(|| slot.to_string())
-        })
-        .unwrap_or_else(|| panic!("no store of a freshly allocated instance into a slot in:\n{f}"));
-
+    let homes = instance_homes(f);
     assert!(
-        bound.contains(&this_slot),
-        "the inline-ctor `this` slot {this_slot} is a plain entry alloca that \
+        homes.len() >= 2,
+        "instance temp and inline `this` homes must be live:\n{f}"
+    );
+    for this_slot in homes {
+        assert!(
+            bound.contains(&this_slot),
+            "the inline-ctor `this` slot {this_slot} is a plain entry alloca that \
          the collector neither marks nor rewrites, yet it holds the instance \
          across the whole constructor body — it must be bound as a shadow slot \
          (#7202). Bound slots: {bound:?}\n{f}"
-    );
+        );
 
-    // A bound home must contain a valid non-pointer JSValue before its first
-    // bind. The pooled temporary uses +0.0; semantic locals use undefined.
-    // Check ordering as well as existence, and prove a missing seed fails.
-    let seeded_before_bind = |ir: &str| {
-        let first_bind = ir.lines().position(|l| {
-            l.contains("@js_shadow_slot_bind(")
-                && l.trim_end().ends_with(&format!("ptr {this_slot})"))
-        });
-        let seed = ir.lines().position(|l| {
-            let l = l.trim();
-            (l.starts_with("store double 0.0, ")
-                || l.starts_with("store double 0x7FFC000000000001, "))
-                && l.ends_with(&format!("ptr {this_slot}"))
-        });
-        matches!((seed, first_bind), (Some(seed), Some(bind)) if seed < bind)
-    };
-    assert!(
-        seeded_before_bind(f),
-        "the `this` slot {this_slot} must contain a non-pointer JSValue before \
+        // A bound home must contain a valid non-pointer JSValue before its first
+        // bind. The pooled temporary uses +0.0; semantic locals use undefined.
+        // Check ordering as well as existence, and prove a missing seed fails.
+        let seeded_before_bind = |ir: &str| {
+            let first_bind = ir.lines().position(|l| {
+                l.contains("@js_shadow_slot_bind(")
+                    && l.trim_end().ends_with(&format!("ptr {this_slot})"))
+            });
+            let seed = ir.lines().position(|l| {
+                let l = l.trim();
+                (l.starts_with("store double 0.0, ")
+                    || l.starts_with("store double 0x7FFC000000000001, "))
+                    && l.ends_with(&format!("ptr {this_slot}"))
+            });
+            matches!((seed, first_bind), (Some(seed), Some(bind)) if seed < bind)
+        };
+        assert!(
+            seeded_before_bind(f),
+            "the `this` slot {this_slot} must contain a non-pointer JSValue before \
          its first bind (#7202/#6968):\n{f}"
-    );
-    let missing_seed = f
-        .lines()
-        .filter(|l| {
-            !(l.trim().starts_with("store double 0.0, ")
-                && l.trim_end().ends_with(&format!("ptr {this_slot}")))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_ne!(missing_seed, f, "the seed sabotage must alter the fixture");
-    assert!(
-        !seeded_before_bind(&missing_seed),
-        "the seed check accepted an uninitialized bound home"
-    );
+        );
+        let missing_seed = f
+            .lines()
+            .filter(|l| {
+                !((l.trim().starts_with("store double 0.0, ")
+                    || l.trim().starts_with("store double 0x7FFC000000000001, "))
+                    && l.trim_end().ends_with(&format!("ptr {this_slot}")))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            missing_seed, f,
+            "the seed negative control must alter the fixture"
+        );
+        assert!(
+            !seeded_before_bind(&missing_seed),
+            "the seed check accepted an uninitialized bound home"
+        );
+    }
 }
 
 /// #7200: `Object.assign(t, …sources)` threads its accumulator through a bare
@@ -1392,7 +1455,7 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
 /// evidence. `Expr::Object` has rooted its accumulator since #6951; this arm
 /// never copied it.
 ///
-/// Sabotage check: drop the `temp_root_push_double`/`temp_root_set_double` pair
+/// Negative control: drop the `temp_root_push_double`/`temp_root_set_double` pair
 /// in the `Expr::ObjectAssign` arm and the accumulator operand stops being a
 /// `js_gc_temp_root_get` result.
 #[test]
@@ -1477,7 +1540,7 @@ fn the_object_assign_accumulator_is_rooted_across_each_source() {
 /// the value names from-space. `this.viaBlock = churn()` inside a
 /// `static { … }` block is the shipped shape.
 ///
-/// Sabotage check: remove the `guard_store_operand`/`reread_store_operand` pair
+/// Negative control: remove the `guard_store_operand`/`reread_store_operand` pair
 /// from the `dyn_inline` arm of `Expr::PutValueSet` and the handle load stops
 /// being re-emitted below the call.
 #[test]
@@ -1553,7 +1616,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
 /// that can collect, so the slot cannot go stale and the frame must not grow
 /// for it.
 ///
-/// Sabotage check: drop the `instance_root.is_some()` guard around the bind in
+/// Negative control: drop the `instance_root.is_some()` guard around the bind in
 /// `lower_new_impl_inner` and this fails.
 #[test]
 fn a_collection_free_construction_emits_no_this_slot_root() {
@@ -1564,7 +1627,7 @@ fn a_collection_free_construction_emits_no_this_slot_root() {
     let ir = ir_for_new("new_inst_inert.ts", Vec::new());
     let f = init_ir(&ir);
     assert!(
-        f.contains("@js_object_alloc"),
+        f.lines().any(class_allocation),
         "the fixture must actually construct something:\n{f}"
     );
     assert_no_temp_rooting(
@@ -1573,11 +1636,14 @@ fn a_collection_free_construction_emits_no_this_slot_root() {
          instance temp root — the `this`-slot bind is gated on the same \
          predicate",
     );
+    // Inline births carry their header image directly and need no mutable
+    // class-key cache. The legacy allocator still needs that one cache bind.
+    let key_cache_binds = usize::from(!f.contains("@perry_birth_class("));
     assert_eq!(
         f.matches("@js_shadow_slot_bind").count(),
-        1,
-        "an inert construction needs only #7876's function-lifetime class-key \
-         root; it must not grow the shadow frame for a `this` slot that cannot \
-         go stale (#7202):\n{f}"
+        key_cache_binds,
+        "an inert construction needs only the legacy class-key cache root \
+         when that allocator is used; it must not grow the shadow frame for \
+         a `this` slot that cannot go stale (#7202):\n{f}"
     );
 }

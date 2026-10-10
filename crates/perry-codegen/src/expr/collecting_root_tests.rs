@@ -937,7 +937,11 @@ fn imported_constructor_receiver_refreshes_after_initializers_and_call_preparati
                 let allocation = cfg
                     .sites()
                     .into_iter()
-                    .find(|site| site.text.contains(" = call i64 @js_object_alloc_class_"))
+                    .find(|site| {
+                        site.text.contains(" = call i64 @js_object_alloc_class_")
+                            || (site.label.starts_with("alloc.merge")
+                                && site.text.contains(" = ptrtoint ptr "))
+                    })
                     .expect("fixture must allocate a class instance");
                 let allocated = allocation.text.split_once(" = ").unwrap().0;
                 let publications: Vec<_> = cfg

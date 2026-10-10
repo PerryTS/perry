@@ -201,10 +201,25 @@ fn assert_literal_width(module: &Module, width: u32) {
         .lines()
         .filter(|l| l.contains("call i64 @js_object_alloc_class_inline_keys_stamped("))
         .collect();
-    assert!(
-        !allocations.is_empty(),
-        "fixture must emit a literal birth: {text}"
-    );
+    if allocations.is_empty() {
+        let total =
+            crate::target_layout::inline_alloc_total_size_bytes("aarch64-apple-darwin", width);
+        let packed = crate::target_layout::inline_alloc_gc_packed("aarch64-apple-darwin", width);
+        assert!(
+            text.contains("alloc.fast"),
+            "fixture must emit a literal birth: {text}"
+        );
+        assert!(
+            text.lines().any(|line| {
+                line.contains(&format!("add i64 ")) && line.ends_with(&format!(", {total}"))
+            }),
+            "wrong emitted allocation width: {text}"
+        );
+        assert!(
+            text.contains(&format!("<i64 {packed}, i64 0>")),
+            "emitted allocation and image size must agree: {text}"
+        );
+    }
     for line in allocations {
         assert!(
             line.contains(&format!(", i32 0, i32 {width}, i64 ")),

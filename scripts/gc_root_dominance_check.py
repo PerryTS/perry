@@ -604,7 +604,7 @@ MOVING_POLL = "js_gc_loop_safepoint"
 # costs a false positive to triage, while a missing one costs a shipped
 # use-after-free plus the investigation round it takes to find it by hand.
 # When in doubt, add it.
-ALLOC_RE = re.compile(
+JS_ALLOC_RE = re.compile(
     r"^js_("
     # -- convention 1: `*_alloc*`, including the arena's own slow path.
     r"\w*_alloc\w*|"
@@ -680,6 +680,32 @@ ALLOC_RE = re.compile(
     r")$"
 )
 
+# Inline LLVM helpers are allocations too, in both the gc-leaf fast arm and
+# the collecting slow arm. Keep fully qualified alternatives so the audit
+# covers both ABIs rather than silently assuming everything starts with js_.
+ALLOC_RE = re.compile(
+    "^(" + "|".join("js_" + a for a in
+                     JS_ALLOC_RE.pattern[len("^js_("):-len(")$")].split("|"))
+    + r"|perry_birth_class|perry_birth_empty_array)$"
+)
+
+
+def codegen_birth_bodies():
+    """Published inline LLVM helpers, read from their Rust definitions.
+
+    Constants alone are not definitions: require the publish call and its raw
+    LLVM body. This lets the allocation/poll audits reject renamed or removed
+    helpers just as they reject missing runtime exports.
+    """
+    bodies = {}
+    for _path, src in _rs_sources(("crates/perry-codegen/src/expr/inline_birth",)):
+        names = dict(re.findall(r'const (\w+): &str = "(perry_birth_\w+)";', src))
+        for m in re.finditer(r'publish\(\s*ctx,\s*(\w+),.*?r#"(.*?)"#', src, re.S):
+            if m.group(1) in names:
+                bodies[names[m.group(1)]] = m.group(2)
+    return bodies
+
+
 # --------------------------------------------------------------------- AUDIT
 #
 # A regex alternative that matches nothing is the gate-can't-fail pattern in
@@ -734,7 +760,12 @@ _MACRO_ITEM_INLINE_RE = re.compile(
 _MACRO_ITEM_ARG_RE = re.compile(r'^[ \t]+(js_\w+)\s*(?:=>|[,)])')
 
 # The runtime crates that export the C-ABI surface perry-codegen calls.
-SYMBOL_ROOTS = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
+SYMBOL_ROOTS = (
+    "crates/perry-runtime/src", "crates/perry-stdlib/src",
+    # The default stdlib archive bundles this provider after zlib's move out
+    # of perry-stdlib. --verify-symbols found 47 otherwise invisible exports.
+    "crates/perry-ext-zlib/src",
+)
 
 
 def _macro_defined_symbols(text):
@@ -806,6 +837,8 @@ def runtime_symbols(roots=SYMBOL_ROOTS):
     for _path, src in _rs_sources(roots):
         syms.update(_EXTERN_C_FN_RE.findall(src))
         syms.update(_macro_defined_symbols(src))
+    if roots == SYMBOL_ROOTS:
+        syms.update(codegen_birth_bodies())
     return syms
 
 
@@ -929,19 +962,19 @@ def nm_exported_symbols(archives, readers=None):
 
 
 def alloc_re_alternatives():
-    """The top-level alternatives inside ALLOC_RE's `js_(...)` group.
+    """The top-level alternatives inside ALLOC_RE's fully qualified group.
 
     Asserts the pattern's shape rather than assuming it: if ALLOC_RE is ever
     rewritten into a form this cannot decompose, that must be a loud failure,
     not an audit that silently checks zero alternatives.
     """
     pat = ALLOC_RE.pattern
-    if not (pat.startswith("^js_(") and pat.endswith(")$")):
+    if not (pat.startswith("^(") and pat.endswith(")$")):
         raise MalformedIR(
-            "ALLOC_RE is no longer of the form ^js_(...)$; the alternative "
+            "ALLOC_RE is no longer of the form ^(...)$; the alternative "
             "audit cannot decompose it. Update alloc_re_alternatives() rather "
             "than leaving the audit silently vacuous.")
-    inner = pat[len("^js_("):-len(")$")]
+    inner = pat[len("^("):-len(")$")]
     if "(" in inner:
         raise MalformedIR(
             "ALLOC_RE now contains a nested group; splitting on '|' would "
@@ -953,7 +986,7 @@ def dead_alloc_alternatives(symbols):
     """ALLOC_RE alternatives matching none of `symbols`, in pattern order."""
     dead = []
     for alt in alloc_re_alternatives():
-        probe = re.compile("^js_(?:%s)$" % alt)
+        probe = re.compile("^(?:%s)$" % alt)
         if not any(probe.match(s) for s in symbols):
             dead.append(alt)
     return dead
@@ -1282,6 +1315,10 @@ def runtime_symbol_bodies(roots=SYMBOL_ROOTS):
                 for sym in _macro_defined_symbols(src):
                     for macro_body in _macro_rule_bodies(src):
                         bodies[sym].append(macro_body)
+    if roots == SYMBOL_ROOTS:
+        for name, body in codegen_birth_bodies().items():
+            # Normalize LLVM call spelling for the runtime call-graph reader.
+            bodies[name].append(re.sub(r"@(js_\w+)\(", r"\1(", body))
     return bodies
 
 
@@ -1464,10 +1501,16 @@ def uses(text, regs):
     """Does `text` reference any of `regs` as a whole SSA operand?
     (`%r1` must NOT match `%r16` -- a substring test silently taints the
     entire rest of the function.)"""
-    for r in regs:
-        if re.search(r"%" + re.escape(r) + r"(?![\w.$])", text):
-            return True
-    return False
+    # Absence of every literal spelling proves absence of whole tokens too.
+    # For small chains this avoids tokenizing enormous gc-live bundles whose
+    # managed references do not include the untracked value under inspection.
+    # A prefix hit still goes through the exact token-boundary check below.
+    if len(regs) <= 4 and not any("%" + r in text for r in regs):
+        return False
+    # Every parsed SSA name uses [\w.$]+. Scan once rather than compiling
+    # one dynamic regex per candidate (large phi chains churn re's cache).
+    # Keep the whole text, including the LHS, exactly as the prior lookup did.
+    return any(r in regs for r in re.findall(r"%([\w.$]+)", text))
 
 
 def is_collecting(callee):
@@ -1584,6 +1627,11 @@ def is_collecting(callee):
 #          count and are deliberately NOT folded in here — same reasoning as
 #          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
+    # Null-raw birth calls reach js_inline_arena_slow_alloc, which can collect.
+    # Non-null fast calls carry a call-site gc-leaf-function attribute; the
+    # symbol itself must never be classified as noncollecting.
+    "perry_birth_class", "perry_birth_empty_array",
+    "js_inline_arena_slow_alloc",
     "js_call_function",
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
@@ -2186,18 +2234,18 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
         hits = []
         if A.block == B.block:
             for c in f.insns[A.block]:
-                if is_collecting(c.callee) and A.idx < c.idx < B.idx:
+                if _collecting_insn(c) and A.idx < c.idx < B.idx:
                     hits.append(c)
             return hits
         for c in f.insns[A.block]:
-            if is_collecting(c.callee) and c.idx > A.idx:
+            if _collecting_insn(c) and c.idx > A.idx:
                 hits.append(c)
         for c in f.insns[B.block]:
-            if is_collecting(c.callee) and c.idx < B.idx:
+            if _collecting_insn(c) and c.idx < B.idx:
                 hits.append(c)
         for m_blk in between_blocks(f, A.block, B.block, killed):
             for c in f.insns[m_blk]:
-                if is_collecting(c.callee):
+                if _collecting_insn(c):
                     hits.append(c)
         return hits
 
@@ -2259,10 +2307,18 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
                 # worth anchoring in "any" mode either; keep calls only.
                 if origin.callee is None or origin.callee in NONCOLLECTING:
                     continue
-            # Real CFG dominance: the value bound must be the value this
-            # instruction produced on every path reaching the bind.
+            # A branch-local birth need not dominate the merge: the phi that
+            # selects it does. Follow its incoming value path (the replacing
+            # edges below exclude the other arm) instead of silently dropping
+            # both origins of every fast/slow allocation diamond.
             if not dominates(idom, origin.block, bind_ins.block):
-                continue
+                phi_dominates = any(
+                    d is not None and _is_phi(d)
+                    and dominates(idom, d.block, bind_ins.block)
+                    and origin in provenance(def_of, d.result)
+                    for d in (def_of.get(r) for r in chain))
+                if not phi_dominates:
+                    continue
             if origin.block == bind_ins.block and origin.idx >= bind_ins.idx:
                 continue
             killed = (phi_replacing_edges(f, def_of, origin.result, chain)
@@ -3108,6 +3164,11 @@ def _stale_use_replacing_edges(f, def_of, src_reg, chain, direct, use):
 
 
 def _collecting_insn(ins):
+    # The fast birth call shares a symbol with the collecting slow call.
+    # Codegen proves the fast arm leaf at the call site, never on the symbol.
+    if ins.callee in {"perry_birth_class", "perry_birth_empty_array"}:
+        if '"gc-leaf-function"' in ins.text:
+            return False
     return is_collecting(ins.callee)
 
 
@@ -3602,7 +3663,7 @@ def flag_path_feasible(f, st, ld, reg, cells, is_mover,
             t = ins.text
             lm = _FLAG_LOAD_RE.match(t)
             sm = _FLAG_STORE_RE.match(t)
-            collects = is_collecting(ins.callee)
+            collects = _collecting_insn(ins)
             bm_ = _I1_LOGIC_RE.match(t)
             nxt = []
             for (sl, slots, env) in states:
@@ -3720,13 +3781,13 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
         hits = []
         if A.block == B.block:
             return [c for c in f.insns[A.block]
-                    if is_collecting(c.callee) and A.idx < c.idx < B.idx]
+                    if _collecting_insn(c) and A.idx < c.idx < B.idx]
         hits += [c for c in f.insns[A.block]
-                 if is_collecting(c.callee) and c.idx > A.idx]
+                 if _collecting_insn(c) and c.idx > A.idx]
         hits += [c for c in f.insns[B.block]
-                 if is_collecting(c.callee) and c.idx < B.idx]
+                 if _collecting_insn(c) and c.idx < B.idx]
         for m_blk in between_blocks(f, A.block, B.block):
-            hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
+            hits += [c for c in f.insns[m_blk] if _collecting_insn(c)]
         # #11590: a slot stored ONCE before a loop and loaded in its body is
         # the same value on every iteration, so a collection anywhere on the
         # back-edge cycle sits between the store and every load after the
@@ -3737,9 +3798,9 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
         cyc = loop_carried_blocks(f, A.block, B.block, store_blocks[reg])
         if cyc is not None:
             hits += [c for c in f.insns[B.block]
-                     if is_collecting(c.callee) and c.idx > B.idx]
+                     if _collecting_insn(c) and c.idx > B.idx]
             for m_blk in cyc:
-                hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
+                hits += [c for c in f.insns[m_blk] if _collecting_insn(c)]
         return hits
 
     def is_mover(callee):
@@ -5906,6 +5967,61 @@ def self_test():
     that has not been shown to work.
     """
     ok = True
+    # Operand identity cannot accept a prefix or drop dot/dollar suffixes.
+    for text, regs, expected in (
+            ("store i64 %r16, ptr %home", {"r1"}, False),
+            ("%r1.rs4p = inttoptr i64 %r16 to ptr", {"r1"}, False),
+            ("%r1.rs4p = inttoptr i64 %r16 to ptr", {"r1.rs4p"}, True),
+            ("phi i64 [ %.0, %bb$2 ], [ %r16, %bb3 ]", {".0", "bb$2"}, True)):
+        if uses(text, regs) != expected:
+            print(f"self-test FAIL: whole SSA operand lookup: {text}", file=sys.stderr)
+            ok = False
+    # Both birth entry points are heap sources through their fast/slow phi.
+    # Prove a late store and a missing bind fail, while the rooted/reloaded
+    # twin clears. Also prove only the non-leaf call is a collection window.
+    for birth in ("perry_birth_class", "perry_birth_empty_array"):
+        fixture = f"""define i64 @birth_control(i1 %fits, ptr %raw) {{
+entry.0:
+  %home = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  br i1 %fits, label %fast, label %slow
+fast:
+  %f = call preserve_mostcc i64 @{birth}(ptr %raw) "gc-leaf-function"
+  br label %merge
+slow:
+  %s = call preserve_mostcc i64 @{birth}(ptr null)
+  br label %merge
+merge:
+  %obj = phi i64 [ %f, %fast ], [ %s, %slow ]
+  store i64 %obj, ptr %home
+  call void @js_shadow_slot_bind(i32 0, ptr %home)
+  call void @js_gc_loop_safepoint()
+  %fresh = load i64, ptr %home
+  ret i64 %fresh
+}}
+"""
+        late = fixture.replace("  call void @js_gc_loop_safepoint()\n", "").replace(
+            "  store i64 %obj", "  call void @js_gc_loop_safepoint()\n  store i64 %obj")
+        unbound = fixture.replace("  call void @js_shadow_slot_bind(i32 0, ptr %home)\n", "")
+        with tempfile.TemporaryDirectory() as td:
+            for name, text, want_late, want_unbound in (
+                    ("clean", fixture, False, False), ("late", late, True, False),
+                    ("unbound", unbound, False, True)):
+                path = os.path.join(td, name + ".ll")
+                with open(path, "w") as fh:
+                    fh.write(text)
+                hits, _ = _scan([path], True, "alloc")
+                alloca_hits = check_func_unrooted_allocas(path, parse_file(path)[0], want_moving_only=True)
+                if bool(hits) != want_late or bool(alloca_hits) != want_unbound:
+                    print(f"self-test FAIL: {birth} {name}: late={len(hits)}, "
+                          f"unbound={len(alloca_hits)}", file=sys.stderr)
+                    ok = False
+        for leaf in (False, True):
+            call = Insn(f'call preserve_mostcc i64 @{birth}(ptr null)'
+                        + (' "gc-leaf-function"' if leaf else ''), "entry", 0)
+            if _collecting_insn(call) == leaf or birth not in POLL_CAPABLE_RUNTIME:
+                print(f"self-test FAIL: {birth} call-site leaf={leaf}", file=sys.stderr)
+                ok = False
     # A finalizer hands back its current rooted receiver, a heap-valued SSA
     # source even though it did not allocate that object. Prove both the late
     # store detector and stale-register detector still see that return value.
@@ -6101,8 +6217,8 @@ entry.0:
         # today's runtime happens to export the right names would go quiet the
         # moment someone renamed a symbol, which is the case it exists for.
         live_alts = [a for a in alloc_re_alternatives()
-                     if re.compile("^js_(?:%s)$" % a).match("js_object_alloc")
-                     or re.compile("^js_(?:%s)$" % a).match("js_regexp_new")]
+                     if re.compile("^(?:%s)$" % a).match("js_object_alloc")
+                     or re.compile("^(?:%s)$" % a).match("js_regexp_new")]
         if not live_alts:
             print("self-test FAIL: neither js_object_alloc nor js_regexp_new "
                   "matches any ALLOC_RE alternative; the audit arm below would "
@@ -6119,7 +6235,7 @@ entry.0:
         synthetic = set()
         for a in alloc_re_alternatives():
             # `\w*` -> `x`, `\w+` -> `x`: a concrete name the alternative matches.
-            synthetic.add("js_" + a.replace(r"\w*", "x").replace(r"\w+", "x"))
+            synthetic.add(a.replace(r"\w*", "x").replace(r"\w+", "x"))
         residue = dead_alloc_alternatives(synthetic)
         if residue:
             print(f"self-test FAIL: the auditor reported {len(residue)} "
