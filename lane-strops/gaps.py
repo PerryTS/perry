@@ -44,9 +44,15 @@ for name in a.tests:
                                 capture_output=True, timeout=180)
         save_result(out / (name + '.node'), node)
         save_result(out / (name + '.perry'), actual)
+        # Same diagnostic exclusions as run_parity_tests.sh. Preserve all
+        # other stderr so runtime errors cannot become parity passes.
+        stderr = re.sub(rb'^\[(?:gc-schedule|object-dictionary)\].*\n?', b'', actual.stderr, flags=re.M)
         rows[name] = {'compile': 0, 'node_exit': node.returncode, 'perry_exit': actual.returncode,
                       'parity': node.returncode == actual.returncode == 0 and node.stdout == actual.stdout
-                      and node.stderr == actual.stderr}
+                      and node.stderr == stderr}
+        moving = re.search(rb'copying_minors=(\d+) moved_objects=(\d+)', actual.stderr)
+        if moving:
+            rows[name].update(copying_minors=int(moving[1]), moved_objects=int(moving[2]))
     (out / 'results.json').write_text(json.dumps(rows, indent=2))
     print(a.arm, name, rows[name], flush=True)
 raise SystemExit(not all(row['parity'] for row in rows.values()))
