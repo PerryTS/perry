@@ -4,7 +4,7 @@
 use super::*;
 
 use perry_ffi::{
-    alloc_buffer, get_handle, get_handle_mut, iter_handles_of, JsClosure, RawClosureHeader,
+    alloc_buffer, get_handle, get_handle_mut, JsClosure, RawClosureHeader,
 };
 
 use crate::server::request::handle_to_pointer_f64;
@@ -165,13 +165,7 @@ pub(crate) fn has_active_h2_clients() -> bool {
     if has_pending_h2_events() || crate::server::turnloop_h2::has_pending() {
         return true;
     }
-    let mut active = false;
-    iter_handles_of::<Http2SessionHandle, _>(|session| {
-        if session.session_type == 1 && !session.closed && !session.destroyed {
-            active = true;
-        }
-    });
-    active
+    crate::server::server::activity::has_active_servers()
 }
 
 pub(crate) fn process_pending_h2_events() -> i32 {
@@ -435,6 +429,7 @@ mod tests {
         connect_event_emitted: bool,
     ) -> Http2SessionHandle {
         Http2SessionHandle {
+            activity_count: crate::server::server::activity::new_session_count(session_type == 1),
             socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
             socket_incarnation: None,
             owner_agent: perry_ffi::agent_post::current_agent(),

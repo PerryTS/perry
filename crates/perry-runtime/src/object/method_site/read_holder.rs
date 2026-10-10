@@ -82,6 +82,9 @@ use function_own::HOLDER_FUNCTION_BAG;
 pub(crate) use function_own::{prime_alias, try_alias_cached_accessor};
 pub(crate) mod class_read;
 pub(crate) mod keyed;
+pub(crate) mod shared;
+mod runtime_chain;
+pub(crate) use runtime_chain::read_runtime_chain;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod probe;
 use accessor_guard::validated_accessor;

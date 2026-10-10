@@ -244,7 +244,9 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
     assert_ne!(unsafe { site(&cache).unwrap().next } & ABSENT_CHURN, 0);
     assert_eq!(e.slot & !MULTI_ABSENT, 96);
     assert_eq!(unsafe { e.hops() }.len(), 8);
-    assert_eq!(std::mem::size_of::<Entry>(), 48);
+    // The runtime shares this record at arbitrary chain depth. Its usize
+    // depth adds eight bytes to the old u8-depth record on 64-bit targets.
+    assert_eq!(std::mem::size_of::<Entry>(), 56);
     // Fake hops are not registered shapes. Exercise the same pinned
     // shape comparisons the real admitted walk proves.
     for r in &receivers {
@@ -735,13 +737,14 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         absent: true,
         pinned_hops: true,
         forward_absent: false,
+        exact_chain: false,
         slot: 0,
         holder: a as usize,
         holder_shape: proto_shape,
         hops: std::ptr::null_mut(),
-        word: crate::object::shapes::shape_proto_id(recv_shape)
+        identity_key: crate::object::shapes::shape_proto_id(recv_shape)
             .and_then(crate::object::shapes::identity_word_slot)
-            .map_or(std::ptr::null(), |word| word as *const u64),
+            .map_or(0, |word| word as u64),
     };
     assert_eq!(
         unsafe { answer(&mut entry, recv) },

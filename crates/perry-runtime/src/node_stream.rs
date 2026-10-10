@@ -24,9 +24,11 @@ use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
+#[cfg(test)]
+use crate::object::js_object_get_field_by_name_f64;
 use crate::object::js_object_set_field_by_name;
 #[cfg(test)]
-use crate::object::{js_object_get_field_by_name_f64, ObjectHeader};
+use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
 pub(crate) mod async_iterator;
@@ -210,15 +212,9 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
     let event_value = f64::from_bits(JSValue::string_ptr(event).bits());
     let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
     let args = [event_value, listener_value];
-    let method = b"on";
+    let method = crate::runtime_state_key!(b"on");
     unsafe {
-        let _ = crate::object::js_native_call_method(
-            old_stream,
-            method.as_ptr() as *const i8,
-            method.len(),
-            args.as_ptr(),
-            args.len(),
-        );
+        let _ = method.call_value(old_stream, args.as_ptr(), args.len());
     }
 }
 
@@ -406,7 +402,7 @@ extern "C" fn ns_finished_default_completion(
         || has_truthy_hidden(stream, hidden_end_emitted_key());
     let writable_done = !js_node_stream_has_writable_side(stream)
         || has_truthy_hidden(stream, hidden_finish_emitted_key());
-    let closed = has_truthy_hidden(stream, hidden_key(b"closed"));
+    let closed = has_truthy_hidden(stream, crate::runtime_state_key!(b"closed"));
     let error = readable_hidden_error(stream);
     if error.is_none() && !closed && !(readable_done && writable_done) {
         return f64::from_bits(TAG_UNDEFINED);
@@ -697,7 +693,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
-    set_hidden_value(stream, hidden_key(b"readableLength"), total);
+    set_hidden_value(stream, crate::runtime_state_key!(b"readableLength"), total);
     if added > 0.0 {
         push_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
@@ -926,7 +922,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
-    set_hidden_value(stream, hidden_key(b"readableLength"), total);
+    set_hidden_value(stream, crate::runtime_state_key!(b"readableLength"), total);
     if added > 0.0 {
         unshift_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
@@ -1347,7 +1343,8 @@ fn writable_default_encoding(stream: f64) -> f64 {
 
 fn writable_backpressure_return(stream: f64) -> f64 {
     let len = writable_length(stream);
-    let hwm = get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0);
+    let hwm = get_hidden_value(stream, crate::runtime_state_key!(b"writableHighWaterMark"))
+        .unwrap_or(16384.0);
     let ok = len < hwm || len == 0.0;
     set_writable_need_drain(stream, !ok);
     f64::from_bits(if ok { TAG_TRUE } else { TAG_FALSE })
@@ -1515,7 +1512,7 @@ pub extern "C" fn js_node_stream_method_unshift(stream_handle: i64, chunk: f64) 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, hidden_key(b"readableHighWaterMark")).unwrap_or(16384.0)
+    get_hidden_value(stream, crate::runtime_state_key!(b"readableHighWaterMark")).unwrap_or(16384.0)
 }
 
 /// `stream.readableLength` property getter on a typed instance.
@@ -1565,7 +1562,7 @@ pub extern "C" fn js_node_stream_method_readable_encoding(stream_handle: i64) ->
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0)
+    get_hidden_value(stream, crate::runtime_state_key!(b"writableHighWaterMark")).unwrap_or(16384.0)
 }
 
 /// `stream.writableLength` property getter on a typed instance.
@@ -1603,7 +1600,7 @@ pub extern "C" fn js_node_stream_method_readable_aborted(stream_handle: i64) -> 
 pub extern "C" fn js_node_stream_method_closed(stream_handle: i64) -> f64 {
     get_hidden_value(
         stream_value_from_handle(stream_handle),
-        hidden_key(b"closed"),
+        crate::runtime_state_key!(b"closed"),
     )
     .unwrap_or(f64::from_bits(TAG_FALSE))
 }
@@ -1674,7 +1671,7 @@ pub extern "C" fn js_node_stream_method_writable_finished(stream_handle: i64) ->
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, hidden_key(b"allowHalfOpen"))
+    get_hidden_value(stream, crate::runtime_state_key!(b"allowHalfOpen"))
         .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
 }
 

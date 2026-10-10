@@ -33,6 +33,9 @@ const _: () = assert!(WAYS.is_power_of_two() && CURSOR_BITS + (WAYS as u32) < us
 /// identity. The ids occupy the tail of its owned hop block; they are not
 /// object addresses and the root scan visits only the chain prefix.
 const MULTI_ABSENT: u32 = 1 << 31;
+// Runtime ordinary Get keeps a holder's null/undefined value. The existing
+// declared-class lane retains its generic getter's nullish continuation rule.
+const ORDINARY_DATA: u32 = 1 << 30;
 const ABSENT_BUCKETS: usize = 256;
 const ABSENT_WORDS: usize =
     ABSENT_BUCKETS * std::mem::size_of::<u32>() / std::mem::size_of::<Hop>();
@@ -47,45 +50,9 @@ const _: () = assert!(
 /// terminal object of an absent read) included.
 pub(super) const CLASS_READ_MAX_DEPTH: usize = 16;
 
-#[derive(Clone, Copy)]
-struct Entry {
-    token: i64,
-    class_id: u32,
-    depth: u8,
-    absent: bool,
-    pinned_hops: bool,
-    /// Ordinary absence is proven, but a native alias still needs forwarding.
-    forward_absent: bool,
-    /// A holder slot word (`HOLDER_SLOT_SPILL` for a spill position), or
-    /// `MULTI_ABSENT | receiver_count` for a shared absent proof.
-    slot: u32,
-    holder: usize,
-    holder_shape: u32,
-    /// The entry's `depth - 1` intermediate hops, receiver side first: a
-    /// block the entry alone owns (null for a single-shape depth-1 entry).
-    /// A multi-shape absent proof appends `ABSENT_BUCKETS` u32 ids, outside
-    /// the chain prefix the root scan visits. Reused or freed on overwrite.
-    hops: *mut Hop,
-    /// The receiver identity's word (`shapes::identity_word_slot`): a stable
-    /// slot of the primary agent's pages, recorded when the entry is proved.
-    /// A hit loads it and compares it with the direct link, so publishing or
-    /// replacing the class's prototype declines the entry with two loads.
-    word: *const u64,
-}
+use super::shared::SharedEntry as Entry;
 
-const EMPTY: Entry = Entry {
-    token: 0,
-    class_id: 0,
-    depth: 0,
-    absent: false,
-    pinned_hops: false,
-    forward_absent: false,
-    slot: 0,
-    holder: 0,
-    holder_shape: 0,
-    hops: std::ptr::null_mut(),
-    word: std::ptr::null(),
-};
+const EMPTY: Entry = Entry::EMPTY;
 
 impl Entry {
     /// Retirement invalidates the whole proof, including its terminal and
@@ -203,7 +170,7 @@ impl Entry {
 
 /// The hop block of an entry of `depth` objects.
 #[inline(always)]
-unsafe fn hop_block<'a>(hops: *mut Hop, depth: u8) -> &'a mut [Hop] {
+unsafe fn hop_block<'a>(hops: *mut Hop, depth: usize) -> &'a mut [Hop] {
     let len = (depth as usize).saturating_sub(1);
     if len == 0 {
         &mut []
@@ -305,10 +272,15 @@ unsafe fn reprove_direct(e: &mut Entry, recv: *const ObjectHeader) -> bool {
 
 #[inline]
 unsafe fn identity_matches(e: &Entry) -> bool {
+    // A runtime proof ending at the receiver's null link needs no holder.
+    if e.depth == 0 {
+        return e.absent && e.identity_key == 0;
+    }
     let direct = if e.depth == 1 { e.holder } else { (*e.hops).0 };
     // SAFETY: a non-null `word` is a stable identity-word slot; pages never
     // move or shrink, so the address outlives every entry that names it.
-    !e.word.is_null() && *e.word == crate::value::POINTER_TAG | direct as u64
+    e.identity_key != 0
+        && *(e.identity_key as *const u64) == crate::value::POINTER_TAG | direct as u64
 }
 
 /// The entry's answer once the receiver and its direct link are proved: the
@@ -324,15 +296,7 @@ unsafe fn pinned_answer(e: &Entry) -> Option<u64> {
 
 #[inline(always)]
 unsafe fn valid_chain(e: &Entry) -> bool {
-    for &(addr, shape) in e.hops() {
-        if addr == 0 || shape_word(addr) != shape {
-            return false;
-        }
-    }
-    if e.holder == 0 || shape_word(e.holder) != e.holder_shape {
-        return false;
-    }
-    true
+    e.valid_shapes()
 }
 
 #[inline(always)]
@@ -340,7 +304,10 @@ unsafe fn value_of(e: &Entry) -> Option<u64> {
     if e.absent {
         return Some(crate::value::TAG_UNDEFINED);
     }
-    let bits = holder_slot_value(e.holder, e.slot)?;
+    let bits = e.slot_value(std::ptr::null())?;
+    if e.slot & ORDINARY_DATA != 0 {
+        return (bits != crate::value::TAG_HOLE).then_some(bits);
+    }
     // The generic inherited getter treats nullish/hole holder values as
     // a miss and may continue to a farther prototype. The holder's
     // ShapeId does not change on a value overwrite, so recheck each hit.
@@ -570,8 +537,34 @@ unsafe fn site_mut(cache: *mut PicCache) -> &'static mut Site {
     }
 }
 
+pub(super) struct Chain<'a> {
+    pub(super) holder: usize,
+    pub(super) holder_shape: u32,
+    pub(super) slot: Option<u32>,
+    pub(super) depth: usize,
+    pub(super) hops: &'a [Hop],
+    pub(super) ordinary_get: bool,
+}
+
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
-    let walked = &w.hops[..w.depth.saturating_sub(1)];
+    publish_chain(
+        cache,
+        recv,
+        &Chain {
+            holder: w.holder,
+            holder_shape: w.holder_shape,
+            slot: w.slot,
+            depth: w.depth,
+            hops: &w.hops[..w.depth.saturating_sub(1)],
+            ordinary_get: false,
+        },
+    );
+}
+
+/// Runtime deep proofs occupy the same ways, hop blocks and root scan.
+pub(super) unsafe fn publish_chain(cache: *mut PicCache, recv: *const ObjectHeader, w: &Chain<'_>) {
+    let walked = w.hops;
+    debug_assert_eq!(walked.len(), w.depth.saturating_sub(1));
     // Recheck the exact link admission used by walk_to, including fixed
     // declaration parents. All hits validate those same intermediate shapes.
     if !walked.iter().all(|&(holder, shape)| {
@@ -583,10 +576,18 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     // The walk proved the direct link through this identity's word, so the
     // slot exists; an identity without one has nothing a hit could compare.
-    let Some(word) =
-        prototype_identity(token as u32).and_then(crate::object::shapes::identity_word_slot)
-    else {
-        return;
+    let word = if w.depth == 0 {
+        if w.slot.is_some() || shape_proto_id(token as u32) != Some(PROTO_ID_NULL) {
+            return;
+        }
+        std::ptr::null()
+    } else {
+        let Some(word) =
+            prototype_identity(token as u32).and_then(crate::object::shapes::identity_word_slot)
+        else {
+            return;
+        };
+        word as *const u64
     };
     let s = site_mut(cache);
     // Filling the ways alone is not evidence of churn. Arm sharing only
@@ -595,12 +596,12 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         && object_shape_descriptor(recv).is_some_and(|shape| {
             shape.object_kind == crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias
         });
-    if w.slot.is_none() && !forward_absent && s.next & ABSENT_CHURN != 0 {
+    if w.depth != 0 && w.slot.is_none() && !forward_absent && s.next & ABSENT_CHURN != 0 {
         if let Some(pid) = prototype_identity(token as u32) {
             let mut group = WAYS;
             for i in 0..1 + s.entries.len() {
                 // The selected group is an earlier way, disjoint from i.
-                // Borrow this way in place; copying its 48-byte record needlessly
+                // Borrow this way in place; copying its record needlessly
                 // spills the publication loop's proof fields.
                 let e = &*(s.class_entry(i) as *const Entry);
                 if !same_absence(e, w, walked, (*recv).class_id, pid) {
@@ -648,20 +649,23 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
             Box::into_raw(Box::<[Hop]>::from(walked)) as *mut Hop
         };
     } else {
-        hop_block(hops, w.depth as u8).copy_from_slice(walked);
+        hop_block(hops, w.depth).copy_from_slice(walked);
     }
     *s.class_entry_mut(index) = Entry {
         token,
         class_id: (*recv).class_id,
-        depth: w.depth as u8,
+        depth: w.depth,
         absent: w.slot.is_none(),
         pinned_hops: true,
         forward_absent,
-        slot: w.slot.unwrap_or(0),
+        exact_chain: false,
+        slot: w.slot.map_or(0, |slot| {
+            slot | if w.ordinary_get { ORDINARY_DATA } else { 0 }
+        }),
         holder: w.holder,
         holder_shape: w.holder_shape,
         hops,
-        word,
+        identity_key: word as u64,
     };
     PRIMES.fetch_add(1, Ordering::Relaxed);
     super::super::stats_report_enabled();
@@ -756,14 +760,8 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
         if e.token == 0 {
             continue;
         }
-        if visitor.visit_tagged_usize_slot(&mut e.holder, crate::value::POINTER_TAG) {
-            ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
-        }
-        for hop in unsafe { hop_block(e.hops, e.depth) } {
-            if visitor.visit_tagged_usize_slot(&mut hop.0, crate::value::POINTER_TAG) {
-                ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        let rewritten = unsafe { e.scan(visitor) };
+        ROOT_REWRITES.fetch_add(rewritten, Ordering::Relaxed);
     }
 }
 
@@ -820,7 +818,7 @@ fn prototype_identity(shape: u32) -> Option<u64> {
 
 #[cold]
 #[inline(never)]
-unsafe fn same_absence(e: &Entry, w: &Walk, walked: &[Hop], class_id: u32, pid: u64) -> bool {
+unsafe fn same_absence(e: &Entry, w: &Chain<'_>, walked: &[Hop], class_id: u32, pid: u64) -> bool {
     e.token != 0
         && !e.retired()
         && e.absent

@@ -19,13 +19,16 @@ pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
 
 /// Read a numeric constructor option (e.g. `highWaterMark`) off the opts
 /// object, returning `None` when absent or non-numeric.
-pub(super) fn opt_number(opts: f64, key: &'static [u8]) -> Option<f64> {
-    jsvalue_as_f64(get_hidden_value(opts, hidden_key(key))?)
+pub(super) fn opt_number(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> Option<f64> {
+    jsvalue_as_f64(get_hidden_value(opts, key)?)
 }
 
 /// Read a string constructor option and preserve the existing JS string value.
-pub(super) fn opt_string_value(opts: f64, key: &'static [u8]) -> Option<f64> {
-    let value = get_hidden_value(opts, hidden_key(key))?;
+pub(super) fn opt_string_value(
+    opts: f64,
+    key: crate::runtime_state_key::NamedStateKey,
+) -> Option<f64> {
+    let value = get_hidden_value(opts, key)?;
     if JSValue::from_bits(value.to_bits()).is_any_string() {
         Some(value)
     } else {
@@ -35,12 +38,21 @@ pub(super) fn opt_string_value(opts: f64, key: &'static [u8]) -> Option<f64> {
 
 /// Read a boolean constructor option, returning `true` only when the option
 /// is present and truthy.
-pub(super) fn opt_bool(opts: f64, key: &'static [u8]) -> bool {
-    get_hidden_value(opts, hidden_key(key)).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+pub(super) fn opt_bool(opts: f64, key: crate::runtime_state_key::NamedStateKey) -> bool {
+    get_hidden_value(opts, key).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
-pub(super) fn resolve_object_mode(opts: f64, specific_object_mode: &'static [u8]) -> bool {
-    opt_bool(opts, specific_object_mode) || opt_bool(opts, b"objectMode")
+pub(super) fn resolve_object_mode(
+    opts: f64,
+    specific_object_mode: crate::runtime_state_key::NamedStateKey,
+) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    opt_bool(opts.get_nanbox_f64(), specific_object_mode)
+        || opt_bool(
+            opts.get_nanbox_f64(),
+            crate::runtime_state_key!(b"objectMode"),
+        )
 }
 
 // #1537: the platform-default highWaterMark, settable at runtime via
@@ -64,31 +76,52 @@ pub(super) fn default_hwm(object_mode: bool) -> f64 {
 
 /// Initialize visible lifecycle flags shared by all stream sides.
 pub(super) fn init_lifecycle_state(stream: f64, opts: f64) {
-    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
-    set_stream_emit_close(stream, opts);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let opts = scope.root_nanbox_f64(opts);
+
     set_hidden_value(
-        stream,
-        hidden_capture_rejections_key(),
-        f64::from_bits(if opt_bool(opts, b"captureRejections") {
-            TAG_TRUE
-        } else {
-            TAG_FALSE
-        }),
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"destroyed"),
+        f64::from_bits(TAG_FALSE),
     );
-    set_visible_closed(stream, false);
+    set_stream_emit_close(stream.get_nanbox_f64(), opts.get_nanbox_f64());
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        hidden_capture_rejections_key(),
+        f64::from_bits(
+            if opt_bool(
+                opts.get_nanbox_f64(),
+                crate::runtime_state_key!(b"captureRejections"),
+            ) {
+                TAG_TRUE
+            } else {
+                TAG_FALSE
+            },
+        ),
+    );
+    set_visible_closed(stream.get_nanbox_f64(), false);
 }
 
 pub(super) fn set_visible_readable(stream: f64, readable: bool) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         let value = if readable { TAG_TRUE } else { TAG_FALSE };
-        set_hidden_value(stream, hidden_key(b"readable"), f64::from_bits(value));
+        set_hidden_value(
+            stream,
+            crate::runtime_state_key!(b"readable"),
+            f64::from_bits(value),
+        );
     }
 }
 
 pub(super) fn set_visible_readable_ended(stream: f64, ended: bool) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         let value = if ended { TAG_TRUE } else { TAG_FALSE };
-        set_hidden_value(stream, hidden_key(b"readableEnded"), f64::from_bits(value));
+        set_hidden_value(
+            stream,
+            crate::runtime_state_key!(b"readableEnded"),
+            f64::from_bits(value),
+        );
     }
 }
 
@@ -97,14 +130,15 @@ pub(super) fn set_visible_readable_did_read(stream: f64, did_read: bool) {
         let value = if did_read { TAG_TRUE } else { TAG_FALSE };
         set_hidden_value(
             stream,
-            hidden_key(b"readableDidRead"),
+            crate::runtime_state_key!(b"readableDidRead"),
             f64::from_bits(value),
         );
     }
 }
 
 pub(super) fn readable_encoding_value(stream: f64) -> f64 {
-    get_hidden_value(stream, hidden_key(b"readableEncoding")).unwrap_or(f64::from_bits(TAG_NULL))
+    get_hidden_value(stream, crate::runtime_state_key!(b"readableEncoding"))
+        .unwrap_or(f64::from_bits(TAG_NULL))
 }
 
 pub(super) fn normalize_readable_encoding(encoding: f64) -> f64 {
@@ -117,7 +151,11 @@ pub(super) fn normalize_readable_encoding(encoding: f64) -> f64 {
 
 pub(super) fn set_visible_readable_encoding(stream: f64, encoding: f64) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
-        set_hidden_value(stream, hidden_key(b"readableEncoding"), encoding);
+        set_hidden_value(
+            stream,
+            crate::runtime_state_key!(b"readableEncoding"),
+            encoding,
+        );
     }
 }
 
@@ -130,14 +168,22 @@ pub(super) fn mark_stream_ended(stream: f64) {
 pub(super) fn set_visible_writable(stream: f64, writable: bool) {
     if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
         let value = if writable { TAG_TRUE } else { TAG_FALSE };
-        set_hidden_value(stream, hidden_key(b"writable"), f64::from_bits(value));
+        set_hidden_value(
+            stream,
+            crate::runtime_state_key!(b"writable"),
+            f64::from_bits(value),
+        );
     }
 }
 
 pub(super) fn set_visible_writable_ended(stream: f64, ended: bool) {
     if get_hidden_value(stream, hidden_writable_flag_key()).is_some() {
         let value = if ended { TAG_TRUE } else { TAG_FALSE };
-        set_hidden_value(stream, hidden_key(b"writableEnded"), f64::from_bits(value));
+        set_hidden_value(
+            stream,
+            crate::runtime_state_key!(b"writableEnded"),
+            f64::from_bits(value),
+        );
     }
 }
 
@@ -146,7 +192,7 @@ pub(super) fn set_visible_writable_finished(stream: f64, finished: bool) {
         let value = if finished { TAG_TRUE } else { TAG_FALSE };
         set_hidden_value(
             stream,
-            hidden_key(b"writableFinished"),
+            crate::runtime_state_key!(b"writableFinished"),
             f64::from_bits(value),
         );
     }
@@ -165,7 +211,11 @@ pub(super) fn mark_writable_finished(stream: f64) {
 
 pub(super) fn set_visible_closed(stream: f64, closed: bool) {
     let value = if closed { TAG_TRUE } else { TAG_FALSE };
-    set_hidden_value(stream, hidden_key(b"closed"), f64::from_bits(value));
+    set_hidden_value(
+        stream,
+        crate::runtime_state_key!(b"closed"),
+        f64::from_bits(value),
+    );
 }
 
 pub(super) fn mark_stream_closed(stream: f64) {
@@ -176,19 +226,38 @@ pub(super) fn mark_stream_closed(stream: f64) {
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
 pub(super) fn init_readable_state(stream: f64, opts: f64) {
-    set_stream_auto_destroy(stream, opts);
-    set_hidden_value(stream, hidden_readable_flag_key(), f64::from_bits(TAG_TRUE));
-    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let opts = scope.root_nanbox_f64(opts);
+
+    set_stream_auto_destroy(stream.get_nanbox_f64(), opts.get_nanbox_f64());
     set_hidden_value(
-        stream,
-        hidden_key(b"readableAborted"),
+        stream.get_nanbox_f64(),
+        hidden_readable_flag_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"destroyed"),
         f64::from_bits(TAG_FALSE),
     );
-    set_hidden_value(stream, hidden_buffered_key(), 0.0);
-    set_hidden_value(stream, hidden_key(b"readableLength"), 0.0);
-    let readable_object_mode = resolve_object_mode(opts, b"readableObjectMode");
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableAborted"),
+        f64::from_bits(TAG_FALSE),
+    );
+    set_hidden_value(stream.get_nanbox_f64(), hidden_buffered_key(), 0.0);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableLength"),
+        0.0,
+    );
+    let readable_object_mode = resolve_object_mode(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableObjectMode"),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
         Slot::ReadableObjectMode,
         f64::from_bits(if readable_object_mode {
             TAG_TRUE
@@ -196,57 +265,107 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
             TAG_FALSE
         }),
     );
-    let r_hwm = opt_number(opts, b"readableHighWaterMark")
-        .or_else(|| opt_number(opts, b"highWaterMark"))
-        .unwrap_or_else(|| {
-            #[cfg(test)]
-            if std::env::var_os("PERRY_TEST_STREAM_MODE_REREAD").is_some() {
-                return default_hwm(resolve_object_mode(opts, b"readableObjectMode"));
-            }
-            default_hwm(readable_object_mode)
-        });
-    set_hidden_value(stream, hidden_hwm_key(), r_hwm);
-    set_hidden_value(stream, hidden_key(b"readableHighWaterMark"), r_hwm);
-    set_hidden_value(stream, readable_flowing_key(), f64::from_bits(TAG_NULL));
+    let r_hwm = opt_number(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableHighWaterMark"),
+    )
+    .or_else(|| {
+        opt_number(
+            opts.get_nanbox_f64(),
+            crate::runtime_state_key!(b"highWaterMark"),
+        )
+    })
+    .unwrap_or_else(|| {
+        #[cfg(test)]
+        if std::env::var_os("PERRY_TEST_STREAM_MODE_REREAD").is_some() {
+            return default_hwm(resolve_object_mode(
+                opts.get_nanbox_f64(),
+                crate::runtime_state_key!(b"readableObjectMode"),
+            ));
+        }
+        default_hwm(readable_object_mode)
+    });
+    set_hidden_value(stream.get_nanbox_f64(), hidden_hwm_key(), r_hwm);
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableHighWaterMark"),
+        r_hwm,
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableFlowing"),
+        f64::from_bits(TAG_NULL),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
         hidden_readable_pending_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_stream_pipes_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
-    set_visible_readable(stream, true);
-    set_visible_readable_ended(stream, false);
-    set_visible_readable_did_read(stream, false);
-    let encoding = opt_string_value(opts, b"encoding").unwrap_or(f64::from_bits(TAG_NULL));
-    set_visible_readable_encoding(stream, encoding);
-    install_readable_state_view(stream);
+    set_visible_readable(stream.get_nanbox_f64(), true);
+    set_visible_readable_ended(stream.get_nanbox_f64(), false);
+    set_visible_readable_did_read(stream.get_nanbox_f64(), false);
+    let encoding = opt_string_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"encoding"),
+    )
+    .unwrap_or(f64::from_bits(TAG_NULL));
+    set_visible_readable_encoding(stream.get_nanbox_f64(), encoding);
+    install_readable_state_view(stream.get_nanbox_f64());
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.
 pub(super) fn init_writable_state(stream: f64, opts: f64) {
-    set_stream_auto_destroy(stream, opts);
-    set_hidden_value(stream, hidden_writable_flag_key(), f64::from_bits(TAG_TRUE));
-    set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_FALSE));
-    let writable_object_mode = resolve_object_mode(opts, b"writableObjectMode");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let opts = scope.root_nanbox_f64(opts);
+
+    set_stream_auto_destroy(stream.get_nanbox_f64(), opts.get_nanbox_f64());
     set_hidden_value(
-        stream,
-        hidden_key(b"writableObjectMode"),
+        stream.get_nanbox_f64(),
+        hidden_writable_flag_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"destroyed"),
+        f64::from_bits(TAG_FALSE),
+    );
+    let writable_object_mode = resolve_object_mode(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableObjectMode"),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableObjectMode"),
         f64::from_bits(if writable_object_mode {
             TAG_TRUE
         } else {
             TAG_FALSE
         }),
     );
-    let w_hwm = opt_number(opts, b"writableHighWaterMark")
-        .or_else(|| opt_number(opts, b"highWaterMark"))
-        .unwrap_or_else(|| default_hwm(writable_object_mode));
-    set_hidden_value(stream, hidden_key(b"writableHighWaterMark"), w_hwm);
+    let w_hwm = opt_number(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableHighWaterMark"),
+    )
+    .or_else(|| {
+        opt_number(
+            opts.get_nanbox_f64(),
+            crate::runtime_state_key!(b"highWaterMark"),
+        )
+    })
+    .unwrap_or_else(|| default_hwm(writable_object_mode));
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableHighWaterMark"),
+        w_hwm,
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
         hidden_writable_object_mode_key(),
         f64::from_bits(if writable_object_mode {
             TAG_TRUE
@@ -254,38 +373,51 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
             TAG_FALSE
         }),
     );
-    let decode_strings = get_hidden_value(opts, hidden_key(b"decodeStrings"))
-        .is_none_or(|v| v.to_bits() != TAG_FALSE);
+    let decode_strings = get_hidden_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"decodeStrings"),
+    )
+    .is_none_or(|v| v.to_bits() != TAG_FALSE);
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_writable_decode_strings_key(),
         f64::from_bits(if decode_strings { TAG_TRUE } else { TAG_FALSE }),
     );
-    let default_encoding =
-        opt_string_value(opts, b"defaultEncoding").unwrap_or_else(|| literal_string_value(b"utf8"));
+    let default_encoding = opt_string_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"defaultEncoding"),
+    )
+    .unwrap_or_else(|| literal_string_value(b"utf8"));
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_writable_default_encoding_key(),
         default_encoding,
     );
-    set_writable_length(stream, 0.0);
-    set_writable_need_drain(stream, false);
-    set_pending_writable_finish_callback(stream, None);
-    set_writable_corked_count(stream, 0.0);
+    set_writable_length(stream.get_nanbox_f64(), 0.0);
+    set_writable_need_drain(stream.get_nanbox_f64(), false);
+    set_pending_writable_finish_callback(stream.get_nanbox_f64(), None);
+    set_writable_corked_count(stream.get_nanbox_f64(), 0.0);
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_writable_buffered_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
-    set_visible_writable(stream, true);
-    set_visible_writable_ended(stream, false);
-    set_visible_writable_finished(stream, false);
-    install_writable_state_view(stream);
+    set_visible_writable(stream.get_nanbox_f64(), true);
+    set_visible_writable_ended(stream.get_nanbox_f64(), false);
+    set_visible_writable_finished(stream.get_nanbox_f64(), false);
+    install_writable_state_view(stream.get_nanbox_f64());
 }
 
 pub(super) fn init_duplex_state(stream: f64, opts: f64) {
-    let allow_half_open = if get_hidden_value(opts, hidden_key(b"allowHalfOpen"))
-        .is_some_and(|v| v.to_bits() == TAG_FALSE)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let opts = scope.root_nanbox_f64(opts);
+
+    let allow_half_open = if get_hidden_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"allowHalfOpen"),
+    )
+    .is_some_and(|v| v.to_bits() == TAG_FALSE)
     {
         TAG_FALSE
     } else {
@@ -293,8 +425,8 @@ pub(super) fn init_duplex_state(stream: f64, opts: f64) {
     };
     // node's own enumerable `allowHalfOpen`.
     set_visible_own_value(
-        stream,
-        hidden_key(b"allowHalfOpen"),
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"allowHalfOpen"),
         f64::from_bits(allow_half_open),
     );
 }

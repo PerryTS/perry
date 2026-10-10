@@ -6,7 +6,8 @@ fn readable() -> f64 {
 }
 
 fn pull(iterator: f64) -> f64 {
-    let next = get_hidden_value(iterator, hidden_key(b"next")).expect("iterator.next");
+    let next =
+        get_hidden_value(iterator, crate::runtime_state_key!(b"next")).expect("iterator.next");
     crate::closure::js_closure_call0(
         raw_ptr_from_value(next) as *const ClosureHeader,
         crate::closure::plain_call_receiver(),
@@ -32,24 +33,33 @@ fn late_child_iterator_observes_retained_eof() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(readable());
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"readableEnded"))
-            .unwrap()
-            .to_bits(),
+        get_hidden_value(
+            stream.get_nanbox_f64(),
+            crate::runtime_state_key!(b"readableEnded")
+        )
+        .unwrap()
+        .to_bits(),
         TAG_FALSE
     );
     // Same EOF helper called by the child-process reactor, without any
     // iterator/end listener in existence when the pipe closes.
     crate::child_process::cp_readable_end(stream.get_nanbox_f64());
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"readable"))
-            .unwrap()
-            .to_bits(),
+        get_hidden_value(
+            stream.get_nanbox_f64(),
+            crate::runtime_state_key!(b"readable")
+        )
+        .unwrap()
+        .to_bits(),
         TAG_FALSE
     );
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"readableEnded"))
-            .unwrap()
-            .to_bits(),
+        get_hidden_value(
+            stream.get_nanbox_f64(),
+            crate::runtime_state_key!(b"readableEnded")
+        )
+        .unwrap()
+        .to_bits(),
         TAG_TRUE
     );
     for _ in 0..2 {

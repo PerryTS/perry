@@ -35,13 +35,7 @@ pub(super) fn pull(stream: f64) -> bool {
         f64::from_bits(TAG_TRUE),
     );
     let next = match catch_pipeline_throw(|| unsafe {
-        crate::object::js_native_call_method(
-            source.get_nanbox_f64(),
-            b"next".as_ptr().cast(),
-            4,
-            std::ptr::null(),
-            0,
-        )
+        crate::runtime_state_key!(b"next").call_value(source.get_nanbox_f64(), std::ptr::null(), 0)
     }) {
         Ok(next) => scope.root_nanbox_f64(crate::promise::adapt_foreign_promise_value(next)),
         Err(reason) => {
@@ -90,19 +84,11 @@ extern "C" fn next_fulfilled(
     if stream_destroyed(stream.get_nanbox_f64()) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let done_key = scope.root_string_ptr(hidden_key(b"done"));
-    let value_key = scope.root_string_ptr(hidden_key(b"value"));
     let step = object_ptr_from_value(result.get_nanbox_f64()).map(|obj| {
-        let done = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            done_key.get_raw_const_ptr(),
-        );
+        let done = unsafe { crate::runtime_state_key!(b"done").read_object(obj) };
         let done = crate::value::js_is_truthy(done) != 0;
         let obj = object_ptr_from_value(result.get_nanbox_f64()).unwrap();
-        let value = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            value_key.get_raw_const_ptr(),
-        );
+        let value = unsafe { crate::runtime_state_key!(b"value").read_object(obj) };
         (done, value)
     });
     let Some((done, value)) = step else {
@@ -184,12 +170,12 @@ mod tests {
             scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 2).cast()));
         set_visible_own_value(
             result.get_nanbox_f64(),
-            hidden_key(b"done"),
+            crate::runtime_state_key!(b"done"),
             f64::from_bits(if count == 4 { TAG_TRUE } else { TAG_FALSE }),
         );
         set_visible_own_value(
             result.get_nanbox_f64(),
-            hidden_key(b"value"),
+            crate::runtime_state_key!(b"value"),
             value.get_nanbox_f64(),
         );
         result.get_nanbox_f64()
@@ -203,19 +189,19 @@ mod tests {
         let next = js_closure_alloc(crate::fn_info!(next, 0), 0);
         set_visible_own_value(
             source.get_nanbox_f64(),
-            hidden_key(b"next"),
+            crate::runtime_state_key!(b"next"),
             box_pointer(next.cast()),
         );
         let options =
             scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 2).cast()));
         set_visible_own_value(
             options.get_nanbox_f64(),
-            hidden_key(b"objectMode"),
+            crate::runtime_state_key!(b"objectMode"),
             f64::from_bits(TAG_FALSE),
         );
         set_visible_own_value(
             options.get_nanbox_f64(),
-            hidden_key(b"highWaterMark"),
+            crate::runtime_state_key!(b"highWaterMark"),
             1024.0,
         );
         let stream = scope.root_nanbox_f64(constructors::js_node_stream_readable_from_options(

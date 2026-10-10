@@ -390,7 +390,7 @@ fn turnloop_https_listen(server_handle: i64, host: &str, port: u16) -> bool {
                 Some(s) => {
                     s.base.bound_port = actual_port;
                     s.base.bound_host = host.to_string();
-                    s.base.listening = true;
+                    s.base.set_listening(true);
                     true
                 }
                 None => false,
@@ -542,7 +542,7 @@ pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringH
 pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) {
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         crate::tls_client::unregister_internal_https_server(s.base.bound_port);
-        s.base.listening = false;
+        s.base.set_listening(false);
         s.base.connections_checking_interval_destroyed = true;
         crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
@@ -594,7 +594,7 @@ pub extern "C" fn js_node_https_server_close_idle_connections(handle: i64) {
 #[no_mangle]
 pub extern "C" fn js_node_https_server_ref(handle: i64) -> i64 {
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
-        s.base.refed = true;
+        s.base.set_refed(true);
     }
     handle
 }
@@ -604,7 +604,7 @@ pub extern "C" fn js_node_https_server_ref(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_node_https_server_unref(handle: i64) -> i64 {
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
-        s.base.refed = false;
+        s.base.set_refed(false);
     }
     handle
 }

@@ -5,7 +5,7 @@ use super::*;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
-use crate::object::{js_object_alloc, js_object_get_field_by_name_f64, ObjectHeader};
+use crate::object::{js_object_alloc, ObjectHeader};
 
 #[derive(Clone, Copy)]
 pub(super) struct PipelineOptions {
@@ -101,7 +101,7 @@ pub(super) fn is_pipeline_options_arg(value: f64) -> bool {
 }
 
 pub(super) fn pipe_options_end(value: f64) -> bool {
-    get_hidden_value(value, hidden_key(b"end"))
+    get_hidden_value(value, crate::runtime_state_key!(b"end"))
         .map(|v| v.to_bits() != TAG_FALSE)
         .unwrap_or(true)
 }
@@ -458,9 +458,14 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
 
 pub(super) fn pipeline_iterator_result(value: f64) -> Option<(bool, f64)> {
     let obj = object_ptr_from_value(value)?;
-    let done = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"done"));
-    let item = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"value"));
-    Some((crate::value::js_is_truthy(done) != 0, item))
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(obj);
+    let done =
+        receiver.with_mut_ptr(|obj| unsafe { crate::runtime_state_key!(b"done").read_object(obj) });
+    let done = scope.root_nanbox_f64(done);
+    let item = receiver
+        .with_mut_ptr(|obj| unsafe { crate::runtime_state_key!(b"value").read_object(obj) });
+    Some((crate::value::js_is_truthy(done.get_nanbox_f64()) != 0, item))
 }
 
 pub(super) fn collect_pipeline_iterator_chunks(iterable: f64) -> Result<Option<f64>, f64> {
@@ -472,10 +477,8 @@ pub(super) fn collect_pipeline_iterator_chunks(iterable: f64) -> Result<Option<f
     let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
     for _ in 0..100_000 {
         let next_result = catch_pipeline_throw(|| unsafe {
-            crate::object::js_native_call_method(
+            crate::runtime_state_key!(b"next").call_value(
                 iterable.get_nanbox_f64(),
-                b"next".as_ptr() as *const i8,
-                4,
                 std::ptr::null(),
                 0,
             )

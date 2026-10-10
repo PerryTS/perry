@@ -786,6 +786,10 @@ pub const SHAPE_CHAIN_HOP_BYTES: usize = 24;
 pub const ADD_CHAIN_REP_OFFSET: usize = 16;
 pub const METHOD_CHAIN_HOLDER_OFFSET: usize = 16;
 pub const METHOD_CHAIN_SLOT_OFFSET: usize = 24;
+/// Shared holder entry offsets for the 64-bit emitted own-symbol guard.
+pub const KEYED_HOLDER_TOKEN_OFFSET: usize = 32;
+pub const KEYED_HOLDER_KEY_OFFSET: usize = 40;
+pub const KEYED_HOLDER_ABSENT_OFFSET: usize = 52;
 
 /// The index bits of an entry's `slot` word (bit 60 is NativeArgs; bit 59 is ConstFn).
 pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 58) - 1;

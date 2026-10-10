@@ -84,7 +84,7 @@ pub(super) fn try_listen_on_turnloop(server_handle: i64, host: &str, port: u16) 
             };
             server.base.bound_port = bound_port;
             server.base.bound_host = host.to_string();
-            server.base.listening = true;
+            server.base.set_listening(true);
             let _ = id;
             H2Listen::Bound
         }

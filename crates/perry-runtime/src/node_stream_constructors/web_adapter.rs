@@ -166,22 +166,14 @@ fn build_web_read_result(value: f64, done: bool) -> f64 {
     build_enumerable_object(&[(b"done", bool_value(done)), (b"value", value)])
 }
 
-fn property_value(value: f64, name: &[u8]) -> f64 {
-    unsafe { crate::value::js_get_property(value, name.as_ptr() as i64, name.len() as i64) }
+fn property_value(value: f64, name: crate::runtime_state_key::NamedStateKey) -> f64 {
+    name.read_value(value)
 }
 
-fn call_method_no_args(receiver: f64, name: &[u8]) -> f64 {
+fn call_method_no_args(receiver: f64, name: crate::runtime_state_key::NamedStateKey) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
-    unsafe {
-        crate::object::js_native_call_method(
-            receiver.get_nanbox_f64(),
-            name.as_ptr() as *const i8,
-            name.len(),
-            std::ptr::null(),
-            0,
-        )
-    }
+    unsafe { name.call_value(receiver.get_nanbox_f64(), std::ptr::null(), 0) }
 }
 
 fn destroy_foreign_readable(stream: f64, reason: f64) {
@@ -190,10 +182,8 @@ fn destroy_foreign_readable(stream: f64, reason: f64) {
     let reason = scope.root_nanbox_f64(reason);
     let args = [reason.get_nanbox_f64()];
     unsafe {
-        let _ = crate::object::js_native_call_method(
+        let _ = crate::runtime_state_key!(b"destroy").call_value(
             stream.get_nanbox_f64(),
-            b"destroy".as_ptr() as *const i8,
-            7,
             args.as_ptr(),
             args.len(),
         );
@@ -254,7 +244,10 @@ fn settle_foreign_readable_pull(controller: f64, result: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let controller = scope.root_nanbox_f64(controller);
     let result = scope.root_nanbox_f64(result);
-    let done = scope.root_nanbox_f64(property_value(result.get_nanbox_f64(), b"done"));
+    let done = scope.root_nanbox_f64(property_value(
+        result.get_nanbox_f64(),
+        crate::runtime_state_key!(b"done"),
+    ));
     if crate::value::js_is_truthy(done.get_nanbox_f64()) != 0 {
         if let Some(close) = web_readable_close() {
             unsafe {
@@ -264,7 +257,10 @@ fn settle_foreign_readable_pull(controller: f64, result: f64) {
         return;
     }
     if let Some(enqueue) = web_readable_enqueue() {
-        let value = scope.root_nanbox_f64(property_value(result.get_nanbox_f64(), b"value"));
+        let value = scope.root_nanbox_f64(property_value(
+            result.get_nanbox_f64(),
+            crate::runtime_state_key!(b"value"),
+        ));
         unsafe {
             enqueue(controller.get_nanbox_f64(), value.get_nanbox_f64());
         }
@@ -316,7 +312,10 @@ extern "C" fn foreign_readable_to_web_pull(
     let scope = crate::gc::RuntimeHandleScope::new();
     let controller = scope.root_nanbox_f64(controller);
     let iterator = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
-    let next = scope.root_nanbox_f64(call_method_no_args(iterator.get_nanbox_f64(), b"next"));
+    let next = scope.root_nanbox_f64(call_method_no_args(
+        iterator.get_nanbox_f64(),
+        crate::runtime_state_key!(b"next"),
+    ));
     if crate::promise::js_value_is_promise(next.get_nanbox_f64()) == 0 {
         settle_foreign_readable_pull(controller.get_nanbox_f64(), next.get_nanbox_f64());
         return f64::from_bits(TAG_UNDEFINED);
@@ -361,7 +360,10 @@ extern "C" fn foreign_readable_to_web_cancel(
     let iterator = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
     let stream = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 1));
     let reason = scope.root_nanbox_f64(reason);
-    let returned = scope.root_nanbox_f64(call_method_no_args(iterator.get_nanbox_f64(), b"return"));
+    let returned = scope.root_nanbox_f64(call_method_no_args(
+        iterator.get_nanbox_f64(),
+        crate::runtime_state_key!(b"return"),
+    ));
     destroy_foreign_readable(stream.get_nanbox_f64(), reason.get_nanbox_f64());
     returned.get_nanbox_f64()
 }
@@ -498,7 +500,10 @@ extern "C" fn fallback_foreign_reader_read(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
-    call_method_no_args(iterator.get_nanbox_f64(), b"next")
+    call_method_no_args(
+        iterator.get_nanbox_f64(),
+        crate::runtime_state_key!(b"next"),
+    )
 }
 
 extern "C" fn fallback_foreign_reader_cancel(
@@ -816,12 +821,15 @@ extern "C" fn web_to_node_readable_read(
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
     let reader = js_closure_get_capture_f64(closure, 1);
-    if has_truthy_hidden(node_stream, hidden_key(b"webReadablePumping")) {
+    if has_truthy_hidden(
+        node_stream,
+        crate::runtime_state_key!(b"webReadablePumping"),
+    ) {
         return f64::from_bits(TAG_UNDEFINED);
     }
     set_hidden_value(
         node_stream,
-        hidden_key(b"webReadablePumping"),
+        crate::runtime_state_key!(b"webReadablePumping"),
         f64::from_bits(TAG_TRUE),
     );
     pump_web_reader(node_stream, reader);
@@ -863,17 +871,17 @@ extern "C" fn web_to_node_readable_read_fulfilled(
     }
     let node_stream = js_closure_get_capture_f64(closure, 0);
     let reader = js_closure_get_capture_f64(closure, 1);
-    let done = property_value(result, b"done");
+    let done = property_value(result, crate::runtime_state_key!(b"done"));
     if crate::value::js_is_truthy(done) != 0 {
         set_hidden_value(
             node_stream,
-            hidden_key(b"webReadablePumping"),
+            crate::runtime_state_key!(b"webReadablePumping"),
             f64::from_bits(TAG_FALSE),
         );
         let _ = push_chunk(node_stream, f64::from_bits(TAG_NULL));
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let value = property_value(result, b"value");
+    let value = property_value(result, crate::runtime_state_key!(b"value"));
     let _ = push_chunk(node_stream, value);
     pump_web_reader(node_stream, reader);
     f64::from_bits(TAG_UNDEFINED)
@@ -888,7 +896,7 @@ extern "C" fn web_to_node_readable_read_rejected(
         let node_stream = js_closure_get_capture_f64(closure, 0);
         set_hidden_value(
             node_stream,
-            hidden_key(b"webReadablePumping"),
+            crate::runtime_state_key!(b"webReadablePumping"),
             f64::from_bits(TAG_FALSE),
         );
         destroy_stream(node_stream, reason);
@@ -1093,8 +1101,8 @@ pub extern "C" fn js_node_stream_writable_from_web(web_stream: f64, opts: f64) -
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
-    let readable_web = property_value(pair, b"readable");
-    let writable_web = property_value(pair, b"writable");
+    let readable_web = property_value(pair, crate::runtime_state_key!(b"readable"));
+    let writable_web = property_value(pair, crate::runtime_state_key!(b"writable"));
     let duplex = js_node_stream_duplex_new(opts);
     let readable_ok = readable_web.to_bits() != TAG_UNDEFINED
         && install_web_readable_adapter(duplex, readable_web);
@@ -1150,8 +1158,16 @@ pub extern "C" fn js_node_stream_to_web(node_stream: f64) -> f64 {
     }
 
     let top = build_web_stream_stub();
-    set_hidden_value(top, hidden_key(b"readable"), build_web_stream_stub());
-    set_hidden_value(top, hidden_key(b"writable"), build_web_stream_stub());
+    set_hidden_value(
+        top,
+        crate::runtime_state_key!(b"readable"),
+        build_web_stream_stub(),
+    );
+    set_hidden_value(
+        top,
+        crate::runtime_state_key!(b"writable"),
+        build_web_stream_stub(),
+    );
     top
 }
 
@@ -1160,8 +1176,8 @@ pub extern "C" fn js_node_stream_to_web(node_stream: f64) -> f64 {
 /// direction clear, then fall back to the legacy Duplex stub.
 #[no_mangle]
 pub extern "C" fn js_node_stream_from_web(web_stream: f64) -> f64 {
-    let readable_web = property_value(web_stream, b"readable");
-    let writable_web = property_value(web_stream, b"writable");
+    let readable_web = property_value(web_stream, crate::runtime_state_key!(b"readable"));
+    let writable_web = property_value(web_stream, crate::runtime_state_key!(b"writable"));
     if readable_web.to_bits() != TAG_UNDEFINED || writable_web.to_bits() != TAG_UNDEFINED {
         return js_node_stream_duplex_from_web(web_stream, f64::from_bits(TAG_UNDEFINED));
     }

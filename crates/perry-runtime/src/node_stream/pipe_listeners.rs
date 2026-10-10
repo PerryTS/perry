@@ -25,19 +25,13 @@ pub(super) fn destination_listener(dest: f64, event: &'static [u8], listener: f6
         }
     } else {
         let method = if remove {
-            b"removeListener".as_slice()
+            crate::runtime_state_key!(b"removeListener")
         } else {
-            b"on".as_slice()
+            crate::runtime_state_key!(b"on")
         };
         let args = [event.get_nanbox_f64(), listener.get_nanbox_f64()];
         unsafe {
-            crate::object::js_native_call_method(
-                dest.get_nanbox_f64(),
-                method.as_ptr().cast(),
-                method.len(),
-                args.as_ptr(),
-                args.len(),
-            );
+            method.call_value(dest.get_nanbox_f64(), args.as_ptr(), args.len());
         }
     }
 }
@@ -51,10 +45,8 @@ fn destination_error_listener_count(dest: f64) -> usize {
     } else {
         let args = [event.get_nanbox_f64()];
         let count = unsafe {
-            crate::object::js_native_call_method(
+            crate::runtime_state_key!(b"listenerCount").call_value(
                 dest.get_nanbox_f64(),
-                b"listenerCount".as_ptr().cast(),
-                13,
                 args.as_ptr(),
                 args.len(),
             )

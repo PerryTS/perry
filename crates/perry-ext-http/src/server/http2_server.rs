@@ -181,6 +181,7 @@ pub struct Http2SecureServer {
 }
 
 pub struct Http2SessionHandle {
+    pub(crate) activity_count: Arc<std::sync::atomic::AtomicUsize>,
     /// Server connections are ordinary Sockets, owned by the logical session.
     pub socket_value: f64,
     pub socket_incarnation: Option<perry_ffi::turnloop_net::HandleSnapshot>,

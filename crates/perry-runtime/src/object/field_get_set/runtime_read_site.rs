@@ -60,7 +60,8 @@ const PACKED_EMPTY: u64 = 0xFFFF_FFFF;
 
 /// One builtin's read site for one key: an emitted read site's two words.
 /// Declare one per (builtin, key) with [`crate::perry_thread_local`].
-pub(crate) struct RuntimeReadSite {
+#[repr(C)]
+pub struct RuntimeReadSite {
     /// The compact MRU word (`@perry_ic_N_packed_get`): ShapeId low, slot high.
     packed: AtomicU64,
     /// The full-cache slot (`@perry_ic_N`): null until the first prime.
@@ -68,7 +69,7 @@ pub(crate) struct RuntimeReadSite {
 }
 
 impl RuntimeReadSite {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         RuntimeReadSite {
             packed: AtomicU64::new(PACKED_EMPTY),
             slot: AtomicPtr::new(std::ptr::null_mut()),
@@ -78,6 +79,29 @@ impl RuntimeReadSite {
     #[inline(always)]
     fn slot_ptr(&self) -> *mut PicCacheSlot {
         self.slot.as_ptr() as *mut PicCacheSlot
+    }
+
+    /// Own data slot recorded in the emitted compact word, including spill.
+    #[inline]
+    pub(crate) unsafe fn own_slot(&self, obj: *const ObjectHeader) -> Option<u32> {
+        let (shape, slot, _) =
+            super::ic_miss::packed_get_decode(self.packed.load(Ordering::Relaxed))?;
+        (crate::object::shapes::object_shape_stamp(obj) == shape).then_some(slot)
+    }
+
+    /// Publish the same own-slot word used by generated reads.
+    pub(crate) fn prime_own_slot(&self, shape: u32, slot: u32, live: u32) {
+        if crate::object::shapes::is_site_matchable_shape_id(shape) {
+            let stamp = if slot < live {
+                shape
+            } else {
+                shape ^ super::ic_miss::PACKED_SPILL_FLIP
+            };
+            self.packed.store(
+                (u64::from(slot) << 32) | u64::from(stamp),
+                Ordering::Relaxed,
+            );
+        }
     }
 
     /// The emitted own-inline hit. The honest +4 word of any live heap cell
@@ -240,7 +264,7 @@ impl RuntimeReadSite {
     pub(crate) unsafe fn read_slow(
         &self,
         obj: *mut ObjectHeader,
-        key: &'static [u8],
+        key: &[u8],
     ) -> (f64, *mut ObjectHeader) {
         let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
         let (atom, obj) = match crate::string::atom_lookup(key, hash) {
@@ -259,6 +283,11 @@ impl RuntimeReadSite {
         };
         let scope = crate::gc::RuntimeHandleScope::new();
         let handle = scope.root_raw_mut_ptr(obj);
+        if let Some(value) = crate::object::method_site::read_holder::read_runtime_chain(
+            obj, key, self.slot_ptr(),
+        ) {
+            return (value, obj);
+        }
         handle.across_mut::<ObjectHeader, _>(|| {
             js_object_get_field_ic_slow(obj as i64, atom, self.slot_ptr(), &self.packed)
         })
@@ -268,9 +297,8 @@ impl RuntimeReadSite {
     ///
     /// # Safety
     /// As [`Self::read_slow`].
-    #[cfg(any(test, feature = "regex-engine"))]
     #[inline]
-    pub(crate) unsafe fn read(&self, obj: *mut ObjectHeader, key: &'static [u8]) -> f64 {
+    pub(crate) unsafe fn read(&self, obj: *mut ObjectHeader, key: &[u8]) -> f64 {
         match self.read_leaf(obj) {
             Some(v) => v,
             None => self.read_slow(obj, key).0,

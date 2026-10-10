@@ -1237,18 +1237,21 @@ fn state_field_memo(
     })
 }
 
-/// The slot a JS-state key had under one ShapeId, remembered per call site
-/// and per agent (ShapeIds are per agent), exactly like an emitted `o.key`
-/// site's compact word: one ShapeId compare, then one load. A miss walks the
-/// keys and re-primes. Declare one with [`state_key_memo!`].
-pub type StateKeyMemo = std::thread::LocalKey<std::cell::Cell<u64>>;
+/// One runtime call site's emitted read words, per agent. The own-only
+/// native-state entry and ordinary own/inherited/absent reads share these
+/// words and the existing PIC holder validation/rooting mechanism.
+pub type StateKeyMemo = std::thread::LocalKey<StateKeySite>;
 
-/// Declare a [`StateKeyMemo`]: `state_key_memo!(static MEMO_DB);`.
+/// The existing emitted read site, also used by native state slot accesses.
+pub use crate::object::field_get_set::runtime_read_site::RuntimeReadSite as StateKeySite;
+
+/// Declare a per-agent runtime call site: `state_key_memo!(static MEMO_DB);`.
 #[macro_export]
 macro_rules! state_key_memo {
     ($vis:vis static $name:ident) => {
         ::std::thread_local! {
-            $vis static $name: ::std::cell::Cell<u64> = const { ::std::cell::Cell::new(0) };
+            $vis static $name: $crate::native_payload::StateKeySite =
+                const { $crate::native_payload::StateKeySite::new() };
         }
     };
 }
@@ -1258,18 +1261,18 @@ unsafe fn state_key_index_memo(
     name: &[u8],
     memo: &'static StateKeyMemo,
 ) -> Option<usize> {
-    let shape = crate::object::shapes::object_shape_stamp(obj);
-    if shape != 0 {
-        let word = memo.with(|cell| cell.get());
-        if (word >> 32) as u32 == shape {
-            return Some((word as u32) as usize);
+    memo.with(|site| {
+        if let Some(slot) = site.own_slot(obj) {
+            return Some(slot as usize);
         }
-    }
-    let i = state_key_index(obj, name)?;
-    if shape != 0 {
-        memo.with(|cell| cell.set(((shape as u64) << 32) | i as u64));
-    }
-    Some(i)
+        let i = state_key_index(obj, name)?;
+        site.prime_own_slot(
+            crate::object::shapes::object_shape_stamp(obj),
+            i as u32,
+            crate::object::object_live_slot_count(obj),
+        );
+        Some(i)
+    })
 }
 
 /// Read a field of a live object through a memo. Never allocates, so no

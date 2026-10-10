@@ -380,10 +380,7 @@ pub extern "C" fn js_event_emitter_async_resource_object_new(options: f64) -> f6
 fn validate_async_resource_name(options: f64) {
     let obj = super::object_ptr_from_value(options);
     let name = match obj {
-        Some(obj) => {
-            let key = crate::string::intern_ascii_literal(b"name");
-            crate::object::js_object_get_field_by_name_f64(obj as *const ObjectHeader, key)
-        }
+        Some(obj) => unsafe { crate::runtime_state_key!(b"name").read_object(obj) },
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     };
     let name_value = JSValue::from_bits(name.to_bits());

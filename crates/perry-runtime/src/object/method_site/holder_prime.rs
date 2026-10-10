@@ -1,11 +1,6 @@
 use super::*;
 
-#[repr(C)]
-struct MethodChain {
-    links: crate::object::shape_chain::ShapeChain,
-    holder: usize,
-    slot: u32,
-}
+use read_holder::shared::SharedEntry as MethodChain;
 
 /// Retain the normal function-value invocation for bound/rest/capture bodies;
 /// the property answer is still loaded under the same shape proof.
@@ -133,11 +128,7 @@ pub(super) unsafe fn prime_chain(
     let Some(links) = crate::object::shape_chain::ShapeChain::capture(recv) else {
         return false;
     };
-    let chain = Box::into_raw(Box::new(MethodChain {
-        links,
-        holder: holder as usize,
-        slot: index,
-    }));
+    let chain = Box::into_raw(Box::new(MethodChain::method(links, holder as usize, index)));
     let entry = MethodEntry {
         word,
         slot: METHOD_SITE_INHERITED | METHOD_SITE_CHAIN | tag,
@@ -154,6 +145,7 @@ pub(super) unsafe fn prime_chain(
         PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
         true
     } else {
+        (*chain).drop_method_proof();
         drop(Box::from_raw(chain));
         false
     }
@@ -163,20 +155,13 @@ pub(super) unsafe fn prime_chain(
 pub unsafe extern "C" fn js_method_site_chain_value(entry: *const MethodEntry) -> u64 {
     let entry = &*entry;
     let chain = &*(entry.closure as *const MethodChain);
-    if !chain.links.valid() {
-        return crate::value::TAG_HOLE;
-    }
-    if chain.slot & (1 << 31) == 0 {
-        field_bits(chain.holder, chain.slot)
-    } else {
-        crate::object::spill::spill_get_present(chain.holder, (chain.slot & !(1 << 31)) as usize)
-            .unwrap_or(crate::value::TAG_HOLE)
-    }
+    chain.method_value().unwrap_or(crate::value::TAG_HOLE)
 }
 
 pub(super) unsafe fn drop_chain(entry: &MethodEntry) {
     if entry.slot & METHOD_SITE_CHAIN != 0 && entry.closure != 0 {
-        drop(Box::from_raw(entry.closure as *mut MethodChain));
+        let chain = Box::from_raw(entry.closure as *mut MethodChain);
+        chain.drop_method_proof();
     }
 }
 
@@ -185,8 +170,7 @@ pub(super) unsafe fn scan_chain(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
 ) {
     let chain = &mut *(entry.closure as *mut MethodChain);
-    chain.links.scan(visitor);
-    visitor.visit_tagged_usize_slot(&mut chain.holder, crate::value::POINTER_TAG);
+    chain.scan(visitor);
 }
 
 /// A direct-holder lookup only asks for a complete proof when a deeper or
@@ -410,7 +394,7 @@ mod tests {
 
     #[test]
     fn method_chain_layout_matches_the_emitted_loads() {
-        assert_eq!(std::mem::offset_of!(MethodChain, links), 0);
+        assert_eq!(std::mem::offset_of!(MethodChain, hops), 0);
         assert_eq!(
             std::mem::offset_of!(MethodChain, holder),
             2 * std::mem::size_of::<usize>()

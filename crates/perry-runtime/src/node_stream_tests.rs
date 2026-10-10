@@ -1332,13 +1332,7 @@ fn bound_stream_method_keeps_its_receiver_over_a_foreign_one() {
 fn stream_methods_dispatch_through_dynamic_method_call() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     unsafe {
-        let _ = crate::object::js_native_call_method(
-            stream,
-            b"end".as_ptr() as *const i8,
-            3,
-            std::ptr::null(),
-            0,
-        );
+        let _ = crate::runtime_state_key!(b"end").call_value(stream, std::ptr::null(), 0);
     }
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
@@ -1360,8 +1354,8 @@ fn callable_stream_constructor_autoinstantiates_passthrough() {
     assert!(get_hidden_value(stream, hidden_readable_flag_key()).is_some());
     assert!(get_hidden_value(stream, hidden_writable_flag_key()).is_some());
 
-    let constructor =
-        get_hidden_value(stream, hidden_key(b"constructor")).expect("constructor field");
+    let constructor = get_hidden_value(stream, crate::runtime_state_key!(b"constructor"))
+        .expect("constructor field");
     let (module, method) = unsafe {
         crate::object::bound_native_callable_module_and_method(constructor)
             .expect("bound stream constructor")

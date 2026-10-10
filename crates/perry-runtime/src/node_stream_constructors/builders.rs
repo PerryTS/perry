@@ -3,7 +3,7 @@
 //! the 2000-line file-size gate, #1987).
 use super::*;
 use crate::closure::ClosureHeader;
-use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
+use crate::object::{js_object_set_field_by_name, ObjectHeader};
 use crate::value::JSValue;
 
 /// G1: an instance owns only its state; the methods are inherited from the
@@ -36,12 +36,9 @@ fn user_hook(value: f64) -> Option<f64> {
 }
 
 /// The value of `name` on the receiver's chain, when it is a user hook.
-fn subclass_hook(this: f64, name: &'static [u8]) -> Option<f64> {
+fn subclass_hook(this: f64, name: crate::runtime_state_key::NamedStateKey) -> Option<f64> {
     let obj = object_ptr_from_value(this)?;
-    user_hook(js_object_get_field_by_name_f64(
-        obj as *const ObjectHeader,
-        hidden_key(name),
-    ))
+    user_hook(unsafe { name.read_object(obj) })
 }
 
 /// node's `Readable` constructor body on an allocated object.
@@ -53,7 +50,7 @@ pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
     let o = || opts.get_nanbox_f64();
     install_stream_state_layout(t());
     let subclass_read = match how {
-        StreamInit::Subclass => subclass_hook(t(), b"_read"),
+        StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_read")),
         StreamInit::Direct => None,
     }
     .map(|read| scope.root_nanbox_f64(read));
@@ -193,14 +190,7 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
     let mut name = if options_value.is_any_string() {
         options
     } else {
-        let key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
-        let options = options_handle.get_nanbox_f64();
-        let options_obj = raw_ptr_from_value(options) as *const ObjectHeader;
-        if options_obj.is_null() {
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        } else {
-            crate::object::js_object_get_field_by_name_f64(options_obj, key)
-        }
+        crate::runtime_state_key!(b"name").read_value(options_handle.get_nanbox_f64())
     };
     if JSValue::from_bits(name.to_bits()).is_undefined() {
         let current_obj = raw_ptr_from_value(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
@@ -361,8 +351,10 @@ pub(crate) fn init_writable_in_place(this: f64, opts: f64, how: StreamInit) {
     install_stream_state_layout(t());
     let (subclass_write, subclass_writev) = match how {
         StreamInit::Subclass => (
-            subclass_hook(t(), b"_write").map(|v| scope.root_nanbox_f64(v)),
-            subclass_hook(t(), b"_writev").map(|v| scope.root_nanbox_f64(v)),
+            subclass_hook(t(), crate::runtime_state_key!(b"_write"))
+                .map(|v| scope.root_nanbox_f64(v)),
+            subclass_hook(t(), crate::runtime_state_key!(b"_writev"))
+                .map(|v| scope.root_nanbox_f64(v)),
         ),
         StreamInit::Direct => (None, None),
     };
@@ -418,13 +410,13 @@ pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
     let t = || this.get_nanbox_f64();
     let o = || opts.get_nanbox_f64();
     install_stream_state_layout(t());
-    let hook = |name: &'static [u8]| match how {
+    let hook = |name: crate::runtime_state_key::NamedStateKey| match how {
         StreamInit::Subclass => subclass_hook(t(), name).map(|v| scope.root_nanbox_f64(v)),
         StreamInit::Direct => None,
     };
-    let subclass_read = hook(b"_read");
-    let subclass_write = hook(b"_write");
-    let subclass_writev = hook(b"_writev");
+    let subclass_read = hook(crate::runtime_state_key!(b"_read"));
+    let subclass_write = hook(crate::runtime_state_key!(b"_write"));
+    let subclass_writev = hook(crate::runtime_state_key!(b"_writev"));
     let custom_sink = || set_hidden_value(t(), Slot::WritableCustomSink, f64::from_bits(TAG_TRUE));
     if let Some(read) = read_callback_from_options(o()) {
         let bound = rebind_callback_this(read, t());
@@ -534,11 +526,13 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
         crate::node_stream::native_hooks::init_runner_slots(t());
     }
     let subclass_transform = match how {
-        StreamInit::Subclass => subclass_hook(t(), b"_transform").map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_transform"))
+            .map(|v| scope.root_nanbox_f64(v)),
         StreamInit::Direct => None,
     };
     let subclass_flush = match how {
-        StreamInit::Subclass => subclass_hook(t(), b"_flush").map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_flush"))
+            .map(|v| scope.root_nanbox_f64(v)),
         StreamInit::Direct => None,
     };
     if let Some(callback) = transform_callback_from_options(o()) {
@@ -564,14 +558,19 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
         // lifecycle as user hooks. In particular a no-op _final completes
         // writable finish before the deferred _flush output is consumed.
         for (name, slot) in [
-            (b"_flush".as_slice(), hidden_transform_flush_key()),
-            (b"_final".as_slice(), hidden_writable_final_key()),
+            (
+                crate::runtime_state_key!(b"_flush"),
+                hidden_transform_flush_key(),
+            ),
+            (
+                crate::runtime_state_key!(b"_final"),
+                hidden_writable_final_key(),
+            ),
         ] {
             if get_hidden_value(t(), slot).is_none() {
-                let hook = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
-                    object_ptr_from_value(t()).unwrap(),
-                    hidden_key(name),
-                ));
+                let hook = scope.root_nanbox_f64(unsafe {
+                    name.read_object(object_ptr_from_value(t()).unwrap())
+                });
                 if is_callable_value(hook.get_nanbox_f64()) {
                     set_hidden_value(t(), slot, hook.get_nanbox_f64());
                 }

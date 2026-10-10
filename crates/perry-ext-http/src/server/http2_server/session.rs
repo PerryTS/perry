@@ -30,8 +30,7 @@ pub(crate) fn mark_server_sessions_closed(server_handle: i64) {
             crate::server::turnloop_h2::target::Target::Session(session),
         );
         if let Some(session) = get_handle_mut::<Http2SessionHandle>(session) {
-            session.closed = true;
-            session.destroyed = true;
+            session.mark_closed();
         }
     }
 }
@@ -160,6 +159,7 @@ pub unsafe extern "C" fn js_node_http2_connect(
             .push(callback);
     }
     let session_handle = register_handle(Http2SessionHandle {
+        activity_count: crate::server::server::activity::new_session_count(true),
         socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
         socket_incarnation: None,
         owner_agent: perry_ffi::agent_post::current_agent(),
@@ -240,8 +240,7 @@ pub(crate) const NO_LOOP_MESSAGE: &str =
 pub(crate) fn decline_client_session(session_handle: i64) {
     if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
         session.connecting = false;
-        session.closed = true;
-        session.destroyed = true;
+        session.mark_closed();
     }
     push_h2_event(Http2PendingEvent::ClientError {
         handle: session_handle,
@@ -469,6 +468,7 @@ mod tests {
 
     fn client_session(turnloop_conn: i64) -> Http2SessionHandle {
         Http2SessionHandle {
+            activity_count: crate::server::server::activity::new_session_count(true),
             socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
             socket_incarnation: None,
             owner_agent: perry_ffi::agent_post::current_agent(),

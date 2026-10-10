@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure, JsValue,
+    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
 
@@ -26,6 +26,7 @@ use crate::server::types::{
 // finalizes parked requests. Extracted to keep this file under the 2000-line
 // file-size limit; the dispatch paths here (`process_pending`,
 // `js_node_http_server_close_all_connections`, the pump) call into it.
+pub(crate) mod activity;
 mod in_flight;
 use in_flight::IN_FLIGHT;
 pub(crate) use in_flight::{
@@ -34,7 +35,7 @@ pub(crate) use in_flight::{
 };
 mod deferred_events;
 pub use deferred_events::ListenError;
-use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
+use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for};
 pub(crate) use deferred_events::{
     queue_deferred_close_emit, queue_deferred_listening_emit, queue_listen_error_parts,
     register_listen_callback, withdraw_listen_callbacks,
@@ -144,6 +145,7 @@ pub struct HttpServer {
     /// addressed to the primary agent's server and run the primary's handler on
     /// the Worker's thread.
     pub owner_agent: u64,
+    activity_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl HttpServer {
@@ -189,6 +191,7 @@ impl HttpServer {
             bun_error_handler: 0,
             bun_development: false,
             owner_agent: perry_ffi::agent_post::current_agent(),
+            activity_count: activity::current_count(),
         }
     }
 }
@@ -549,7 +552,7 @@ pub extern "C" fn js_node_http_server_set_timeout_method(
 #[no_mangle]
 pub extern "C" fn js_node_http_server_ref(handle: i64) -> i64 {
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
-        s.refed = true;
+        s.set_refed(true);
     }
     handle
 }
@@ -561,7 +564,7 @@ pub extern "C" fn js_node_http_server_ref(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_node_http_server_unref(handle: i64) -> i64 {
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
-        s.refed = false;
+        s.set_refed(false);
     }
     handle
 }
@@ -728,7 +731,7 @@ impl ListenPlan {
             Some(s) => {
                 s.bound_port = actual_port;
                 s.bound_host = self.host.clone();
-                s.listening = true;
+                s.set_listening(true);
                 s.no_delay
             }
             None => return false,
@@ -806,7 +809,7 @@ fn finish_listen(server_handle: i64, callback: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback: i64) {
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        s.listening = false;
+        s.set_listening(false);
         s.connections_checking_interval_destroyed = true;
         queue_deferred_close_emit(s, callback);
     }
@@ -1022,7 +1025,7 @@ pub unsafe extern "C" fn js_node_http_server_remove_listener(
 // upgrades are dispatched on the same main thread as before — just driven
 // from the outer event loop instead of an inner blocking one.
 //
-// Both externs walk the global handle registry via `iter_handles_of`
+// The request pump walks the handle registry via `iter_handles_of`
 // (covers HTTP/1, HTTPS, and HTTP/2 — HTTPS / HTTP/2 wrap an
 // `HttpServer` inside their own struct, so checking the standalone
 // HttpServers + the `.base` of the wrappers covers all three).
@@ -1035,29 +1038,7 @@ pub unsafe extern "C" fn js_node_http_server_remove_listener(
 /// request through the channel.
 #[no_mangle]
 pub extern "C" fn js_node_http_server_has_active() -> i32 {
-    let mut active = 0i32;
-    // Only this agent's servers keep this agent alive (#11433).
-    iter_handles_of::<HttpServer, _>(|s| {
-        if s.owned_here() && server_is_active(s) {
-            active = 1;
-        }
-    });
-    if active != 0 {
-        return 1;
-    }
-    iter_handles_of::<crate::server::https_server::HttpsServer, _>(|s| {
-        if s.base.owned_here() && server_is_active(&s.base) {
-            active = 1;
-        }
-    });
-    if active != 0 {
-        return 1;
-    }
-    iter_handles_of::<crate::server::http2_server::Http2SecureServer, _>(|s| {
-        if s.base.owned_here() && server_is_active(&s.base) {
-            active = 1;
-        }
-    });
+    let mut active = i32::from(activity::has_active_servers());
     if active == 0 && crate::server::http2_server::has_active_h2_clients() {
         active = 1;
     }

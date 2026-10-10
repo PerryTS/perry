@@ -211,7 +211,7 @@ fn after_write(stream: f64, callback: f64) {
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_stream_pipe_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_finishing_key())
-            && !has_truthy_hidden(s.get_nanbox_f64(), hidden_key(b"destroyed"));
+            && !has_truthy_hidden(s.get_nanbox_f64(), crate::runtime_state_key!(b"destroyed"));
         set_writable_need_drain(s.get_nanbox_f64(), false);
         if should_emit_drain {
             let _ = emit_stream_event(s.get_nanbox_f64(), literal_string_value(b"drain"), &[]);
@@ -436,7 +436,7 @@ fn transform_write_done(stream: f64, len: f64, callback: f64, length_before: f64
     let st = s.get_nanbox_f64();
     let rlen = readable_buffered_length(st);
     let hwm = get_hidden_value(st, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
-    if has_truthy_hidden(st, hidden_key(b"readableEnded")) {
+    if has_truthy_hidden(st, crate::runtime_state_key!(b"readableEnded")) {
         // `push(null)` ran in the transform: node delays the callback a tick
         // so the new state propagates first.
         let held = js_closure_alloc(crate::fn_info!(ns_transform_held_callback, 0), 3);

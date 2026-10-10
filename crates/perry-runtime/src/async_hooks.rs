@@ -15,7 +15,7 @@ use crate::closure::{
     js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     ClosureHeader,
 };
-use crate::object::{js_object_get_field_by_name, ObjectHeader};
+use crate::object::ObjectHeader;
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, POINTER_MASK};
 
@@ -603,16 +603,11 @@ fn closure_from_value(value: f64) -> *const ClosureHeader {
     ptr_from_nanboxed(value) as *const ClosureHeader
 }
 
-fn object_field(obj_value: f64, name: &[u8]) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_nanbox_f64(obj_value);
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32) as *const StringHeader;
-    let key_handle = scope.root_string_ptr(key);
-    let obj = ptr_from_nanboxed(obj_handle.get_nanbox_f64()) as *const ObjectHeader;
-    if obj.is_null() {
+fn object_field(obj_value: f64, key: crate::runtime_state_key::NamedStateKey) -> f64 {
+    if ptr_from_nanboxed(obj_value).is_null() {
         return TAG_UNDEFINED_F64;
     }
-    f64::from_bits(js_object_get_field_by_name(obj, key_handle.get_raw_const_ptr()).bits())
+    key.read_value(obj_value)
 }
 
 fn save_hook_state(handle: f64, callbacks: HookCallbacks, track_promises: bool) {
@@ -672,14 +667,30 @@ fn callbacks_from_hook_state(handle: f64) -> Option<(HookCallbacks, bool)> {
     if JSValue::from_bits(state.get_nanbox_f64().to_bits()).is_undefined() {
         return None;
     }
-    let init = scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"init"));
-    let before = scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"before"));
-    let after = scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"after"));
-    let destroy = scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"destroy"));
-    let promise_resolve =
-        scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"promiseResolve"));
-    let track_promises =
-        scope.root_nanbox_f64(object_field(state.get_nanbox_f64(), b"trackPromises"));
+    let init = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"init"),
+    ));
+    let before = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"before"),
+    ));
+    let after = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"after"),
+    ));
+    let destroy = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"destroy"),
+    ));
+    let promise_resolve = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"promiseResolve"),
+    ));
+    let track_promises = scope.root_nanbox_f64(object_field(
+        state.get_nanbox_f64(),
+        crate::runtime_state_key!(b"trackPromises"),
+    ));
     Some((
         HookCallbacks {
             init: closure_from_value(init.get_nanbox_f64()),
@@ -732,19 +743,31 @@ fn callbacks_from_options(options: f64) -> (HookCallbacks, bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options_handle = scope.root_nanbox_f64(options);
     let mut callbacks = HookCallbacks::empty();
-    let init = scope.root_nanbox_f64(object_field(options_handle.get_nanbox_f64(), b"init"));
-    let before = scope.root_nanbox_f64(object_field(options_handle.get_nanbox_f64(), b"before"));
-    let after = scope.root_nanbox_f64(object_field(options_handle.get_nanbox_f64(), b"after"));
-    let destroy = scope.root_nanbox_f64(object_field(options_handle.get_nanbox_f64(), b"destroy"));
+    let init = scope.root_nanbox_f64(object_field(
+        options_handle.get_nanbox_f64(),
+        crate::runtime_state_key!(b"init"),
+    ));
+    let before = scope.root_nanbox_f64(object_field(
+        options_handle.get_nanbox_f64(),
+        crate::runtime_state_key!(b"before"),
+    ));
+    let after = scope.root_nanbox_f64(object_field(
+        options_handle.get_nanbox_f64(),
+        crate::runtime_state_key!(b"after"),
+    ));
+    let destroy = scope.root_nanbox_f64(object_field(
+        options_handle.get_nanbox_f64(),
+        crate::runtime_state_key!(b"destroy"),
+    ));
     let promise_resolve = scope.root_nanbox_f64(object_field(
         options_handle.get_nanbox_f64(),
-        b"promiseResolve",
+        crate::runtime_state_key!(b"promiseResolve"),
     ));
     // Node reads `trackPromises` after the five callback properties. Missing
     // means true; a present value must be a boolean.
     let track_promises = scope.root_nanbox_f64(object_field(
         options_handle.get_nanbox_f64(),
-        b"trackPromises",
+        crate::runtime_state_key!(b"trackPromises"),
     ));
     callbacks.init = validate_hook_member(init.get_nanbox_f64(), "init");
     callbacks.before = validate_hook_member(before.get_nanbox_f64(), "before");
