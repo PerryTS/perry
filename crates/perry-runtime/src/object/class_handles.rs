@@ -454,6 +454,25 @@ pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
     }
 }
 
+/// The JS value a handle dispatcher's `i64` receiver stands for. Handle
+/// dispatch flattens two representations into one `i64`: a `POINTER_TAG`
+/// payload (a heap object or a registry handle) and a raw numeric Web Streams
+/// id (#1545). A live stream id answers as the plain number it arrived as;
+/// everything else re-boxes under `POINTER_TAG`. Every consumer that needs
+/// the receiver as a value again (a GC root, a payload or TLS state probe)
+/// goes through here, so a stream id is never re-boxed as a pointer. Header
+/// reads stay behind `addr_class`'s gates, which reject every id band anyway.
+pub fn handle_receiver_value(handle: i64) -> f64 {
+    let id = handle as usize;
+    if crate::value::addr_class::is_stream_id_band(id)
+        && stream_handle_probe().is_some_and(|probe| unsafe { probe(id) })
+    {
+        handle as f64
+    } else {
+        crate::value::js_nanbox_pointer(handle)
+    }
+}
+
 /// #1545: register the Web Streams handle probe (called by the stdlib at init).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_stream_handle_probe(f: StreamHandleProbeFn) {

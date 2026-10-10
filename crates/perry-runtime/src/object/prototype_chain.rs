@@ -805,27 +805,40 @@ unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
 /// shape's prototype identity is not the one its class implies — a user
 /// `setPrototypeOf`/`__proto__`, an evaluated class's prototype, runtime
 /// wiring to anything but the class's own declaration prototype. A shape
-/// read (`shapes::object_shape_identity`), not a flag. A receiver with no
-/// class surface (class id 0, a synthetic class) never needs this.
+/// read, not a flag. An explicit null edge is authoritative even without a
+/// declared class surface; otherwise a class-id-zero receiver has no class
+/// surface for its chain to replace.
 #[inline]
 pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
     unsafe {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
-        // An unlinked identity (the ShapeId says so) is the default, a
-        // class's or a per-object one: never another class's link, since a
-        // link of a class instance to anything but its own class's
-        // declaration prototype is a linked identity.
-        if !crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) {
+        let word = (*obj).parent_class_id;
+        // Plain shapes cannot replace a class surface. Preserve this
+        // header-only admission before validating a linked ShapeId.
+        if !crate::object::shapes::shape_word_may_be_linked(word) {
             return false;
         }
-        let implied = crate::object::shapes::class_proto_id((*obj).class_id);
-        if implied == crate::object::shapes::PROTO_ID_DEFAULT {
+        let stamp = crate::object::shapes::object_shape_stamp(obj);
+        // The null identity is already encoded in the ShapeId. Read that
+        // fact before the class eligibility guard, without fetching a slab.
+        if crate::object::shapes::shape_word_kind(stamp)
+            == crate::object::shapes::SHAPE_ID_KIND_NULL
+        {
+            return true;
+        }
+        // A non-class receiver has no shared class surface to supersede.
+        // This eligibility guard does not select any default prototype.
+        if (*obj).class_id == 0 {
             return false;
         }
         let pid = crate::object::shapes::object_shape_identity(obj);
-        pid != implied && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
+        // CLASS is already the selected origin, DEFAULT/serial describe
+        // ordinary chains. A MIXED identity carries a declared class plus
+        // its evaluation/override link. No registry re-derives these facts.
+        pid >= crate::object::shapes::PROTO_ID_MIXED
+            && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
     }
 }
 
@@ -1248,7 +1261,7 @@ mod tests {
 
         // "Individual" is read from the shape: a compiled class's instance
         // whose identity names anything but its class's prototype. Receivers
-        // with no class surface (class id 0) never are.
+        // with no class surface still carry an authoritative explicit null edge.
         const CLASS: u32 = 0x7A;
         let fresh = crate::object::js_object_alloc(CLASS, 0);
         assert!(!object_has_individual_class_prototype(fresh as usize));
@@ -1256,10 +1269,10 @@ mod tests {
         object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
         assert!(object_has_individual_class_prototype(evaluated as usize));
         assert!(unsafe { (*evaluated).meta }.is_null(), "no flag, no record");
-        assert!(!object_has_individual_class_prototype(
+        assert!(object_has_individual_class_prototype(
             class_default as usize
         ));
-        assert!(!object_has_individual_class_prototype(
+        assert!(object_has_individual_class_prototype(
             runtime_wired as usize
         ));
 
@@ -1515,3 +1528,56 @@ mod latch_drain_tests_7737 {
 #[cfg(test)]
 #[path = "proxy_reentry_tests.rs"]
 mod proxy_reentry_tests;
+
+#[cfg(test)]
+mod readpath_null_tests {
+    #[test]
+    fn nonclass_link_keeps_ordinary_reads_without_a_class_surface() {
+        use crate::object::{self, prototype_chain as chain};
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let prototype = object::js_object_alloc(0, 0);
+        let receiver = object::js_object_alloc(0, 0);
+        chain::object_set_user_prototype(
+            receiver as usize,
+            crate::value::js_nanbox_pointer(prototype as i64).to_bits(),
+        );
+        assert!(!chain::object_has_individual_class_prototype(
+            receiver as usize
+        ));
+        let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
+        object::js_object_set_field_by_name(prototype, key, 42.0);
+        assert_eq!(
+            object::js_object_get_field_by_name(receiver, key).as_number(),
+            42.0
+        );
+        chain::object_set_user_prototype(receiver as usize, crate::value::TAG_NULL);
+        assert!(chain::object_has_individual_class_prototype(
+            receiver as usize
+        ));
+        assert!(object::js_object_get_field_by_name(receiver, key).is_undefined());
+    }
+
+    #[test]
+    fn synthetic_instance_null_edge_overrides_constructor_surface() {
+        use crate::object::{self, prototype_chain as chain};
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let cid = object::class_registry::prototype_objects::alloc_synthetic_class_id();
+        let prototype = object::js_object_alloc(0, 0);
+        object::class_registry::class_prototype_object_root_store(cid, prototype);
+        let instance = object::js_object_alloc(cid, 0);
+        chain::object_link_class_default_prototype(
+            instance as usize,
+            crate::value::js_nanbox_pointer(prototype as i64).to_bits(),
+        );
+        chain::object_set_user_prototype(instance as usize, crate::value::TAG_NULL);
+        assert!(
+            chain::object_has_individual_class_prototype(instance as usize),
+            "the live null edge must be authoritative even for a synthetic class"
+        );
+        let key = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
+        unsafe {
+            object::js_object_set_field_by_name(prototype, key, 42.0);
+            assert!(object::js_object_get_field_by_name(instance, key).is_undefined());
+        }
+    }
+}

@@ -91,3 +91,42 @@ fn native_step_output_is_an_unknown_value_rooted_before_the_body() {
         );
     });
 }
+
+#[test]
+fn array_record_literal_materialization_is_an_outlined_rooted_call() {
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let value = Expr::NativeMethodCall {
+            module: "__perry_runtime".into(),
+            class_name: None,
+            object: None,
+            method: "arrayRecordLiteral".into(),
+            args: vec![Expr::Number(1.0), Expr::String("kept".into())],
+        };
+        let ir = crate::temp_root_coverage::main_ir_for(
+            "literal_materialization",
+            vec![crate::temp_root_coverage::console_log(vec![value])],
+        );
+        assert_eq!(
+            ir.lines()
+                .filter(|l| l.contains("call double @js_array_record_literal("))
+                .count(),
+            1,
+            "{mode}: {ir}"
+        );
+        let call = ir.find(" = call double @js_array_record_literal(").unwrap();
+        assert!(
+            !ir[..call]
+                .lines()
+                .any(|l| l.contains("call ") && l.contains("@js_array_alloc(")),
+            "{mode}: literal construction must stay in the shared callee: {ir}"
+        );
+        let result =
+            crate::testing::temp_slots::first_call_result(&ir, "js_array_record_literal").unwrap();
+        crate::testing::temp_slots::assert_rooted_across(
+            &ir,
+            &result,
+            "js_array_push_f64",
+            "the materialized literal must survive the console argument-pack allocation",
+        );
+    });
+}

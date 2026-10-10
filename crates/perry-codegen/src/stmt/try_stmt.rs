@@ -107,17 +107,46 @@ fn emit_eh_dispatch_inner(
     lpad_label
 }
 
+fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::Call { callee, .. } => {
+            matches!(&**callee, Expr::ExternFuncRef { name, .. } if name == "js_iterator_close_on_throw")
+        }
+        Expr::NativeMethodCall {
+            module,
+            class_name: None,
+            object: None,
+            method,
+            args,
+        } => {
+            module == "__perry_runtime"
+                && (method == "iteratorCloseOnThrow"
+                    || (method == "arrayRecordClose"
+                        && matches!(args.last(), Some(Expr::Bool(true)))))
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => iterator_cleanup_expr(then_expr) && iterator_cleanup_expr(else_expr),
+        _ => false,
+    }
+}
+
 fn iterator_cleanup_body(body: &[perry_hir::Stmt]) -> bool {
     body.iter().any(|s| match s {
-        perry_hir::Stmt::Throw(perry_hir::Expr::Call { callee, .. })
-        | perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, .. }) =>
-            matches!(&**callee, perry_hir::Expr::ExternFuncRef { name, .. } if name == "js_iterator_close_on_throw"),
-        perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall { module, class_name, object, method, .. })
-        | perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall { module, class_name, object, method, .. }) =>
-            module == "__perry_runtime" && class_name.is_none() && object.is_none() && method == "iteratorCloseOnThrow",
-        perry_hir::Stmt::If { then_branch, else_branch, .. } =>
+        perry_hir::Stmt::Throw(expr) | perry_hir::Stmt::Expr(expr) => iterator_cleanup_expr(expr),
+        perry_hir::Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
             iterator_cleanup_body(then_branch)
-                || else_branch.as_ref().is_some_and(|s| iterator_cleanup_body(s)),
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|s| iterator_cleanup_body(s))
+        }
         _ => false,
     })
 }
@@ -167,7 +196,22 @@ pub(crate) fn lower_try(
 
     // --- catch (reached only through the landing pad) ---
     ctx.current_block = catch_idx;
-    if let Some(clause) = catch {
+    let outlined = catch
+        .zip(finally)
+        .filter(|_| !registered)
+        .and_then(|(c, f)| crate::lower_conditional::array_record::abrupt_args(c, f));
+    if let Some(args) = outlined {
+        lower_expr(
+            ctx,
+            &perry_hir::Expr::NativeMethodCall {
+                module: "__perry_runtime".into(),
+                class_name: None,
+                object: None,
+                method: "arrayRecordAbrupt".into(),
+                args,
+            },
+        )?;
+    } else if let Some(clause) = catch {
         let exc = if registered {
             ctx.block().call(DOUBLE, "js_catch_enter", &[])
         } else {
@@ -265,6 +309,45 @@ pub(crate) fn lower_try(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn array_record_cleanup_has_no_normal_path_savepoint() {
+        use perry_hir::{Expr, Stmt};
+        let close = |method: &str, args| Expr::NativeMethodCall {
+            module: "__perry_runtime".into(),
+            class_name: None,
+            object: None,
+            method: method.into(),
+            args,
+        };
+        let expr = Expr::Conditional {
+            condition: Box::new(Expr::Bool(false)),
+            then_expr: Box::new(close("iteratorCloseOnThrow", vec![])),
+            else_expr: Box::new(close(
+                "arrayRecordClose",
+                vec![
+                    Expr::Undefined,
+                    Expr::Integer(0),
+                    Expr::Bool(false),
+                    Expr::Undefined,
+                    Expr::Bool(true),
+                ],
+            )),
+        };
+        let catch = perry_hir::CatchClause {
+            param: Some((1, "__forof_err_1".into())),
+            body: vec![Stmt::Throw(expr)],
+        };
+        assert!(unregistered_iterator_cleanup(
+            "x86_64-unknown-linux-gnu",
+            Some(&catch)
+        ));
+        assert!(
+            !iterator_cleanup_expr(&close("arrayRecordClose", vec![Expr::Bool(false)])),
+            "normal close must not be mistaken for exception cleanup"
+        );
+    }
+
     #[test]
     fn iterator_cleanup_has_no_normal_path_savepoint() {
         let mut catch = perry_hir::CatchClause {

@@ -123,6 +123,13 @@ pub(crate) fn parse_interval(raw: Option<&str>) -> usize {
 /// Smallest interval an explicit integer can select.
 pub(crate) const MIN_INTERVAL_BYTES: usize = 256;
 
+/// Runtime bumps may defer pacing accounting, but sampling must charge their
+/// bytes here, once, with the runtime type rather than the generated type.
+#[inline(always)]
+pub(crate) fn runtime_bump_permitted() -> bool {
+    current_interval() == 0
+}
+
 /// A runtime-path allocation of `total` bytes (header included) of
 /// `obj_type` is about to happen.
 #[inline(always)]

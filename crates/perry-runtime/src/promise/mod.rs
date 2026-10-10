@@ -37,6 +37,7 @@ mod rejection_loop_tests;
 mod resolving_function_kind_tests;
 pub mod scanners;
 pub mod spec_combinators;
+pub(crate) mod step_completion;
 pub mod subclass;
 pub mod then;
 pub(crate) mod then_probe;
@@ -567,9 +568,12 @@ pub struct Promise {
     /// shaped object's address inherited that object's LIVE ShapeId there.
     /// Naming the padding makes `ptr::write(p, Promise::new())` zero it.
     pub(crate) _shape_word_pad: [u8; 5],
-    /// The resolved value (if fulfilled)
+    /// The resolved value (if fulfilled). During rejection settlement this
+    /// carries the producer completion until it is called and cleared.
     pub(crate) value: f64,
-    /// The rejection reason (if rejected)
+    /// The rejection reason (if rejected). While pending, this unused word
+    /// may hold the single internal step completion as a traced JSValue.
+    /// Fulfillment calls and clears it after scheduling public reactions.
     pub(crate) reason: f64,
     /// Closure to run when fulfilled (null if none)
     pub(crate) on_fulfilled: ClosurePtr,

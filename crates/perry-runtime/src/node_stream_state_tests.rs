@@ -96,7 +96,7 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
     let default_obj = raw_ptr_from_value(default_transform) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(default_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_FALSE
+        TAG_UNDEFINED
     );
     assert_eq!(
         js_object_get_field_by_name_f64(default_obj, hidden_key(b"writableObjectMode")).to_bits(),
@@ -118,7 +118,7 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
     let duplex_obj = raw_ptr_from_value(duplex) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(duplex_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_TRUE
+        TAG_UNDEFINED
     );
     assert_eq!(
         js_object_get_field_by_name_f64(duplex_obj, hidden_key(b"writableObjectMode")).to_bits(),

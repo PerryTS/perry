@@ -3,6 +3,8 @@
 //! Contains `lower_conditional` (ternary), `lower_logical` (&&/||/??),
 //! and `lower_truthy` (truthiness test).
 
+#[path = "lower_conditional_array_record.rs"]
+pub(crate) mod array_record;
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 
@@ -171,6 +173,50 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
 /// A test consumer needs only truthiness. Logical operands retain JavaScript
 /// evaluation order, with an i1 phi rather than a boxed operand-value phi.
 pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // A record bound spells a counted loop for admission, but an override
+    // only needs IteratorStepValue's done bit. Keep that protocol call out of
+    // line and consume its bit directly, without a synthetic Infinity bound.
+    if let Expr::Compare {
+        op: perry_hir::CompareOp::Lt,
+        left,
+        right,
+    } = expr
+    {
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = right.as_ref()
+        {
+            if module == "__perry_runtime"
+                && method == "arrayRecordForBound"
+                && args.len() == 5
+                && matches!((left.as_ref(), &args[2]), (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
+            {
+                if let Some(ready) = crate::array_record_stack::next_test(ctx, args)? {
+                    return Ok(ready);
+                }
+                lower_expr(ctx, &args[4])?;
+                let predicate = Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(Expr::Compare {
+                        op: perry_hir::CompareOp::Eq,
+                        left: Box::new(args[3].clone()),
+                        right: Box::new(Expr::Bool(false)),
+                    }),
+                    else_expr: Box::new(Expr::Compare {
+                        op: perry_hir::CompareOp::Lt,
+                        left: left.clone(),
+                        right: Box::new(args[1].clone()),
+                    }),
+                };
+                let value = lower_expr(ctx, &predicate)?;
+                let bits = ctx.block().bitcast_double_to_i64(&value);
+                return Ok(ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64));
+            }
+        }
+    }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
         return Ok(bit);
     }
@@ -275,6 +321,18 @@ pub(crate) fn lower_conditional(
     then_expr: &Expr,
     else_expr: &Expr,
 ) -> Result<String> {
+    if let Some(args) = array_record::finish_args(condition, then_expr, else_expr) {
+        return lower_expr(
+            ctx,
+            &Expr::NativeMethodCall {
+                module: "__perry_runtime".into(),
+                class_name: None,
+                object: None,
+                method: "arrayRecordFinish".into(),
+                args,
+            },
+        );
+    }
     let branch_proofs = crate::lower_call::guarded_discriminant_branch_proofs(ctx, condition);
     let saved_guarded_proof = branch_proofs
         .as_ref()

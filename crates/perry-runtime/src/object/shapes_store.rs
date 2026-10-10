@@ -124,10 +124,10 @@ pub(crate) struct ShapeRecord {
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
     /// discriminant (codes 0-6; the store facts F-A/F-B are kinds 5 and 6).
     /// Bits 11-14: the births a keyless birth shape served while tracking its
-    /// width (#10905). Bit 15: derived WeakMap/WeakSet brand summary.
+    /// width (#10905). Bit 15: a weak-collection brand; bit 31 distinguishes WeakSet.
     /// Bits 16-23: the
     /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
-    /// Bits 24-31: the inline width a keyless birth shape's descendants grow
+    /// Bits 24-30: the inline width a keyless birth shape's descendants grow
     /// to (#10905). The two #10905 fields are learned facts of the record,
     /// never identity.
     ///
@@ -166,6 +166,7 @@ pub(crate) struct ShapeRecord {
 }
 
 const RECORD_WEAK_COLLECTION: u32 = 1 << 15;
+const RECORD_WEAK_SET: u32 = 1 << 31;
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
 /// The largest `ShapeObjectKind::code()` (`NativeNamespace`, 7).
@@ -189,9 +190,12 @@ const _: () = assert!(RECORD_KIND_MASK & 0xFF == 0);
 /// `TRACKING_BIRTHS`, asserted below).
 const RECORD_BIRTHS_SHIFT: u32 = 11;
 const RECORD_BIRTHS_MASK: u32 = 0xF << RECORD_BIRTHS_SHIFT;
-/// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-31.
+/// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-30 (maximum 64).
 const RECORD_WIDTH_SHIFT: u32 = 24;
-const RECORD_WIDTH_MASK: u32 = 0xFF << RECORD_WIDTH_SHIFT;
+const RECORD_WIDTH_MASK: u32 = 0x7F << RECORD_WIDTH_SHIFT;
+const _: () = assert!(
+    super::shapes_birth_width::LEARNED_WIDTH_MAX <= RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT
+);
 // The fields of `flags_and_kind` are pairwise disjoint.
 const _: () = {
     let fields = [
@@ -199,6 +203,7 @@ const _: () = {
         RECORD_KIND_MASK,
         RECORD_BIRTHS_MASK,
         RECORD_WEAK_COLLECTION,
+        RECORD_WEAK_SET,
         RECORD_SUMMARY_MASK,
         RECORD_WIDTH_MASK,
     ];
@@ -322,7 +327,7 @@ impl ShapeRecord {
     }
 
     /// Raise [`ShapeRecord::descendant_width`] to `width` (monotone,
-    /// saturating at the byte).
+    /// saturating at the seven-bit width).
     #[inline]
     pub(super) fn note_descendant_width(&mut self, width: u32) {
         let width = width.min(RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT);

@@ -722,6 +722,11 @@ fn expr_numeric_by_construction_with_region(
     if depth > 16 {
         return false;
     }
+    if crate::type_analysis::iterator_record_primitive_type(e)
+        == Some(perry_hir::types::Type::Number)
+    {
+        return true;
+    }
     use perry_hir::BinaryOp;
     let rec = |x: &Expr| {
         expr_numeric_by_construction_with_region(

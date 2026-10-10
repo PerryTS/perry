@@ -1,5 +1,6 @@
 {
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
+        if let Some(result) = crate::array_record_stack::lower(ctx, method, args)? { return Ok(result); }
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
                 // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
@@ -17,6 +18,159 @@
                 let result = ctx.block().call(DOUBLE, name, &values);
                 arg_group.release(ctx);
                 return Ok(result);
+            }
+            "arrayRecordLiteral" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let buffer = if values.is_empty() {
+                    "null".to_owned()
+                } else {
+                    let buffer = ctx.func.alloca_entry_array(DOUBLE, values.len());
+                    for (i, value) in values.iter().enumerate() {
+                        let slot = ctx.block().gep(DOUBLE, &buffer, &[(I64, &i.to_string())]);
+                        ctx.block().store(DOUBLE, value, &slot);
+                    }
+                    buffer
+                };
+                // The callee roots the whole argument pack before allocating.
+                let array = ctx.block().call(DOUBLE, "js_array_record_literal",
+                    &[(crate::types::PTR, &buffer), (I32, &values.len().to_string())]);
+                roots.release(ctx);
+                return Ok(array);
+            }
+            "arrayRecordPayload" => {
+                let (Expr::LocalGet(source), Expr::LocalSet(payload, _)) = (&args[0], &args[1]) else {
+                    anyhow::bail!("record payload requires its private source and destination");
+                };
+                let result = lower_expr(ctx, &args[1])?;
+                let _ = lower_expr(ctx, &args[2])?;
+                if let Some(admission) = ctx.record_packed_admissions.remove(source) {
+                    ctx.record_packed_admissions.insert(*payload, admission);
+                }
+                return Ok(result);
+            }
+            "arrayRecordNeedsIterator" if matches!(args.first(), Some(Expr::LocalSet(..))) => {
+                let Expr::LocalSet(source_id, source_expr) = &args[0] else {
+                    return Err(anyhow::anyhow!("arrayRecordEnter requires its private source binding"));
+                };
+                let (values, roots) = super::lower_call_args_rooted(ctx, std::slice::from_ref(source_expr.as_ref()))?;
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                // A counted consumer also asks for the packed-f64 admission of
+                // the live head the proof resolves (bit 1); its loop consumes
+                // that bit instead of classifying the receiver again.
+                let counted = matches!(args.get(1), Some(Expr::Bool(true)));
+                let site = crate::expr::array_record_site(ctx);
+                let verdict = ctx.block().call(I32,
+                    if counted { "js_array_record_enter_counted" } else { "js_array_record_enter" },
+                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (crate::types::PTR, &site)]);
+                let needs = if counted {
+                    let admission = ctx.record_packed_admissions.get(source_id).cloned()
+                        .unwrap_or_else(|| ctx.func.alloca_entry(crate::types::I1));
+                    let bit = ctx.block().and(I32, &verdict, "2");
+                    let admitted = ctx.block().icmp_ne(I32, &bit, "0");
+                    ctx.block().store(crate::types::I1, &admitted, &admission);
+                    ctx.record_packed_admissions.insert(*source_id, admission);
+                    ctx.block().and(I32, &verdict, "1")
+                } else {
+                    verdict
+                };
+                let source = ctx.block().load(DOUBLE, &slot);
+                roots.release(ctx);
+                crate::expr::invalidate_local_write_facts(ctx, *source_id);
+                crate::expr::bind_lowered_value_to_local(ctx, *source_id, &source, source_expr)?;
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+            }
+            "arrayRecordForUpdate" => {
+                return lower_expr(ctx, &Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(Expr::Number(0.0)),
+                    else_expr: Box::new(args[1].clone()),
+                });
+            }
+            "arrayRecordForValue" => {
+                return lower_expr(ctx, &Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(args[1].clone()), else_expr: Box::new(args[2].clone()),
+                });
+            }
+            "arrayRecordForBound" => {
+                return lower_expr(ctx, &Expr::Sequence(vec![args[4].clone(), Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(Expr::Conditional {
+                        condition: Box::new(args[3].clone()),
+                        then_expr: Box::new(args[2].clone()),
+                        else_expr: Box::new(Expr::Number(f64::INFINITY)),
+                    }),
+                    else_expr: Box::new(args[1].clone()),
+                }]));
+            }
+            "arrayRecordFinish" | "arrayRecordAbrupt" => {
+                let abrupt = method == "arrayRecordAbrupt";
+                let count = if abrupt { 5 } else { 7 };
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..count])?;
+                // Save the operands in native roots before releasing the
+                // record's locals on the escaping exception path.
+                for release in &args[count..] { let _ = lower_expr(ctx, release)?; }
+                let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
+                // Both completions use the same single payload. Older HIR
+                // shapes remain legal; its strict mode predicate selects the
+                // original receiver before crossing the runtime boundary.
+                let mode_bits = ctx.block().bitcast_double_to_i64(values[0].1);
+                let mode = ctx.block().icmp_eq(I64, &mode_bits, crate::nanbox::TAG_TRUE_I64);
+                let payload = ctx.block().select(crate::types::I1, &mode, DOUBLE, values[3].1, values[1].1);
+                let mode_flag = ctx.block().zext(crate::types::I1, &mode, I32);
+                if abrupt {
+                    ctx.block().call_void("js_array_record_abrupt",
+                        &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[4].1), (I32, &mode_flag)]);
+                    ctx.block().unreachable();
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
+                let done = if crate::type_analysis::is_bool_expr(ctx, &args[4]) {
+                    let done_bits = ctx.block().bitcast_double_to_i64(values[4].1);
+                    ctx.block().icmp_eq(I64, &done_bits, crate::nanbox::TAG_TRUE_I64)
+                } else {
+                    // IteratorClose consumes ToBoolean(done). Only an actual
+                    // constructed Boolean permits the strict tag shortcut.
+                    let truth = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, values[4].1)]);
+                    ctx.block().icmp_ne(I32, &truth, "0")
+                };
+                let done_flag = ctx.block().zext(crate::types::I1, &done, I32);
+                let done_flag = ctx.block().shl(I32, &done_flag, "1");
+                let flags = ctx.block().or(I32, &mode_flag, &done_flag);
+                let flags = if matches!(args[6], Expr::Bool(true)) {
+                    ctx.block().or(I32, &flags, "4")
+                } else { flags };
+                let result = ctx.block().call(DOUBLE, "js_array_record_finish",
+                    &[(DOUBLE, &payload), (DOUBLE, values[2].1), (DOUBLE, values[5].1), (I32, &flags)]);
+
+                roots.release(ctx);
+                return Ok(result);
+            }
+            "arrayRecordCloseAbsent" => {
+                let needs = ctx.block().call(I32, "js_array_record_close_absent", &[]);
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+            }
+            "arrayRecordClose" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
+                let result = ctx.block().call(DOUBLE, "js_array_record_close", &values);
+                roots.release(ctx);
+                return Ok(result);
+            }
+            "arrayRecordLength" => {
+                // The entry proof owns the ordinary-array length fact.
+                // Use the existing guarded property lowering and its shared cold body.
+return crate::lower_array_record_length::lower(ctx, &args[0]);
+            }
+            "arrayRecordIndex" => return lower_expr(ctx, &args[0]),
+            "iteratorRestAppend" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let bits = ctx.block().bitcast_double_to_i64(&values[0]);
+                let array = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                let next = ctx.block().call(I64, "js_array_push_f64", &[(I64, &array), (DOUBLE, &values[1])]);
+                let tagged = ctx.block().or(I64, &next, crate::nanbox::POINTER_TAG_I64);
+                let boxed = ctx.block().bitcast_i64_to_double(&tagged);
+                roots.release(ctx);
+                return Ok(boxed);
             }
             "iteratorNextMethod" => {
                 let iter = lower_expr(ctx, &args[0])?;
@@ -54,7 +208,12 @@
             // #10524: the runtime guard of array destructuring over a source
             // with no static array proof — a NaN-boxed boolean, the same shape
             // `Expr::ArrayIterationPatched` produces for the proven arm.
-            "arrayDestructureNeedsIterator" => {
+            "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
+                if method == "arrayRecordNeedsIterator" && args.is_empty() {
+                    let site = crate::expr::array_record_site(ctx);
+                    let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[(crate::types::PTR, &site)]);
+                    return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+                }
                 let source = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
                     |arg| lower_expr(ctx, arg),
@@ -62,7 +221,7 @@
                 let blk = ctx.block();
                 let needs = blk.call(
                     I32,
-                    "js_array_destructure_needs_iterator",
+                    if method == "arrayRecordNeedsIterator" { "js_array_record_needs_iterator" } else { "js_array_destructure_needs_iterator" },
                     &[(DOUBLE, &source)],
                 );
                 return Ok(crate::expr::i32_bool_to_nanbox(blk, &needs));

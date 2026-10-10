@@ -62,7 +62,8 @@ pub use alloc::{
 #[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
 pub(crate) use alloc_basic::{
-    object_alloc_born, object_alloc_filled_birth, object_alloc_plain, object_alloc_unpublished,
+    object_alloc_born, object_alloc_branded, object_alloc_filled_birth, object_alloc_plain,
+    object_alloc_unpublished,
 };
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
@@ -326,8 +327,9 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, iterator_prototype_for_class_id,
-    iterator_step_is_builtin, iterator_step_method_is_builtin,
+    attach_iterator_prototype, call_overridden_iterator_next, ensure_iterator_prototypes,
+    iterator_prototype_for_class_id, iterator_prototypes_materialized, iterator_step_is_builtin,
+    iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;
@@ -1958,3 +1960,8 @@ mod wide_object_membership_tests;
 
 mod packed_keys;
 pub(crate) use packed_keys::packed_key_names;
+
+pub(crate) use iterator_prototypes::array_record_close_is_absent;
+pub(crate) use iterator_prototypes::{
+    array_iterator_next_is_intrinsic, array_iterator_prototype_addr, shape_member_body_is,
+};

@@ -265,40 +265,29 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
     rand::rng().random_range(min..max) as f64
 }
 
-/// One-shot `crypto.hash(alg, data, encoding = "hex")`, run as
-/// `createHash(alg).update(data).digest(encoding)`.
-///
-/// The hash is an ordinary GC object that owns its native payload. `update`
-/// can collect (and a copying minor can move it), and a bare Rust local is not
-/// a root, so the hash, the data and the encoding sit in a handle scope rather
-/// than in bare locals.
+/// One-shot `crypto.hash(alg, data, encoding = "hex")` uses the same
+/// native state, byte consumer and output encoder as Hash and local chains.
+/// It has no observable Hash object, so no temporary JS object or prototype
+/// dispatch is needed. Root arguments across output allocation and coercion.
 unsafe fn crypto_hash_one_shot(alg_ptr: i64, data: f64, encoding: Option<f64>) -> f64 {
+    use super::hash_handles::{
+        hash_digest_value, new_hash_state_or_throw, update_hash_state, with_hash_update_bytes,
+    };
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let data = scope.root_nanbox_f64(data);
     let encoding = encoding.map(|value| scope.root_nanbox_f64(value));
-    let hash = scope.root_nanbox_f64(js_crypto_create_hash(alg_ptr));
-    let update_args = [data.get_nanbox_f64()];
-    perry_runtime::object::js_native_call_method(
-        hash.get_nanbox_f64(),
-        b"update".as_ptr() as *const i8,
-        6,
-        update_args.as_ptr(),
-        1,
-    );
+    let undefined = f64::from_bits(JSValue::undefined().bits());
+    let (mut state, output_len) = new_hash_state_or_throw(alg_ptr, undefined);
+    with_hash_update_bytes(&[data.get_nanbox_f64()], |bytes| {
+        update_hash_state(&mut state, bytes)
+    });
     let encoding = match encoding {
         Some(handle) => handle.get_nanbox_f64(),
         None => {
             f64::from_bits(JSValue::string_ptr(js_string_from_bytes(b"hex".as_ptr(), 3)).bits())
         }
     };
-    let digest_args = [encoding];
-    perry_runtime::object::js_native_call_method(
-        hash.get_nanbox_f64(),
-        b"digest".as_ptr() as *const i8,
-        6,
-        digest_args.as_ptr(),
-        1,
-    )
+    hash_digest_value(Some(state), output_len, Some(encoding))
 }
 
 /// #1577: dispatcher for captured-then-called `crypto.*` methods

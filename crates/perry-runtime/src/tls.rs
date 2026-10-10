@@ -92,8 +92,7 @@ pub struct TlsClientMetadata {
 /// TLS facts belong to the actual Socket's ordinary hidden JS state.
 /// The attached family's class proves the state receiver, including subclasses;
 /// no id lookup, constructor name or Rust projection is involved.
-fn client_state(handle: i64, create: bool) -> Option<f64> {
-    let value = ptr_value(handle as *mut u8);
+fn client_state(value: f64, create: bool) -> Option<f64> {
     (crate::native_payload::attached_family_class_id(value)
         == Some(crate::native_class_ids::NET_SOCKET))
     .then(|| crate::native_payload::js_state_object(value, create))
@@ -106,11 +105,8 @@ fn state_field(state: f64, key: &str) -> f64 {
 }
 pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
-    let state = scope.root_nanbox_f64(client_state(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
-        false,
-    )?);
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
+    let state = scope.root_nanbox_f64(client_state(owner.get_nanbox_f64(), false)?);
     if !JSValue::from_bits(state_field(state.get_nanbox_f64(), "encrypted").to_bits()).to_bool() {
         return None;
     }
@@ -145,12 +141,10 @@ pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
 }
 pub fn is_tls_client_handle(handle: i64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
-    client_state(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
-        false,
-    )
-    .is_some_and(|state| JSValue::from_bits(state_field(state, "encrypted").to_bits()).to_bool())
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
+    client_state(owner.get_nanbox_f64(), false).is_some_and(|state| {
+        JSValue::from_bits(state_field(state, "encrypted").to_bits()).to_bool()
+    })
 }
 #[no_mangle]
 pub extern "C" fn js_tls_client_is_connected(handle: i64) -> i32 {
@@ -239,16 +233,15 @@ fn key(name: &str) -> *mut StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
+/// The header of an arbitrary option value (a user-supplied `ca`, a state
+/// field): ownership-proved, so an id that arrived boxed is never read.
 unsafe fn gc_header(value: f64) -> Option<*mut crate::gc::GcHeader> {
     let js = JSValue::from_bits(value.to_bits());
     if !js.is_pointer() {
         return None;
     }
-    let ptr = js.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    Some(ptr.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader)
+    crate::value::addr_class::try_read_tracked_gc_header(js.as_pointer::<u8>() as usize)
+        .map(|header| header.as_ptr())
 }
 
 fn freeze_heap_value(value: f64) -> f64 {
@@ -500,12 +493,9 @@ pub unsafe extern "C" fn js_tls_client_record_start(
     servername_len: usize,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
     let options = scope.root_nanbox_f64(options);
-    let Some(state) = client_state(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
-        true,
-    ) else {
+    let Some(state) = client_state(owner.get_nanbox_f64(), true) else {
         return;
     };
     let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap());
@@ -567,11 +557,8 @@ pub unsafe extern "C" fn js_tls_client_record_connected(
     own_cert_len: usize,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
-    let Some(state) = client_state(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
-        true,
-    ) else {
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
+    let Some(state) = client_state(owner.get_nanbox_f64(), true) else {
         return;
     };
     let state = scope.root_raw_mut_ptr(object_ptr(state).unwrap());
@@ -619,7 +606,7 @@ pub unsafe extern "C" fn js_tls_client_record_connected(
 
 #[no_mangle]
 pub extern "C" fn js_tls_client_record_closed(handle: i64) {
-    let Some(state) = client_state(handle, false) else {
+    let Some(state) = client_state(crate::object::handle_receiver_value(handle), false) else {
         return;
     };
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -638,12 +625,9 @@ pub extern "C" fn js_tls_client_record_closed(handle: i64) {
 #[no_mangle]
 pub extern "C" fn js_tls_client_check_identity(handle: i64, certificate: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
     let certificate = scope.root_nanbox_f64(certificate);
-    let Some(state) = client_state(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()),
-        false,
-    ) else {
+    let Some(state) = client_state(owner.get_nanbox_f64(), false) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
     let state = scope.root_nanbox_f64(state);
@@ -743,7 +727,7 @@ fn certificate_subject_alt_name(cert: &x509_cert::Certificate) -> Option<String>
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_client_certificate(owner: i64, own: i32, detailed: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner_root = scope.root_nanbox_f64(ptr_value(owner as *mut u8));
+    let owner_root = scope.root_nanbox_f64(crate::object::handle_receiver_value(owner));
     let metadata = tls_client_metadata(crate::value::js_nanbox_get_pointer(
         owner_root.get_nanbox_f64(),
     ));
@@ -764,7 +748,7 @@ pub unsafe extern "C" fn js_tls_client_certificate(owner: i64, own: i32, detaile
 #[no_mangle]
 pub extern "C" fn js_tls_client_attach_socket_prototype(owner: i64) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(owner as *mut u8));
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(owner));
     if crate::native_payload::attached_family_class_id(owner.get_nanbox_f64())
         != Some(crate::native_class_ids::NET_SOCKET)
     {
@@ -826,7 +810,7 @@ pub unsafe extern "C" fn js_tls_client_check_identity_from_metadata(handle: i64)
         return f64::from_bits(TAG_UNDEFINED);
     };
     let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_nanbox_f64(ptr_value(handle as *mut u8));
+    let owner = scope.root_nanbox_f64(crate::object::handle_receiver_value(handle));
     let certificate = scope.root_nanbox_f64(tls_legacy_certificate_object(
         &metadata.peer_certificate,
         true,

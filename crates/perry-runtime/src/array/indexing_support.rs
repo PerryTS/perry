@@ -251,10 +251,6 @@ pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
     }
 }
 
-pub(crate) fn array_proto_iterator_modified() -> bool {
-    ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
-}
-
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an
 /// indexed property, so subsequent out-of-bounds reads consult it. Called from
 /// the array element-write paths; cheap (two relaxed atomic loads + compare).

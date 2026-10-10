@@ -650,15 +650,12 @@ fn lower_runtime_for_await_iterator(
     Ok(())
 }
 
-/// Returns `true` when the caller should ALSO emit the lazy arm (#7760): this
-/// was a proven-array index loop, which ignores a patched
-/// `Array.prototype[Symbol.iterator]`.
+/// Lower a synchronous consumer once; its record may use an array cursor.
 pub(super) fn lower_stmt_for_of_inner(
     ctx: &mut LoweringContext,
     module: &mut Module,
     for_of_stmt: &ast::ForOfStmt,
-    force_lazy: Option<bool>,
-) -> Result<bool> {
+) -> Result<()> {
     // `for (… of m.values()/keys()/entries())` on a statically-proven Map/Set
     // is the direct-collection loop written another way; rewrite it to that
     // form so it reaches the delete-safe index fast path instead of building a
@@ -992,7 +989,7 @@ pub(super) fn lower_stmt_for_of_inner(
         }
 
         ctx.pop_block_scope(for_scope_mark);
-        return Ok(false);
+        return Ok(());
     }
 
     // --- #1646: `for await (const c of <Web ReadableStream>)` ---
@@ -1154,7 +1151,7 @@ pub(super) fn lower_stmt_for_of_inner(
             }));
 
             ctx.pop_block_scope(for_scope_mark);
-            return Ok(false);
+            return Ok(());
         }
     }
 
@@ -1336,8 +1333,7 @@ pub(super) fn lower_stmt_for_of_inner(
         // pre-registration slot (never written) and calling it throws
         // `value is not a function` (claude-code bundle e8/K8).
         ctx.pop_block_scope(for_scope_mark);
-        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr)
-            .map(|()| false);
+        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
     }
     // #for-of lazy iterator protocol: a generic/untyped iterable (custom
     // iterator, generator object, any-typed value) must be driven lazily —
@@ -1348,22 +1344,8 @@ pub(super) fn lower_stmt_for_of_inner(
     // which (a) runs a generator past the point a `break` should have closed
     // it and (b) made IteratorClose impossible. `is_await` is already handled
     // by the early return above, so this is always the synchronous path.
-    // #7760: `force_lazy: Some(true)` builds the protocol arm of a guarded
-    // proven-array loop; `None` is the ordinary lowering.
-    let use_lazy_iter = needs_runtime_iterator || force_lazy == Some(true);
-    // The guard is needed exactly when this loop would otherwise be a plain
-    // array index loop: a proven array, no other fast path, not the await form
-    // (which returned above), and not the arm we are building for the guard.
-    let guard_with_lazy_arm = force_lazy.is_none()
-        && proven_array
-        && !needs_runtime_iterator
-        && !is_string_iter
-        && !is_headers_iter
-        && !is_urlsp_iter
-        && !is_iterable_map
-        && !is_iterable_set
-        && !is_iterable_typed_array
-        && !for_of_stmt.is_await;
+    // Ordinary arrays are a representation of the same synchronous record.
+    let use_lazy_iter = needs_runtime_iterator || (proven_array && !for_of_stmt.is_await);
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
@@ -1391,7 +1373,7 @@ pub(super) fn lower_stmt_for_of_inner(
         arr_expr
     } else if use_lazy_iter {
         // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
-        Expr::GetIterator(Box::new(arr_expr))
+        arr_expr
     } else if is_string_iter {
         // #10062: string indexing yields UTF-16 code units, while for-of
         // yields code points. Materialize with the same WTF-8 conversion as
@@ -1474,7 +1456,30 @@ pub(super) fn lower_stmt_for_of_inner(
             .push((format!("__result_{}", result_id), result_id, Type::Any));
     }
 
-    // Store array reference: let __arr = arr (or `let __iter = GetIterator(..)`).
+    let mut record = use_lazy_iter.then(|| {
+        if crate::destructuring::spread_free_array_literal(&for_of_stmt.right).is_some() {
+            if let Expr::Array(values) = &arr_expr {
+                return crate::iterator_record::IteratorRecordPlan::literal(
+                    ctx,
+                    values.clone(),
+                    &mut module.init,
+                );
+            }
+        }
+        crate::iterator_record::IteratorRecordPlan::new_typed(
+            ctx,
+            arr_expr.clone(),
+            if proven_array {
+                Type::Array(Box::new(elem_type.clone()))
+            } else {
+                Type::Any
+            },
+            &mut module.init,
+        )
+    });
+    let arr_expr = record
+        .as_mut()
+        .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
     module.init.push(Stmt::Let {
         id: arr_id,
         name: format!("__arr_{}", arr_id),
@@ -1784,11 +1789,14 @@ pub(super) fn lower_stmt_for_of_inner(
             for_of_stmt.span.lo.0,
             guarded_stmts,
         ));
-        module
-            .init
-            .extend(lazy_iter_for_stmts(ctx, arr_id, result_id, full_body));
+        module.init.extend(
+            record
+                .as_ref()
+                .unwrap()
+                .drive(ctx, arr_id, result_id, full_body),
+        );
         ctx.pop_block_scope(for_scope_mark);
-        return Ok(false);
+        return Ok(());
     }
 
     // Prepend the binding statements to the loop body
@@ -1851,7 +1859,7 @@ pub(super) fn lower_stmt_for_of_inner(
         body: loop_body,
     });
     ctx.pop_block_scope(for_scope_mark);
-    Ok(guard_with_lazy_arm)
+    Ok(())
 }
 
 pub(crate) fn lower_stmt_for_in(

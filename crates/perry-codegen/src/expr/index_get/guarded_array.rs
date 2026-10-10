@@ -459,6 +459,58 @@ pub(super) fn lower_guarded_array_index_get(
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
 ) -> Result<String> {
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Signed(idx_i32),
+        block_prefix,
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+    )
+}
+
+/// The same indexed read with a compiler proof of a nonnegative u32 index.
+/// Retain its original JS number on the cold path, including indices > i32::MAX.
+pub(super) fn lower_unsigned_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    index: &str,
+    receiver_slot: Option<&str>,
+) -> Result<String> {
+    let idx_i32 = ctx.block().fptoui(DOUBLE, index, I32);
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Unsigned {
+            i32_value: &idx_i32,
+            number: index,
+        },
+        "array_record_index",
+        false,
+        false,
+        receiver_slot,
+    )
+}
+
+enum GuardedArrayIndex<'a> {
+    Signed(&'a str),
+    Unsigned { i32_value: &'a str, number: &'a str },
+}
+
+fn lower_guarded_array_index_get_with_index(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    index: GuardedArrayIndex<'_>,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
+) -> Result<String> {
+    let (idx_i32, unsigned_index) = match index {
+        GuardedArrayIndex::Signed(value) => (value, None),
+        GuardedArrayIndex::Unsigned { i32_value, number } => (i32_value, Some(number)),
+    };
     let site_id = ctx.typed_feedback_site_id(ctx.ic_site_counter);
     crate::typed_feedback_profile::register_site(
         site_id,
@@ -625,11 +677,31 @@ pub(super) fn lower_guarded_array_index_get(
         };
 
         ctx.current_block = live_deref_idx;
+        // Only the record's proven cursor owns the private source root that
+        // needs eager forwarding repair. Ordinary indexed reads keep their
+        // existing fallback custody and local-flow facts.
+        let repair_slot = unsigned_index.and(receiver_slot);
+        let repair_idx =
+            repair_slot.map(|_| ctx.new_block(&format!("{}.guard.repair", block_prefix)));
+        let live_success_label = repair_idx
+            .map(|idx| ctx.block_label(idx))
+            .unwrap_or_else(|| range_label.clone());
         {
             let blk = ctx.block();
             let live_word = emit_array_guard_word(blk, &live_handle);
             let word_ok = emit_array_guard_word_ok(blk, &live_word);
-            blk.cond_br(&word_ok, &range_label, &guard_fail_label);
+            blk.cond_br(&word_ok, &live_success_label, &guard_fail_label);
+        }
+        if let (Some(repair_idx), Some(slot)) = (repair_idx, repair_slot) {
+            // The verified forwarding destination is the same JS array. Repair
+            // the existing local root on this cold edge so later length and
+            // element reads use its live storage, including after body growth.
+            ctx.current_block = repair_idx;
+            let blk = ctx.block();
+            let tagged = blk.or(I64, &live_handle, crate::nanbox::POINTER_TAG_I64);
+            let boxed = blk.bitcast_i64_to_double(&tagged);
+            blk.store(DOUBLE, &boxed, slot);
+            blk.br(&range_label);
         }
         let live_end = ctx.block().label.clone();
 
@@ -829,7 +901,9 @@ pub(super) fn lower_guarded_array_index_get(
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     // Materialize the f64 index only here (cold path) so the int→fp conversion
     // stays out of the numeric loop's hot region.
-    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let idx_box = unsigned_index
+        .map(str::to_owned)
+        .unwrap_or_else(|| ctx.block().sitofp(I32, idx_i32, DOUBLE));
     let fallback_boxed = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_array_index_get_fallback_boxed",
@@ -1132,4 +1206,136 @@ pub(super) fn lower_packed_f64_loop_index_get(
         ],
     );
     value
+}
+
+/// An entry-proven ordinary array and the record's unsigned cursor use the
+/// same header word and slot load as this backend. All non-packed operations
+/// share its established runtime getter through the record's cold ABI.
+pub(crate) fn lower_record_index(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    record: &str,
+    payload_slot: &str,
+    index_slot: &str,
+) -> Result<String> {
+    let fast = ctx.new_block("record.read.fast");
+    let load = ctx.new_block("record.read.load");
+    let cold = ctx.new_block("record.read.cold");
+    let merge = ctx.new_block("record.read.merge");
+    let fl = ctx.block_label(fast);
+    let ll = ctx.block_label(load);
+    let cl = ctx.block_label(cold);
+    let ml = ctx.block_label(merge);
+    let bits = ctx.block().bitcast_double_to_i64(array);
+    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let invalidated = ctx
+        .block()
+        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let prototype_clear = ctx.block().icmp_eq(I8, &invalidated, "0");
+    let safe = ctx.block().and(I1, &safe, &prototype_clear);
+    ctx.block().cond_br(&safe, &fl, &cl);
+    ctx.current_block = fast;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let length_ptr = ctx.block().inttoptr(I64, &handle);
+    let length = ctx.block().load(I32, &length_ptr);
+    let in_bounds = ctx.block().icmp_ult(I32, &i, &length);
+    ctx.block().cond_br(&in_bounds, &ll, &cl);
+    ctx.current_block = load;
+    let value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    let bits = ctx.block().bitcast_double_to_i64(&value);
+    let hole = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
+    let fp = ctx.block().label.clone();
+    ctx.block().cond_br(&hole, &cl, &ml);
+    ctx.current_block = cold;
+    ctx.block().store_volatile(DOUBLE, array, payload_slot);
+    ctx.block().store(DOUBLE, index, index_slot);
+    let value_cold = ctx.block().call(
+        DOUBLE,
+        "js_array_record_stack_dispatch",
+        &[(crate::types::PTR, record), (I32, "5")],
+    );
+    let cp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = merge;
+    Ok(ctx
+        .block()
+        .phi(DOUBLE, &[(&value, &fp), (&value_cold, &cp)]))
+}
+
+/// One guard for the record's live length and value. The cold operation owns
+/// both ArrayIterator Get and the captured protocol's IteratorStepValue.
+pub(crate) fn lower_record_next(
+    ctx: &mut FnCtx<'_>,
+    array: &str,
+    index: &str,
+    protocol: &str,
+    record: &str,
+    index_slot: &str,
+    value_slot: &str,
+) -> Result<(String, String)> {
+    let guard = ctx.new_block("record.next.guard");
+    let bounds = ctx.new_block("record.next.bounds");
+    let load = ctx.new_block("record.next.load");
+    let exhausted = ctx.new_block("record.next.exhausted");
+    let cold = ctx.new_block("record.next.cold");
+    let merge = ctx.new_block("record.next.merge");
+    let gl = ctx.block_label(guard);
+    let bl = ctx.block_label(bounds);
+    let ll = ctx.block_label(load);
+    let el = ctx.block_label(exhausted);
+    let cl = ctx.block_label(cold);
+    let ml = ctx.block_label(merge);
+    ctx.block().cond_br(protocol, &cl, &gl);
+    ctx.current_block = guard;
+    let bits = ctx.block().bitcast_double_to_i64(array);
+    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let safe = emit_array_guard_word_ok(ctx.block(), &word);
+    let invalidated = ctx
+        .block()
+        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let clear = ctx.block().icmp_eq(I8, &invalidated, "0");
+    let safe = ctx.block().and(I1, &safe, &clear);
+    ctx.block().cond_br(&safe, &bl, &cl);
+    ctx.current_block = bounds;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let ptr = ctx.block().inttoptr(I64, &handle);
+    let len = ctx.block().load(I32, &ptr);
+    let ready = ctx.block().icmp_ult(I32, &i, &len);
+    ctx.block().cond_br(&ready, &ll, &el);
+    ctx.current_block = load;
+    let fast_value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    let fp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = exhausted;
+    let absent = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let ep = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = cold;
+    ctx.block().store(DOUBLE, index, index_slot);
+    let done = ctx.block().call(
+        DOUBLE,
+        "js_array_record_stack_dispatch",
+        &[(crate::types::PTR, record), (I32, "6")],
+    );
+    let bits = ctx.block().bitcast_double_to_i64(&done);
+    let cold_ready = ctx
+        .block()
+        .icmp_eq(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+    let cold_value = ctx.block().load_volatile(DOUBLE, value_slot);
+    ctx.block().store_volatile(DOUBLE, &absent, value_slot);
+    let cp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = merge;
+    let value = ctx.block().phi(
+        DOUBLE,
+        &[(&fast_value, &fp), (&absent, &ep), (&cold_value, &cp)],
+    );
+    let ready = ctx
+        .block()
+        .phi(I1, &[("true", &fp), ("false", &ep), (&cold_ready, &cp)]);
+    Ok((value, ready))
 }

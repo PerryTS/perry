@@ -277,9 +277,14 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
     }
 }
 
-/// Ordinary (non-proxy) `Reflect.defineProperty` `[[DefineOwnProperty]]`,
-/// reporting success as a NaN-boxed boolean. Shared by `crate::proxy`'s
-/// `Reflect.defineProperty` entry point (both the no-trap and direct paths).
+/// Ordinary (non-proxy) `[[DefineOwnProperty]]` on a decoded descriptor,
+/// returning its verdict. Shared by `Object.defineProperty`/`defineProperties`
+/// (which throw a `false`) and `crate::proxy`'s `Reflect.defineProperty` entry
+/// point (both the no-trap and direct paths, which return it).
+///
+/// Integer-indexed exotic keys answer first; every other receiver family
+/// validates and applies in `apply_property_descriptor`, against the facts its
+/// own storage holds. There is no second, record-based validation here.
 pub(crate) unsafe fn reflect_define_property_decoded(
     scope: &crate::gc::RuntimeHandleScope,
     obj_handle: &crate::gc::RuntimeHandle<'_>,
@@ -294,46 +299,6 @@ pub(crate) unsafe fn reflect_define_property_decoded(
         super::TypedArrayDefineOutcome::Defined => return true,
         super::TypedArrayDefineOutcome::Rejected => return false,
         super::TypedArrayDefineOutcome::NotTypedArray => {}
-    }
-    // ArraySetLength coerces value before rejecting flags and can leave a
-    // partial shrink on failure. Preserve the exotic's own ordering/verdict.
-    let value = f64::from_bits(obj_handle.get_nanbox_u64());
-    let array =
-        crate::value::addr_class::try_read_tracked_gc_header(extract_obj_ptr(value) as usize)
-            .is_some_and(|header| {
-                matches!(
-                    (*header.as_ptr()).obj_type,
-                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
-                )
-            });
-    let length_key = crate::string::with_string_value_bytes(key_handle.get_nanbox_f64(), |bytes| {
-        bytes == b"length"
-    })
-    .unwrap_or(false);
-    if array && length_key {
-        return super::object_ops::apply_property_descriptor(
-            scope,
-            value,
-            key_handle.get_nanbox_f64(),
-            descriptor,
-        );
-    }
-    let current = scope.root_nanbox_f64(super::js_object_get_own_property_descriptor(
-        f64::from_bits(obj_handle.get_nanbox_u64()),
-        key_handle.get_nanbox_f64(),
-    ));
-    if current.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
-        if crate::value::js_is_truthy(super::js_object_is_extensible(f64::from_bits(
-            obj_handle.get_nanbox_u64(),
-        ))) == 0
-        {
-            return false;
-        }
-    } else {
-        let current = super::object_ops::decode_own_descriptor_result(scope, &current);
-        if !super::object_ops::descriptor_compatible_with_current(&current, descriptor) {
-            return false;
-        }
     }
     super::object_ops::apply_property_descriptor(
         scope,

@@ -693,7 +693,7 @@ pub(super) unsafe fn next_from_word(obj: *const ObjectHeader, word: u64) -> *con
 
 /// Shape identities that pin the next object while the shape is unchanged.
 /// MIXED carries the explicit prototype's serial. Bare CLASS still requires
-/// the class generation/live-link guards; PER_OBJECT and UNIQUE are refused.
+/// a live identity-word compare; PER_OBJECT and UNIQUE are refused.
 #[inline]
 fn hop_identity_pins_link(pid: u64) -> bool {
     pid == PROTO_ID_DEFAULT
@@ -737,9 +737,8 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 }
 
 /// A MIXED identity records an explicit serial link. A bare CLASS identity
-/// names its registry-resolved prototype: priming resolves the live
-/// declared-prototype pointer, and a later relink retires that pointer's
-/// ShapeId (see the module docs), which the hit's holder compare sees.
+/// names its live identity word. Hits compare that word with the recorded
+/// direct holder, then check each hop and holder ShapeId.
 pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
     // Most ordinary receivers have serial/default links. Their shape rules
@@ -747,10 +746,10 @@ pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const Obje
     if !(PROTO_ID_CLASS..PROTO_ID_UNIQUE).contains(&pid) {
         return None;
     }
-    let (stated, word) = stated_link(recv);
-    if stated != pid {
-        return None;
-    }
+    // The prototype funnel minted this identity with the receiver's link.
+    // Re-deriving its generic origin through the registry cannot strengthen
+    // the shape proof and would repeat a lock/hash lookup on every memo hit.
+    let word = crate::object::shapes::object_prototype_word(recv);
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
         next_from_word(recv, word)
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
@@ -786,9 +785,6 @@ pub(crate) unsafe fn recorded_class_link(
     word: u64,
 ) -> Result<Option<*const ObjectHeader>, ()> {
     let pid = shape_proto_id(object_shape_stamp(recv)).ok_or(())?;
-    if crate::object::shapes::object_proto_id_for(recv, word) != pid {
-        return Err(());
-    }
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
         if crate::object::shapes::declaration_parent_identity(recv, word) == Some(pid) {
             let parent = next_from_word(recv, word);

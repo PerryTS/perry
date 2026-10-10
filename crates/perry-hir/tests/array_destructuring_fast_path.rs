@@ -1,8 +1,8 @@
 //! #10086: array destructuring over a spread-free array literal or a
 //! statically-proven array must lower to the guarded non-iterator arm; #10524:
 //! a source with no static proof lowers to the same arm behind a runtime
-//! receiver check; a rest pattern or a statically non-array source keeps the
-//! plain spec iterator protocol.
+//! receiver check. Rest drains that same record, and a statically non-array
+//! source keeps the plain spec iterator protocol.
 //!
 //! These assert the LOWERING DECISION, which is what the perf fix is; the
 //! behavioural half (evaluation order, defaults, holes, rest, nested patterns,
@@ -33,17 +33,40 @@ fn hir(src: &str) -> String {
     format!("{:#?}", lower(src))
 }
 
-/// The guard itself: `Expr::ArrayIterationPatched`, the volatile read of the
-/// runtime's sticky `PERRY_ARRAY_ITERATION_NOT_PRISTINE` byte.
-const GUARD: &str = "ArrayIterationPatched";
+/// One receiver/intrinsic shape proof admits the array record.
+const GUARD: &str = "arrayRecordNeedsIterator";
 
-/// `[x, y] = [y, x]` — the measured swap. The guard must be read BEFORE the
-/// iterator is resolved, which is the whole point: `GetIterator` takes the
-/// rebuilt array literal as its operand, so a guard that dominates it means
-/// neither the iterator NOR the array is materialized on the fast arm.
+/// A literal is evaluated once as the common record source. The shape proof
+/// must dominate GetIterator; its successful representation allocates neither
+/// an iterator nor per-element result records.
 #[test]
-fn swap_through_an_array_literal_is_guarded_and_allocates_nothing_up_front() {
-    let dump = hir("let x = 1; let y = 2; [x, y] = [y, x]; console.log(x, y);");
+fn swap_evaluates_one_source_and_guards_iterator_creation() {
+    let module = lower("let x = 1; let y = 2; [x, y] = [y, x]; console.log(x, y);");
+    assert_eq!(
+        module
+            .init
+            .iter()
+            .filter(|s| matches!(
+                s,
+                perry_hir::Stmt::Let {
+                    init: Some(perry_hir::Expr::Array(_)),
+                    ..
+                }
+            ))
+            .count(),
+        0,
+        "the proven dense literal must remain scalar until it becomes observable"
+    );
+    let dump = format!("{module:#?}");
+    assert_eq!(
+        dump.matches("__iterator_literal_").count(),
+        2,
+        "evaluate each source element once"
+    );
+    assert!(
+        dump.contains("arrayRecordCloseAbsent"),
+        "an observable close must still materialize its receiver"
+    );
     let guard = dump
         .find(GUARD)
         .expect("a literal-source swap must read the array-iteration guard");
@@ -52,8 +75,7 @@ fn swap_through_an_array_literal_is_guarded_and_allocates_nothing_up_front() {
         .expect("the protocol arm must still exist for a patched prototype");
     assert!(
         guard < get_iterator,
-        "the guard must dominate GetIterator (and therefore the array literal \
-         it iterates); guard at {guard}, GetIterator at {get_iterator}"
+        "the guard must dominate GetIterator; guard at {guard}, GetIterator at {get_iterator}"
     );
 }
 
@@ -101,7 +123,7 @@ fn assignment_from_a_proven_array_is_guarded() {
 }
 
 /// #10524: the runtime guard of a source with no static array proof.
-const RUNTIME_GUARD: &str = "arrayDestructureNeedsIterator";
+const RUNTIME_GUARD: &str = GUARD;
 
 /// A source with no static array proof — an `any`, an untyped call result —
 /// takes the index arm behind a RUNTIME receiver check, not the static
@@ -116,8 +138,8 @@ fn an_unproven_source_is_guarded_by_a_runtime_receiver_check() {
     ] {
         let dump = hir(src);
         assert!(
-            !dump.contains(GUARD),
-            "an unproven source must not trust the static prototype guard alone:\n{src}"
+            !dump.contains("ArrayIterationPatched"),
+            "an unproven source must use receiver shapes, without the old global guard:\n{src}"
         );
         let guard = dump
             .find(RUNTIME_GUARD)
@@ -164,20 +186,22 @@ fn a_generator_source_keeps_the_plain_iterator_protocol() {
     );
 }
 
-/// A rest element keeps the iterator drain: the protocol builds a DENSE array
-/// while the index-side equivalent (`slice`) preserves holes, so the two
-/// disagree on a sparse source.
+/// Rest drains through the same step and internal data-property append.
 #[test]
-fn a_rest_element_keeps_the_iterator_drain() {
+fn a_rest_element_drains_the_same_record_step() {
     for src in [
         "const src: number[] = [1, 2, 3];\nconst [a, ...rest] = src;\nconsole.log(a, rest);",
         "declare const src: any;\nconst [a, ...rest] = src;\nconsole.log(a, rest);",
     ] {
         let dump = hir(src);
+        assert_eq!(dump.matches(GUARD).count(), 1, "{src}");
         assert!(
-            !dump.contains(GUARD) && !dump.contains(RUNTIME_GUARD),
-            "a rest pattern must keep the unguarded iterator lowering:\n{src}"
+            dump.contains("iteratorStep")
+                && dump.contains("IndexGet")
+                && dump.contains("iteratorRestAppend"),
+            "{src}"
         );
+        assert!(!dump.contains("iteratorRestToArray"), "{src}");
     }
 }
 

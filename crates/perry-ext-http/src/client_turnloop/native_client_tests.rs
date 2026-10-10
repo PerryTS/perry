@@ -486,6 +486,16 @@ fn delayed_agent_cleanup_preserves_a_reopened_socket_capability() {
             "reopen retains the same cell"
         );
         assert!(!net::matches(owner.get(), &old));
+        assert!(
+            crate::current_request_socket(request).is_none(),
+            "request continuation must refuse the replacement incarnation"
+        );
+        let stale = net::RootedSocket::with_snapshot(owner.get(), old);
+        assert!(
+            stale.write(b"stale response", 0).is_none(),
+            "carried snapshot must prevent native writes to the reopened cell"
+        );
+        assert!(unsafe { stale.with_native_io(|_| ()) }.is_none());
         unsafe {
             crate::finish_agent_request(request, false);
         }

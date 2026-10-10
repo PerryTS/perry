@@ -154,38 +154,24 @@ pub(crate) fn lower_global_builtin_static_value(
     ctx: &mut FnCtx<'_>,
     builtin: &str,
     property: &str,
-) -> String {
+) -> Result<String> {
     if builtin == "Promise" {
         let key_idx = ctx.strings.intern(property);
         let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
         let key_len = property.len().to_string();
-        return ctx.block().call(
+        return Ok(ctx.block().call(
             DOUBLE,
             "js_promise_static_function_value",
             &[(PTR, &key_bytes_global), (I64, &key_len)],
-        );
+        ));
     }
 
-    let builtin_idx = ctx.strings.intern(builtin);
-    let builtin_bytes_global = format!("@{}", ctx.strings.entry(builtin_idx).bytes_global);
-    let builtin_len = builtin.len().to_string();
-    let builtin_value = ctx.block().call(
-        DOUBLE,
-        "js_get_global_this_builtin_value",
-        &[(PTR, &builtin_bytes_global), (I64, &builtin_len)],
-    );
-    let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let blk = ctx.block();
-    let builtin_handle = unbox_to_i64(blk, &builtin_value);
-    let key_box = blk.load(DOUBLE, &key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-    blk.call(
-        DOUBLE,
-        "js_object_get_field_by_name_f64",
-        &[(I64, &builtin_handle), (I64, &key_raw)],
-    )
+    let receiver = Expr::PropertyGet {
+        object: Box::new(Expr::GlobalGet(0)),
+        property: builtin.to_string(),
+        byte_offset: 0,
+    };
+    super::lower_generic_property_get(ctx, &receiver, property, 0)
 }
 
 pub(crate) fn lower_raw_f64_class_field_get_for_number_context(

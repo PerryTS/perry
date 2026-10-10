@@ -190,7 +190,7 @@ pub(crate) use self::indexing::{
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{
-    array_index_fast_path_invalid_for, array_iteration_not_pristine, array_proto_iterator_modified,
+    array_index_fast_path_invalid_for, array_iteration_not_pristine,
     invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
     note_array_index_write, note_array_iteration_not_pristine, note_array_proto_iterator_write,
     note_object_prototype_index_write, object_prototype_has_index_flag,
@@ -228,10 +228,10 @@ pub use self::numeric_range::{
 };
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
-    array_prototype_addr, forget_object_prototype_intrinsic, function_prototype_addr,
-    function_prototype_addr_if_resolved, note_object_prototype_intrinsic, object_prototype_addr,
-    object_prototype_addr_if_resolved, object_prototype_addr_matches, prime_prototype_addr_cache,
-    primitive_wrapper_prototype_addr,
+    array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
+    function_prototype_addr, function_prototype_addr_if_resolved, note_object_prototype_intrinsic,
+    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
+    prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -338,7 +338,22 @@ pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_ro
 
 pub(crate) use iter_object::dispatch_array_iterator_step;
 
+mod iterator_record_cleanup;
+mod iterator_stack_record;
 mod iterator_step;
+pub use iterator_record_cleanup::{js_array_record_abrupt, js_array_record_finish};
 pub use iterator_step::{
-    js_iterator_next_method, js_iterator_step, js_iterator_step_rest_to_array,
+    js_array_record_close, js_array_record_close_absent, js_array_record_enter,
+    js_array_record_enter_counted, js_array_record_literal, js_array_record_literal_needs_iterator,
+    js_array_record_needs_iterator, js_iterator_next_method, js_iterator_step,
+    js_iterator_step_rest_to_array,
 };
+
+pub(crate) use iterator_step::array_intrinsic_values_iterator;
+#[cfg(test)]
+pub(crate) use iterator_step::js_array_record_iterator_at;
+#[cfg(test)]
+pub(crate) use iterator_step::ArrayRecordSite;
+
+#[cfg(test)]
+pub(crate) use iterator_step::array_record_full_proof_calls;

@@ -868,6 +868,17 @@ pub(crate) fn install_proto_method(
     info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) -> f64 {
+    install_proto_method_with_key(proto_obj, method_name, info, arity, std::ptr::null())
+}
+
+/// Install through the same attributed store with an already owned key atom.
+pub(crate) fn install_proto_method_with_key(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+    key: *const crate::StringHeader,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -878,7 +889,11 @@ pub(crate) fn install_proto_method(
     if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
         super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     }
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let key = if key.is_null() {
+        crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32)
+    } else {
+        key as *mut crate::StringHeader
+    };
     let value = crate::value::js_nanbox_pointer(closure as i64);
     // Built-in prototype methods are `{ writable: true, enumerable: false,
     // configurable: true }` per spec. Record that descriptor (reflection-only,

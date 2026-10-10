@@ -455,6 +455,15 @@ pub unsafe extern "C" fn js_register_class_getter(
             Err(_) => return,
         }
     };
+    if name.starts_with('#') {
+        super::parent_static::register_private_accessor_half(
+            class_id as u32,
+            &name,
+            func_ptr as usize,
+            false,
+        );
+        return;
+    }
     let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
@@ -465,13 +474,6 @@ pub unsafe extern "C" fn js_register_class_getter(
     vtable.declare_accessor_half(&name, func_ptr as usize, false);
     drop(registry);
     publish_unbuilt_holder(class_id as u32);
-    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        cache.borrow_mut().remove(&(
-            class_id as u32,
-            name.clone(),
-            ClassDeclarationValueKind::PrivateAccessor,
-        ));
-    });
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
         &name,
@@ -511,6 +513,15 @@ pub unsafe extern "C" fn js_register_class_setter(
             Err(_) => return,
         }
     };
+    if name.starts_with('#') {
+        super::parent_static::register_private_accessor_half(
+            class_id as u32,
+            &name,
+            func_ptr as usize,
+            true,
+        );
+        return;
+    }
     let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
@@ -526,13 +537,6 @@ pub unsafe extern "C" fn js_register_class_setter(
     );
     drop(registry);
     publish_unbuilt_holder(class_id as u32);
-    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        cache.borrow_mut().remove(&(
-            class_id as u32,
-            name.clone(),
-            ClassDeclarationValueKind::PrivateAccessor,
-        ));
-    });
     super::decl_accessors::note_instance_accessor_registered(
         class_id as u32,
         &name,

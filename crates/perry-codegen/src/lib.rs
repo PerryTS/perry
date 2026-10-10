@@ -290,3 +290,6 @@ pub fn module_is_cjs_wrapped(hir: &perry_hir::Module) -> bool {
 
 #[cfg(test)]
 mod receiver_call_effect_tests;
+
+mod array_record_stack;
+mod lower_array_record_length;

@@ -67,6 +67,7 @@ mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
 mod leaf_marks;
 mod malloc_parent_remembering;
+mod dirty_scan_custody;
 mod map_store;
 mod mark_slot_hoists;
 mod minor_fixed_cost;

@@ -233,7 +233,8 @@ fn desc_view_field_values_are_rooted() {
             payload,
         );
 
-        let view = crate::object::object_ops::decode_property_descriptor(&scope, &descriptor);
+        let view = crate::object::try_decode_descriptor(&scope, descriptor.get_nanbox_f64())
+            .expect("a plain object literal descriptor must take the fast decode path");
         assert!(view.has(crate::object::DESC_VALUE));
         let before = addr_of(f64::from_bits(view.read(crate::object::DESC_VALUE).bits()));
 
@@ -481,7 +482,10 @@ fn descriptor_snapshot_collection_keeps_heap_value_and_accessor_after_copying() 
 /// Force the descriptor object's own allocation to copy its saved input fields.
 /// Existing test controls open the supported alloc-point relocation mode; no
 /// production allocation/GC hook is added. The next block allocation belongs
-/// to getOwnPropertyDescriptor, or to the universal current-record precheck.
+/// to getOwnPropertyDescriptor. A definition validates against the holder's
+/// own facts and builds no record, so the redefining variant applies its
+/// generic descriptor first and then witnesses the record of the redefined
+/// property.
 #[test]
 fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
     struct NoConservativeScan(Option<crate::gc::roots::ConservativeStackScanMode>);
@@ -567,6 +571,13 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
                         string_value("enumerable"),
                         f64::from_bits(crate::value::TAG_TRUE),
                     );
+                    if redefine {
+                        crate::object::js_object_define_property(
+                            receiver.get_nanbox_f64(),
+                            key.get_nanbox_f64(),
+                            generic.get_nanbox_f64(),
+                        );
+                    }
                     // Warm reflection shapes and intrinsics before arming. No
                     // user callbacks or numeric/key conversions allocate here.
                     crate::object::js_object_get_own_property_descriptor(
@@ -579,23 +590,18 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
                     let moved = moved_objects_total();
                     super::runtime_roots::force_next_general_arena_alloc_slow();
                     trigger.make_arena_trigger_due();
-                    let result = if redefine {
-                        crate::object::js_object_define_property(
-                            receiver.get_nanbox_f64(),
-                            key.get_nanbox_f64(),
-                            generic.get_nanbox_f64(),
-                        );
-                        crate::object::js_object_get_own_property_descriptor(
-                            receiver.get_nanbox_f64(),
-                            key.get_nanbox_f64(),
-                        )
-                    } else {
-                        crate::object::js_object_get_own_property_descriptor(
-                            receiver.get_nanbox_f64(),
-                            key.get_nanbox_f64(),
-                        )
-                    };
+                    let result = crate::object::js_object_get_own_property_descriptor(
+                        receiver.get_nanbox_f64(),
+                        key.get_nanbox_f64(),
+                    );
                     let result = scope.root_nanbox_f64(result);
+                    if redefine {
+                        assert_eq!(
+                            read_property(result.get_nanbox_f64(), "enumerable").to_bits(),
+                            crate::value::TAG_TRUE,
+                            "the generic redefinition must be applied"
+                        );
+                    }
                     assert!(
                         copying_minor_cycles() > cycles,
                         "descriptor allocation must run a copying minor"

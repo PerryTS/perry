@@ -401,10 +401,7 @@ pub(crate) unsafe fn define_array_property(
         if !named_exists && !index_exists {
             let gc = gc_header_for(obj);
             if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-                super::throw_object_type_error_with_suffix(
-                    "Cannot define property ",
-                    &format!("{key_name}, object is not extensible"),
-                );
+                return Some(false);
             }
         }
     }

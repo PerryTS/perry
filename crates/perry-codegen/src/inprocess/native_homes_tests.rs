@@ -419,3 +419,144 @@ fn explicit_release_does_not_gain_a_duplicate_volatile_store() {
         native_homes::SMALL_HOME_SET + 1
     );
 }
+
+#[test]
+fn compiler_stack_record_publishes_all_fields_even_in_a_small_function() {
+    use crate::types::{DOUBLE, PTR, VOID};
+    let _pin = crate::codegen::helpers::NativeRootsPin::native();
+    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+    module.declare_function("record_collect", VOID, &[PTR]);
+    let function = module.define_function("record_home", DOUBLE, vec![(DOUBLE, "%value".into())]);
+    function.enable_shadow_frame(0);
+    let (record, fields) = function.alloca_entry_root_record(6);
+    let block = function.create_block("entry");
+    block.store_volatile(DOUBLE, "%value", &fields[0]);
+    block.call_void("record_collect", &[(PTR, &record)]);
+    let value = block.load_volatile(DOUBLE, &fields[0]);
+    block.ret(DOUBLE, &value);
+    let ir = module.to_ir();
+    let pieces = compile_ll_to_object_inprocess(
+        &ir,
+        "x86_64-unknown-linux-gnu",
+        &["-S".into(), "-Os".into()],
+        "record_home",
+        true,
+    )
+    .expect("explicit stack home emits");
+    let asm = String::from_utf8(pieces.concat()).unwrap();
+    let maps = crate::gc_map::decode_stack_map_roots(&asm, "x86_64-unknown-linux-gnu").unwrap();
+    let records = &maps
+        .iter()
+        .find(|(name, _)| name == "record_home")
+        .expect("record map")
+        .1;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].len(),
+        6,
+        "every field must be visible at a moving statepoint"
+    );
+}
+
+#[test]
+fn stack_record_and_scalar_homes_merge_without_losing_record_words() {
+    let mut ir = fixture(32, 64);
+    ir = ir.replace(
+        "define i64 @homes",
+        "declare void @record_collect(ptr)\ndefine i64 @homes",
+    );
+    ir = ir.replace(
+        "entry:\n",
+        concat!(
+            "entry:\n",
+            "  %record = alloca [6 x ptr addrspace(1)], align 8, !perry.native.home !{}\n",
+            "  call void @record_collect(ptr %record)\n"
+        ),
+    );
+    let context = Context::create();
+    let module = parse_ir_text(&context, &ir, "record_offsets").unwrap();
+    retain(&module);
+    let text = module.print_to_string().to_string();
+    let scalar_store = text
+        .lines()
+        .find(|l| {
+            l.contains("store volatile ptr addrspace(1) %p0, ptr ")
+                || l.contains("store ptr addrspace(1) %p0, ptr ")
+        })
+        .expect("first scalar store");
+    let address = scalar_store
+        .split(", ptr ")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap();
+    let gep = text
+        .lines()
+        .find(|l| {
+            l.trim_start()
+                .starts_with(&format!("{address} = getelementptr"))
+        })
+        .expect("first scalar address");
+    assert!(
+        gep.contains("i64 6"),
+        "the first scalar starts after every record word: {gep}"
+    );
+
+    let pieces = compile_ll_to_object_inprocess(
+        &ir,
+        "x86_64-unknown-linux-gnu",
+        &["-S".into(), "-Os".into()],
+        "record_and_homes",
+        true,
+    )
+    .expect("record and scalar homes emit together");
+    let asm = String::from_utf8(pieces.concat()).unwrap();
+    let maps = crate::gc_map::decode_stack_map_roots(&asm, "x86_64-unknown-linux-gnu").unwrap();
+    let records = &maps.iter().find(|(name, _)| name == "homes").unwrap().1;
+    assert_eq!(records.len(), 65);
+    for record in records {
+        assert_eq!(
+            record.len(),
+            38,
+            "the six-word record must not overlap scalar homes"
+        );
+    }
+}
+
+#[test]
+fn small_functions_coalesce_explicit_stack_records_before_optimization() {
+    let ir = r#"declare void @record_collect(ptr, ptr)
+define void @small_records() gc "statepoint-example" {
+entry:
+  %first = alloca [6 x ptr addrspace(1)], align 8, !perry.native.home !{}
+  %second = alloca [6 x ptr addrspace(1)], align 8, !perry.native.home !{}
+  call void @record_collect(ptr %first, ptr %second)
+  ret void
+}
+"#;
+    let context = Context::create();
+    let module = parse_ir_text(&context, ir, "small_explicit_records").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    let text = module.print_to_string().to_string();
+    assert_eq!(
+        text.matches("alloca [12 x ptr addrspace(1)]").count(),
+        1,
+        "explicit ranges must not depend on the long-lived SSA heuristic"
+    );
+    assert!(!text.contains("alloca [6 x ptr addrspace(1)]"));
+    let pieces = compile_ll_to_object_inprocess(
+        ir,
+        "x86_64-unknown-linux-gnu",
+        &["-S".into(), "-Os".into()],
+        "small_records",
+        true,
+    )
+    .unwrap();
+    let asm = String::from_utf8(pieces.concat()).unwrap();
+    let maps = crate::gc_map::decode_stack_map_roots(&asm, "x86_64-unknown-linux-gnu").unwrap();
+    let roots = &maps.iter().find(|(n, _)| n == "small_records").unwrap().1;
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].len(), 12);
+}

@@ -719,18 +719,14 @@ pub(crate) unsafe fn primitive_object_prototype_accessor(
     name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    let object_ctor = super::super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_value = JSValue::from_bits(object_ctor.to_bits());
-    if !ctor_value.is_pointer() {
+    // A primitive inherits from this realm's intrinsic, independently of
+    // assignments to the writable global constructor binding. The existing
+    // movable intrinsic root supplies that identity; its shape still owns
+    // every property and accessor change.
+    let proto_ptr = crate::array::object_prototype_addr();
+    if proto_ptr == 0 {
         return None;
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = JSValue::from_bits(proto.to_bits());
-    if !proto_value.is_pointer() {
-        return None;
-    }
-    let proto_ptr = proto_value.as_pointer::<ObjectHeader>() as usize;
     let acc = get_accessor_descriptor(proto_ptr, name)?;
     if acc.get == 0 {
         return Some(JSValue::undefined());
@@ -751,28 +747,28 @@ unsafe fn bind_closure_value_to_receiver(value: JSValue, receiver: f64) -> JSVal
 }
 
 pub(crate) unsafe fn primitive_builtin_prototype_property(
-    builtin_name: &[u8],
-    key: *const crate::StringHeader,
-    receiver: f64,
+    mut key: *const crate::StringHeader,
+    mut receiver: f64,
 ) -> Option<JSValue> {
     if key.is_null() {
         return None;
     }
-    let ctor = js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
-    let ctor_value = JSValue::from_bits(ctor.to_bits());
-    if !ctor_value.is_pointer() {
+    let mut proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
+    if proto_addr == 0 {
+        // The first observable primitive read may need realm bootstrap.
+        // Both borrowed arguments must be refreshed if bootstrap collects.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key_root = scope.root_string_ptr(key);
+        let receiver_root = scope.root_nanbox_f64(receiver);
+        super::super::js_get_global_this();
+        key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        receiver = receiver_root.get_nanbox_f64();
+        proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
+    }
+    if proto_addr == 0 {
         return None;
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = JSValue::from_bits(proto.to_bits());
-    if !proto_value.is_pointer() {
-        return None;
-    }
-    let proto_ptr = proto_value.as_pointer::<ObjectHeader>();
-    if proto_ptr.is_null() {
-        return None;
-    }
+    let proto_ptr = proto_addr as *const ObjectHeader;
     // An ACCESSOR installed on the builtin prototype
     // (`Object.defineProperty(Number.prototype, "x", { get(){…} })`) must run
     // with the ORIGINAL primitive receiver — boxed/raw per getter strictness

@@ -248,7 +248,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | "try"
             ) =>
         {
-            Ok(lower_global_builtin_static_value(ctx, "Promise", property))
+            lower_global_builtin_static_value(ctx, "Promise", property)
         }
 
         Expr::PropertyGet {
@@ -416,7 +416,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // non-numeric `length`, a function, a typed array, `null` and
             // `undefined`, and require node-identical output. They run the
             // inline arm now instead of the generic tower.
-            && (is_array_expr(ctx, object)
+            && (matches!(object.as_ref(), Expr::LocalGet(id) if ctx.array_record_length_local == Some(*id))
+                || is_array_expr(ctx, object)
                 || is_string_expr(ctx, object)
                 || match crate::type_analysis::static_type_of(ctx, object) {
                     // A `Function`-typed receiver is a closure, not a
@@ -501,6 +502,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // was forced through `js_value_length_f64` (issue #128
             // follow-up — correctness-safe, but ~10x slower on the
             // `.length` hot path). Tag check is platform-independent.
+            // A compiler-owned record carries the entry proof. Preserve its
+            // compact guard without changing ordinary indexed-loop codegen.
+            if matches!(object.as_ref(), Expr::LocalGet(id)
+                if ctx.array_record_length_local == Some(*id)
+                    && ctx.array_stack_records.contains_key(id))
+            {
+                return Ok(composed_ics::emit_record_length(
+                    ctx,
+                    &recv_box,
+                    &recv_bits,
+                    &recv_handle,
+                ));
+            }
+            let blk = ctx.block();
             let recv_tag = blk.lshr(I64, &recv_bits, "48");
             let recv_tag_masked = blk.and(I64, &recv_tag, "65533"); // 0xFFFD
             let tag_ok = blk.icmp_eq(I64, &recv_tag_masked, "32765"); // 0x7FFD

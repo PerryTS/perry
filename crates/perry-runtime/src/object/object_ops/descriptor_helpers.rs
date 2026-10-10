@@ -201,15 +201,68 @@ impl DescView<'_> {
     }
 }
 
+/// Handle slots one collected definition occupies in an
+/// `Object.defineProperties` scope: the key, the presence mask, then the six
+/// field values in `DESC_*` order (an absent field holds `undefined`).
+pub(crate) const COLLECTED_DESCRIPTOR_WORDS: usize = 8;
+
+impl<'scope> DescView<'scope> {
+    /// The record as `COLLECTED_DESCRIPTOR_WORDS` NaN-box words, `key` first.
+    /// The caller pushes them as handles with no allocation in between, so
+    /// raw words never outlive a collection point. The presence bits travel
+    /// with the record, so a present `undefined` stays present.
+    pub(crate) fn collected_words(&self, key: u64) -> [u64; COLLECTED_DESCRIPTOR_WORDS] {
+        let mask = (0..6).fold(0u32, |mask, f| mask | (u32::from(self.present[f]) << f));
+        let mut words = [crate::value::TAG_UNDEFINED; COLLECTED_DESCRIPTOR_WORDS];
+        words[0] = key;
+        words[1] = f64::from(mask).to_bits();
+        for f in 0..6 {
+            words[2 + f] = self.read(f).bits();
+        }
+        words
+    }
+
+    /// Entry `entry` of the contiguous records pushed into `scope` from
+    /// handle-stack index `base`: the rooted key and the rooted record. The
+    /// handles are the scope's own slots, so nothing is pushed again.
+    ///
+    /// # Safety
+    /// `base` and every record after it were pushed into `scope`, contiguously,
+    /// as `collected_words` arrays.
+    pub(crate) unsafe fn collected_at(
+        scope: &'scope crate::gc::RuntimeHandleScope,
+        base: usize,
+        entry: usize,
+    ) -> (crate::gc::RuntimeHandle<'scope>, DescView<'scope>) {
+        let at = base + entry * COLLECTED_DESCRIPTOR_WORDS;
+        let key = scope.ffi_nanbox_handle(at);
+        let mask = f64::from_bits(scope.ffi_nanbox_handle(at + 1).get_nanbox_u64()) as u32;
+        let mut view = DescView {
+            present: [false; 6],
+            handles: [None; 6],
+        };
+        for f in 0..6 {
+            if mask & (1 << f) != 0 {
+                view.present[f] = true;
+                view.handles[f] = Some(scope.ffi_nanbox_handle(at + 2 + f));
+            }
+        }
+        (key, view)
+    }
+}
+
 impl DescView<'_> {
+    #[inline]
     pub(crate) fn has_named(&self, name: &[u8]) -> bool {
         desc_field_index(name).is_some_and(|index| self.has(index))
     }
+    #[inline]
     pub(crate) fn read_named(&self, name: &[u8]) -> crate::JSValue {
         desc_field_index(name)
             .map(|index| self.read(index))
             .unwrap_or_else(|| crate::JSValue::from_bits(crate::value::TAG_UNDEFINED))
     }
+    #[inline]
     pub(crate) fn flag(&self, name: &[u8]) -> Option<bool> {
         self.has_named(name)
             .then(|| self.read_named(name).bits() == crate::value::TAG_TRUE)
@@ -423,7 +476,7 @@ pub(crate) unsafe fn descriptor_object_from_view(
     object.with_mut_ptr::<ObjectHeader, _>(|object| crate::value::js_nanbox_pointer(object as i64))
 }
 
-#[inline]
+#[inline(always)]
 fn desc_field_index(b: &[u8]) -> Option<usize> {
     match b {
         b"value" => Some(DESC_VALUE),
@@ -487,7 +540,7 @@ pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
 /// Single-pass decode of `descriptor_value`'s 6 `ToPropertyDescriptor` fields.
 /// `Some(view)` is exactly equivalent to running `desc_has_field` /
 /// `desc_read_field` per field; `None` means the caller must use those.
-unsafe fn try_decode_descriptor<'scope>(
+pub(crate) unsafe fn try_decode_descriptor<'scope>(
     scope: &'scope crate::gc::RuntimeHandleScope,
     descriptor_value: f64,
 ) -> Option<DescView<'scope>> {
@@ -684,20 +737,18 @@ pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crat
     crate::value::JSValue::from_bits(v.to_bits())
 }
 
-/// #2843: enforce the ordinary `[[DefineOwnProperty]]` invariants
-/// (ECMA-262 10.1.6.3 `ValidateAndApplyPropertyDescriptor`) for
-/// `Object.defineProperty`. `obj` is the resolved heap object, `key` the
-/// coerced key string. Throws the Node `TypeError` when the definition would
-/// violate an invariant; returns normally when the definition is permitted.
+/// #2843: the validation half of the ordinary `[[DefineOwnProperty]]`
+/// (ECMA-262 10.1.6.3 `ValidateAndApplyPropertyDescriptor`) for a plain heap
+/// object. `obj` is the resolved heap object, `key` the coerced key string.
+/// Returns the definition's verdict; it never throws. `Object.defineProperty`
+/// turns a `false` into its `TypeError`, `Reflect.defineProperty` returns it.
 ///
-/// Rules (matching Node v25):
-///   - Adding a NEW key to a non-extensible object:
-///       `Cannot define property <k>, object is not extensible`
-///   - Redefining an EXISTING **non-configurable** key in a way the spec
+/// Rejected (matching Node v25):
+///   - adding a NEW key to a non-extensible object;
+///   - redefining an EXISTING **non-configurable** key in a way the spec
 ///     forbids (make it configurable, flip enumerable, switch data↔accessor,
 ///     re-enable writability, or change the value of a non-writable data
-///     property to a different value):
-///       `Cannot redefine property: <k>`
+///     property to a different value).
 ///
 /// A property is non-configurable either object-wide (the object was frozen or
 /// sealed — both drop `configurable` on every existing key) OR individually
@@ -710,9 +761,9 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     key: *const crate::StringHeader,
     key_name: &str,
     descriptor: &DescView<'_>,
-) {
+) -> bool {
     if obj.is_null() || (obj as usize) <= 0x10000 {
-        return;
+        return true;
     }
     let gc = gc_header_for(obj);
     let no_extend = (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0;
@@ -722,14 +773,8 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     let exists = own_key_present_via_index(obj, key).unwrap_or_else(|| own_key_present(obj, key));
 
     if !exists {
-        // Adding a new property to a non-extensible object always throws.
-        if no_extend {
-            throw_object_type_error_with_suffix(
-                "Cannot define property ",
-                &format!("{key_name}, object is not extensible"),
-            );
-        }
-        return;
+        // Adding a new property to a non-extensible object is rejected.
+        return !no_extend;
     }
 
     // Existing own property. Its configurability comes from the per-key
@@ -737,10 +782,10 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     // applies ⇒ any redefinition is permitted. Frozen/sealed objects and
     // explicit `{configurable: false}` defines both populate the table.
     let Some(attrs) = get_property_attrs(obj as usize, key_name) else {
-        return;
+        return true;
     };
     if attrs.configurable() {
-        return; // still configurable — redefinition allowed
+        return true; // still configurable — redefinition allowed
     }
 
     // --- ValidateAndApplyPropertyDescriptor: current is non-configurable. ---
@@ -750,29 +795,18 @@ pub(crate) unsafe fn enforce_define_property_invariants(
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
-    validate_nonconfigurable_redefine(key_name, attrs, cur_accessor, cur_value, descriptor);
+    nonconfigurable_redefine_allowed(attrs, cur_accessor, cur_value, descriptor)
 }
 
-/// The non-configurable branch of `ValidateAndApplyPropertyDescriptor`, factored
-/// so the plain-object, function-object (closure), and symbol-keyed define paths
-/// share one spec implementation. `cur_attrs` is the existing property's
-/// attributes (already known non-configurable). `cur_accessor` is `Some(_)` for
-/// an accessor property (carrying its get/set closure bits) or `None` for a data
-/// property whose current value is `cur_value`. Throws `TypeError: Cannot
-/// redefine property: <k>` when the redefinition violates an invariant.
-pub(crate) unsafe fn validate_nonconfigurable_redefine(
-    key_name: &str,
-    cur_attrs: PropertyAttrs,
-    cur_accessor: Option<AccessorDescriptor>,
-    cur_value: f64,
-    descriptor: &DescView<'_>,
-) {
-    if !nonconfigurable_redefine_allowed(cur_attrs, cur_accessor, cur_value, descriptor) {
-        throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
-    }
-}
-
-/// The shared invariant verdict for Object and Reflect definitions.
+/// The non-configurable branch of `ValidateAndApplyPropertyDescriptor`, shared
+/// by every family's `[[DefineOwnProperty]]` (plain object, function object,
+/// symbol key, array, buffer, exotic cell, typed array, handle, class). The
+/// family reads its own current facts and asks this one predicate.
+/// `cur_attrs` is the existing property's attributes (already known
+/// non-configurable). `cur_accessor` is `Some(_)` for an accessor property
+/// (carrying its get/set closure bits) or `None` for a data property whose
+/// current value is `cur_value`. A `false` is the family's rejection verdict:
+/// `Object.*` throws it, `Reflect.defineProperty` returns it.
 #[inline(never)]
 pub(crate) unsafe fn nonconfigurable_redefine_allowed(
     cur_attrs: PropertyAttrs,

@@ -99,7 +99,7 @@ pub(crate) fn lower_destructuring_assignment_stmt_from_local(
 fn lower_array_assignment_from_expr(
     ctx: &mut LoweringContext,
     arr_pat: &ast::ArrayPat,
-    source: ArraySource,
+    mut source: ArraySource,
 ) -> Result<Vec<Stmt>> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, "destruct_iter", Type::Any);
     let (next_id, next_name) = fresh_destruct_local(ctx, "destruct_next", Type::Any);
@@ -111,7 +111,7 @@ fn lower_array_assignment_from_expr(
             name: iter_name,
             ty: Type::Any,
             mutable: false,
-            init: Some(source.iter_init()),
+            init: Some(source.iter_init(iter_id)),
         },
         Stmt::Let {
             id: next_id,
@@ -154,20 +154,7 @@ fn lower_array_assignment_from_expr(
                 done_id,
                 Box::new(Expr::Bool(true)),
             )));
-            body.push(Stmt::Let {
-                id: rest_id,
-                name: rest_name,
-                ty: Type::Any,
-                mutable: false,
-                init: Some(runtime_iterator_call(
-                    "iteratorRestToArray",
-                    vec![
-                        Expr::LocalGet(iter_id),
-                        Expr::LocalGet(next_id),
-                        Expr::LocalGet(rest_done_id),
-                    ],
-                )),
-            });
+            body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
             body.push(Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
@@ -226,6 +213,7 @@ fn lower_array_assignment_from_expr(
         finally: None,
     });
     result.push(close_stmt);
+    result.extend(source.release(&[iter_id, next_id]));
 
     Ok(result)
 }
@@ -238,12 +226,12 @@ fn iterator_next_value_stmts(
     value_id: LocalId,
     read_value: bool,
 ) -> Vec<Stmt> {
-    let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Any);
+    let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
             id: step_id,
             name: step_name,
-            ty: Type::Any,
+            ty: Type::Boolean,
             mutable: false,
             init: Some(runtime_iterator_call(
                 "iteratorStep",
@@ -265,15 +253,17 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::LocalGet(step_id),
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(step_id)),
+                right: Box::new(Expr::Bool(true)),
+            },
             then_branch: vec![Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
             ))],
-            else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
-                value_id,
-                Box::new(Expr::LocalGet(value_id)),
-            ))]),
+            // IteratorStepValue already owns publication to the output slot.
+            else_branch: Some(vec![]),
         },
     ];
 
@@ -295,7 +285,11 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::LocalGet(done_id),
+        condition: Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(done_id)),
+            right: Box::new(Expr::Bool(true)),
+        },
         then_branch: vec![Stmt::Expr(Expr::LocalSet(
             value_id,
             Box::new(Expr::Undefined),
@@ -620,7 +614,14 @@ fn assign_prepared_target(
             strict: ctx.current_strict,
         })]),
         PreparedTarget::Array(arr) => {
-            lower_array_assignment_from_expr(ctx, &arr, ArraySource::Iterator(value))
+            let mut setup = Vec::new();
+            let plan = array_fast::FastPlan::new(ctx, value, &mut setup);
+            setup.extend(lower_array_assignment_from_expr(
+                ctx,
+                &arr,
+                ArraySource::Guarded(plan),
+            )?);
+            Ok(setup)
         }
         PreparedTarget::Object(obj) => lower_object_assignment_from_expr(ctx, &obj, value),
         PreparedTarget::Skip => Ok(Vec::new()),
@@ -645,10 +646,20 @@ mod iterator_close_tests {
                         ..
                     } => {
                         if let Some(branch) = else_branch {
-                            let next = branch.iter().position(|s| matches!(
-                                s, Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
-                                if method == "iteratorStep"
-                            ));
+                            let next = branch.iter().position(|s| {
+                                let Stmt::Let {
+                                    init: Some(init), ..
+                                } = s
+                                else {
+                                    return false;
+                                };
+                                let protocol = match init {
+                                    Expr::Conditional { then_expr, .. } => then_expr.as_ref(),
+                                    init => init,
+                                };
+                                matches!(protocol, Expr::NativeMethodCall { method, .. }
+                                    if method == "iteratorStep")
+                            });
                             if let Some(next) = next {
                                 assert!(next > 0, "IteratorNext must be preceded by marking done");
                                 assert!(matches!(&branch[next - 1],
@@ -705,6 +716,12 @@ mod iterator_close_tests {
                 matches!(s,
                     Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
                     if method == "iteratorRestToArray"
+                ) || matches!(
+                    s,
+                    Stmt::Let {
+                        init: Some(Expr::Array(_)),
+                        ..
+                    }
                 )
             })
             .unwrap();
@@ -712,6 +729,21 @@ mod iterator_close_tests {
             Stmt::Expr(Expr::LocalSet(id, value)) if matches!(**value, Expr::Bool(true)) => *id,
             _ => panic!("draining must mark done before any iterator step"),
         };
+        if matches!(
+            &body[rest],
+            Stmt::Let {
+                init: Some(Expr::Array(_)),
+                ..
+            }
+        ) {
+            assert!(
+                matches!(&body[rest + 2], Stmt::If {
+                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+            } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
+                && matches!(right.as_ref(), Expr::Bool(true))),
+                "drain must test the saved pre-drain done bit"
+            );
+        }
         if let Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }),
             ..

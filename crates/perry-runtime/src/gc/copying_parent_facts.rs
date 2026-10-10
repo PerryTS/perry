@@ -260,26 +260,28 @@ impl CopyingNurseryCollector {
         self.ptrs.decode_bits(bits).map(|(addr, _, _)| addr)
     }
 
-    pub(super) unsafe fn visit_mutable_slot_with_parent(
+    /// The dirty scan has already admitted an old or malloc parent and
+    /// filtered weak targets. Reuse those facts instead of reclassifying the
+    /// same parent and its weak-holder class for every slot.
+    pub(super) unsafe fn visit_remembered_slot(
         &mut self,
         slot: GcMutableSlot,
         parent_header: *mut GcHeader,
         external: bool,
     ) {
+        debug_assert!(!parent_header.is_null());
+        #[cfg(test)]
+        {
+            assert!(barrier_parent_needs_remembering(
+                (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize
+            ));
+            assert!(!crate::weakref::is_weak_target_trace_slot(
+                parent_header,
+                slot.slot
+            ));
+        }
         let skip = self.skip_remembering;
-        self.visit_slot_core(
-            slot,
-            parent_header,
-            weak_holder_fact(parent_header),
-            move || {
-                !parent_header.is_null()
-                    && !skip
-                    && barrier_parent_needs_remembering(
-                        (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
-                    )
-            },
-            move || external,
-        );
+        self.visit_slot_core(slot, parent_header, false, move || !skip, move || external);
     }
 
     /// Visit a raw slot with the parent's weak-holder fact supplied by the

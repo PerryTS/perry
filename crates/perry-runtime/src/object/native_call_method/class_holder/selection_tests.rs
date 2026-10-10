@@ -61,8 +61,8 @@ fn s7b_selection_prebuilt_chain_preserves_each_consumer_answer() {
     assert!(crate::object::class_has_own_method(a, "m"));
     unsafe {
         assert_eq!(shape_named_class(recv), Some(b));
-        assert_eq!(class_instance_prototype(recv), cp);
-        assert_eq!(class_instance_prototype_built(recv), cp);
+        assert_eq!(class_instance_prototype(recv), bp);
+        assert_eq!(class_instance_prototype_built(recv), bp);
         assert_eq!(guarded_class_instance_prototype(recv), bp);
     }
 }
@@ -110,7 +110,7 @@ fn s7b_selection_lazy_chain_preserves_inner_materializer_projection() {
 }
 
 #[test]
-fn s7b_selection_guarded_fallback_requires_identical_raw_cid() {
+fn readpath_selection_unbuilt_shape_word_has_no_hot_alias_fallback() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let (a, b, c) = (0x7120, 0x7121, 0x7122);
     for cid in [a, b, c] {
@@ -123,10 +123,16 @@ fn s7b_selection_guarded_fallback_requires_identical_raw_cid() {
     unsafe {
         assert_eq!(shape_named_class(before), Some(a));
         assert_eq!(shape_named_class(after), Some(b));
+        assert_eq!(raw(c), crate::value::js_nanbox_pointer(cp as i64).to_bits());
         assert!(!crate::JSValue::from_bits(raw(b)).is_pointer());
         assert!(guarded_class_instance_prototype(before).is_null());
-        assert_eq!(guarded_class_instance_prototype(after), cp);
-        assert_eq!(class_instance_prototype_built(before), cp);
+        assert!(guarded_class_instance_prototype(after).is_null());
+        // The receiver born before alias registration materializes its
+        // recorded A word. Hot reads above never redirect an unbuilt word
+        // through the later B -> C registration input.
+        let built = class_instance_prototype_built(before);
+        assert_eq!(built, ptr(raw(a)));
+        assert_eq!((*built).class_id, a);
     }
 }
 
@@ -148,7 +154,7 @@ fn s7b_selection_independent_calls_reproject_late_alias_and_replacement() {
     assert_eq!(registry::class_method_slot_owner(a, "m"), Some(b));
     crate::object::js_register_class_generic_origin(a, c);
     assert_eq!(registry::class_method_slot_owner(a, "m"), Some(c));
-    assert_eq!(unsafe { class_instance_prototype_built(recv) }, cp);
+    assert_eq!(unsafe { class_instance_prototype_built(recv) }, old);
     registry::class_decl_prototype_object_root_store(b, cp.cast_mut());
     assert_eq!(registry::class_method_slot_owner(d, "m"), Some(c));
     assert_eq!(

@@ -61,10 +61,7 @@ pub(crate) fn install_client_config(
     }
     let session = crate::turnloop_tls::TlsSession::client(client_config, server_name)?;
     unsafe {
-        p::socket_ptr(link)
-            .map_err(|_| "socket is closed")?
-            .as_mut()
-            .unwrap()
+        (*p::socket_ptr(link).map_err(|_| "socket is closed")?)
             .ext
             .tls = Some(Box::new(TlsLayer {
             session,
@@ -103,10 +100,7 @@ pub(crate) fn install_server(
     }
     let session = crate::turnloop_tls::TlsSession::server(config)?;
     unsafe {
-        p::socket_ptr(link)
-            .map_err(|_| "socket is closed")?
-            .as_mut()
-            .unwrap()
+        (*p::socket_ptr(link).map_err(|_| "socket is closed")?)
             .ext
             .tls = Some(Box::new(TlsLayer {
             session,
@@ -140,9 +134,8 @@ pub(crate) fn queued(link: OwnerLink) -> usize {
 pub(crate) fn write(owner: f64, bytes: &[u8], user: u64) -> Result<usize, tl::NetError> {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
-    let window =
-        unsafe { perry_ffi::native_payload::project::<p::SocketPayload>(owner.get(), &p::SOCKET) }
-            .map_err(|_| bad_fd("write"))?;
+    let window = unsafe { super::native_transport::transport_window(owner.get()) }
+        .map_err(|_| bad_fd("write"))?;
     let _account = p::AccountSocket(window.link);
     unsafe { write_proven(owner.get(), window, bytes, user) }
 }
@@ -223,6 +216,9 @@ pub(crate) fn begin_connected(owner: f64) {
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
     let _account = p::AccountSocket(link);
+    let Some(snapshot) = io::snapshot(link) else {
+        return;
+    };
     let initial = unsafe {
         p::socket_ptr(link)
             .ok()
@@ -235,7 +231,14 @@ pub(crate) fn begin_connected(owner: f64) {
         return;
     };
     if let Err(message) = install_client(owner.get(), servername, verify, config) {
-        fail(owner.get(), &message, false);
+        if io::matches(link, &snapshot) {
+            fail(owner.get(), &message, false);
+        }
+        return;
+    }
+    // Installation and every held write can drive TLS listeners. Old held
+    // writes must never flow into a replacement Socket incarnation.
+    if !io::matches(link, &snapshot) {
         return;
     }
     let pending = unsafe {
@@ -248,13 +251,21 @@ pub(crate) fn begin_connected(owner: f64) {
     };
     if let Some((writes, end)) = pending {
         for (bytes, user) in writes {
-            if let Err(error) = write(owner.get(), &bytes, user) {
+            let result = write(owner.get(), &bytes, user);
+            if !io::matches(link, &snapshot) {
+                return;
+            }
+            if let Err(error) = result {
                 fail(owner.get(), &error.message(), false);
                 return;
             }
         }
         if let Some(user) = end {
-            if let Err(error) = shutdown(owner.get(), user) {
+            let result = shutdown(owner.get(), user);
+            if !io::matches(link, &snapshot) {
+                return;
+            }
+            if let Err(error) = result {
                 fail(owner.get(), &error.message(), false);
             }
         }
@@ -294,7 +305,12 @@ pub(crate) fn wrote(owner: f64, len: usize) {
                 .front()
                 .is_some_and(|write| write.mark.is_some_and(|mark| mark <= layer.cipher_acked))
             {
-                let write = layer.pending.pop_front().unwrap();
+                // The successful front predicate and pop share one exclusive
+                // borrow with no callback or queue mutation between them.
+                let write = layer
+                    .pending
+                    .pop_front()
+                    .expect("observed TLS pending front");
                 done.push((write.user, write.plain_len));
             }
             Some(done)
@@ -365,17 +381,29 @@ fn drive(owner: f64) {
         return;
     };
     if !output.is_empty() {
-        if let Err(error) =
-            unsafe { tl::link_write(&mut *p::socket_core(link).unwrap(), link, &output, 0) }
-        {
+        if let Err(error) = unsafe {
+            let Ok(core) = p::socket_core(link) else {
+                return;
+            };
+            if !tl::link_handle_matches(&mut *core, link, &snapshot) {
+                return;
+            }
+            tl::link_write(&mut *core, link, &output, 0)
+        } {
             fail(owner.get(), &error.message(), closing);
             return;
         }
     }
     if let Some(user) = end {
-        if let Err(error) =
-            unsafe { tl::link_shutdown(&mut *p::socket_core(link).unwrap(), link, user) }
-        {
+        if let Err(error) = unsafe {
+            let Ok(core) = p::socket_core(link) else {
+                return;
+            };
+            if !tl::link_handle_matches(&mut *core, link, &snapshot) {
+                return;
+            }
+            tl::link_shutdown(&mut *core, link, user)
+        } {
             fail(owner.get(), &error.message(), closing);
             return;
         }

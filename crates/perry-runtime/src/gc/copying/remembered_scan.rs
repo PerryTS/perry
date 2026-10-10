@@ -18,62 +18,90 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
         dirty_pages_scanned: snapshot.dirty_pages.len(),
         ..RememberedSetTraceStats::default()
     };
-    let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
+    let old_headers = crate::arena::old_arena_headers_on_pages(&snapshot.dirty_old_pages);
+    if let Some(covered) = covered.as_deref_mut() {
+        // Every entry comes from one of these snapshot inputs. Reserve their
+        // current bound once, rather than guessing from the previous minor.
+        covered.reserve(
+            old_headers.len()
+                + snapshot.external_dirty_entries.len()
+                + snapshot.fallback_headers.len(),
+        );
+    }
+    #[cfg(any(test, debug_assertions))]
+    let covered_capacity = covered.as_deref().map(|set| set.capacity());
+    let mut seen_headers = crate::fast_hash::new_ptr_hash_set_with_capacity(
+        snapshot.external_dirty_entries.len() + snapshot.fallback_headers.len(),
+    );
 
-    let mut scan_header = |header: *mut GcHeader, stats: &mut RememberedSetTraceStats| unsafe {
-        if header.is_null() || !seen_headers.insert(header as usize) {
-            return;
-        }
-        let arena_parent = plausible_gc_header(header, true);
-        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
-        if !arena_parent && !malloc_parent {
-            return;
-        }
-        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if arena_parent
-            && !matches!(
-                crate::arena::classify_heap_generation(user),
-                crate::arena::HeapGeneration::Old
-            )
-        {
-            return;
-        }
-        stats.old_objects_considered += 1;
-        stats.valid_roots += 1;
-        stats.dirty_objects_scanned += 1;
-        let mut changed = false;
-        let mut visit_slot = |slot: GcMutableSlot, stats: &mut RememberedSetTraceStats| {
-            let external = !matches!(
-                crate::arena::classify_heap_generation(slot.slot as usize),
-                crate::arena::HeapGeneration::Old
-            );
-            let before = slot.read();
-            visit(slot, header, external, stats);
-            changed |= slot.read() != before;
-        };
-        let complete =
-            scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
-        if complete {
-            if let Some(covered) = covered.as_deref_mut() {
-                covered.insert(header as usize);
+    let mut scan_header =
+        |header: *mut GcHeader, old_walk: bool, stats: &mut RememberedSetTraceStats| unsafe {
+            // The old-page walker already emits each owner once. Only external
+            // and fallback entries need exact deduplication here.
+            if header.is_null() || (!old_walk && !seen_headers.insert(header as usize)) {
+                return;
             }
-        }
-        if changed {
-            run_gc_rewrite_hook((*header).obj_type, user);
-        }
-    };
+            let arena_parent = plausible_gc_header(header, true);
+            let malloc_parent = !arena_parent && plausible_gc_header(header, false);
+            if !arena_parent && !malloc_parent {
+                return;
+            }
+            let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+            if arena_parent
+                && !matches!(
+                    crate::arena::classify_heap_generation(user),
+                    crate::arena::HeapGeneration::Old
+                )
+            {
+                return;
+            }
+            if arena_parent
+                && !old_walk
+                && crate::arena::address_span_overlaps_pages(
+                    header as usize,
+                    (*header).size as usize,
+                    &snapshot.dirty_old_pages,
+                )
+            {
+                return; // already emitted by the old-page walk
+            }
+            stats.old_objects_considered += 1;
+            stats.valid_roots += 1;
+            stats.dirty_objects_scanned += 1;
+            let mut changed = false;
+            let mut visit_slot =
+                |slot: GcMutableSlot, external: bool, stats: &mut RememberedSetTraceStats| {
+                    let before = slot.read();
+                    visit(slot, header, external, stats);
+                    changed |= slot.read() != before;
+                };
+            let complete =
+                scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+            if complete {
+                if let Some(covered) = covered.as_deref_mut() {
+                    covered.insert(header as usize);
+                }
+            }
+            if changed {
+                run_gc_rewrite_hook((*header).obj_type, user);
+            }
+        };
 
-    if !snapshot.dirty_old_pages.is_empty() {
-        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |header| {
-            scan_header(header as *mut GcHeader, &mut stats);
-        });
+    for header in old_headers {
+        scan_header(header as *mut GcHeader, true, &mut stats);
     }
     for &(_, header_addr) in &snapshot.external_dirty_entries {
-        scan_header(header_addr as *mut GcHeader, &mut stats);
+        scan_header(header_addr as *mut GcHeader, false, &mut stats);
     }
     for header_addr in snapshot.fallback_headers.iter().copied() {
-        scan_header(header_addr as *mut GcHeader, &mut stats);
+        scan_header(header_addr as *mut GcHeader, false, &mut stats);
     }
+    #[cfg(any(test, debug_assertions))]
+    assert_eq!(
+        covered.as_deref().map(|set| set.capacity()),
+        covered_capacity,
+        "dirty scan exceeded the current owner snapshot's reserved bound"
+    );
 
     stats.dirty_pages_after = remembered_dirty_page_count();
     stats

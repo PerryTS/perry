@@ -20,7 +20,7 @@
 pub use super::class_handles::{
     fetch_handle_kind_probe, handle_method_dispatch, handle_own_property_names_dispatch,
     handle_property_dispatch, handle_property_set_dispatch, handle_prototype_dispatch,
-    http_agent_handle_probe, js_register_fetch_handle_kind_probe,
+    handle_receiver_value, http_agent_handle_probe, js_register_fetch_handle_kind_probe,
     js_register_handle_method_dispatch, js_register_handle_own_property_names_dispatch,
     js_register_handle_property_dispatch, js_register_handle_property_set_dispatch,
     js_register_handle_prototype_dispatch, js_register_http_agent_handle_probe,
@@ -112,7 +112,7 @@ pub use state::{
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
-    class_holder_prototype, class_holder_word, class_prototype_object,
+    class_holder_prototype, class_holder_word, class_holder_word_selected, class_prototype_object,
     ensure_function_prototype_object, function_class_id, function_value_for_class_id,
     object_proto_chain_symbol_slot, resolve_proto_chain_field,
     resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
@@ -245,17 +245,10 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             let mut entries = 0usize;
             let mut inner = 0usize;
             for vt in m.values() {
-                entries += vt.methods.len() + vt.accessors.len() + vt.private_accessors.len();
-                inner += map_bytes(&vt.methods)
-                    + map_bytes(&vt.accessors)
-                    + map_bytes(&vt.private_accessors);
+                entries += vt.methods.len() + vt.accessors.len();
+                inner += map_bytes(&vt.methods) + map_bytes(&vt.accessors);
                 inner += vt.methods.keys().map(|k| k.capacity()).sum::<usize>();
                 inner += vt.accessors.keys().map(|k| k.capacity()).sum::<usize>();
-                inner += vt
-                    .private_accessors
-                    .keys()
-                    .map(|k| k.capacity())
-                    .sum::<usize>();
             }
             rows.push((
                 "class.vtables(methods+accessors)",

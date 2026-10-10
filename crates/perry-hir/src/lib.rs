@@ -78,3 +78,5 @@ pub use patched_builtins::{
     set_patched_builtins, PatchedBuiltins,
 };
 pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTable};
+
+mod iterator_record;

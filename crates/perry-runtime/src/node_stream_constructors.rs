@@ -189,15 +189,6 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
     let readable_object_mode = resolve_object_mode(opts, b"readableObjectMode");
     set_hidden_value(
         stream,
-        hidden_key(b"readableObjectMode"),
-        f64::from_bits(if readable_object_mode {
-            TAG_TRUE
-        } else {
-            TAG_FALSE
-        }),
-    );
-    set_hidden_value(
-        stream,
         Slot::ReadableObjectMode,
         f64::from_bits(if readable_object_mode {
             TAG_TRUE

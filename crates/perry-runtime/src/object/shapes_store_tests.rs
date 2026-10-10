@@ -786,7 +786,10 @@ fn weak_collection_summary_agrees_with_shape_brands() {
             };
             assert_eq!(record.weak_collection_brand(), expected);
             record.note_rollback_parent(SHAPE_ID_BASE);
-            record.set_tracked_births(1);
+            record.set_tracked_births(8);
+            record.note_descendant_width(64);
+            assert_eq!(record.descendant_width(), 64);
+            assert_eq!(record.tracked_births(), 8);
             record = record.with_summary(0xFF);
             assert_eq!(record.weak_collection_brand(), expected);
             unsafe {
@@ -795,4 +798,29 @@ fn weak_collection_summary_agrees_with_shape_brands() {
         }
     }
     assert_eq!(ShapeRecord::EMPTY.weak_collection_brand(), None);
+}
+
+#[test]
+fn weak_collection_header_brand_preserves_map_precedence() {
+    let mut record = ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0).with_special_facts(
+        0,
+        &[],
+        &[
+            u64::from(crate::weakref::CLASS_ID_WEAKMAP),
+            u64::from(crate::weakref::CLASS_ID_WEAKSET),
+        ],
+    );
+    assert_eq!(
+        record.weak_collection_brand(),
+        Some(crate::weakref::CLASS_ID_WEAKMAP)
+    );
+    record.note_descendant_width(u32::MAX);
+    assert_eq!(record.descendant_width(), 127);
+    assert_eq!(
+        record.weak_collection_brand(),
+        Some(crate::weakref::CLASS_ID_WEAKMAP)
+    );
+    unsafe {
+        record.release_extras();
+    }
 }

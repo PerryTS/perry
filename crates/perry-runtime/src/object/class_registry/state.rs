@@ -6,13 +6,10 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// Distinct declaration namespaces in the existing rooted value store.
-/// A computed method may have any string name, including internal-looking
-/// prefixes, so a private accessor pair must never reserve a string key.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum ClassDeclarationValueKind {
     Method,
     NonPropertyMethod,
-    PrivateAccessor,
 }
 
 crate::perry_thread_local! {
@@ -379,16 +376,12 @@ pub struct AccessorDecl {
 /// the prototype's real property, which `defineProperty` / `delete` may have
 /// changed since.
 ///
-/// `private_accessors` holds `#x` accessors. They are never properties and
-/// are not reachable by name: only the private-name get/set paths of their
-/// lexical class read them.
 #[derive(Default)]
 pub struct ClassVTable {
     /// Compiler candidate for lazy materialization, never a live lookup answer.
     pub prototype_birth_shape: u32,
     pub methods: HashMap<String, VTableMethodEntry>,
     pub accessors: HashMap<String, AccessorDecl>,
-    pub private_accessors: HashMap<String, AccessorDecl>,
 }
 
 impl ClassVTable {
@@ -409,12 +402,7 @@ impl ClassVTable {
         if func_ptr == 0 {
             return;
         }
-        let table = if name.starts_with('#') {
-            &mut self.private_accessors
-        } else {
-            &mut self.accessors
-        };
-        let decl = table.entry(name.to_string()).or_default();
+        let decl = self.accessors.entry(name.to_string()).or_default();
         if is_setter {
             decl.set = func_ptr;
             decl.set_length = set_length;

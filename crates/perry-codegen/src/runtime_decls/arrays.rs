@@ -348,6 +348,28 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #10524: `const [a, b] = <untyped>` — 0 when the source is an ordinary
     // Array whose iteration is unobservable (read it by index), 1 otherwise.
     module.declare_function("js_array_destructure_needs_iterator", I32, &[DOUBLE]);
+    module.declare_function("js_array_record_stack_dispatch", DOUBLE, &[PTR, I32]);
+    module.declare_function("js_array_record_literal", DOUBLE, &[PTR, I32]);
+    module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR, PTR]);
+    module.declare_function("js_array_record_enter_counted", I32, &[DOUBLE, PTR, PTR]);
+    module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);
+    module.declare_function("js_array_record_literal_needs_iterator", I32, &[PTR]);
+    module.declare_function("js_array_record_close_absent", I32, &[]);
+    module.declare_function(
+        "js_array_record_finish",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_array_record_abrupt",
+        VOID,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_array_record_close",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_iterator_rest_to_array", DOUBLE, &[DOUBLE, DOUBLE]);
     // #1831: `yield*` iterator resolution — `operand[Symbol.iterator]()` or the
     // operand itself when already an iterator. Returns a NaN-boxed JSValue.

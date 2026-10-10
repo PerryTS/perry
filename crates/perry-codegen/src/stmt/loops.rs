@@ -1,6 +1,7 @@
 //! `Stmt::For`, `Stmt::While`, `Stmt::DoWhile` lowering and supporting helpers.
 
 mod i32_counter;
+mod iterator_record;
 
 use super::*;
 
@@ -1389,7 +1390,25 @@ fn lower_packed_f64_versioned_for(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<bool> {
-    let Some(matched) = match_packed_f64_versioned_loop(ctx, init, condition, update, body) else {
+    lower_packed_f64_versioned_for_with_protocol(ctx, init, condition, update, body, None)
+}
+
+fn lower_packed_f64_versioned_for_with_protocol(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    protocol: Option<(
+        &perry_hir::Expr,
+        &perry_hir::Expr,
+        &perry_hir::Expr,
+        &[Stmt],
+    )>,
+) -> Result<bool> {
+    let Some(matched) =
+        match_packed_f64_versioned_loop(ctx, init, condition, update, body, protocol.is_some())
+    else {
         return Ok(false);
     };
 
@@ -1414,19 +1433,56 @@ fn lower_packed_f64_versioned_for(
             PackedNumericLoopKind::U32 => TypedFeedbackContract::packed_u32_array_loop(),
         },
     );
-    let guard_ok = {
-        let blk = ctx.block();
-        let guard_fn = match matched.array_kind {
-            PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
-            PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
-            PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
+    // A record's counted entry already admitted (or refused) this live head
+    // beside its shape proof; an overridden iterator never sets the bit.
+    let record_admission = protocol
+        .filter(|_| matches!(matched.array_kind, PackedNumericLoopKind::F64))
+        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned());
+    let guard_ok = if let Some(slot) = record_admission {
+        ctx.block().load(I1, &slot)
+    } else {
+        // An overridden iterator never attempts indexed admission. The captured
+        // entry verdict short-circuits the existing numeric receiver guard.
+        let indexed_gate = if let Some((mode, _, _, _)) = protocol {
+            let mode = lower_expr(ctx, mode)?;
+            let bits = ctx.block().bitcast_double_to_i64(&mode);
+            let indexed = ctx
+                .block()
+                .icmp_eq(I64, &bits, &crate::nanbox::TAG_FALSE.to_string());
+            let from = ctx.block().label.clone();
+            let inspect = ctx.new_block("record.indexed.guards");
+            let merge = ctx.new_block("record.indexed.guards.merge");
+            let inspect_label = ctx.block_label(inspect);
+            let merge_label = ctx.block_label(merge);
+            ctx.block().cond_br(&indexed, &inspect_label, &merge_label);
+            ctx.current_block = inspect;
+            Some((from, merge, merge_label))
+        } else {
+            None
         };
-        let guard_i32 = blk.call(
-            I32,
-            guard_fn,
-            &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
-        );
-        blk.icmp_ne(I32, &guard_i32, "0")
+        let mut guard_ok = {
+            let blk = ctx.block();
+            let guard_fn = match matched.array_kind {
+                PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
+                PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
+                PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
+            };
+            let guard_i32 = blk.call(
+                I32,
+                guard_fn,
+                &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
+            );
+            blk.icmp_ne(I32, &guard_i32, "0")
+        };
+        if let Some((from, merge, merge_label)) = indexed_gate {
+            let inspected = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge;
+            guard_ok = ctx
+                .block()
+                .phi(I1, &[("false", &from), (&guard_ok, &inspected)]);
+        }
+        guard_ok
     };
 
     record_packed_f64_loop_guard_artifacts(
@@ -1499,6 +1555,19 @@ fn lower_packed_f64_versioned_for(
         let len_ptr = blk.inttoptr(I64, &arr_handle);
         blk.load(I32, &len_ptr)
     };
+    let record_shadow =
+        if protocol.is_some() && !ctx.i32_counter_slots.contains_key(&matched.counter_id) {
+            let slot = ctx.func.alloca_entry(I32);
+            let counter = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.counter_id))?;
+            let value = ctx.block().fptosi(DOUBLE, &counter, I32);
+            ctx.block().store(I32, &value, &slot);
+            ctx.i32_counter_slots.insert(matched.counter_id, slot);
+            ctx.local_slot_reps
+                .insert(matched.counter_id, crate::expr::SlotRep::I32);
+            true
+        } else {
+            false
+        };
     let saved_stride = ctx.poll_stride_counter_slot.take();
     ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
     lower_for_after_init_with_i32_bound(
@@ -1511,6 +1580,38 @@ fn lower_packed_f64_versioned_for(
         Some((matched.counter_id, hoisted_len_i32)),
     )?;
     ctx.poll_stride_counter_slot = saved_stride;
+    // The bounded private record counter uses the same canonical i32 view
+    // as a counted loop. Close reads that view while inside the native copy;
+    // synchronize its full-range Number storage once on the normal exit.
+    if record_shadow && !ctx.block().is_terminated() {
+        let slot = ctx.i32_counter_slots[&matched.counter_id].clone();
+        let counter = ctx.block().load(I32, &slot);
+        let value = ctx.block().sitofp(I32, &counter, DOUBLE);
+        let destination = ctx.locals[&matched.counter_id].clone();
+        ctx.block().store(DOUBLE, &value, &destination);
+    }
+    if !ctx.block().is_terminated() {
+        if let Some((_, original_condition, _, _)) = protocol {
+            if let perry_hir::Expr::Compare { right, .. } = original_condition {
+                if let perry_hir::Expr::NativeMethodCall { args, .. } = right.as_ref() {
+                    if let perry_hir::Expr::LocalSet(state, _) = &args[4] {
+                        lower_expr(
+                            ctx,
+                            &perry_hir::Expr::Conditional {
+                                condition: Box::new(perry_hir::Expr::Compare {
+                                    op: perry_hir::CompareOp::Eq,
+                                    left: Box::new(perry_hir::Expr::LocalGet(*state)),
+                                    right: Box::new(perry_hir::Expr::Number(0.0)),
+                                }),
+                                then_expr: Box::new(args[4].clone()),
+                                else_expr: Box::new(perry_hir::Expr::Number(0.0)),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+    }
     ctx.receiver_descriptors
         .dematerialize_scope(packed_scope_id);
     acc_scope.finish(ctx);
@@ -1518,13 +1619,19 @@ fn lower_packed_f64_versioned_for(
         ctx.block().br(&merge_label);
     }
 
+    if record_shadow {
+        ctx.local_slot_reps.remove(&matched.counter_id);
+        ctx.i32_counter_slots.remove(&matched.counter_id);
+    }
     ctx.current_block = slow_pre_idx;
+    let slow_condition = protocol.map_or(condition, |(_, condition, _, _)| Some(condition));
+    let slow_body = protocol.map_or(body, |(_, _, _, body)| body);
     lower_for_after_init(
         ctx,
         init,
-        condition,
-        update,
-        body,
+        slow_condition,
+        protocol.map_or(update, |(_, _, update, _)| Some(update)),
+        slow_body,
         &format!("for.{loop_label}_slow"),
     )?;
     if !ctx.block().is_terminated() {
@@ -5732,6 +5839,7 @@ fn match_packed_f64_versioned_loop(
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
+    proven_record_counter: bool,
 ) -> Option<PackedF64VersionedLoop> {
     if !ctx.pending_labels.is_empty() {
         return packed_loop_reject("pending_labels");
@@ -5753,7 +5861,7 @@ fn match_packed_f64_versioned_loop(
     if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
         return packed_loop_reject("compare_op_not_lt");
     }
-    if !ctx.integer_locals.contains(&hoist.counter_id)
+    if (!ctx.integer_locals.contains(&hoist.counter_id) && !proven_record_counter)
         || !loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
         || !loop_counter_entry_i32_range_is_safe(init, hoist.counter_id)
     {
@@ -5821,7 +5929,7 @@ fn match_packed_f64_versioned_loop(
     } else {
         return packed_loop_reject("array_kind_unknown");
     };
-    if !local_is_number_array(ctx, hoist.arr_id) {
+    if !proven_record_counter && !local_is_number_array(ctx, hoist.arr_id) {
         return packed_loop_reject("guard_emit_declined");
     }
     let body_is_supported = store_array_kind.is_some() || read_body_is_safe;
@@ -6846,6 +6954,17 @@ pub(crate) fn lower_for(
     // ctx.locals, which the body can then load via LocalGet.
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
+    }
+
+    if iterator_record::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
+    // The record already merges the indexed and protocol values before one
+    // body. Regional clones here would split that body again and add a
+    // learned receiver guard to a compiler-owned traversal boundary.
+    if crate::array_record_stack::fused_condition(ctx, condition) {
+        return lower_for_after_init(ctx, init, condition, update, body, "for");
     }
 
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,

@@ -456,7 +456,13 @@ fn build_family_proto(
     // configurable:true }` and the closure's `name`/`length` as
     // `{ writable:false, enumerable:false, configurable:true }` — exactly the
     // spec descriptor shape test262 verifies. `.length` 0 (next takes no args).
-    super::global_this::install_proto_method(proto, "next", next_info, 0);
+    super::global_this::install_proto_method_with_key(
+        proto,
+        "next",
+        next_info,
+        0,
+        crate::string::intern_ascii_literal(b"next"),
+    );
     set_to_string_tag(proto, tag);
     chain_to(proto, shared);
     // Populate the existing ConstFn representation after descriptor/symbol
@@ -468,7 +474,6 @@ fn build_family_proto(
 }
 
 /// Whether any iterator-prototype tower has been materialized on this thread.
-#[cfg(test)]
 pub(crate) fn iterator_prototypes_materialized() -> bool {
     ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
 }
@@ -927,6 +932,58 @@ mod override_probe_allocation_tests {
             );
         }
     }
+}
+
+/// %ArrayIteratorPrototype%'s address once the iterator tower is published.
+#[inline(always)]
+pub(crate) fn array_iterator_prototype_addr() -> usize {
+    ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as usize
+}
+
+/// Whether the shape names `key` at a slot whose ConstFn lane owns `code`.
+/// A pristine owner names its intrinsic member among its first slots; any
+/// other layout is the same scan of the same shape.
+#[inline(always)]
+pub(crate) unsafe fn shape_member_body_is(
+    shape: super::shapes::ShapeRecordRef,
+    is_key: impl Fn(u64) -> bool,
+    code: *const u8,
+) -> bool {
+    // A dictionary owner delegates its key list to the receiver; only an
+    // ordinary shape can carry the member's ConstFn lane.
+    if shape.keys() == 0 {
+        return false;
+    }
+    let keys = crate::array::array_elements_ptr(shape.keys() as *const crate::array::ArrayHeader);
+    let Some(slot) = (0..shape.logical_key_count()).find(|&i| is_key(*keys.add(i as usize))) else {
+        return false;
+    };
+    shape
+        .constfn_info(slot)
+        .is_some_and(|info| (*(info as *const crate::closure::JsFunctionInfo)).code == code)
+}
+
+/// The array record omits the iterator allocation only when the current
+/// family shape still owns the intrinsic next body. Captured at entry;
+/// subsequent next writes cannot change that record. The key is validated
+/// with the ordinary key equality: the bounded intern table can evict an
+/// atom, so re-interning the same bytes need not reproduce the shape's key.
+#[inline(always)]
+pub(crate) unsafe fn array_iterator_next_is_intrinsic(owner: *const ObjectHeader) -> bool {
+    let Some(shape) = super::shapes::object_shape_record(owner) else {
+        return false;
+    };
+    shape_member_body_is(
+        shape,
+        |bits| crate::string::js_string_key_matches_bytes(JSValue::from_bits(bits), b"next"),
+        array_iterator_next_thunk as *const u8,
+    )
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn array_record_next_is_builtin() -> bool {
+    ensure_iterator_prototypes();
+    array_iterator_next_is_intrinsic(array_iterator_prototype_addr() as *const ObjectHeader)
 }
 
 /// Prove a built-in advance using the receiver and prototype shapes.
@@ -1735,4 +1792,75 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
     (*method).info as usize as u64 == info
         || crate::closure::get_valid_func_ptr(method)
             == (*(info as *const crate::closure::JsFunctionInfo)).code
+}
+
+#[cfg(test)]
+mod array_record_tests;
+
+/// Shape-only absence proof for the optional close method. A named addition,
+/// dictionary conversion or non-ordinary ancestor declines to ordinary Get.
+pub(crate) unsafe fn array_record_close_is_absent() -> bool {
+    // Resolve allocating intrinsic setup before retaining raw shape owners.
+    ensure_iterator_prototypes();
+    let mut object_proto = crate::array::object_prototype_addr_if_resolved();
+    if object_proto == 0 {
+        object_proto = crate::array::object_prototype_addr();
+    }
+    let mut obj = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+    for _ in 0..64 {
+        if super::dictionary::is_dictionary(obj) {
+            return false;
+        }
+        let Some(shape) = super::shapes::object_shape_record(obj) else {
+            return false;
+        };
+        // This is GetMethod(return)'s ordinary property-key lookup on the
+        // owned shape, before a receiver is needed. An accessor or any own
+        // return value materializes the record and uses shared IteratorClose.
+        // The shape's key list is the live, collector-maintained head.
+        let (slots, len) = super::keys_lookup::keys_array_dense_slots_resolved(
+            shape.keys() as *const crate::array::ArrayHeader
+        );
+        let count = (shape.logical_key_count() as usize).min(len);
+        if (0..count).any(|i| {
+            crate::string::js_string_key_matches_bytes(
+                JSValue::from_bits((*slots.add(i)).to_bits()),
+                b"return",
+            )
+        }) {
+            return false;
+        }
+        let parent = super::shapes::object_prototype_word(obj);
+        if parent == crate::value::TAG_NULL {
+            return true;
+        }
+        if parent == 0 {
+            let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+                return false;
+            };
+            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+                || obj as usize == object_proto
+            {
+                return true;
+            }
+            // Class-zero ordinary owners inherit Object.prototype when their
+            // shape has no explicit link. A class default needs ordinary Get.
+            if (*obj).class_id != 0 || object_proto == 0 {
+                return false;
+            }
+            obj = object_proto as *const ObjectHeader;
+            continue;
+        }
+        if !JSValue::from_bits(parent).is_pointer() {
+            return false;
+        }
+        let raw = crate::value::js_nanbox_get_pointer(f64::from_bits(parent)) as usize;
+        if !crate::value::addr_class::try_read_gc_header(raw)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            return false;
+        }
+        obj = raw as *const ObjectHeader;
+    }
+    false
 }

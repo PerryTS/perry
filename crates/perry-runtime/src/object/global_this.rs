@@ -219,3 +219,7 @@ pub(crate) use typed_array::{
     typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,
     validate_array_buffer_species_constructor,
 };
+
+pub(crate) use array_error::array_prototype_values_thunk;
+
+pub(crate) use install_static::install_proto_method_with_key;

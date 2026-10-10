@@ -1089,7 +1089,17 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                             false
                         };
                         if !result_is_self_chain {
-                            propagate_callback_result(result, next);
+                            // A step's catch wrapper is an abrupt completion,
+                            // not a returned promise to adopt. Match the thunk
+                            // runner's direct rejection forwarding.
+                            let result_handle = trap_scope.root_nanbox_f64(result);
+                            super::async_step::forward_swallowed_rejection(result, next);
+                            // Forwarding can resume a queued generator and
+                            // collect: recover both values from their roots.
+                            propagate_callback_result(
+                                result_handle.get_nanbox_f64(),
+                                rooted_promise(&next_handle),
+                            );
                         }
                     } else {
                         CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));

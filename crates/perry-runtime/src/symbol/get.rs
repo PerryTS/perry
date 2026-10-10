@@ -1361,9 +1361,22 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             let iter_f64 =
                 f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
             if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
-                let proto = crate::object::builtin_prototype_value("Array");
-                return own_symbol_property(proto, sym_f64)
-                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                // Use the actual chain and the same symbol Get. Array.prototype
+                // is itself an Array: after deletion, its parent may supply the
+                // method, and an inherited getter receives the original source.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let object = scope.root_nanbox_f64(obj_f64);
+                let symbol = scope.root_nanbox_f64(sym_f64);
+                let receiver = scope.root_nanbox_f64(receiver_f64);
+                let proto = crate::object::js_object_get_prototype_of(object.get_nanbox_f64());
+                if crate::value::JSValue::from_bits(proto.to_bits()).is_null() {
+                    return f64::from_bits(TAG_UNDEFINED);
+                }
+                return js_object_get_symbol_property_with_receiver(
+                    proto,
+                    symbol.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                );
             }
         }
     }

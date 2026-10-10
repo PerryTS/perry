@@ -21,8 +21,8 @@
 //! registered handle.
 
 use super::hash_handles::{
-    hash_digest_value, hash_update_bytes, hmac_digest_value, latin1_string,
-    new_hash_state_or_throw, new_hmac_state_or_throw, update_hash_state, update_hmac_state,
+    hash_digest_value, hmac_digest_value, latin1_string, new_hash_state_or_throw,
+    new_hmac_state_or_throw, update_hash_state, update_hmac_state, with_hash_update_bytes,
     HashState, HmacState,
 };
 use super::*;
@@ -114,15 +114,13 @@ pub unsafe extern "C" fn js_crypto_chain_update(state: f64, data: f64, encoding:
             let Some(s) = s.as_mut() else {
                 throw_finalized()
             };
-            let bytes = hash_update_bytes(&[data, encoding]);
-            update_hash_state(s, &bytes);
+            with_hash_update_bytes(&[data, encoding], |bytes| update_hash_state(s, bytes));
         }
         ChainState::Hmac { state: s } => {
             let Some(s) = s.as_mut() else {
                 throw_finalized()
             };
-            let bytes = hash_update_bytes(&[data, encoding]);
-            update_hmac_state(s, &bytes);
+            with_hash_update_bytes(&[data, encoding], |bytes| update_hmac_state(s, bytes));
         }
     }
     state

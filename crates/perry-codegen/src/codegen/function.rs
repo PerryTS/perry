@@ -1290,6 +1290,9 @@ pub(super) fn compile_function(
         interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
+        pending_helpers: Vec::new(),
+        array_record_length_local: None,
+        array_stack_records: Default::default(),
         integer_locals: native_facts.integer_locals(),
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
@@ -1320,6 +1323,7 @@ pub(super) fn compile_function(
             .map(|id| (*id, crate::expr::SlotRep::I32))
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
+        record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         transition_cache_base_slot: None,
         receiver_descriptors: Default::default(),
@@ -1659,12 +1663,16 @@ pub(super) fn compile_function(
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
+    let helpers = std::mem::take(&mut ctx.pending_helpers);
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx); // releases &mut LlFunction borrow on llmod
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;
     llmod.native_rep_records.extend(native_rep_records);
+    for helper in helpers {
+        llmod.add_outlined_helper(helper);
+    }
     for (name, ret, params) in pending {
         llmod.declare_function(&name, ret, &params);
     }

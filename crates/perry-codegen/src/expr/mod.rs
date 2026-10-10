@@ -953,6 +953,10 @@ pub(crate) struct FnCtx<'a> {
     /// cross-module call. Lazy emission tracks declares at the actual
     /// emission point so any path the lowering reaches automatically gets
     /// its declare — no walker to keep in sync.
+    pub pending_helpers: Vec<LlFunction>,
+    /// Entry-proved source, scoped to the existing length-property lowering.
+    pub array_record_length_local: Option<u32>,
+    pub array_stack_records: std::collections::HashMap<u32, crate::array_record_stack::Record>,
     pub pending_declares: Vec<(String, crate::types::LlvmType, Vec<crate::types::LlvmType>)>,
 
     /// LocalIds that are provably integer-valued — i.e., initialized from
@@ -1146,6 +1150,10 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+    /// Array-record source local -> i1 slot holding the packed-f64 loop
+    /// admission its counted entry computed beside the shape proof. Written
+    /// at that entry, consumed by the versioned loop that reads the source.
+    pub record_packed_admissions: std::collections::HashMap<u32, String>,
     /// Unboxed reduce-accumulator redirect, active only while a packed fast
     /// clone is being lowered: local id -> plain (addrspace-0) F64 alloca.
     /// The clone's preheader tag-tested the local as a Number and moved its
@@ -2523,6 +2531,19 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// inline hit path loads the slot through [`emit_inline_cache_slot`] and
 /// proves it non-null before reading a cache word; every runtime miss entry
 /// takes the slot's address.
+/// A fresh array-record entry site: one zeroed `i64` word the runtime uses
+/// as the site's memo of the intrinsic owners' validated ShapeIds
+/// (`perry_runtime::array::iterator_step::ArrayRecordSite`). It holds no heap
+/// pointer and is re-validated by ShapeId compare on every entry.
+pub(crate) fn array_record_site(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!("{}_record", inline_cache_global_name(ctx, site_id));
+    ctx.typed_parse_rodata
+        .push(format!("@{name} = private global i64 0, align 8"));
+    format!("@{name}")
+}
+
 pub(crate) fn inline_cache_global_definition(name: &str) -> String {
     format!("@{name} = private global ptr null")
 }
@@ -3140,7 +3161,7 @@ mod unary_bigint_tests;
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
-    emit_array_region_guard, emit_typed_f64_region_guard,
+    emit_array_region_guard, emit_typed_f64_region_guard, lower_record_index, lower_record_next,
     numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts, ArrayRegionDense,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;

@@ -81,11 +81,7 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         }
     }
     let selected = crate::object::class_registry::decl_prototype_identity_id(class_id);
-    let word = crate::object::shapes::identity_prototype_word(if class_id == 0 {
-        crate::object::shapes::PROTO_ID_DEFAULT
-    } else {
-        crate::object::shapes::PROTO_ID_CLASS | u64::from(selected)
-    });
+    let word = crate::object::class_holder_word_selected(selected);
     let existing = crate::JSValue::from_bits(word);
     let start = if !existing.is_pointer() {
         let proto = JSValue::from_bits(

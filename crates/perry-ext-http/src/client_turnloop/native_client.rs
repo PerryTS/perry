@@ -60,13 +60,13 @@ pub(super) fn reusable(owner: f64, key: &PoolKey) -> bool {
 fn mark_request(request: Handle) {
     crate::CLIENT_REQUESTS_INFLIGHT
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert((perry_ffi::agent_post::current_agent(), request));
 }
 fn retire_request(request: Handle) {
     crate::CLIENT_REQUESTS_INFLIGHT
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&(perry_ffi::agent_post::current_agent(), request));
     perry_ffi::notify_main_thread();
 }

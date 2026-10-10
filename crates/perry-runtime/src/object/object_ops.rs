@@ -49,10 +49,12 @@ pub(crate) use descriptor_helpers::{
     descriptor_compatible_with_current, descriptor_object_from_view,
     enforce_define_property_invariants, nonconfigurable_redefine_allowed,
     normalize_descriptor_operand, registered_buffer_index_own_property_present,
-    throw_object_type_error, throw_object_type_error_with_suffix,
-    validate_nonconfigurable_redefine, value_is_object_like, DescView, DESC_CONFIGURABLE,
-    DESC_ENUMERABLE, DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
+    throw_object_type_error, throw_object_type_error_with_suffix, value_is_object_like, DescView,
+    DESC_CONFIGURABLE, DESC_ENUMERABLE, DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
 };
+// The rooted-decode tests prove the fast path itself runs.
+#[cfg(test)]
+pub(crate) use descriptor_helpers::try_decode_descriptor;
 pub(crate) use prototype::get_prototype_of_resolved;
 // Module-private `unsafe fn value_is_callable` (descriptor_helpers): used by the
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT

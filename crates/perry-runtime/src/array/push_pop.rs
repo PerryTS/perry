@@ -138,11 +138,18 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
+        if flags
+            & (crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND
+                | crate::gc::OBJ_FLAG_FROZEN)
+            != 0
+        {
+            return arr;
+        }
+    } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
@@ -186,23 +193,28 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // acquire the same old->young forwarding edge.
         let old_header =
             (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let source_generation = crate::arena::classify_heap_generation(arr as usize);
         let source_requires_old_target = (*old_header).gc_flags & crate::gc::GC_FLAG_TENURED != 0
-            || !matches!(
-                crate::arena::classify_heap_generation(arr as usize),
-                crate::arena::HeapGeneration::Nursery
-            );
-        let new_ptr = if source_requires_old_target {
-            crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+            || !matches!(source_generation, crate::arena::HeapGeneration::Nursery);
+        let young = if source_requires_old_target {
+            ptr::null_mut()
         } else {
-            let young =
-                crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY);
-            if young.is_null() {
-                crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
-            } else {
-                young
-            }
-        } as *mut ArrayHeader;
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+        };
+        let (new_ptr, arr) = if !young.is_null() {
+            // No collection, so the source address remains valid without a
+            // transient root. Only the old/refill branch needs a handle.
+            (young as *mut ArrayHeader, arr)
+        } else {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_raw_mut_ptr(arr);
+            let target = crate::arena::arena_alloc_gc_old_born_tenured(
+                new_size,
+                8,
+                crate::gc::GC_TYPE_ARRAY,
+            ) as *mut ArrayHeader;
+            (target, source.get_raw_mut_ptr::<ArrayHeader>())
+        };
         let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
         (*new_ptr).capacity = new_capacity;
@@ -234,14 +246,22 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let new_header =
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
-        crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        // Header-carried layout facts were copied above. Only these two
+        // authoritative bits can owe an address-keyed array record a move.
+        if (*old_header).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*old_header)._reserved
+                & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_ELEMENT_SHAPE)
+                != 0
+        {
+            crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        }
         if reserve != 0 {
             // Array expandos, sparse numeric indices and exec-result values
             // live in the reserve slots. Growth is not a collector move, so
             // carry them to the replacement head explicitly (barriered) before
             // the old address becomes a forwarding stub (#9371, #9201).
             crate::array::carry_named_props_reserve(arr, new_ptr, reserve);
-        } else {
+        } else if (*old_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
             // An array that was full at its first named property keeps them in
             // the address-keyed fallback table; rekey it before the old
             // address becomes a forwarding stub (#9371, #9201).
@@ -256,13 +276,14 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // store's dirty-page coverage can be TRANSLATED to the new address
         // instead of re-derived from 3 M slot values. Falls back to the full
         // value-derived replay whenever the translation declines.
-        if shifted
-            || !crate::gc::relocate_copied_old_object_dirty_pages(
-                new_ptr as usize,
-                arr as usize,
-                new_ptr as usize,
-                old_size,
-            )
+        if young.is_null()
+            && (shifted
+                || !crate::gc::relocate_copied_old_object_dirty_pages(
+                    new_ptr as usize,
+                    arr as usize,
+                    new_ptr as usize,
+                    old_size,
+                ))
         {
             replay_array_growth_write_barriers(new_ptr);
         }
@@ -283,7 +304,15 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // before a header dereference.
         let installed =
             install_array_growth_forwarding_with(arr as usize, new_ptr as *mut u8, |addr| {
-                crate::value::addr_class::try_read_tracked_gc_header(addr)
+                if matches!(source_generation, crate::arena::HeapGeneration::Unknown) {
+                    // The resolver has a native-storage exception; keep the
+                    // ownership classifier when no R2 region proved this head.
+                    crate::value::addr_class::try_read_tracked_gc_header(addr)
+                } else {
+                    // R2 proved ownership, and any collecting allocation
+                    // refreshed the source through its handle.
+                    std::ptr::NonNull::new(old_header)
+                }
             });
         assert!(
             installed,

@@ -9,6 +9,35 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use crate::expr::FnCtx;
 
+/// Result contracts of the compiler's IteratorRecord primitives. Carry the
+/// same evidence through initializer proofs, flow analysis and expression
+/// lowering; a private cursor is a full-range Number, never a signed shadow.
+pub(crate) fn iterator_record_primitive_type(expr: &Expr) -> Option<HirType> {
+    let Expr::NativeMethodCall {
+        module,
+        class_name: None,
+        object: None,
+        method,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    if module != "__perry_runtime" {
+        return None;
+    }
+    match method.as_str() {
+        "arrayRecordLength"
+        | "arrayRecordIndex"
+        | "arrayRecordForBound"
+        | "arrayRecordForUpdate" => Some(HirType::Number),
+        "iteratorStep" | "arrayRecordNeedsIterator" | "arrayRecordCloseAbsent" => {
+            Some(HirType::Boolean)
+        }
+        _ => None,
+    }
+}
+
 /// Statically determine whether an expression evaluates to a real numeric
 /// `double` (NOT a NaN-boxed value). Used by `lower_truthy` to decide
 /// between the fast `fcmp one cond, 0.0` test and the runtime
@@ -146,6 +175,9 @@ pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
 }
 
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if iterator_record_primitive_type(e) == Some(HirType::Number) {
+        return true;
+    }
     match e {
         Expr::Integer(_)
         | Expr::Number(_)
@@ -1054,7 +1086,17 @@ fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: boo
 /// - LocalGet of string-typed locals (params with `: string`, `let x = "a"`)
 /// - recursive Add of strings (`"a" + "b" + s`)
 pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if iterator_record_primitive_type(e) == Some(HirType::Boolean) {
+        return true;
+    }
     match e {
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => is_bool_expr(ctx, then_expr) && is_bool_expr(ctx, else_expr),
+        Expr::Sequence(exprs) => exprs.last().is_some_and(|last| is_bool_expr(ctx, last)),
+
         Expr::Bool(_) => true,
         Expr::Compare { .. } => true,
         Expr::Logical { left, right, .. } => is_bool_expr(ctx, left) && is_bool_expr(ctx, right),

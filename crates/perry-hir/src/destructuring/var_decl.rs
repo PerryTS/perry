@@ -450,12 +450,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     None
                 };
 
-            // #10086: `const [a, b] = [x, y]` / `= <statically-proven array>`
-            // binds through the guarded non-iterator arm — no iterator object,
-            // no `{ value, done }` result object per element, and for a literal
-            // source no array allocation at all. Decided BEFORE the initializer
-            // is lowered, because the literal shape spills each element into
-            // its own temp instead of materializing the array.
+            // Plan the shared record before binding: literals and possible
+            // arrays use one shape proof; known nonarrays keep GetIterator.
             if use_state_tuple.is_none() {
                 if let (ast::Pat::Array(arr_pat), Some(init)) = (pattern, decl.init.as_ref()) {
                     if let Some((mut stmts, plan)) =
@@ -472,6 +468,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         result.extend(stmts);
                         return Ok(result);
                     }
+                    // The AST source already rules out an Array. Preserve the
+                    // plain protocol rather than re-guarding this top pattern
+                    // through the recursive (unknown-source) binding walker.
+                    let source = lower_expr(ctx, init)?;
+                    super::pattern_binding::lower_array_pattern_binding(
+                        ctx,
+                        arr_pat,
+                        super::array_fast::ArraySource::Iterator(source),
+                        mutable,
+                        is_var_decl,
+                        &mut result,
+                    )?;
+                    return Ok(result);
                 }
             }
 

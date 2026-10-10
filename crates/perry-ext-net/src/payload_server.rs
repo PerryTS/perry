@@ -18,6 +18,8 @@ pub(crate) fn link(owner: f64) -> OwnerLink {
     p::server_link(owner).unwrap_or_else(super::payload_prototype::throw_miss)
 }
 pub(crate) fn state(owner: f64) -> f64 {
+    // SAFETY: The owner/link is family-checked on this agent; state comes from its traced cell and
+    // is rooted before any later allocation.
     unsafe { p::server_state(link(owner), true) }
 }
 
@@ -39,8 +41,12 @@ pub(crate) fn initialize_server(
         callback
     });
     let fields = ServerFields {
+        // SAFETY: The argument is a live JS value on this agent; conversions finish before any
+        // payload projection, and allocating paths retain their rooted operands.
         allow_half_open: unsafe { crate::get_object_bool_field(options.get(), "allowHalfOpen") }
             .unwrap_or(false),
+        // SAFETY: The argument is a live JS value on this agent; conversions finish before any
+        // payload projection, and allocating paths retain their rooted operands.
         pause_on_connect: unsafe { crate::get_object_bool_field(options.get(), "pauseOnConnect") }
             .unwrap_or(false),
         ..ServerFields::default()
@@ -72,6 +78,8 @@ pub(crate) fn initialize_server(
         extern "C" {
             fn js_node_stream_method_on(owner: i64, event: f64, callback: f64) -> f64;
         }
+        // SAFETY: The receiver and callback are rooted; listener registration owns their traced
+        // edges and runs without a native payload borrow.
         unsafe {
             js_node_stream_method_on(
                 p::raw_owner(owner.get()),
@@ -90,6 +98,8 @@ fn once(owner: f64, event: &str, callback: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let callback = scope.root_nanbox(callback);
+    // SAFETY: The receiver and callback are rooted; listener registration owns their traced edges
+    // and runs without a native payload borrow.
     unsafe {
         js_node_stream_method_once(
             p::raw_owner(owner.get()),
@@ -107,6 +117,8 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
     let c = scope.root_nanbox(c);
     let server = link(owner.get());
     let _account = p::AccountServer(server);
+    // SAFETY: The argument is a live JS value on this agent; conversions finish before any payload
+    // projection, and allocating paths retain their rooted operands.
     let (path, host, port, backlog, callback) = unsafe {
         if let Some(path) = crate::jsvalue_to_owned_string(a.get()) {
             (Some(path), String::new(), 0.0, 511, b.get())
@@ -132,11 +144,15 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
     };
     let callback = scope.root_nanbox(callback);
     if path.is_none() {
+        // SAFETY: The validator consumes scalar arguments on this agent; no payload borrow is held
+        // when it throws.
         unsafe {
             js_net_validate_listen_port(port);
         }
     }
     once(owner.get(), "listening", callback.get());
+    // SAFETY: This owner retains a stable cell on its agent; lifecycle lookup validates the family
+    // without dereferencing a disposed payload.
     unsafe {
         if np::link_lifecycle(server, &SERVER) == Ok(np::Lifecycle::Closed) {
             let state = scope.root_nanbox(state(owner.get()));
@@ -168,6 +184,8 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
             );
         }
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let result = unsafe {
         let core = p::server_core(server).unwrap_or_else(super::payload_prototype::throw_miss);
         let result = match &path {
@@ -204,6 +222,8 @@ pub(crate) fn listen_tcp(
     let owner = scope.root_nanbox(owner);
     let server = link(owner.get());
     let _account = p::AccountServer(server);
+    // SAFETY: This owner retains a stable cell on its agent; lifecycle lookup validates the family
+    // without dereferencing a disposed payload.
     unsafe {
         if np::link_lifecycle(server, &SERVER) == Ok(np::Lifecycle::Closed) {
             let state = scope.root_nanbox(state(owner.get()));
@@ -228,13 +248,20 @@ pub(crate) fn listen_tcp(
             .ext
             .tls_config = tls_config;
     }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let endpoint = unsafe {
         let core = p::server_core(server).unwrap_or_else(super::payload_prototype::throw_miss);
         tl::link_tcp_listen(
             &mut *core, server, host, port, backlog, reuse_port, no_delay,
         )?;
         tl::link_accept_start(&mut *core, server)?;
-        tl::link_local_address(&mut *core, server).expect("bound listener has an address")
+        tl::link_local_address(&mut *core, server).ok_or_else(|| tl::NetError {
+            code: "EBADF".into(),
+            syscall: "getsockname".into(),
+            errno: -9,
+            no_loop: false,
+        })?
     };
     finish_listen(owner.get(), None);
     Ok(endpoint)
@@ -244,8 +271,12 @@ fn finish_listen(owner: f64, path: Option<String>) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let server = link(owner.get());
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let parts = unsafe {
-        let core = p::server_core(server).unwrap();
+        let Ok(core) = p::server_core(server) else {
+            return;
+        };
         let endpoint = tl::link_local_address(&mut *core, server);
         let local = endpoint.and_then(|endpoint| {
             endpoint
@@ -254,11 +285,17 @@ fn finish_listen(owner: f64, path: Option<String>) {
                 .ok()
                 .map(|ip| std::net::SocketAddr::new(ip, endpoint.port))
         });
-        let fields = &mut (*p::server_ptr(server).unwrap()).ext;
+        let Ok(payload) = p::server_ptr(server) else {
+            return;
+        };
+        let fields = &mut (*payload).ext;
         fields.local = local;
         fields.path = path;
         fields.listening = true;
-        tl::link_handle_parts(&mut *core, server).expect("bound listener has a driver handle")
+        let Some(parts) = tl::link_handle_parts(&mut *core, server) else {
+            return;
+        };
+        parts
     };
     let state = scope.root_nanbox(state(owner.get()));
     let group = scope.root_nanbox(closed::record(parts));
@@ -273,6 +310,8 @@ fn finish_listen(owner: f64, path: Option<String>) {
         "listenerClosed",
         f64::from_bits(JsValue::FALSE.bits()),
     );
+    // SAFETY: This allocation runs on the owning agent; its array result is rooted or installed
+    // into a rooted record before further allocation.
     let children = unsafe { perry_ffi::js_array_alloc(0) };
     p::record_set(group.get(), "children", p::boxed_addr(children as i64));
     p::record_set(state.get(), "activeGroup", group.get());
@@ -282,8 +321,13 @@ fn finish_listen(owner: f64, path: Option<String>) {
         b"TCPSERVERWRAP",
         u64::MAX,
     ));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     unsafe {
-        (*p::server_ptr(server).unwrap()).ext.async_id = provider::id(resource.get());
+        let Ok(payload) = p::server_ptr(server) else {
+            return;
+        };
+        (*payload).ext.async_id = provider::id(resource.get());
     }
     p::record_set(group.get(), provider::SERVER, resource.get());
     events::queue_emit(owner.get(), "listening", &[]);
@@ -297,6 +341,8 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
     let server = link(owner.get());
     let _account = p::AccountServer(server);
     let state = scope.root_nanbox(state(owner.get()));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let listening = unsafe {
         p::server_ptr(server)
             .ok()
@@ -311,6 +357,8 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
             let wrapper = scope.root_addr(perry_ffi::alloc_closure(
                 perry_ffi::js_function_info!(not_running_callback, 0; with_flags(perry_ffi::FN_BUILTIN)), 2,
             ) as i64);
+            // SAFETY: The rooted closure was allocated with these capture slots; every JS capture
+            // is rooted until the scheduled job owns its traced edge.
             unsafe {
                 let wrapper = wrapper.get() as *mut RawClosureHeader;
                 perry_ffi::set_closure_capture_f64(wrapper, 0, callback.get());
@@ -318,7 +366,11 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
             }
             once(owner.get(), "close", p::boxed_addr(wrapper.get()));
         }
+        // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+        // and field/core access ends before allocation or JS.
         if unsafe { p::server_ptr(server) }.is_ok() {
+            // SAFETY: The rooted owner retains these family-checked links; memory-only release
+            // follows the native borrow, and owed completions retain their own cell references.
             unsafe {
                 np::close_link(server, &SERVER);
             }
@@ -331,8 +383,13 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
     }
     once(owner.get(), "close", callback.get());
     let group = scope.root_nanbox(p::record_get(state.get(), "activeGroup"));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let (path, options) = unsafe {
-        let fields = &(*p::server_ptr(server).unwrap()).ext;
+        let Ok(payload) = p::server_ptr(server) else {
+            return owner.get();
+        };
+        let fields = &(*payload).ext;
         (
             fields.path.clone(),
             (fields.allow_half_open, fields.pause_on_connect),
@@ -345,7 +402,14 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
     }
     #[cfg(not(unix))]
     let _ = path;
-    let owed = unsafe { tl::link_close(&mut *p::server_core(server).unwrap(), server) };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
+    let owed = unsafe {
+        let Ok(core) = p::server_core(server) else {
+            return owner.get();
+        };
+        tl::link_close(&mut *core, server)
+    };
     let owed = match owed {
         Ok(owed) => owed,
         Err(failure) => {
@@ -354,6 +418,8 @@ pub(crate) fn close(owner: f64, callback: f64) -> f64 {
             return owner.get();
         }
     };
+    // SAFETY: The rooted owner retains these family-checked links; memory-only release follows the
+    // native borrow, and owed completions retain their own cell references.
     unsafe {
         np::close_link(server, &SERVER);
     }
@@ -397,6 +463,8 @@ unsafe extern "C" fn not_running_callback(closure: *const RawClosureHeader, this
 /// hold the server as a raw address rather than a JS value.
 pub(crate) fn address_json(owner: f64) -> String {
     let server = link(owner);
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let address = unsafe {
         p::server_ptr(server).ok().and_then(|payload| {
             let fields = &(*payload).ext;
@@ -421,6 +489,8 @@ pub(crate) fn address_json(owner: f64) -> String {
 
 pub(crate) fn address(owner: f64) -> f64 {
     let server = link(owner);
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let address = unsafe {
         p::server_ptr(server).ok().and_then(|payload| {
             let fields = &(*payload).ext;
@@ -460,6 +530,8 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
     let server = link(owner);
     if key == "listening" {
         return f64::from_bits(
+            // SAFETY: The retained link belongs to this agent; projection checks family/open
+            // lifecycle, and field/core access ends before allocation or JS.
             JsValue::from_bool(unsafe {
                 p::server_ptr(server)
                     .ok()
@@ -498,6 +570,8 @@ pub(crate) fn set_ref(owner: f64, referenced: bool) -> f64 {
     let owner = scope.root_nanbox(owner);
     let server = link(owner.get());
     let _account = p::AccountServer(server);
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     unsafe {
         if let Ok(core) = p::server_core(server) {
             tl::link_set_ref(&mut *core, server, referenced);
@@ -520,6 +594,8 @@ fn finish_group(group: f64, synthetic: bool) {
     let scope = TransientRootScope::enter();
     let group = scope.root_nanbox(group);
     let children = scope.root_nanbox(p::record_get(group.get(), "children"));
+    // SAFETY: This binding-created array is reached through a rooted record; reads/shift are
+    // callback-free, with in-bounds queue entries and no retained element pointer.
     if unsafe { perry_ffi::js_array_length(array_ptr(children.get())) } != 0 {
         return;
     }
@@ -556,9 +632,13 @@ fn finish_pending(owner: f64, synthetic: bool) {
     if !JsValue::from_bits(array.get().to_bits()).is_pointer() {
         return;
     }
+    // SAFETY: This binding-created array is reached through a rooted record; reads/shift are
+    // callback-free, with in-bounds queue entries and no retained element pointer.
     let count = unsafe { perry_ffi::js_array_length(array_ptr(array.get())) };
     let groups: Vec<_> = (0..count)
         .map(|index| {
+            // SAFETY: This binding-created array is reached through a rooted record; reads/shift
+            // are callback-free, with in-bounds queue entries and no retained element pointer.
             scope.root_nanbox(f64::from_bits(unsafe {
                 perry_ffi::js_array_get(array_ptr(array.get()), index).bits()
             }))
@@ -579,6 +659,8 @@ pub(crate) fn listener_closed(owner: f64, event: &tl::NetCompletion) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let state = scope.root_nanbox(state(owner.get()));
+    // SAFETY: The runtime keeps the completion and its spans valid until this sink returns; these
+    // reads do not retain the borrowed metadata.
     let Some(parts) = (unsafe { event.closed_handle_parts() }) else {
         return;
     };
@@ -603,9 +685,13 @@ pub(crate) fn child_closed(child: f64, group: f64) {
         return;
     }
     let children = scope.root_nanbox(p::record_get(group.get(), "children"));
+    // SAFETY: This binding-created array is reached through a rooted record; reads/shift are
+    // callback-free, with in-bounds queue entries and no retained element pointer.
     let count = unsafe { perry_ffi::js_array_length(array_ptr(children.get())) };
     let values: Vec<_> = (0..count)
         .map(|index| {
+            // SAFETY: This binding-created array is reached through a rooted record; reads/shift
+            // are callback-free, with in-bounds queue entries and no retained element pointer.
             scope.root_nanbox(f64::from_bits(unsafe {
                 perry_ffi::js_array_get(array_ptr(children.get()), index).bits()
             }))
@@ -618,9 +704,13 @@ pub(crate) fn child_closed(child: f64, group: f64) {
         return;
     };
     let mut remaining =
+        // SAFETY: This allocation runs on the owning agent; its array result is rooted or installed
+        // into a rooted record before further allocation.
         scope.root_addr(unsafe { perry_ffi::js_array_alloc(count.saturating_sub(1)) } as i64);
     for (position, value) in values.iter().enumerate() {
         if position != index {
+            // SAFETY: The binding-created arrays and each element are rooted; push reloads their
+            // addresses and its result is rooted before another allocation.
             remaining = scope.root_addr(unsafe {
                 perry_ffi::js_array_push(
                     remaining.get() as *mut ArrayHeader,
@@ -643,6 +733,8 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     let _account = p::AccountServer(server);
     let state = scope.root_nanbox(state(owner.get()));
     let group = scope.root_nanbox(p::record_get(state.get(), "activeGroup"));
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field/core access ends before allocation or JS.
     let Some((allow_half_open, pause_on_connect, tls_config, snapshot)) = (unsafe {
         p::server_ptr(server).ok().and_then(|payload| {
             let fields = &(*payload).ext;
@@ -673,6 +765,9 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     ));
     let child_link = socket::link(child.get());
     let _child_account = p::AccountSocket(child_link);
+    // SAFETY: The runtime keeps the completion and its spans valid until this sink returns; these
+    // reads do not retain the borrowed metadata. Payload projection validates family/lifecycle, and
+    // its borrow ends before event callbacks.
     unsafe {
         let Ok(core) = p::server_core(server) else {
             return;
@@ -686,7 +781,10 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
         if tl::link_install_accepted(&mut *child_core, child_link, &*completion).is_err() {
             return;
         }
-        let fields = &mut (*p::socket_ptr(child_link).unwrap()).ext;
+        let Ok(payload) = p::socket_ptr(child_link) else {
+            return;
+        };
+        let fields = &mut (*payload).ext;
         fields.opened = true;
         fields.allow_half_open = allow_half_open;
         fields.paused = pause_on_connect;
@@ -701,6 +799,8 @@ pub(crate) fn accepted(owner: f64, completion: *const tl::NetCompletion) {
     p::own_set(child_state.get(), "server", owner.get());
     p::own_set(child_state.get(), "serverGroup", group.get());
     let children = scope.root_nanbox(p::record_get(group.get(), "children"));
+    // SAFETY: The binding-created arrays and each element are rooted; push reloads their addresses
+    // and its result is rooted before another allocation.
     let updated = unsafe {
         perry_ffi::js_array_push(
             array_ptr(children.get()),

@@ -94,24 +94,28 @@ fn iterator_delegate_throw(iter: f64, error: f64) -> f64 {
 }
 
 #[cfg(panic = "abort")]
+#[inline(never)]
 #[no_mangle]
 pub extern "C" fn js_iterator_close_if_not_done(iter: f64, done: f64) -> f64 {
     iterator_close_if_not_done(iter, done)
 }
 
 #[cfg(not(panic = "abort"))]
+#[inline(never)]
 #[no_mangle]
 pub extern "C-unwind" fn js_iterator_close_if_not_done(iter: f64, done: f64) -> f64 {
     iterator_close_if_not_done(iter, done)
 }
 
 #[cfg(panic = "abort")]
+#[inline(never)]
 #[no_mangle]
 pub extern "C" fn js_iterator_close_on_throw(iter: f64, done: f64, error: f64) -> f64 {
     iterator_close_on_throw(iter, done, error)
 }
 
 #[cfg(not(panic = "abort"))]
+#[inline(never)]
 #[no_mangle]
 pub extern "C-unwind" fn js_iterator_close_on_throw(iter: f64, done: f64, error: f64) -> f64 {
     iterator_close_on_throw(iter, done, error)

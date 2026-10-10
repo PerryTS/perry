@@ -1,18 +1,50 @@
 use super::*;
 
-/// Allocate memory from the thread-local arena
-/// This is very fast - just a pointer bump in the common case
-///
-/// Coexists with the inline allocator: every call here syncs the
-/// inline state's offset back to the underlying block first (so we
-/// don't overwrite inline-allocated memory), then allocates, then
-/// resyncs the inline state to the post-alloc state of the block.
-/// The two extra TLS reads cost ~5-10ns per call, which is fine
-/// because non-inline allocations (`js_string_from_bytes`,
-/// `js_closure_alloc`, etc.) are infrequent compared to the
-/// per-class-instance hot path that uses the inline allocator.
-#[inline]
+/// Allocate from the same Eden bump state used by generated code. Accounting
+/// is flushed by the existing arena/GC checkpoints; only small allocations
+/// may defer it because the large-allocation counter must retain its meaning.
+#[inline(always)]
 pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
+    let raw = try_inline_bump(size, align);
+    if !raw.is_null() {
+        return raw;
+    }
+    arena_alloc_slow(size, align)
+}
+
+/// No TLS arena borrow, collector, or reservation is reachable on success.
+/// Sampling retains the original runtime path so bytes are charged once and
+/// retain their runtime object type rather than being sampled as class births.
+#[inline(always)]
+fn try_inline_bump(size: usize, align: usize) -> *mut u8 {
+    if size >= 16 * 1024 || align > 8 || !super::alloc_sample::runtime_bump_permitted() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let state = &mut *crate::arena::hot_inline_state();
+        if state.data.is_null() {
+            return std::ptr::null_mut();
+        }
+        let Some(end) = state
+            .offset
+            .checked_add(size)
+            .and_then(|n| n.checked_add(7))
+        else {
+            return std::ptr::null_mut();
+        };
+        let next = end & !7;
+        if next > state.size {
+            return std::ptr::null_mut();
+        }
+        let raw = state.data.add(state.offset);
+        state.offset = next;
+        raw
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn arena_alloc_slow(size: usize, align: usize) -> *mut u8 {
     // #7469: both thread-locals come off the one cached hot-TLS base rather
     // than two `_tlv_get_addr` calls. The comment above about "two extra TLS
     // reads cost ~5-10ns" was measuring exactly that toll.
@@ -33,8 +65,8 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
             arena.blocks[current].offset = offset;
         }
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
-        // Resync block → inline (may have advanced to a new block).
-        if !(*inline_ptr).data.is_null() {
+        // Initialize/resync the existing state even for runtime-only callers.
+        {
             let (data, offset, block_size) = {
                 let arena = &*arena_ptr;
                 let block = &arena.blocks[arena.current];
@@ -77,8 +109,6 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
 /// memory `arena_alloc_gc` would have handed back identically.
 #[inline(always)]
 pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
-
     let total = gc_padded_total_size(size, align);
     super::alloc_sample::note(total, obj_type);
     // Old-gen birth walks page lists and can reserve — outside the contract.
@@ -97,17 +127,7 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
         return std::ptr::null_mut();
     }
 
-    unsafe {
-        let header = raw as *mut GcHeader;
-        (*header).obj_type = obj_type;
-        (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
-        crate::gc::gc_note_black_birth(header);
-        (*header)._reserved = 0;
-        (*header).size = total as u32;
-    }
-    record_arena_object_start(raw as usize, obj_type);
-
-    unsafe { raw.add(GC_HEADER_SIZE) }
+    unsafe { init_young_header(raw, total, obj_type) }
 }
 
 /// [`arena_alloc`] minus its collection point: serve the request from the
@@ -119,6 +139,10 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
 /// `arena_alloc` behaves as if this had never been called.
 #[inline(always)]
 fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
+    let raw = try_inline_bump(size, align);
+    if !raw.is_null() {
+        return raw;
+    }
     unsafe {
         let inline_ptr = crate::arena::hot_inline_state();
         let arena_ptr = crate::arena::hot_arena();
@@ -133,7 +157,7 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
         let Some(ptr) = crate::arena::arena_cell_try_alloc_current(arena_ptr, size, align) else {
             return std::ptr::null_mut();
         };
-        if !(*inline_ptr).data.is_null() {
+        {
             let (data, offset, block_size) = {
                 let arena = &*arena_ptr;
                 let block = &arena.blocks[arena.current];
@@ -416,6 +440,44 @@ pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    let total = gc_padded_total_size(size, align);
+    super::alloc_sample::note(total, obj_type);
+    if !crate::gc::is_large_object_total_size_for_type(total, obj_type)
+        && !crate::gc::hot_arena_free_list_nonempty().get()
+    {
+        let raw = try_inline_bump(total, align);
+        if !raw.is_null() {
+            return unsafe { init_young_header(raw, total, obj_type) };
+        }
+    }
+    arena_alloc_gc_slow(size, align, obj_type, total)
+}
+
+/// The current live birth color is read at the allocation, never cached
+/// across a poll. Black births still seed the existing marking worklist,
+/// and kinds requiring exact starts still update the R2 region bitmap.
+#[inline(always)]
+unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8 {
+    use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
+    let header = raw as *mut GcHeader;
+    // GcHeader is exactly eight initialized bytes with no padding. Write its
+    // native image as one aligned word, as generated class births do; an
+    // aggregate write otherwise lowers to four separate stores on x86-64.
+    let image = std::mem::transmute::<GcHeader, u64>(GcHeader {
+        obj_type,
+        gc_flags: GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags(),
+        _reserved: 0,
+        size: total as u32,
+    });
+    raw.cast::<u64>().write(image);
+    crate::gc::gc_note_black_birth(header);
+    record_arena_object_start(raw as usize, obj_type);
+    raw.add(GC_HEADER_SIZE)
+}
+
+#[cold]
+#[inline(never)]
+fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
     // Large arena-backed GC objects are born directly in non-moving old
@@ -430,8 +492,6 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // `gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES` for the measurement
     // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
     // slots per minor because of it).
-    let total = gc_padded_total_size(size, align);
-    super::alloc_sample::note(total, obj_type);
     // `&&` short-circuits, so the scope check is reached only by an allocation
     // the size test has ALREADY called large -- never on the hot path (#10123).
     if crate::gc::is_large_object_total_size_for_type(total, obj_type)
