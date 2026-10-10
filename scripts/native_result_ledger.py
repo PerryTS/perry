@@ -149,8 +149,18 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # reused node providers now name their own bun providers. 252 -> 236 rows,
 # 228 -> 215 providers, as the script reports on the resolved tree.
 # B2b: 22 zlib rows now return plain NaN-boxed values through the binding.
-EXPECTED_ROWS = 214
-EXPECTED_PROVIDERS = 193
+# net.Socket/net.Server as native payloads (da5678268): the socket, server
+# and BlockList objects are GC payload owners, so their constructors and
+# connect/listen/tls.connect entry points return a heap address (NR_GCPTR,
+# not a registry id), the listener/option/cork/pipe helpers and
+# BlockList.rules no longer have typed native-table rows (the payload
+# prototype dispatches them), so they left this ledger, and handle_exports.rs/lifecycle.rs/
+# option_setters.rs/cork.rs/pipe.rs are gone. `js_ext_net_socket_alloc`
+# (the payload constructor row) and `js_buffer_alloc_unsafe_slow` (typed by
+# the B4 byte-store unification) join as NR_GCPTR. 214 -> 179 rows and
+# 193 -> 167 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 179
+EXPECTED_PROVIDERS = 167
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

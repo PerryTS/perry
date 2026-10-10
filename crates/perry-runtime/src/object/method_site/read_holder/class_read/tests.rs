@@ -623,7 +623,7 @@ fn deep_entry_compares_every_hop() {
     );
     // Fake headers carry admitted shape descriptors; the comparison
     // checks below exercise every shape the real walk records.
-    let mut e = *e;
+    let e = *e;
 
     assert_eq!(
         unsafe { pinned_answer(&e) },

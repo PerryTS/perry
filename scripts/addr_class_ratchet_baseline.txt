@@ -129,8 +129,8 @@ handle-floor | crates/perry-runtime/src/object/native_module/web_locks.rs | 1
 handle-floor | crates/perry-runtime/src/object/object_literal_ops.rs | 1
 handle-floor | crates/perry-runtime/src/object/object_ops/accessors.rs | 1
 handle-floor | crates/perry-runtime/src/object/object_ops/define_properties.rs | 1
-handle-floor | crates/perry-runtime/src/object/object_ops/define_property.rs | 2
-handle-floor | crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs | 8
+handle-floor | crates/perry-runtime/src/object/object_ops/define_property.rs | 1
+handle-floor | crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs | 7
 handle-floor | crates/perry-runtime/src/object/object_ops/has_own.rs | 3
 handle-floor | crates/perry-runtime/src/object/object_ops/keys_array.rs | 6
 handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 4
@@ -227,7 +227,7 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method/proto_dispatch.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/native_this_alias.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_literal_ops.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/define_properties.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/define_properties.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/from_entries.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/has_own.rs | 1

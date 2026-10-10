@@ -624,6 +624,7 @@ impl AgentTimers {
 
     /// Remove every entry `dead` admits. The entries are returned so the
     /// caller drops them (and their ref-state ids) after releasing the store.
+    #[cfg(not(test))]
     fn remove_where(&mut self, dead: impl Fn(&Entry) -> bool) -> Vec<Entry> {
         let doomed: Vec<usize> = self
             .slab

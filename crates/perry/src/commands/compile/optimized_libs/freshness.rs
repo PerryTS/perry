@@ -153,7 +153,6 @@ pub(crate) fn gc_instruments_requested() -> bool {
 pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_REGEX_DIAG",
     "PERRY_IC_DIAG",
-    "PERRY_LAYOUT_DIAG",
     "PERRY_ENUM_DIAG",
     "PERRY_RECEIVER_REPR_DIAG",
 ];

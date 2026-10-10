@@ -255,6 +255,26 @@ pub(crate) fn register_runtime_handle_root_scanner_for_tests() {
     );
 }
 
+/// The object model's production root scanners, for fixtures under
+/// `CopyingNurseryTestGuard` (which clears production scanner registration and
+/// suppresses lazy `gc_init`). Shape-cache, transition-cache and canonical
+/// keys lists live in the reclaimable arenas, so any fixture that builds an
+/// object shape (a literal, a descriptor record, a reflection result) and then
+/// collects must mark and rewrite these raw array edges exactly as `gc_init`
+/// does. A handle keeps a receiver live but cannot refresh a cache's pointer:
+/// without these, a moved or swept keys list stays named by the cache and the
+/// next allocation of that shape reads freed memory.
+pub(crate) fn register_object_model_root_scanners_for_tests() {
+    crate::gc::gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    crate::gc::gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::gc::gc_register_mutable_root_scanner(
+        crate::object::canonical_keys::scan_canonical_keys_roots_mut,
+    );
+    crate::gc::gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+}
+
 /// Pin this thread's conservative-scan mode to `Disabled` for the guard's
 /// lifetime, restoring the prior override on drop.
 ///

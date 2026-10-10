@@ -31,7 +31,7 @@ fn chunk(n: u32) -> f64 {
     ));
     let text_key = key("text");
     obj.with_mut_ptr(|obj| {
-        text.with_const_ptr(|text| {
+        text.with_mut_ptr(|text| {
             crate::object::js_object_set_field_by_name(
                 obj,
                 text_key,

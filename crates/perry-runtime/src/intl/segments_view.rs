@@ -80,7 +80,7 @@ per_test_global! {
 }
 static DECLINE_NOT_UTF8: AtomicU64 = AtomicU64::new(0);
 static DECLINE_EMPTY: AtomicU64 = AtomicU64::new(0);
-crate::per_test_global! {
+per_test_global! {
     static NEXTS: AtomicU64 = AtomicU64::new(0);
 }
 static CODE_POINT_ATS: AtomicU64 = AtomicU64::new(0);

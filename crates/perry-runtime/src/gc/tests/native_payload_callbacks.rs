@@ -889,9 +889,11 @@ fn callback_cell_slot_resolves_array_growth_before_gc_rewrite() {
     let arr =
         crate::JSValue::from_bits(original.to_bits()).as_pointer::<crate::array::ArrayHeader>();
     // Model an array alias growing its storage without a JS-state setter.
-    let grown = scope.root_raw_mut_ptr(unsafe {
-        crate::array::js_array_set_f64_extend(arr as *mut _, 4096, cb.get_nanbox_f64())
-    });
+    let grown = scope.root_raw_mut_ptr(crate::array::js_array_set_f64_extend(
+        arr as *mut _,
+        4096,
+        cb.get_nanbox_f64(),
+    ));
     assert_ne!(
         original.to_bits() & POINTER_MASK,
         grown.with_mut_ptr::<crate::array::ArrayHeader, _>(|grown| grown as u64)

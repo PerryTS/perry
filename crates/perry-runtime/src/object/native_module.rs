@@ -79,12 +79,25 @@ use vtable_impls::vt_get_own_field;
 pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
+/// Fixed aHash keys for `NATIVE_CALLABLE_EXPORTS` (see there).
+const NATIVE_CALLABLE_EXPORTS_HASHER: ahash::RandomState = ahash::RandomState::with_seeds(
+    0x243f_6a88_85a3_08d3,
+    0x1319_8a2e_0370_7344,
+    0xa409_3822_299f_31d0,
+    0x082e_fa98_ec4e_6c89,
+);
+
 crate::perry_thread_local! {
     /// Every minted bound export by `"<module>\0<property>"`. Read on hot
     /// paths (`new EventEmitter()` resolves its prototype through it), so it
-    /// hashes with aHash, which keeps a random key without SipHash's rounds.
+    /// hashes with aHash rather than SipHash. The keys are compiled module and
+    /// property names, never input, so the hasher is fixed-keyed: a random key
+    /// would make this thread-local's first touch seed itself from the OS
+    /// (`getrandom` through a function pointer), and every hot thread-local
+    /// read shares that initializer path, so the GC call-effects classifier
+    /// would have to treat all of them as able to collect.
     pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, ahash::RandomState>> =
-        RefCell::new(HashMap::default());
+        RefCell::new(HashMap::with_hasher(NATIVE_CALLABLE_EXPORTS_HASHER));
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static HANDLE_PROPERTY_BIND_REENTRY: Cell<bool> = const { Cell::new(false) };

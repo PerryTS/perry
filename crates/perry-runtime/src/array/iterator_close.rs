@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use crate::{closure, object, string, value};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    crate::per_test_global! {
+    per_test_global! {
         static CALLS: AtomicUsize = AtomicUsize::new(0);
     }
     extern "C" fn returns_object(

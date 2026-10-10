@@ -38,6 +38,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // a different backend means different object bytes.
     "PERRY_LLVM_INPROCESS",
     "PERRY_WRITE_BARRIERS",
+    // Adds a birth check of every closure capture cell to emitted code.
+    "PERRY_ASSERT_CAPTURE_CELLS",
     // #9342 kill switch: `PERRY_U8_INLINE_READ=0` removes the inline u8-read
     // lane from the emitted code, so an object built with the lane must not be
     // served from cache to a build that turned it off (and vice versa).

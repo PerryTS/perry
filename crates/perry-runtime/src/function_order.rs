@@ -18,7 +18,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
-crate::per_test_global! {
+per_test_global! {
     static OUTPUT: OnceLock<Option<File>> = OnceLock::new();
 }
 

@@ -1,8 +1,9 @@
 {
   "_comment": "Files still declaring raw `thread_local!`. The count is the number of DECLARATIONS that survive into a shipping build \u2014 each one pays `_tlv_get_addr` per read on Darwin \u2014 and it is a ratchet, so adding a `static` to an already-listed file fails whether or not it opens a new block. New code should use `crate::perry_thread_local!` \u2014 see crates/perry-runtime/src/tls_hot.rs. Regenerate with scripts/check_thread_locals.py --update.",
-  "_hot_declarations": 513,
+  "_hot_declarations": 518,
   "files": {
     "crates/perry-runtime/src/agent.rs": 1,
+    "crates/perry-runtime/src/alloc_census.rs": 2,
     "crates/perry-runtime/src/arena/block.rs": 5,
     "crates/perry-runtime/src/arena/page_meta/mod.rs": 2,
     "crates/perry-runtime/src/async_context.rs": 2,
@@ -81,12 +82,6 @@
     "crates/perry-runtime/src/v8.rs": 2,
     "crates/perry-runtime/src/wasi.rs": 1,
     "crates/perry-runtime/src/weakref.rs": 2,
-    "crates/perry-runtime/src/web_storage.rs": 2,
-    "crates/perry-runtime/src/alloc_census.rs": 2,
-    "crates/perry-runtime/src/buffer/bytes.rs": 1
-  },
-  "_allocation_free_exceptions": {
-    "crates/perry-runtime/src/alloc_census.rs": "CREDIT and IN_SAMPLER run inside the global allocator before runtime TLS is initialized. HotKey claim allocates its bookkeeping before the sampler guard can be set, recursively entering the allocator. Raw TLS keeps sampling credit and its recursion guard allocation-free.",
-    "crates/perry-runtime/src/buffer/bytes.rs": "NO_GC_DEPTH is the byte-borrow assertion/scope guard, first accessed from allocation assertions. Its first touch must itself be allocation-free; a HotKey lookup may initialize HotTls and allocate before the no-GC assertion can run."
+    "crates/perry-runtime/src/web_storage.rs": 2
   }
 }

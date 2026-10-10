@@ -399,6 +399,7 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     check(&first);
     drop(first);
     check(&second);
+    #[cfg(target_os = "linux")]
     let data = second.as_ptr();
     drop(second);
     #[cfg(target_os = "linux")]

@@ -282,7 +282,7 @@ pub(crate) unsafe fn decode_property_descriptor<'scope>(
                 name.len() as u32,
             ));
             let key_value =
-                || key.with_const_ptr(|key| f64::from_bits(crate::JSValue::string_ptr(key).bits()));
+                || key.with_mut_ptr(|key| f64::from_bits(crate::JSValue::string_ptr(key).bits()));
             if crate::object::js_object_has_property(descriptor.get_nanbox_f64(), key_value())
                 .to_bits()
                 != crate::value::TAG_TRUE

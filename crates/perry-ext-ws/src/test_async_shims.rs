@@ -42,3 +42,32 @@ pub extern "C" fn perry_ffi_native_async_reject_string(
 ) -> i32 {
     0
 }
+
+// The plain-promise bridge (`perry_ffi::promise_*`), referenced by the
+// upgrade path this crate shares with perry-ext-http. These forward to the
+// runtime's own promise, exactly as perry-ext-net's shims do, so a test that
+// reaches them settles a real promise.
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_new() -> *mut perry_ffi::Promise {
+    perry_runtime::promise::js_promise_new() as *mut perry_ffi::Promise
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_resolve_bits(promise: *mut perry_ffi::Promise, bits: u64) {
+    perry_runtime::promise::js_promise_resolve(
+        promise as *mut perry_runtime::Promise,
+        f64::from_bits(bits),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_reject_deferred(
+    promise: *mut perry_ffi::Promise,
+    ctx: *mut c_void,
+    invoke: extern "C" fn(*mut c_void) -> u64,
+) {
+    perry_runtime::promise::js_promise_reject(
+        promise as *mut perry_runtime::Promise,
+        f64::from_bits(invoke(ctx)),
+    );
+}

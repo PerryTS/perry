@@ -98,7 +98,7 @@ fn bigint_comparator_moves_inside_operand_boxing() {
     crate::closure::js_closure_set_capture_f64(comparator, 0, 37.0);
     js_shadow_slot_set(0, pointer_value(comparator).to_bits());
     assert!(crate::arena::pointer_in_nursery(comparator as usize));
-    let site = unsafe { crate::closure::DirectCall2::resolve(comparator) };
+    let site = crate::closure::DirectCall2::resolve(comparator);
     let mut boxes = 0;
     let order = unsafe {
         crate::typedarray::bigint_lane_compare_with_boxer(site, comparator, 9, 3, |bits| {
@@ -129,6 +129,10 @@ fn finreg_unregister_refreshes_first_lookup_after_allocating_key() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
+    // Poison the from-space copy so a stale registry read cannot pass on the
+    // old bytes it still holds.
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     let _scan = ConservativeScanDisabledGuard::new();
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     register_runtime_handle_root_scanner_for_tests();

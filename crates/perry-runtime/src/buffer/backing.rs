@@ -15,6 +15,11 @@ pub(crate) struct Backing {
     live_counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
+// The shipped layout is two words. Checked at compile time in every
+// non-test build; a test build adds only the counter field above.
+#[cfg(not(test))]
+const _: () = assert!(std::mem::size_of::<Backing>() == 16);
+
 // Exclusive ownership crosses the queue; no JS access remains after detach.
 unsafe impl Send for Backing {}
 
@@ -114,7 +119,7 @@ impl Drop for Backing {
 }
 
 #[cfg(test)]
-crate::per_test_global! {
+per_test_global! {
     pub(crate) static LIVE_BACKINGS: std::sync::Arc<std::sync::atomic::AtomicUsize> =
         std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 }

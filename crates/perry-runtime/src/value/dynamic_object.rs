@@ -874,19 +874,11 @@ mod length_handle_band_tests {
                 "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
             );
 
-            // GC_STORE_AUDIT(POINTER_FREE): TypedArrayHeader is
-            // length/capacity/kind/elem_size/_pad numerics with no pointer
-            // field, and the destination is this test's own private anonymous
-            // mmap page rather than arena-managed memory, so the store creates
-            // no heap edge for the collector to trace.
-            std::ptr::write(
-                ptr,
-                crate::typedarray::TypedArrayHeader {
-                    length: 37,
-                    capacity: 37,
-                    link: 0,
-                },
-            );
+            // The byte-cell layout is private to the store; its own
+            // initializer writes length/capacity 37 and a null link into this
+            // test's private anonymous mmap page (not arena-managed memory),
+            // so no heap edge is created.
+            crate::buffer::store::initialize_shared_block(ptr, 37);
 
             assert_eq!(
                 js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),

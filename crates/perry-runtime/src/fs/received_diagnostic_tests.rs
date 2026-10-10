@@ -373,7 +373,7 @@ fn with_received_typed_array_constructor(test: impl FnOnce(f64, f64)) {
     with_received_intrinsic_constructor("Int16Array", test);
 }
 
-crate::per_test_global! {
+per_test_global! {
     static RECEIVED_CHAIN_LINK_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 }
@@ -432,7 +432,7 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
     check(value.get_nanbox_f64(), &format!("an instance of {name}"));
 }
 
-crate::per_test_global! {
+per_test_global! {
     static RECEIVED_CONSTRUCTOR_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 }
@@ -970,7 +970,7 @@ fn received_third_constructor_nullish_getv() {
     );
 }
 
-crate::per_test_global! {
+per_test_global! {
     static RECEIVED_PRIMITIVE_THIS: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 }

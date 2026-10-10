@@ -27,9 +27,14 @@ file fails so cleanup has to delete its permission.  ``--update`` may only
 lower existing per-file and aggregate ceilings.  ``--no-raise-vs`` compares
 the recorded ledger with a git revision, closing the usual loophole where the
 same pull request raises both the source count and its baseline. A precise
-``# moved-from: PATH`` annotation may transfer per-file counts, bounded by
-what that source surrendered on each axis; split destinations share that
-credit, aggregate counts cannot rise, and landed annotations grant no new credit.
+``# moved-from: PATH`` annotation may transfer TABLE counts only when the move
+is verified against the base tree by identity: the destination's recorded
+count may not exceed its handle-keyed declarations that already existed by
+name at the base (in the destination or the source) and that the source no
+longer declares, so no table born in this diff is ever credited. Credit is also
+bounded by what the source surrendered in the ledger; split destinations share
+it, aggregate counts cannot rise, and landed annotations grant no new credit.
+Producer counts are anonymous call sites, so they never move by annotation.
 
 Usage:
     python3 scripts/native_handle_ledger.py
@@ -353,7 +358,8 @@ def no_raise_vs(ref: str) -> int:
     base = parse_ledger(base_text)
     head_text = LEDGER.read_text(encoding="utf-8")
     head = parse_ledger(head_text)
-    bad = compare_relocated_ceiling(head, base, ledger_moves(head_text))
+    moves = ledger_moves(head_text)
+    bad = compare_relocated_ceiling(head, base, moves, verified_moves(ref, moves))
     bt, bp = totals(base)
     ht, hp = totals(head)
     if ht > bt:
@@ -369,15 +375,64 @@ def no_raise_vs(ref: str) -> int:
     return 0
 
 
-def compare_relocated_ceiling(head, base, moves):
-    """Each source supplies one shared pool per axis, bounded by real cleanup.
+def handle_table_names(rel: str, text: str | None) -> set[str]:
+    """Names of the shipped handle-keyed tables `rel` declares in `text`."""
+    if text is None:
+        return set()
+    code = strip_test_items(text)
+    return {
+        name
+        for name, _line, type_text in declarations(rel, code)
+        if handle_keyed(type_text) and not excluded_table(rel, name)
+    }
 
-    Tables and producers are separate currencies. Relocations cannot increase
-    either total, spend a source twice, or borrow the source's retained debt.
-    A landed annotation is inert once base and head agree about both paths.
+
+def moved_table_names(
+    dest: str, source: str, base_files: dict[str, str | None], head_files: dict[str, str | None]
+) -> set[str]:
+    """Tables of `dest` that verifiably came from `source`, or were already there.
+
+    A head declaration of `dest` counts only if a table of that exact name
+    existed at the base in `dest` or in `source`, and `source` no longer
+    declares it. A table born in this diff never counts, and a copy that left
+    the source in place never counts. The base side covers a move that landed
+    before the base while the base ledger still charged the source. This
+    needs only the two trees (CI checks out at depth 1), not history.
     """
-    pools = {source: [max(0, base.get(source, (0, 0))[i] - head.get(source, (0, 0))[i])
-                      for i in range(2)] for source in set(moves.values())}
+    existed = handle_table_names(dest, base_files.get(dest)) | handle_table_names(
+        source, base_files.get(source)
+    )
+    return (handle_table_names(dest, head_files.get(dest)) & existed) - handle_table_names(
+        source, head_files.get(source)
+    )
+
+
+def git_show_file(ref: str, path: str) -> str | None:
+    shown = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=ROOT, capture_output=True, text=True)
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def verified_moves(ref: str, moves: dict[str, str]) -> dict[str, int]:
+    """Per destination: the table count the base and head trees can account for."""
+    paths = set(moves) | set(moves.values())
+    base_files = {path: git_show_file(ref, path) for path in paths}
+    head_files = {
+        path: (ROOT / path).read_text(encoding="utf-8", errors="replace") if (ROOT / path).exists() else None
+        for path in paths
+    }
+    return {dest: len(moved_table_names(dest, source, base_files, head_files)) for dest, source in moves.items()}
+
+
+def compare_relocated_ceiling(head, base, moves, verified):
+    """Each source supplies one shared table pool, bounded by real cleanup.
+
+    Only tables move, and a destination's head count may not exceed what
+    `verified` accounts for by identity. Relocations cannot increase either total, spend a source
+    twice, or borrow the source's retained debt. A landed annotation is inert
+    once base and head agree about both paths.
+    """
+    pools = {source: max(0, base.get(source, (0, 0))[0] - head.get(source, (0, 0))[0])
+             for source in set(moves.values())}
     bad = []
     for path, counts in sorted(head.items()):
         for i, axis in enumerate(("tables", "producers")):
@@ -385,10 +440,16 @@ def compare_relocated_ceiling(head, base, moves):
             if need <= 0:
                 continue
             source = moves.get(path)
-            if source is None or source == path or pools[source][i] < need:
+            if (
+                i != 0
+                or source is None
+                or source == path
+                or pools[source] < need
+                or verified.get(path, 0) < counts[0]
+            ):
                 bad.append(f"{path}: {axis} increased by {need} without sufficient surrendered relocation credit")
             else:
-                pools[source][i] -= need
+                pools[source] -= need
     return bad
 
 
@@ -435,23 +496,42 @@ fn test_only() { register_handle(2_u8); }
         return 1
 
     relocation_base = {"source.rs": (4, 2)}
+    proven = {"dest.rs": 2, "left.rs": 2, "right.rs": 2}
     relocation_cases = [
-        ({"source.rs": (2, 1), "dest.rs": (2, 1)}, {"dest.rs": "source.rs"}, False),
-        ({"source.rs": (2, 1), "dest.rs": (2, 1)}, {}, True),
-        ({"source.rs": (4, 2), "dest.rs": (1, 0)}, {"dest.rs": "source.rs"}, True),
-        ({"source.rs": (2, 1), "dest.rs": (3, 1)}, {"dest.rs": "source.rs"}, True),
-        ({"source.rs": (2, 1), "dest.rs": (1, 2)}, {"dest.rs": "source.rs"}, True),
-        ({"left.rs": (2, 1), "right.rs": (2, 1)},
-         {"left.rs": "source.rs", "right.rs": "source.rs"}, False),
-        ({"left.rs": (3, 1), "right.rs": (2, 1)},
-         {"left.rs": "source.rs", "right.rs": "source.rs"}, True),
+        ({"source.rs": (2, 2), "dest.rs": (2, 0)}, {"dest.rs": "source.rs"}, proven, False),
+        ({"source.rs": (2, 2), "dest.rs": (2, 0)}, {}, proven, True),
+        # The ledger alone is not proof: no verified table identity, no credit.
+        ({"source.rs": (2, 2), "dest.rs": (2, 0)}, {"dest.rs": "source.rs"}, {}, True),
+        ({"source.rs": (2, 2), "dest.rs": (2, 0)}, {"dest.rs": "source.rs"}, {"dest.rs": 1}, True),
+        ({"source.rs": (4, 2), "dest.rs": (1, 0)}, {"dest.rs": "source.rs"}, proven, True),
+        ({"source.rs": (2, 2), "dest.rs": (3, 0)}, {"dest.rs": "source.rs"}, {"dest.rs": 3}, True),
+        # Producers are anonymous call sites: they never move by annotation.
+        ({"source.rs": (2, 1), "dest.rs": (2, 1)}, {"dest.rs": "source.rs"}, proven, True),
+        ({"left.rs": (2, 0), "right.rs": (2, 0), "source.rs": (0, 2)},
+         {"left.rs": "source.rs", "right.rs": "source.rs"}, proven, False),
+        ({"left.rs": (3, 0), "right.rs": (2, 0), "source.rs": (0, 2)},
+         {"left.rs": "source.rs", "right.rs": "source.rs"}, {"left.rs": 3, "right.rs": 2}, True),
     ]
-    for head, moves, rejected in relocation_cases:
-        if bool(compare_relocated_ceiling(head, relocation_base, moves)) != rejected:
-            print(f"native_handle_ledger self-test FAILED: relocation {head}, {moves}")
+    for head, moves, verified, rejected in relocation_cases:
+        if bool(compare_relocated_ceiling(head, relocation_base, moves, verified)) != rejected:
+            print(f"native_handle_ledger self-test FAILED: relocation {head}, {moves}, {verified}")
             return 1
+    table = "static {}: std::sync::LazyLock<std::collections::HashMap<usize, u8>> = todo!();\n"
+    base_files = {"src.rs": table.format("MOVED") + table.format("KEPT"), "dst.rs": ""}
+    head_files = {"src.rs": table.format("KEPT"), "dst.rs": table.format("MOVED") + table.format("FRESH")}
+    if moved_table_names("dst.rs", "src.rs", base_files, head_files) != {"MOVED"}:
+        print("native_handle_ledger self-test FAILED: identity check credited a table that did not move")
+        return 1
+    copied = {"src.rs": base_files["src.rs"], "dst.rs": head_files["dst.rs"]}
+    if moved_table_names("dst.rs", "src.rs", base_files, copied):
+        print("native_handle_ledger self-test FAILED: a copy that left the source in place was credited")
+        return 1
+    landed_early = {"src.rs": table.format("KEPT"), "dst.rs": table.format("MOVED")}
+    if moved_table_names("dst.rs", "src.rs", landed_early, head_files) != {"MOVED"}:
+        print("native_handle_ledger self-test FAILED: a move that landed before the base was not accounted")
+        return 1
     landed = {"dest.rs": (4, 2)}
-    if not compare_relocated_ceiling({"dest.rs": (5, 2)}, landed, {"dest.rs": "source.rs"}):
+    if not compare_relocated_ceiling({"dest.rs": (5, 2)}, landed, {"dest.rs": "source.rs"}, {"dest.rs": 5}):
         print("native_handle_ledger self-test FAILED: landed annotation granted fresh credit")
         return 1
     encoded = render(landed, {"dest.rs": "source.rs"})

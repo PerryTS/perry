@@ -472,7 +472,7 @@ fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
             // The pointer above is deliberately not a root. A real full sweep
             // must reach the Map finalizer even after its keys were removed.
             let before = test_thread_map_side_deallocation_snapshot();
-            let mut cycle = GcCycleState::new_full(GcTriggerSnapshot {
+            let cycle = GcCycleState::new_full(GcTriggerSnapshot {
                 kind: GcTriggerKind::Manual,
                 steps_before: Some(GcStepSnapshot::current()),
             });

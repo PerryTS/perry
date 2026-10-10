@@ -686,6 +686,17 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // A native handle (a pointer-tagged small registry id, not a Proxy) is an
+    // object whose own properties live in `handle_expando`. Freeze, seal and
+    // preventExtensions take their no-op path for it (no header to flag, see
+    // `integrity_flags_are_writable`), so it is always extensible; answering
+    // false here made every `Object.defineProperty(handle, newKey, ...)` reject.
+    let value = crate::JSValue::from_bits(obj_value.to_bits());
+    if value.is_pointer()
+        && crate::value::addr_class::is_small_handle(value.as_pointer::<u8>() as usize)
+    {
+        return f64::from_bits(TAG_TRUE);
+    }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() || (obj as usize) <= 0x10000 {

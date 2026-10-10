@@ -18,7 +18,12 @@ fn adopted_vec_keeps_capacity_layout_and_visible_length() {
     bytes.extend_from_slice(&[1, 2, 3]);
     let pointer = bytes.as_ptr();
     let capacity = bytes.capacity();
-    assert_eq!(std::mem::size_of::<backing::Backing>(), 16);
+    // The shipped two-word layout is a compile-time assertion in backing.rs;
+    // a test build carries exactly one extra field, the live counter.
+    assert_eq!(
+        std::mem::size_of::<backing::Backing>(),
+        16 + std::mem::size_of::<std::sync::Arc<std::sync::atomic::AtomicUsize>>()
+    );
     let backing = backing::Backing::from_vec(bytes);
     assert_eq!(backing.data(), pointer as *mut u8);
     assert_eq!(backing.capacity() as usize, capacity);

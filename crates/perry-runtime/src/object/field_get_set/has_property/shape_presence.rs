@@ -173,7 +173,7 @@ mod tests {
             0
         );
 
-        crate::per_test_global! {
+        per_test_global! {
             static GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         }
         extern "C" fn getter(

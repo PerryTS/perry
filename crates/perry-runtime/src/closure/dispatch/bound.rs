@@ -1025,18 +1025,17 @@ mod rebind_predicate_tests {
         // return the target untouched.
         let method = closure_value(method_body, CAPTURES_THIS_FLAG | 1);
         let already_bound = closure_value(method_body, CAPTURES_THIS_FLAG | 1);
-        unsafe {
-            crate::closure::js_closure_set_capture_f64(
-                crate::value::js_nanbox_get_pointer(method) as *mut ClosureHeader,
-                0,
-                42.0,
-            );
-            crate::closure::js_closure_set_capture_f64(
-                crate::value::js_nanbox_get_pointer(already_bound) as *mut ClosureHeader,
-                0,
-                receiver,
-            );
-        }
+        crate::closure::js_closure_set_capture_f64(
+            crate::value::js_nanbox_get_pointer(method) as *mut ClosureHeader,
+            0,
+            42.0,
+        );
+        crate::closure::js_closure_set_capture_f64(
+            crate::value::js_nanbox_get_pointer(already_bound) as *mut ClosureHeader,
+            0,
+            receiver,
+        );
+
         let cases = [
             (
                 "method whose captured receiver already matches",
