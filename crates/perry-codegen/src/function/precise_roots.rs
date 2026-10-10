@@ -60,7 +60,11 @@ fn is_local_name_char(c: char) -> bool {
 /// An empty `asm` with a tied `"=r,0"` operand: the standard register-level
 /// identity, zero machine instructions, and — unlike every pure IR spelling —
 /// something InstCombine cannot see through, so it can no longer read
-/// `inttoptr(ptrtoint X)` as an identity pair. Marked `"gc-leaf-function"` so
+/// `inttoptr(ptrtoint X)` as an identity pair. The input is the managed
+/// pointer itself and the output its ordinary i64 bits: the tied register
+/// crosses that representation boundary without a redundant `ptrtoint`.
+/// Keeping the pointer-typed input also preserves RS4GC liveness when LLVM
+/// simplifies integer consumers. Marked `"gc-leaf-function"` so
 /// RS4GC does not try to wrap the asm itself in a statepoint (which it rejects
 /// outright: "Cannot take the address of an inline asm!").
 ///
@@ -126,7 +130,7 @@ fn rewrite_root_access(
             return None;
         }
         return Some(format!(
-            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = and i64 {result}.rs4o, 281474976710655\n"
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(ptr addrspace(1) {result}.rs4p) \"gc-leaf-function\"\n  {result} = and i64 {result}.rs4o, 281474976710655\n"
         ));
     }
     if let Some((result, ptr)) = trimmed.split_once(" = load double, ptr ") {
@@ -134,7 +138,7 @@ fn rewrite_root_access(
             return None;
         }
         return Some(format!(
-            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = bitcast i64 {result}.rs4o to double\n"
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(ptr addrspace(1) {result}.rs4p) \"gc-leaf-function\"\n  {result} = bitcast i64 {result}.rs4o to double\n"
         ));
     }
     None
@@ -886,3 +890,6 @@ mod stack_map_tests {
 
 #[cfg(test)]
 mod equivalence_tests;
+
+#[cfg(test)]
+mod root_launder_budget_tests;

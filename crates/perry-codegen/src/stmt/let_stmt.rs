@@ -27,6 +27,16 @@ pub(crate) fn lower_let(
     ty: &perry_hir::types::Type,
     mutable: bool,
 ) -> Result<()> {
+    // A loop-local const can bind a different view on each iteration even
+    // when the initializer emits no call. Invalidate its existing proof at
+    // the binding, then use the same receiver-invariance proof as parameters.
+    let immutable = !mutable && !ctx.reassigned_locals.contains(&id);
+    for state in ctx
+        .receiver_descriptors
+        .byte_receiver_binding(id, immutable)
+    {
+        ctx.block().store(I8, "0", &state);
+    }
     if crate::array_record_stack::bind_field(ctx, id, name, init, ty)? {
         return Ok(());
     }
