@@ -123,28 +123,23 @@ pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
 }
 
 pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
-    if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        let cache = cache.borrow();
-        if let Some(bits) = cache
-            .get(&(
-                class_id,
-                method_name.to_string(),
-                ClassDeclarationValueKind::Method,
-            ))
-            .or_else(|| {
-                cache.get(&(
-                    class_id,
-                    method_name.to_string(),
-                    ClassDeclarationValueKind::NonPropertyMethod,
-                ))
-            })
-            .copied()
-        {
-            return Some(bits);
-        }
-        None
-    }) {
+    if let Some(bits) = class_kept_method_value(class_id, method_name) {
         return f64::from_bits(bits);
+    }
+    // The class's holder keeps its method values, so a declared class gets
+    // its holder here. Minting builds the prototype, which materializes and
+    // keeps the class's methods itself: read again before making a second
+    // object for the same method. A per-evaluation template keeps no holder
+    // for a value read (building it would evaluate the template's heritage);
+    // each evaluation keeps its own method values on its class object.
+    if class_id != 0
+        && crate::object::class_value::class_value_if_minted(class_id).is_none()
+        && !crate::object::class_registry::template_has_class_objects(class_id)
+    {
+        crate::object::class_value::class_value_ptr(class_id);
+        if let Some(bits) = class_kept_method_value(class_id, method_name) {
+            return f64::from_bits(bits);
+        }
     }
 
     // The registry is read only to materialize this declaration's function
@@ -193,28 +188,32 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
         } else {
             ClassDeclarationValueKind::Method
         };
-    crate::object::class_registry::class_declaration_value_root_store(
+    crate::object::class_registry::class_declaration_value_store(
         class_id,
-        method_name.to_string(),
         kind,
+        method_name,
         value.to_bits(),
     );
     value
 }
 
+/// The method value class `class_id`'s holder keeps for `name`, of either
+/// method kind.
+fn class_kept_method_value(class_id: u32, name: &str) -> Option<u64> {
+    use crate::object::class_registry::{class_declaration_value, ClassDeclarationValueKind};
+    class_declaration_value(class_id, ClassDeclarationValueKind::Method, name).or_else(|| {
+        class_declaration_value(class_id, ClassDeclarationValueKind::NonPropertyMethod, name)
+    })
+}
+
 /// A materialized lexical/symbol member, separate from public properties.
 pub(crate) fn class_non_property_method_value(class_id: u32, name: &str) -> Option<u64> {
     let _ = class_prototype_method_value_for_name(class_id, name);
-    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        cache
-            .borrow()
-            .get(&(
-                class_id,
-                name.to_string(),
-                ClassDeclarationValueKind::NonPropertyMethod,
-            ))
-            .copied()
-    })
+    crate::object::class_registry::class_declaration_value(
+        class_id,
+        crate::object::class_registry::ClassDeclarationValueKind::NonPropertyMethod,
+        name,
+    )
 }
 
 /// The function object of declared class `class_id`'s method `name` whose

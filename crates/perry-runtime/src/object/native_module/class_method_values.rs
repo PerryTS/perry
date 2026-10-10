@@ -95,16 +95,11 @@ pub(crate) fn class_private_static_method_value_for_name(
         return method.get_nanbox_f64();
     }
 
-    if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        cache
-            .borrow()
-            .get(&(
-                owner_class_id,
-                cache_name.clone(),
-                ClassDeclarationValueKind::Method,
-            ))
-            .copied()
-    }) {
+    use crate::object::class_registry::{
+        class_declaration_value, class_declaration_value_store, ClassDeclarationValueKind,
+    };
+    let kind = ClassDeclarationValueKind::PrivateStaticMethod;
+    if let Some(bits) = class_declaration_value(owner_class_id, kind, method_name) {
         return f64::from_bits(bits);
     }
     let leaked = intern_class_method_name(owner_class_id, method_name);
@@ -114,7 +109,7 @@ pub(crate) fn class_private_static_method_value_for_name(
         leaked.len(),
         Some(evaluation_brand),
     );
-    class_prototype_method_value_cache_root_store(owner_class_id, cache_name, method.to_bits());
+    class_declaration_value_store(owner_class_id, kind, method_name, method.to_bits());
     method
 }
 static CLASS_METHOD_NAME_INTERNER: OnceLock<RwLock<HashMap<(u32, String), &'static [u8]>>> =

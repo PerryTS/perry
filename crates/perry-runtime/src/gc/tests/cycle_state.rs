@@ -564,11 +564,7 @@ fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
     const ROOTS: usize = 32;
     let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
     for (idx, &child) in children.iter().enumerate() {
-        crate::object::test_seed_class_prototype_method_value_root(
-            0x5300 + idx as u32,
-            "root",
-            string_bits(child),
-        );
+        crate::object::test_seed_class_prototype_object_root(0x5300 + idx as u32, child);
     }
     let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
     let parent_closure = alloc_tracked_test_closure() as usize;
@@ -1774,6 +1770,11 @@ fn full_cycle_bound_prototype_method_cache_after_root_scan_marks_new_value() {
             0,
         );
     }
+    // The class's holder keeps its method values; it exists before the
+    // cycle, as any class whose methods are read has one. A holder is pinned,
+    // and pinned objects are roots (as the runtime registers them).
+    gc_register_mutable_root_scanner(crate::gc::pin::scan_pinned_object_roots_mut);
+    crate::object::class_value::class_value_ptr(0x5104);
 
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
@@ -1787,15 +1788,24 @@ fn full_cycle_bound_prototype_method_cache_after_root_scan_marks_new_value() {
     assert_eq!(value_bits & TAG_MASK, POINTER_TAG);
     let value_ptr = (value_bits & POINTER_MASK) as usize;
     let value_header = unsafe { header_from_user_ptr(value_ptr as *const u8) };
+    // Created after this cycle's pointer snapshot, the value is outside its
+    // sweep. The next cycle reaches it only through the class holder's
+    // traced state record: no root table names it.
+    run_cycle_in_single_unit_steps(&mut state);
+    assert_eq!(
+        crate::object::test_class_prototype_method_value_root_bits(0x5104, "lateBound"),
+        value_bits
+    );
+    let mut next = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut next, GcCyclePhase::Sweep);
     unsafe {
         assert_ne!(
             (*value_header).gc_flags & GC_FLAG_MARKED,
             0,
-            "bound prototype-method cache creation after root scan should fire the root barrier"
+            "a method value kept on its class holder must be traced through the holder"
         );
     }
-
-    run_cycle_in_single_unit_steps(&mut state);
+    run_cycle_in_single_unit_steps(&mut next);
     assert_eq!(
         crate::object::test_class_prototype_method_value_root_bits(0x5104, "lateBound"),
         value_bits

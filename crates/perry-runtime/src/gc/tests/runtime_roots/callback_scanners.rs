@@ -1335,11 +1335,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::object::test_seed_transition_cache_root(fixture.nursery_addr());
     crate::object::test_seed_object_cache_roots([fixture.nursery_bits; 7], fixture.nursery_i64());
 
-    crate::object::test_seed_class_prototype_method_value_root(
-        0x5501,
-        "bound",
-        fixture.nursery_bits,
-    );
     crate::object::test_seed_function_class_id_key(fixture.nursery_bits, 0x8200_5501);
     crate::json::test_seed_parse_roots(
         fixture.nursery_value(),
@@ -1485,10 +1480,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         ([fixture.old_bits; 7], fixture.old_addr() as i64)
     );
 
-    assert_eq!(
-        crate::object::test_class_prototype_method_value_root_bits(0x5501, "bound"),
-        fixture.old_bits
-    );
     assert_eq!(
         crate::object::test_function_class_id_key_for_class(0x8200_5501),
         fixture.old_bits
