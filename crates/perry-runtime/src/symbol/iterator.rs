@@ -6,13 +6,31 @@ use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
-/// the object. Looks up the side table populated by
-/// `js_object_set_symbol_property`.
+/// the object, in property creation order.
 ///
 /// Returns a raw `*mut ArrayHeader` as i64 (unboxed). Callers should NaN-box
 /// with POINTER_TAG before handing the result to user code.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64 {
+    // A live ordinary shape proves symbol absence from its immutable key
+    // prefix. Retain the fresh array and allocation point shared by all
+    // callers; only enumeration work is omitted.
+    let value = crate::JSValue::from_bits(obj_f64.to_bits());
+    if value.is_pointer() {
+        let addr = value.as_pointer::<u8>() as usize;
+        if crate::value::addr_class::try_read_tracked_gc_header(addr)
+            .is_some_and(|header| (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            let object = addr as *const crate::object::ObjectHeader;
+            if crate::object::shapes::shape_record_by_id(crate::object::shapes::object_shape_stamp(
+                object,
+            ))
+            .is_some_and(|record| record.proves_no_symbols())
+            {
+                return crate::array::js_array_alloc(0) as i64;
+            }
+        }
+    }
     // #2818: ToObject(null/undefined) throws TypeError, matching Node. Other
     // primitives box successfully and enumerate no own symbols (empty array).
     let jv = crate::JSValue::from_bits(obj_f64.to_bits());

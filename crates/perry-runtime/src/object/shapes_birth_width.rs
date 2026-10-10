@@ -73,7 +73,7 @@ fn find_birth_record(
     inner: &ShapeTableInner,
     slab: &shapes_store::ShapeSlab,
     proto_id: u64,
-) -> Option<*mut ShapeRecord> {
+) -> Option<(u32, *mut ShapeRecord)> {
     let facts =
         shapes_store::facts_key_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0);
     let ids = inner.by_facts.get(&facts)?;
@@ -86,7 +86,7 @@ fn find_birth_record(
         if r.has(RECORD_FLAG_FACTS_INDEXED)
             && r.facts_match_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0)
         {
-            return Some(record);
+            return Some((id, record));
         }
     }
     None
@@ -103,7 +103,7 @@ pub(super) fn note_descendant_width(
     if width <= crate::object::INLINE_SLOT_FLOOR as u32 || !is_prototype_serial(proto_id) {
         return;
     }
-    if let Some(record) = find_birth_record(inner, slab, proto_id) {
+    if let Some((_, record)) = find_birth_record(inner, slab, proto_id) {
         // SAFETY: a live slab record; single-threaded agent.
         unsafe { (*record).note_descendant_width(width.min(LEARNED_WIDTH_MAX)) };
     }
@@ -138,19 +138,32 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> KeylessBirth {
     if !is_prototype_serial(proto_id) {
         return KeylessBirth::untracked();
     }
-    let id = super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
-        std::ptr::null(),
-        0,
-        0,
-        0,
-        ShapeObjectKind::Ordinary,
-        proto_id,
-        super::ReceiverFacts::NONE,
-    ));
     let table = &crate::state::state().shapes;
-    let Some(record) = table.slab().record_ptr(id) else {
-        return KeylessBirth::untracked();
+    // The birth owner's exact facts index already resolves this keyless
+    // ordinary record. Reuse it before asking the same interner to derive
+    // receiverless key/kind/representation facts again.
+    let resolved = {
+        let inner = table.inner.borrow();
+        find_birth_record(&inner, table.slab(), proto_id)
     };
+    let (id, record) = resolved.unwrap_or_else(|| {
+        let id = super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            ShapeObjectKind::Ordinary,
+            proto_id,
+            super::ReceiverFacts::NONE,
+        ));
+        (
+            id,
+            table.slab().record_ptr(id).unwrap_or(std::ptr::null_mut()),
+        )
+    });
+    if record.is_null() {
+        return KeylessBirth::untracked();
+    }
     // SAFETY: a live slab record; single-threaded agent. No table borrow is
     // held (`shape_descriptor_ensure_with_generation` released it).
     let r = unsafe { &mut *record };

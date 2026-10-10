@@ -313,6 +313,11 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).live_inline_slot_count }
     }
 
+    #[inline]
+    pub(crate) fn proves_no_symbols(self) -> bool {
+        unsafe { (*self.0.as_ptr()).proves_no_symbols() }
+    }
+
     /// The record's attribute summary (`key_attrs::SUMMARY_*`): one load,
     /// asked before any per-key attribute lookup.
     #[inline]

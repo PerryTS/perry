@@ -60,24 +60,26 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
 /// Object.create(proto) — create an empty object with an owner-traced prototype.
 #[no_mangle]
 pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
-    // Keep the existing accepted prototype kinds, but store their identity on
-    // the instance instead of permanently rooting them under a new class id.
-    let valid = crate::proxy::js_proxy_is_proxy(proto_value) != 0
-        || crate::typedarray_props::typed_array_addr_from_value(proto_value).is_some()
-        || {
-            let value = crate::value::JSValue::from_bits(proto_value.to_bits());
-            if value.is_pointer() {
-                let ptr = value.as_pointer::<ObjectHeader>();
-                let addr = ptr as usize;
-                crate::value::addr_class::is_above_handle_band(addr)
-                    && !crate::set::is_registered_set(addr)
-                    && !crate::map::is_registered_map(addr)
-                    && is_valid_obj_ptr(ptr as *const u8)
-            } else {
-                false
-            }
-        };
-    if !valid {
+    let proto_value = unsafe { normalize_descriptor_operand(proto_value) };
+    // #2816 prototype validation: only an object or `null` is permitted. A
+    // Symbol is pointer-tagged but not an object, so reject it explicitly.
+    let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
+    let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
+    let proto_ok = proto_jv.is_null()
+        || crate::proxy::js_proxy_is_proxy(proto_value) != 0
+        || (!proto_is_symbol
+            && (unsafe { value_is_object_like(proto_value) }
+                || super::class_ref_id(proto_value).is_some()));
+    if !proto_ok {
+        // V8 renders the offending value: `... an Object or null: 5`.
+        let rendered = unsafe { describe_value_for_type_error(proto_value) };
+        throw_object_type_error_with_suffix(
+            "Object prototype may only be an Object or null: ",
+            &rendered,
+        );
+    }
+
+    if proto_jv.is_null() {
         return crate::value::js_nanbox_pointer(js_object_alloc_null_proto(0, 0) as i64);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
