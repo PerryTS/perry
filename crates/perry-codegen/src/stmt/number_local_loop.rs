@@ -90,6 +90,8 @@ struct LoopFacts<'a> {
     /// value at entry is not the value the clone reads, so they are never
     /// entry-tested candidates.
     declared: HashSet<u32>,
+    /// Immutable body reads whose storage can be scoped to the fast clone.
+    byte_results: Vec<(u32, &'a Expr)>,
     /// Locals used directly by bitwise operations or as typed-byte indices.
     numeric_consumers: HashSet<u32>,
     byte_receivers: BTreeSet<u32>,
@@ -105,7 +107,19 @@ impl<'a> LoopFacts<'a> {
 
     fn walk_stmt(&mut self, ctx: &FnCtx<'_>, stmt: &'a Stmt) -> bool {
         match stmt {
-            Stmt::Let { id, init, .. } => {
+            Stmt::Let {
+                id, init, mutable, ..
+            } => {
+                if !mutable {
+                    if let Some(
+                        init @ (Expr::IndexGet { .. }
+                        | Expr::Uint8ArrayGet { .. }
+                        | Expr::BufferIndexGet { .. }),
+                    ) = init
+                    {
+                        self.byte_results.push((*id, init));
+                    }
+                }
                 self.declared.insert(*id);
                 init.as_ref().is_none_or(|init| self.walk_expr(ctx, init))
             }
@@ -171,15 +185,8 @@ impl<'a> LoopFacts<'a> {
                     return false;
                 }
             }
-            Expr::IndexGet { object, index } => {
-                if crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1) {
-                    return false;
-                }
-                if let Expr::LocalGet(id) = index.as_ref() {
-                    self.numeric_consumers.insert(*id);
-                }
-            }
-            Expr::Uint8ArrayGet {
+            Expr::IndexGet { object, index }
+            | Expr::Uint8ArrayGet {
                 array: object,
                 index,
             }
@@ -187,13 +194,30 @@ impl<'a> LoopFacts<'a> {
                 buffer: object,
                 index,
             } => {
+                if matches!(expr, Expr::IndexGet { .. })
+                    && crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1)
+                {
+                    return false;
+                }
                 let Expr::LocalGet(id) = object.as_ref() else {
                     return false;
                 };
-                if ctx.reassigned_locals.contains(id) || ctx.boxed_vars.contains(id) {
-                    return false;
+                let externally_mutable = (ctx.module_globals.contains_key(id)
+                    || ctx.closure_captures.contains_key(id)
+                    || ctx.repsel_closure_ref_locals.contains(id))
+                    && !crate::expr::ta_element_read::byte_receiver_is_proven(ctx, object);
+                if ctx.reassigned_locals.contains(id)
+                    || ctx.boxed_vars.contains(id)
+                    || externally_mutable
+                {
+                    // Preserve the general read's existing Number-counter
+                    // admission without publishing a byte-result proof.
+                    if !matches!(expr, Expr::IndexGet { .. }) {
+                        return false;
+                    }
+                } else {
+                    self.byte_receivers.insert(*id);
                 }
-                self.byte_receivers.insert(*id);
                 if let Expr::LocalGet(id) = index.as_ref() {
                     self.numeric_consumers.insert(*id);
                 }
@@ -484,6 +508,31 @@ pub(super) fn lower(
             let bound = ctx.block().load(crate::types::I32, &guard.bound_i32_slot);
             (plan.counter, bound)
         });
+    // The slow clone can return a heap value from an erased receiver. Its
+    // root alloca must not promote the fast clone's Number-or-undefined
+    // result slot to a GC pointer. Keep the existing loop clone, and scope
+    // only immutable, uncaptured body-local bindings to its byte proof.
+    let mut body_facts = LoopFacts::default();
+    body_facts.walk_stmts(ctx, body);
+    let mut primitive_results = Vec::new();
+    for (id, init) in body_facts.byte_results {
+        if ctx.locals.contains_key(&id)
+            || ctx.reassigned_locals.contains(&id)
+            || ctx.boxed_vars.contains(&id)
+            || ctx.closure_captures.contains_key(&id)
+            || ctx.repsel_closure_ref_locals.contains(&id)
+            || ctx.module_globals.contains_key(&id)
+            || ctx.local_slot_reps.contains_key(&id)
+            || !crate::expr::ta_element_read::byte_read_is_numeric(ctx, init)
+        {
+            continue;
+        }
+        let shadow = ctx.shadow_slot_map.remove(&id);
+        // Let publishes the initializer's Number-or-undefined fact after
+        // evaluation, through the normal initializer-proof producer.
+        let proof = ctx.snapshot_guarded_proof(&id);
+        primitive_results.push((id, shadow, proof));
+    }
     let fast = super::loops::lower_for_after_init_with_i32_bound(
         ctx,
         init,
@@ -509,6 +558,18 @@ pub(super) fn lower(
     }
     if let Some(active) = int_active {
         active.finish(ctx);
+    }
+    for (id, shadow, proof) in primitive_results {
+        // The original clone allocates its own ordinary, rooted result slot.
+        ctx.locals.remove(&id);
+        if let Some(slot) = shadow {
+            ctx.shadow_slot_map.insert(id, slot);
+        }
+        if let Some(ty) = proof {
+            ctx.proven_local_types.insert(id, ty);
+        } else {
+            ctx.proven_local_types.remove(&id);
+        }
     }
     ctx.receiver_descriptors.dematerialize_scope(scope_id);
     for (id, previous) in receiver_proofs {
@@ -573,3 +634,7 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
     }
     found || controls.iter().any(|e| walk(ctx, e))
 }
+
+#[cfg(test)]
+#[path = "byte_result_tests.rs"]
+mod byte_result_tests;

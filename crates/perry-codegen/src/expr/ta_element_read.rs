@@ -81,10 +81,32 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let (object, index) = match expr {
         Expr::Uint8ArrayGet { array, index } => (array, index),
         Expr::BufferIndexGet { buffer, index } => (buffer, index),
+        Expr::IndexGet { object, index } if receiver_kind(ctx, object) == Some(1) => {
+            (object, index)
+        }
         _ => return false,
     };
+    // A nullable read is safe for arithmetic coercion, but undefined as a
+    // property key can read an expando. Publish a result fact only for an
+    // actual Number key, including the existing admitted loop counters.
+    let number_key = match index.as_ref() {
+        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::LocalGet(id) => {
+            !ctx.stable_local_type_proof(id).is_some_and(|ty| {
+                fn contains_void(ty: &perry_hir::types::Type) -> bool {
+                    match ty {
+                        perry_hir::types::Type::Void => true,
+                        perry_hir::types::Type::Union(types) => types.iter().any(contains_void),
+                        _ => false,
+                    }
+                }
+                contains_void(ty)
+            }) && crate::type_analysis::is_numeric_expr(ctx, index)
+        }
+        _ => false,
+    };
     byte_receiver_is_proven(ctx, object)
-        && crate::type_analysis::is_numeric_expr(ctx, index)
+        && number_key
         && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, index)
 }
 
