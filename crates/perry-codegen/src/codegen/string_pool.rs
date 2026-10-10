@@ -1228,16 +1228,25 @@ pub(super) fn emit_string_pool(
             ", i64 0".repeat(words - 1)
         ));
     }
-    for class in module_classes {
-        if let Some(&cid) = class_ids.get(&class.name) {
-            if let Some((id, _)) = super::static_shape_ids::static_prototype_shape(cid) {
-                chunker.roll_if_full();
-                chunker.current_block().call_void(
-                    "js_register_class_prototype_shape",
-                    &[(I32, &cid.to_string()), (I32, &id.to_string())],
-                );
-            }
+    // Each class's instance members: one image constant, registered once.
+    let declarations = super::class_declarations::class_declaration_globals(
+        &local_classes,
+        strings,
+        module_prefix,
+        &mut |body| chunker.current_block().fn_info_ref(body),
+    );
+    for decl in declarations {
+        for global in decl.globals {
+            chunker.module().add_raw_global(global);
         }
+        chunker.roll_if_full();
+        chunker.current_block().call_void(
+            "js_register_class_declaration",
+            &[
+                (I32, &decl.cid.to_string()),
+                (PTR, &format!("@{}", decl.symbol)),
+            ],
+        );
     }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
@@ -1285,35 +1294,7 @@ pub(super) fn emit_string_pool(
             has_synth_args,
             home,
         });
-        let entry_info_ref = blk.fn_info_ref(&entry_name);
-        // Cast the method function pointer to i64 via ptrtoint so the
-        // runtime can store it as a `usize` in the VTABLE_REGISTRY
-        // entry. The `inttoptr` round-trip in `call_vtable_method`
-        // restores it for the indirect call.
-        let func_ref = format!("@{}", llvm_name);
-        let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
-        let has_synth_args_str = if has_synth_args { "1" } else { "0" };
-        let has_rest_str = if has_rest { "1" } else { "0" };
-        // One registration per method carries its entry. A declared class's
-        // method object names its entry's code when it is first built, so the
-        // init pays nothing more per method; each evaluation of a template
-        // builds its own objects from the template, so the name is
-        // registered here.
-        blk.call_void(
-            "js_register_class_method_with_entry",
-            &[
-                (I64, &cid.to_string()),
-                (I64, &bytes_i64),
-                (I64, &len_str),
-                (I64, &func_i64),
-                (I64, &param_count.to_string()),
-                (I64, has_synth_args_str),
-                (I64, has_rest_str),
-                (I64, &entry_i64),
-            ],
-        );
         if home {
             blk.call_void(
                 register_name_fn,
@@ -1648,23 +1629,20 @@ pub(super) fn emit_string_pool(
         };
         let bytes_global = format!("@{}", entry.bytes_global);
         let len_str = entry.byte_len.to_string();
-        let func_ref = format!("@{}", llvm_name);
-        let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        let register_fn = if is_static {
-            "js_register_class_static_getter"
-        } else {
-            "js_register_class_getter"
-        };
-        blk.call_void(
-            register_fn,
-            &[
-                (I64, &cid.to_string()),
-                (I64, &bytes_i64),
-                (I64, &len_str),
-                (I64, &func_i64),
-            ],
-        );
+        // An instance getter is a member of its class's declaration constant.
+        if is_static {
+            let func_i64 = blk.ptrtoint(&format!("@{}", llvm_name), I64);
+            blk.call_void(
+                "js_register_class_static_getter",
+                &[
+                    (I64, &cid.to_string()),
+                    (I64, &bytes_i64),
+                    (I64, &len_str),
+                    (I64, &func_i64),
+                ],
+            );
+        }
         blk.call_void(
             "js_register_class_string_member_order",
             &[
@@ -1736,27 +1714,24 @@ pub(super) fn emit_string_pool(
         };
         let bytes_global = format!("@{}", entry.bytes_global);
         let len_str = entry.byte_len.to_string();
-        let func_ref = format!("@{}", llvm_name);
-        let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        // The setter's spec `.length` rides with its registration, so
-        // `Object.getOwnPropertyDescriptor(proto, prop).set.length` reports
-        // the default-aware count instead of the raw ABI arity.
-        let register_fn = if is_static {
-            "js_register_class_static_setter"
-        } else {
-            "js_register_class_setter"
-        };
-        blk.call_void(
-            register_fn,
-            &[
-                (I64, &cid.to_string()),
-                (I64, &bytes_i64),
-                (I64, &len_str),
-                (I64, &func_i64),
-                (I32, &spec_length.to_string()),
-            ],
-        );
+        // An instance setter is a member of its class's declaration constant;
+        // a static one registers with its spec `.length`, so
+        // `Object.getOwnPropertyDescriptor(C, prop).set.length` reports the
+        // default-aware count instead of the raw ABI arity.
+        if is_static {
+            let func_i64 = blk.ptrtoint(&format!("@{}", llvm_name), I64);
+            blk.call_void(
+                "js_register_class_static_setter",
+                &[
+                    (I64, &cid.to_string()),
+                    (I64, &bytes_i64),
+                    (I64, &len_str),
+                    (I64, &func_i64),
+                    (I32, &spec_length.to_string()),
+                ],
+            );
+        }
         blk.call_void(
             "js_register_class_string_member_order",
             &[

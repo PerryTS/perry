@@ -1154,8 +1154,8 @@ pub fn try_lower_native_method_str_dispatch(
         // closure-valued property — which silently no-ops on Map/Set field
         // mutations like `this.adds.set(k, v)` inside the cross-module
         // method. Route through `js_native_call_method` instead so the
-        // runtime's `CLASS_VTABLE_REGISTRY` (populated by v0.5.464's
-        // `js_register_class_method` calls in `emit_string_pool`) dispatches
+        // runtime's class prototype (built from the class's declaration
+        // constant, `class_declarations.rs`) dispatches
         // to the real `perry_method_<modprefix>__<class>__<method>`.
         let class_unknown_to_codegen = class_name_opt
             .as_ref()

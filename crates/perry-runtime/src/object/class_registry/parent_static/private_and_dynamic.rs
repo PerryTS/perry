@@ -272,45 +272,19 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
 }
 
 /// The `#x` accessor of `class_id`'s own ClassBody. Private accessors are
-/// not properties: they live only in the class's private-accessor record, are
+/// not properties: they are halves of the class's static declaration, are
 /// never inherited, and are never shadowed by a public string property with
 /// the same spelling.
 pub(super) fn class_private_accessor_pair(
     class_id: u32,
     name: &str,
 ) -> Option<crate::object::accessor_pair::Accessor> {
-    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
-    unsafe {
-        let value = crate::closure::props::state_internal_get(owner, name)?;
-        crate::object::accessor_pair::pair_of_value(value.to_bits())
-    }
-}
-
-/// A private declaration half is installed on the lexical class function's
-/// internal holder at registration. It is a traced slot, never a JS property
-/// and never a lazily materialized registry answer.
-pub(crate) fn register_private_accessor_half(
-    class_id: u32,
-    name: &str,
-    body: usize,
-    setter: bool,
-) {
-    if body == 0 {
-        return;
-    }
-    let _no_move = crate::gc::GcSuppressScope::new();
-    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
-    let mut pair = class_private_accessor_pair(class_id, name).unwrap_or_default();
-    if setter {
-        pair.raw_set = body;
-    } else {
-        pair.raw_get = body;
-    }
-    unsafe {
-        let value = crate::value::js_nanbox_pointer(
-            crate::object::accessor_pair::pair_new(pair) as i64);
-        crate::closure::props::state_internal_set(owner, name, value);
-    }
+    let decl = super::super::declarations::class_accessor_decl(class_id, name)?;
+    Some(crate::object::accessor_pair::Accessor {
+        raw_get: decl.get,
+        raw_set: decl.set,
+        ..Default::default()
+    })
 }
 
 /// Invoke an instance-private getter on its lexical declaring class. `None`

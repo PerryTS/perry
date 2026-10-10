@@ -354,10 +354,6 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
 
     // ========== Class registration ==========
-    module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
-    // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
-    // The last argument is the setter's default-aware spec `.length`.
-    module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64, I32]);
     module.declare_function(
         "js_register_class_string_member_order",
         VOID,
@@ -384,16 +380,6 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         "js_register_class_static_setter",
         VOID,
         &[I64, I64, I64, I64, I32],
-    );
-    module.declare_function(
-        "js_register_class_method",
-        VOID,
-        &[I64, I64, I64, I64, I64, I64, I64],
-    );
-    module.declare_function(
-        "js_register_class_method_with_entry",
-        VOID,
-        &[I64, I64, I64, I64, I64, I64, I64, I64],
     );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
@@ -422,7 +408,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
     // #446: bound-method closure for `obj.method` PropertyGet on a known class.
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
-    // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
+    // dispatch through the class's prototype instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_class_method_snapshot_bind", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_class_method_bind_by_id", DOUBLE, &[DOUBLE, I64]);
@@ -443,11 +429,6 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_static_method_entry_enter_home", VOID, &[I32, I64, I64]);
     module.declare_function("js_class_method_entry_enter_home", I64, &[I32, I64, I64]);
     module.declare_function("js_class_method_entry_leave", VOID, &[I64]);
-    module.declare_function(
-        "js_register_class_method_entry",
-        VOID,
-        &[I64, I64, I64, I64],
-    );
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",

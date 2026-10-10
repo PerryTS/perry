@@ -760,7 +760,7 @@ pub fn lower_class_decl(
                             && matches!(method.kind, ast::MethodKind::Method)
                         {
                             // `[util.inspect.custom]() {}` on a class — rename
-                            // to a stable string key so `js_register_class_method`
+                            // to a stable string key so the class declaration
                             // picks it up. `format_object_as_json` looks up
                             // this name on the object's vtable when there is no
                             // per-instance entry. Refs #1248.

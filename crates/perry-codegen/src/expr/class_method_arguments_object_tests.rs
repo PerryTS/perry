@@ -323,8 +323,11 @@ fn a_length_only_class_method_direct_call_passes_the_scalar_count() {
          object:\n{ir}"
     );
     assert!(
-        ir.contains("ptrtoint ptr @perry_method_class_method_arguments_ts__T__m to i64"),
-        "runtime registration must continue to publish the public method, \
+        ir.contains("ptr @perry_method_class_method_arguments_ts__T__m, ptr @")
+            && !ir.contains(
+                "ptr @perry_method_class_method_arguments_ts__T__m$arguments_length, ptr"
+            ),
+        "the class declaration must continue to publish the public method, \
          never the scalar-only clone:\n{ir}"
     );
 }

@@ -309,8 +309,8 @@ pub(crate) fn build_and_run_link(
     }
 
     // Link libraries - stdlib bundles perry-runtime; runtime provides base FFI symbols.
-    // Note: libperry_stdlib.a may omit some runtime symbols (js_register_class_method,
-    // js_register_class_getter, etc.) due to Rust DCE on rlib dependencies. We always
+    // Note: libperry_stdlib.a may omit some runtime symbols (js_register_class_declaration,
+    // js_register_class_name, etc.) due to Rust DCE on rlib dependencies. We always
     // link libperry_runtime.a as a fallback to fill these gaps. On macOS/Linux/ELF the
     // linker uses first-definition-wins for archives, so no duplicate symbol errors arise.
     // When UI lib is also linked, it bundles its own copy of perry-runtime.

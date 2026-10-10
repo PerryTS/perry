@@ -134,6 +134,23 @@ extern "C" fn stats_birthtime_setter(this_value: f64, value: f64) -> f64 {
     stats_date_set(this_value, 3, value)
 }
 
+/// The Date accessors `Stats` and `BigIntStats` declare.
+static STATS_DATE_MEMBERS: [crate::object::ClassMemberDecl; 8] = {
+    use crate::object::ClassMemberDecl as M;
+    [
+        M::native_accessor("atime", stats_atime_getter as *const u8, false),
+        M::native_accessor("atime", stats_atime_setter as *const u8, true),
+        M::native_accessor("mtime", stats_mtime_getter as *const u8, false),
+        M::native_accessor("mtime", stats_mtime_setter as *const u8, true),
+        M::native_accessor("ctime", stats_ctime_getter as *const u8, false),
+        M::native_accessor("ctime", stats_ctime_setter as *const u8, true),
+        M::native_accessor("birthtime", stats_birthtime_getter as *const u8, false),
+        M::native_accessor("birthtime", stats_birthtime_setter as *const u8, true),
+    ]
+};
+static STATS_DATE_DECLARATION: crate::object::ClassDeclaration =
+    crate::object::ClassDeclaration::native(&STATS_DATE_MEMBERS);
+
 fn ensure_stats_date_accessors_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| unsafe {
@@ -149,42 +166,7 @@ fn ensure_stats_date_accessors_registered() {
                 class_name.as_ptr(),
                 class_name.len() as u32,
             );
-            for (name, getter, setter) in [
-                (
-                    "atime",
-                    stats_atime_getter as *const u8,
-                    stats_atime_setter as *const u8,
-                ),
-                (
-                    "mtime",
-                    stats_mtime_getter as *const u8,
-                    stats_mtime_setter as *const u8,
-                ),
-                (
-                    "ctime",
-                    stats_ctime_getter as *const u8,
-                    stats_ctime_setter as *const u8,
-                ),
-                (
-                    "birthtime",
-                    stats_birthtime_getter as *const u8,
-                    stats_birthtime_setter as *const u8,
-                ),
-            ] {
-                crate::object::js_register_class_getter(
-                    class_id as i64,
-                    name.as_ptr(),
-                    name.len() as i64,
-                    getter as i64,
-                );
-                crate::object::js_register_class_setter(
-                    class_id as i64,
-                    name.as_ptr(),
-                    name.len() as i64,
-                    setter as i64,
-                    1,
-                );
-            }
+            crate::object::js_register_class_declaration(class_id, &STATS_DATE_DECLARATION);
         }
     });
 }

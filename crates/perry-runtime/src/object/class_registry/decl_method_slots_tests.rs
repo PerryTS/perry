@@ -159,7 +159,7 @@ extern "C" fn private_getter(_this: f64) -> f64 {
 }
 
 #[test]
-fn s7b_private_accessor_reads_its_materialized_pair() {
+fn s7b_private_accessor_reads_its_declaration() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let cid = 0x6E34;
     register(cid, b"PrivatePair");
@@ -170,11 +170,8 @@ fn s7b_private_accessor_reads_its_materialized_pair() {
             2,
             private_getter as *const () as usize as i64,
         );
-        // The declaration installed the pair on its function's traced holder.
-        // Removing materialization input cannot change the private read.
-        if let Some(declarations) = CLASS_VTABLE_REGISTRY.write().unwrap().as_mut() {
-            declarations.remove(&cid);
-        }
+        // The private half is read from the class's declaration each time:
+        // there is no materialized copy to go stale.
         for _ in 0..2 {
             assert_eq!(
                 super::class_private_instance_getter_value(cid, "#x", 0.0),

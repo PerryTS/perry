@@ -147,8 +147,8 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// clone symbol. (The old `__pshape` suffix was forgeable and needed a
 /// composed-symbol collision prune here.)
 ///
-/// This symbol is NEVER registered into a runtime vtable
-/// (`js_register_class_method` keeps the public name). It is externally
+/// This symbol is NEVER part of a class's runtime declaration
+/// (`class_declarations.rs` keeps the public name). It is externally
 /// visible solely so an importing native module can use it after receiving a
 /// producer-authored capability; every call remains one of the proven direct
 /// sites. [`tests::pshape_symbol_reachability`] ratchets that.
@@ -819,8 +819,8 @@ mod tests {
     fn pshape_symbol_reachability() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         // Naming + emission + the two proven call sites. `string_pool.rs`
-        // (which emits `js_register_class_method`) is deliberately ABSENT:
-        // the vtable must only ever hold the public symbol.
+        // and `class_declarations.rs` are deliberately ABSENT: a class's
+        // declaration must only ever hold the public symbol.
         let allowed: [&str; 9] = [
             "collectors/proven_this.rs",                         // this test
             "collectors/proven_this_routing_tests.rs",           // routing IR ratchet

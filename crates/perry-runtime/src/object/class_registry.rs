@@ -42,9 +42,14 @@ pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 pub(crate) use construct::{ordinary_compiled_function_has_instance, OrdinaryInstanceof};
 mod decl_accessors;
+pub(crate) mod declarations;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
     install_decl_prototype_accessor, instance_chain_getter_value, instance_chain_setter_apply,
+};
+pub use declarations::{
+    js_register_class_declaration, ClassDeclaration, ClassMemberDecl, CLASS_MEMBER_GETTER,
+    CLASS_MEMBER_METHOD, CLASS_MEMBER_REST, CLASS_MEMBER_SETTER, CLASS_MEMBER_SYNTHETIC_ARGUMENTS,
 };
 mod decl_prototype_birth;
 mod dispatch;
@@ -85,30 +90,28 @@ pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{
     builtin_parent_ctor_in_chain, class_decl_prototype_object, class_decl_prototype_value,
     class_decl_prototype_value_for_instance_class, class_decl_prototype_value_selected,
-    class_declaration_value, class_declaration_value_store,
-    class_delete_own_dynamic_prop,
+    class_declaration_value, class_declaration_value_store, class_delete_own_dynamic_prop,
     class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
     class_method_entry, class_object_value_for_cid, class_object_value_root_store,
     class_own_dynamic_prop_names, class_own_enumerable_field_names, class_own_static_field_value,
     class_own_string_member_names, class_parent_closure, class_parent_closure_root_store,
     class_proto_key_deleted, class_prototype_member_names,
-    class_prototype_object_addr_index_contains,
-    class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
-    class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
-    class_static_alias_sync, class_static_clear_defined_attrs, class_static_defined_attrs,
-    class_static_key_deleted, class_static_prototype, class_static_prototype_is_nulled,
-    class_static_prototype_root_clear, class_static_prototype_root_store,
-    class_static_set_defined_attrs, decl_prototype_identity_id, global_object_prototype_bits,
-    is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, proto_member_has_no_string_key, template_has_class_objects,
+    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
+    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
+    class_register_declared_static_global_slot, class_static_alias_sync,
+    class_static_clear_defined_attrs, class_static_defined_attrs, class_static_key_deleted,
+    class_static_prototype, class_static_prototype_is_nulled, class_static_prototype_root_clear,
+    class_static_prototype_root_store, class_static_set_defined_attrs, decl_prototype_identity_id,
+    global_object_prototype_bits, is_bound_native_constructor_closure_value,
+    is_non_constructable_builtin_function_value, parent_closure_in_chain,
+    proto_member_has_no_string_key, template_has_class_objects,
     throw_non_constructable_builtin_function, ClassDeclarationValueKind, CLASS_OBJECT_EVER,
 };
 pub use state::{
-    AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DYNAMIC_PARENT_VALUE,
-    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS,
-    CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS,
-    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
-    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    AccessorDecl, CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
+    CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS,
+    CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS,
+    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -193,12 +196,15 @@ pub(crate) use registration::{
     invalidate_class_string_member_order,
 };
 pub use registration::{
-    is_class_id_registered, js_register_class_getter, js_register_class_method,
-    js_register_class_method_bind_length, js_register_class_method_entry,
-    js_register_class_method_with_entry, js_register_class_prototype_shape,
-    js_register_class_setter, js_register_class_static_getter,
+    is_class_id_registered, js_register_class_method_bind_length, js_register_class_static_getter,
     js_register_class_static_method_bind_length, js_register_class_static_setter,
     js_register_class_string_member_order,
+};
+#[cfg(test)]
+pub use registration::{
+    js_register_class_getter, js_register_class_method, js_register_class_method_entry,
+    js_register_class_method_with_entry, js_register_class_prototype_shape,
+    js_register_class_setter,
 };
 
 // ── dispatch.rs ─────────────────────────────────────────────────────────────
@@ -241,22 +247,19 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             rows.push(("class.names", m.len(), map_bytes(m) + inner));
         }
     }
-    if let Ok(g) = state::CLASS_VTABLE_REGISTRY.read() {
-        if let Some(m) = g.as_ref() {
-            let mut entries = 0usize;
-            let mut inner = 0usize;
-            for vt in m.values() {
-                entries += vt.methods.len() + vt.accessors.len();
-                inner += map_bytes(&vt.methods) + map_bytes(&vt.accessors);
-                inner += vt.methods.keys().map(|k| k.capacity()).sum::<usize>();
-                inner += vt.accessors.keys().map(|k| k.capacity()).sum::<usize>();
-            }
-            rows.push((
-                "class.vtables(methods+accessors)",
-                entries,
-                map_bytes(m) + inner,
-            ));
+    if let Ok(index) = declarations::CLASS_DECLARATIONS.read() {
+        let (mut classes, mut members) = (0usize, 0usize);
+        for decl in index.declarations() {
+            classes += 1;
+            members += decl.members().len();
         }
+        // The declarations themselves are image constants; the index is one
+        // address per class.
+        rows.push((
+            "class.declarations(members)",
+            members,
+            classes * std::mem::size_of::<usize>(),
+        ));
     }
     if let Ok(g) = state::CLASS_STATIC_METHODS.read() {
         if let Some(m) = g.as_ref() {

@@ -328,12 +328,6 @@
       "why": "Interns #private name spellings, which are compile-time literals per access site: one per distinct name"
     },
     {
-      "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "CLASS_PROTOTYPE_METHOD_VALUES",
-      "verdict": "bounded_by_program",
-      "why": "(class_id, method name) -> bound method closure cache, filled only for vtable-registered methods"
-    },
-    {
       "file": "crates/perry-runtime/src/object/native_module.rs",
       "name": "NATIVE_CALLABLE_EXPORTS",
       "verdict": "bounded_by_program",

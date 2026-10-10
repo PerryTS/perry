@@ -24,10 +24,11 @@ use super::*;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("perry_class_value_dir_cell", PTR, &[]);
+    // A class's instance members: its image declaration constant.
     module.declare_function(
-        "js_register_class_prototype_shape",
+        "js_register_class_declaration",
         crate::types::VOID,
-        &[I32, I32],
+        &[I32, PTR],
     );
     module.declare_function(
         "js_literal_shape_initialize",
@@ -120,6 +121,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_class_evaluation_object_with_prototype",
         I64,
         &[I32, I32, I32, PTR, DOUBLE, DOUBLE],
+    );
+    // A class with computed instance members: the evaluation's object first,
+    // its prototype once the definition named them.
+    module.declare_function(
+        "js_class_evaluation_object_with_parent",
+        I64,
+        &[I32, I32, I32, PTR, DOUBLE],
+    );
+    module.declare_function(
+        "js_class_evaluation_finish_prototype",
+        VOID,
+        &[I64, I32, DOUBLE, DOUBLE],
     );
     module.declare_function("js_class_object_set_ctor_caps", VOID, &[I64, DOUBLE, PTR]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,

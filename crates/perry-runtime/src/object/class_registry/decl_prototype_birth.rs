@@ -8,8 +8,8 @@
 //! entry, a ConstFn lane), linked to the parent's prototype. So the shape it
 //! ends in is known before the object exists, exactly as a per-evaluation
 //! class's prototype template is (`field_get_set/class_object_template.rs`),
-//! except that a declared class needs no first build to record it: the class
-//! registry already holds every fact.
+//! except that a declared class needs no first build to record it: its
+//! static declaration already holds every fact.
 //!
 //! The birth is therefore one allocation, N slot stores and ONE stamp of the
 //! final property shape, which names the link. Publishing the class link then
@@ -32,16 +32,17 @@ const METHOD_ENTRY: u8 = crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
 /// Build class `class_id`'s prototype object in its final shape, linked to
 /// `parent_bits` (the parent prototype, NaN-boxed, or `TAG_NULL`), and make it
 /// the class's prototype link. `None` (nothing allocated, nothing linked) when
-/// the class's prototype is not one the registry fully describes.
+/// the class's prototype is not one its declaration fully describes.
 ///
 /// `class_id` is the prototype's identity id; the caller has minted its class
 /// function object and found no prototype linked.
 pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Option<f64> {
-    let requested = CLASS_VTABLE_REGISTRY
-        .read()
-        .ok()
-        .and_then(|r| r.as_ref()?.get(&class_id).map(|c| c.prototype_birth_shape))
-        .filter(|&id| id != 0);
+    // A class with a computed member installs in ClassBody order as its
+    // definition names them (`declarations.rs`): the general path.
+    if super::declarations::class_has_computed_members(class_id) {
+        return None;
+    }
+    let requested = Some(super::declarations::class_birth_shape(class_id)).filter(|&id| id != 0);
     let members = class_prototype_member_names(class_id);
     if members.iter().any(|(name, accessor)| {
         name == "constructor" || (!*accessor && class_method_entry(class_id, name).is_none())
@@ -73,7 +74,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
 
     // The values, in key order: the constructor (the class's pinned function
     // object), then one entry-backed function object per method (cached and
-    // rooted by the class registry; rooted here too across the allocations
+    // kept by the class holder; rooted here too across the allocations
     // below).
     let ctor = class_constructor_ref_value(class_id);
     let mut values = Vec::with_capacity(members.len() + 1);
@@ -140,7 +141,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         count = next.len();
     }
     if count as usize != values.len() {
-        // A duplicate name cannot come from the registry; refuse rather
+        // A duplicate name cannot come from a declaration; refuse rather
         // than stamp a shape whose keys miss a value.
         return None;
     }

@@ -545,115 +545,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             rooted_group.release(ctx);
             Ok(rooted_result)
         }
-        Expr::RegisterClassComputedMethod {
-            class_name,
-            key_expr,
-            method_name,
-            is_static,
-            param_count,
-            has_rest,
-            definition_order,
-        } => {
-            let key_v = lower_expr(ctx, key_expr)?;
-            if let Some(&class_id) = ctx.class_ids.get(class_name) {
-                if class_id != 0 {
-                    let registry_name = if *is_static {
-                        crate::codegen::static_method_registry_key(method_name)
-                    } else {
-                        method_name.clone()
-                    };
-                    if let Some(llvm_name) = ctx.methods.get(&(class_name.clone(), registry_name)) {
-                        let func_ref = format!("@{}", llvm_name);
-                        let func_i64 = ctx.block().ptrtoint(&func_ref, I64);
-                        let cid_str = class_id.to_string();
-                        let param_count_str = param_count.to_string();
-                        let is_static_str = (*is_static as i64).to_string();
-                        let has_rest_str = (*has_rest as i64).to_string();
-                        let definition_order_str = definition_order.to_string();
-                        // A static one's own function object runs its
-                        // closure-convention entry's `JsFunctionInfo` (string pool).
-                        let entry_i64 = if *is_static {
-                            let info = ctx.block().fn_info_ref(&format!("{llvm_name}__clo"));
-                            ctx.block().ptrtoint(&info, I64)
-                        } else {
-                            "0".to_string()
-                        };
-                        ctx.block().call_void(
-                            "js_register_class_computed_method",
-                            &[
-                                (I64, &cid_str),
-                                (DOUBLE, &key_v),
-                                (I64, &func_i64),
-                                (I64, &param_count_str),
-                                (I64, &is_static_str),
-                                (I64, &has_rest_str),
-                                (I64, &definition_order_str),
-                                (I64, &entry_i64),
-                            ],
-                        );
-                    }
-                }
-            }
-            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
-        }
-        Expr::RegisterClassComputedAccessor {
-            class_name,
-            key_expr,
-            getter_name,
-            setter_name,
-            is_static,
-            definition_order,
-        } => {
-            let key_v = lower_expr(ctx, key_expr)?;
-            if let Some(&class_id) = ctx.class_ids.get(class_name) {
-                if class_id != 0 {
-                    let getter_i64 = getter_name
-                        .as_ref()
-                        .and_then(|name| {
-                            let registry_name = if *is_static {
-                                crate::codegen::static_method_registry_key(name)
-                            } else {
-                                name.clone()
-                            };
-                            ctx.methods.get(&(class_name.clone(), registry_name))
-                        })
-                        .map(|llvm_name| {
-                            let func_ref = format!("@{}", llvm_name);
-                            ctx.block().ptrtoint(&func_ref, I64)
-                        })
-                        .unwrap_or_else(|| "0".to_string());
-                    let setter_i64 = setter_name
-                        .as_ref()
-                        .and_then(|name| {
-                            let registry_name = if *is_static {
-                                crate::codegen::static_method_registry_key(name)
-                            } else {
-                                name.clone()
-                            };
-                            ctx.methods.get(&(class_name.clone(), registry_name))
-                        })
-                        .map(|llvm_name| {
-                            let func_ref = format!("@{}", llvm_name);
-                            ctx.block().ptrtoint(&func_ref, I64)
-                        })
-                        .unwrap_or_else(|| "0".to_string());
-                    let cid_str = class_id.to_string();
-                    let is_static_str = (*is_static as i64).to_string();
-                    let definition_order_str = definition_order.to_string();
-                    ctx.block().call_void(
-                        "js_register_class_computed_accessor",
-                        &[
-                            (I64, &cid_str),
-                            (DOUBLE, &key_v),
-                            (I64, &getter_i64),
-                            (I64, &setter_i64),
-                            (I64, &is_static_str),
-                            (I64, &definition_order_str),
-                        ],
-                    );
-                }
-            }
-            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        Expr::RegisterClassComputedMethod { .. } | Expr::RegisterClassComputedAccessor { .. } => {
+            lower_computed_member_registration(ctx, expr, None)
         }
         // Issue #1772: per-evaluation class identity for a class expression.
         // Each evaluation allocates a real heap "class object" — a regular
@@ -928,8 +821,19 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
         } else {
             None
         };
-        for step in definition_steps {
-            lower_expr(ctx, step)?;
+        // A class with computed instance members names them on this
+        // evaluation's class object, so the definition runs after the object
+        // exists and its prototype is built once they are named
+        // (`class_registry::declarations`). Any other class keeps the
+        // definition ahead of the object, as it always ran.
+        let names_on_object = ctx
+            .classes
+            .get(template)
+            .is_some_and(|c| c.computed_members.iter().any(|m| !m.is_static));
+        if !names_on_object {
+            for step in definition_steps {
+                lower_expr(ctx, step)?;
+            }
         }
         // The template's own record (its template cell), which the module's
         // string-pool initializer defines for every template it evaluates.
@@ -973,19 +877,33 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
         // directly in the template's final shape.
         let obj = if let Some((parent_root, proto_root)) = operands {
             let parent = heritage.reread_emitted(ctx, parent_root);
-            let proto = heritage.reread_emitted(ctx, proto_root);
-            ctx.block().call(
-                I64,
-                "js_class_evaluation_object_with_prototype",
-                &[
-                    (I32, &tcid_str),
-                    (I32, &nfields),
-                    (I32, &field_mask.to_string()),
-                    (PTR, &cell),
-                    (DOUBLE, &parent),
-                    (DOUBLE, &proto),
-                ],
-            )
+            if names_on_object {
+                ctx.block().call(
+                    I64,
+                    "js_class_evaluation_object_with_parent",
+                    &[
+                        (I32, &tcid_str),
+                        (I32, &nfields),
+                        (I32, &field_mask.to_string()),
+                        (PTR, &cell),
+                        (DOUBLE, &parent),
+                    ],
+                )
+            } else {
+                let proto = heritage.reread_emitted(ctx, proto_root);
+                ctx.block().call(
+                    I64,
+                    "js_class_evaluation_object_with_prototype",
+                    &[
+                        (I32, &tcid_str),
+                        (I32, &nfields),
+                        (I32, &field_mask.to_string()),
+                        (PTR, &cell),
+                        (DOUBLE, &parent),
+                        (DOUBLE, &proto),
+                    ],
+                )
+            }
         } else {
             ctx.block().call(
                 I64,
@@ -1021,6 +939,45 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
                 let obj = group.reread_emitted(ctx, rooted);
                 let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
                 store_evaluation_owner(ctx, *owner, &obj_box);
+            }
+            if names_on_object {
+                let reread = |ctx: &mut FnCtx<'_>| {
+                    let obj = group.reread_emitted(ctx, rooted);
+                    nanbox_pointer_inline(ctx.block(), &obj)
+                };
+                for step in definition_steps {
+                    match step {
+                        Expr::RegisterClassComputedMethod { .. }
+                        | Expr::RegisterClassComputedAccessor { .. } => {
+                            lower_computed_member_registration(ctx, step, Some(&reread))?;
+                        }
+                        _ => {
+                            lower_expr(ctx, step)?;
+                        }
+                    }
+                }
+                let obj = group.reread_emitted(ctx, rooted);
+                let (has_parent, parent, proto) = match operands {
+                    Some((parent_root, proto_root)) => (
+                        "1",
+                        heritage.reread_emitted(ctx, parent_root),
+                        heritage.reread_emitted(ctx, proto_root),
+                    ),
+                    None => {
+                        let undefined =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        ("0", undefined.clone(), undefined)
+                    }
+                };
+                ctx.block().call_void(
+                    "js_class_evaluation_finish_prototype",
+                    &[
+                        (I64, &obj),
+                        (I32, has_parent),
+                        (DOUBLE, &parent),
+                        (DOUBLE, &proto),
+                    ],
+                );
             }
             // Resolve all ComputedPropertyNames before any static field
             // initializer, preserving class-body order. Hidden own slots
@@ -1200,4 +1157,140 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
             Ok(obj_box)
         })
     })
+}
+
+/// Re-reads a class expression evaluation's class object, NaN-boxed.
+pub(crate) type EvaluationOwner<'r> = &'r dyn Fn(&mut FnCtx<'_>) -> String;
+
+/// One computed ClassBody member registration
+/// (`Expr::RegisterClassComputedMethod` / `Accessor`): evaluate the key, then
+/// register the member under it. `owner` re-reads the class object of the
+/// class EXPRESSION evaluation whose definition this is (its computed
+/// members are named on it), and is `None` for a declaration (named on the
+/// class holder).
+pub(crate) fn lower_computed_member_registration(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    owner: Option<EvaluationOwner<'_>>,
+) -> Result<String> {
+    let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    match expr {
+        Expr::RegisterClassComputedMethod {
+            class_name,
+            key_expr,
+            method_name,
+            is_static,
+            param_count,
+            has_rest,
+            definition_order,
+        } => {
+            let key_v = lower_expr(ctx, key_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let registry_name = if *is_static {
+                        crate::codegen::static_method_registry_key(method_name)
+                    } else {
+                        method_name.clone()
+                    };
+                    if let Some(llvm_name) = ctx.methods.get(&(class_name.clone(), registry_name)) {
+                        let func_ref = format!("@{}", llvm_name);
+                        let func_i64 = ctx.block().ptrtoint(&func_ref, I64);
+                        let cid_str = class_id.to_string();
+                        let param_count_str = param_count.to_string();
+                        let is_static_str = (*is_static as i64).to_string();
+                        let has_rest_str = (*has_rest as i64).to_string();
+                        let definition_order_str = definition_order.to_string();
+                        // A static one's own function object runs its
+                        // closure-convention entry's `JsFunctionInfo` (string pool).
+                        let entry_i64 = if *is_static {
+                            let info = ctx.block().fn_info_ref(&format!("{llvm_name}__clo"));
+                            ctx.block().ptrtoint(&info, I64)
+                        } else {
+                            "0".to_string()
+                        };
+                        let owner_v = owner.map_or_else(undefined, |owner| owner(ctx));
+                        ctx.block().call_void(
+                            "js_register_class_computed_method",
+                            &[
+                                (I64, &cid_str),
+                                (DOUBLE, &key_v),
+                                (I64, &func_i64),
+                                (I64, &param_count_str),
+                                (I64, &is_static_str),
+                                (I64, &has_rest_str),
+                                (I64, &definition_order_str),
+                                (I64, &entry_i64),
+                                (DOUBLE, &owner_v),
+                            ],
+                        );
+                    }
+                }
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        Expr::RegisterClassComputedAccessor {
+            class_name,
+            key_expr,
+            getter_name,
+            setter_name,
+            is_static,
+            definition_order,
+        } => {
+            let key_v = lower_expr(ctx, key_expr)?;
+            if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                if class_id != 0 {
+                    let getter_i64 = getter_name
+                        .as_ref()
+                        .and_then(|name| {
+                            let registry_name = if *is_static {
+                                crate::codegen::static_method_registry_key(name)
+                            } else {
+                                name.clone()
+                            };
+                            ctx.methods.get(&(class_name.clone(), registry_name))
+                        })
+                        .map(|llvm_name| {
+                            let func_ref = format!("@{}", llvm_name);
+                            ctx.block().ptrtoint(&func_ref, I64)
+                        })
+                        .unwrap_or_else(|| "0".to_string());
+                    let setter_i64 = setter_name
+                        .as_ref()
+                        .and_then(|name| {
+                            let registry_name = if *is_static {
+                                crate::codegen::static_method_registry_key(name)
+                            } else {
+                                name.clone()
+                            };
+                            ctx.methods.get(&(class_name.clone(), registry_name))
+                        })
+                        .map(|llvm_name| {
+                            let func_ref = format!("@{}", llvm_name);
+                            ctx.block().ptrtoint(&func_ref, I64)
+                        })
+                        .unwrap_or_else(|| "0".to_string());
+                    let cid_str = class_id.to_string();
+                    let is_static_str = (*is_static as i64).to_string();
+                    let definition_order_str = definition_order.to_string();
+                    let owner_v = owner.map_or_else(undefined, |owner| owner(ctx));
+                    ctx.block().call_void(
+                        "js_register_class_computed_accessor",
+                        &[
+                            (I64, &cid_str),
+                            (DOUBLE, &key_v),
+                            (I64, &getter_i64),
+                            (I64, &setter_i64),
+                            (I64, &is_static_str),
+                            (I64, &definition_order_str),
+                            (DOUBLE, &owner_v),
+                        ],
+                    );
+                }
+            }
+            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+        }
+        _ => {
+            unreachable!("lower_computed_member_registration takes a computed member registration")
+        }
+    }
 }

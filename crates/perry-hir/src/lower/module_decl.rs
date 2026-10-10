@@ -187,7 +187,7 @@ pub(crate) fn lower_module_decl(
             // Without this, `import type { Foo }` dropped Foo's class
             // metadata before it reached compile.rs, so codegen lost the
             // method registry — `obj.method()` worked only via the
-            // CLASS_VTABLE_REGISTRY runtime fallback (#392 followup) and
+            // runtime class-prototype fallback (#392 followup) and
             // `typeof obj.method` returned `"undefined"`. Issue #446.
             native_profile_import::register_native_profile_type_imports(ctx, &source, import_decl);
             if import_decl.type_only && is_native {
