@@ -1691,6 +1691,24 @@ pub fn linearize_body(
                         rewrite_labeled_bc_in_lowered_for_of_arm(then_branch, label, next_local_id);
                         rewrite_labeled_bc_in_lowered_for_of_arm(else_branch, label, next_local_id);
                     }
+                    // A `for...of` that holds an iterator record lowers to
+                    // `try { <setup>; <loop> } finally { <release> }`, so the
+                    // source label names the try and the loop is its last
+                    // statement. Completing that loop completes the try body,
+                    // so `break label` is the loop's own break and `continue
+                    // label` its own continue; the finally still runs on the
+                    // way out. Rewrite them on that loop, exactly as for a
+                    // directly labeled loop (#9199).
+                    try_stmt @ Stmt::Try { .. } => {
+                        if let Some(body) = super::break_continue::loop_body_mut(try_stmt) {
+                            super::break_continue::desugar_labeled_escape_across_nested_loops(
+                                body,
+                                label,
+                                next_local_id,
+                            );
+                            rewrite_labeled_bc_in_stmts(body, label, next_local_id);
+                        }
+                    }
                     // A labeled yielding SWITCH: `break label` at case-body
                     // level is the switch's own break — rewrite it to plain
                     // `break` so the yielding-switch desugar below folds it
