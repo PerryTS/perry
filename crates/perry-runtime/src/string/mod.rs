@@ -1187,24 +1187,11 @@ pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
         return js_string_from_ascii_bytes(bytes.as_ptr(), len);
     }
 
-    let mut utf16_len = 0u32;
-    let mut has_lone_surrogate = false;
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        let (advance, units, code_point) = wtf8_step(bytes, offset);
-        utf16_len = utf16_len.saturating_add(units as u32);
-        has_lone_surrogate |= units == 1 && (0xD800..=0xDFFF).contains(&code_point);
-        offset = (offset + advance).min(bytes.len());
-    }
+    let (utf16_len, flags) = raw_string_metadata(bytes.as_ptr(), len);
     if utf16_len as usize > MAX_STRING_LENGTH {
         throw_invalid_string_length();
     }
 
-    let flags = if has_lone_surrogate {
-        STRING_FLAG_HAS_LONE_SURROGATES
-    } else {
-        0
-    };
     let result = js_string_from_bytes_known_utf16(bytes.as_ptr(), len, utf16_len, flags);
     concat::canonicalize_surrogate_pairs(result)
 }
