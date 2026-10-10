@@ -560,19 +560,16 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
                 );
             }
-            // After the fit (its live-bound transition keeps no ConstFn
-            // lane): the shape names the builtin exec and test bodies, as an
-            // ordinary key-add of those function objects would. The holder
-            // ShapeId alone then proves both, and any store or delete of
-            // either revokes its lane (a new ShapeId).
-            #[cfg(feature = "regex-engine")]
-            if name == "RegExp" {
-                // SAFETY: the live, just-populated prototype.
-                unsafe {
-                    crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, bits| {
-                        super::super::regex_proto_thunks::is_builtin_exec_or_test(bits)
-                    });
-                }
+            // Every builtin prototype, after the fit (its live-bound
+            // transition keeps no ConstFn lane): the shape names the body of
+            // each member whose function info declares a permanent image
+            // (`FN_PERMANENT_IMAGE`), as an ordinary key-add of that function
+            // object would. The declaration on the member decides, never the
+            // prototype's name; a store or delete of the member revokes its
+            // lane (a new ShapeId).
+            // SAFETY: the live, just-populated prototype.
+            unsafe {
+                crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
             }
         }
         let name_bytes = name.as_bytes();

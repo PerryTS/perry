@@ -270,6 +270,7 @@ fn perex_test_entry_holds_no_handle_and_reads_every_base_back_after_a_moving_pol
         api::regexp(&receiver),
         crate::regex::regexp_data_ptr(api::regexp(&receiver)),
         input.with_const_ptr::<StringHeader, _>(|s| s),
+        crate::regex::get_last_index(api::regexp(&receiver)),
         crate::regex::perex_runtime::CaptureMode::Full,
         &mut budget,
         &memory,

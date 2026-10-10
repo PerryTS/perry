@@ -276,17 +276,61 @@ pub(crate) fn object_alloc_born(
 }
 
 /// A plain ordinary receiver on a cached shape, or its keyless birth shape
-/// when the memo is absent or collection pruned it. Validate AFTER allocating:
-/// a scalar ShapeId memo does not retain the descriptor or its keys.
+/// when the memo is absent or collection pruned it. Returns the receiver
+/// and, when it was born on `shape_id`, that shape's representation word
+/// (read from the same record that validated it).
+///
+/// The common birth is `object_alloc_created`'s: the open nursery block
+/// serves it with no collection point (`arena_alloc_gc_no_collect`), so the
+/// shape validated just before is still live at the stamp and the newborn is
+/// known young. Otherwise validate AFTER allocating: a scalar ShapeId memo
+/// does not retain the descriptor or its keys.
 #[cfg(feature = "regex-engine")]
-pub(crate) fn object_alloc_plain_born(field_count: u32, shape_id: u32) -> *mut ObjectHeader {
+#[inline(always)]
+pub(crate) fn object_alloc_plain_born(
+    field_count: u32,
+    shape_id: u32,
+) -> (*mut ObjectHeader, Option<u64>) {
+    // The record in place: its facts, no lifted descriptor copy.
+    let fits = || {
+        crate::object::shapes::shape_record_by_id(shape_id)
+            .filter(|shape| {
+                shape.object_kind() == crate::object::shapes::ShapeObjectKind::Ordinary
+                    && shape.live_inline_slot_count() == field_count
+            })
+            .map(|shape| shape.rep())
+    };
+    if let Some(rep) = fits() {
+        let alloc_width = (field_count as usize).max(crate::object::INLINE_SLOT_FLOOR);
+        let size = std::mem::size_of::<ObjectHeader>() + alloc_width * 8;
+        let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
+            as *mut ObjectHeader;
+        if !fast.is_null() {
+            unsafe {
+                // GC_STORE_AUDIT(INIT): fresh nursery receiver; its stamp is a scalar ShapeId.
+                init_unpublished(fast, 0, alloc_width, shape_id);
+                crate::object::shapes::store_kind::premark_plain_ordinary(fast);
+            }
+            return (fast, Some(rep));
+        }
+    }
+    object_alloc_plain_born_slow(field_count, shape_id, fits)
+}
+
+/// [`object_alloc_plain_born`] through the collecting allocator.
+#[cfg(feature = "regex-engine")]
+#[cold]
+#[inline(never)]
+fn object_alloc_plain_born_slow(
+    field_count: u32,
+    shape_id: u32,
+    fits: impl Fn() -> Option<u64>,
+) -> (*mut ObjectHeader, Option<u64>) {
     let object = object_alloc_unpublished(0, field_count);
     unsafe {
         crate::object::shapes::store_kind::premark_plain_ordinary(object);
-        if crate::object::shapes::shape_descriptor_by_id(shape_id).is_some_and(|shape| {
-            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-                && shape.live_inline_slot_count == field_count
-        }) {
+        let rep = fits();
+        if rep.is_some() {
             if crate::arena::pointer_in_nursery(object as usize) {
                 // GC_STORE_AUDIT(POINTER_FREE): fresh nursery receiver's scalar ShapeId.
                 (*object).parent_class_id = shape_id;
@@ -296,8 +340,8 @@ pub(crate) fn object_alloc_plain_born(field_count: u32, shape_id: u32) -> *mut O
         } else {
             crate::object::shapes::birth_publish_object_shape(object, field_count);
         }
+        (object, rep)
     }
-    object
 }
 
 fn object_alloc_born_impl(

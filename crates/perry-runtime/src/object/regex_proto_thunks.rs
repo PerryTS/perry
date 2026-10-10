@@ -307,9 +307,24 @@ pub(crate) extern "C" fn regex_proto_test_direct(
     if value.is_short_string() || !value.is_string() {
         return regex_proto_test_thunk(c, this, arg);
     }
-    let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_proven(
-        (this.as_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+    // The site's receiver ShapeId, compared immediately before this call,
+    // proved the matcher data at inline slot 0 and the own data `lastIndex`
+    // at inline slot 1, both `Any` lanes: the two operands are those slots'
+    // values. The search is the one every builtin `test` runs.
+    let re = (this.as_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    // SAFETY: the shape proof above; nothing ran since the site's compare.
+    let (data, last_index) = unsafe {
+        let slots = re.add(1).cast::<u64>();
+        (
+            (slots.read() & crate::value::POINTER_MASK) as *const crate::regex::RegExpData,
+            f64::from_bits(slots.add(1).read()),
+        )
+    };
+    let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_builtin(
+        re,
+        data,
         value.as_string_ptr(),
+        last_index,
     ));
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
 }
@@ -412,19 +427,6 @@ pub(crate) unsafe fn method_site_test_code(
         regex_proto_test_direct as *const () as u64
     } else {
         body
-    }
-}
-
-/// Whether `bits` is this agent's builtin `exec` or `test` function object:
-/// the RegExp.prototype slots whose bodies its shape names (ConstFn lanes).
-#[cfg(feature = "regex-engine")]
-pub(super) fn is_builtin_exec_or_test(bits: u64) -> bool {
-    let value = f64::from_bits(bits);
-    crate::value::JSValue::from_bits(bits).is_pointer() && {
-        let code = crate::closure::get_valid_func_ptr(
-            crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader
-        );
-        code == regex_proto_exec_thunk as *const u8 || code == regex_proto_test_thunk as *const u8
     }
 }
 

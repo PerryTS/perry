@@ -18,13 +18,103 @@ struct ProgramCell {
     /// the words never change, and a recompile emits a new cell that starts
     /// with none, so it cannot describe other words. Stored by the first
     /// validating bind; the cell stays a pointer-free leaf.
-    witness: Option<perex::binding::ProgramWitness>,
+    witness: WitnessWords,
     /// The register count a search of these words needs, read from a bound
     /// view of them once (S6), so a per-call search need not open a view to
     /// size its scratch. Like the witness, it describes only these immutable
     /// words and a recompiled program starts without one.
     registers: Option<usize>,
     // Immediately followed by word_count initialized u32 words.
+}
+
+const WITNESS_BYTES: usize = std::mem::size_of::<perex::binding::ProgramWitness>();
+const WITNESS_WORDS: usize = WITNESS_BYTES / 8;
+const _: () = assert!(
+    WITNESS_BYTES.is_multiple_of(8) && std::mem::align_of::<perex::binding::ProgramWitness>() <= 8,
+    "a witness is stored as whole words"
+);
+
+/// A program cell's witness as plain words: the witness's own field bytes,
+/// and zero in every byte its layout leaves as padding.
+///
+/// A typed store of a `ProgramWitness` (or of an `Option` of one) copies the
+/// padding of wherever the value was held, so the stored bytes would depend
+/// on stale stack or register contents (release builds: half a word of them
+/// per witness), not on the witness. A cell's bytes must be a function of
+/// its value alone: every byte is read by the whole-heap from-space scan.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WitnessWords {
+    /// 1 when `words` holds a witness, 0 when none was recorded.
+    present: u64,
+    words: [u64; WITNESS_WORDS],
+}
+
+impl WitnessWords {
+    const NONE: Self = Self {
+        present: 0,
+        words: [0; WITNESS_WORDS],
+    };
+
+    fn new(witness: perex::binding::ProgramWitness) -> Self {
+        let padding = witness_padding();
+        let mut words = std::mem::MaybeUninit::<[u64; WITNESS_WORDS]>::zeroed();
+        // SAFETY: the buffer is witness-sized and word-aligned (asserted
+        // above). After the typed write every field byte is initialized; the
+        // padding bytes it leaves undefined are each written zero below, so
+        // every byte is initialized when the words are read.
+        unsafe {
+            let at = words.as_mut_ptr().cast::<u8>();
+            at.cast::<perex::binding::ProgramWitness>().write(witness);
+            for (i, &pad) in padding.iter().enumerate() {
+                if pad {
+                    at.add(i).write(0);
+                }
+            }
+            Self {
+                present: 1,
+                words: words.assume_init(),
+            }
+        }
+    }
+
+    fn get(&self) -> Option<perex::binding::ProgramWitness> {
+        // SAFETY: `words` was written from a witness by [`Self::new`].
+        (self.present != 0).then(|| unsafe {
+            self.words
+                .as_ptr()
+                .cast::<perex::binding::ProgramWitness>()
+                .read()
+        })
+    }
+}
+
+/// Which bytes of a `ProgramWitness` are padding: those whose value never
+/// changes the witness it is read as. A property of the type, found once by
+/// writing 0x00 and 0xFF to each byte of an image and comparing the witness
+/// read back. Sound because a witness is plain data (perex: "its length and
+/// header"), integers that every bit pattern is a valid value of.
+fn witness_padding() -> &'static [bool; WITNESS_BYTES] {
+    static PADDING: std::sync::OnceLock<[bool; WITNESS_BYTES]> = std::sync::OnceLock::new();
+    PADDING.get_or_init(|| {
+        let mut padding = [false; WITNESS_BYTES];
+        let mut image = [0u64; WITNESS_WORDS];
+        let at = image.as_mut_ptr().cast::<u8>();
+        // SAFETY: a zeroed image is a valid witness (above), and every probe
+        // writes a whole byte before the witness is read back.
+        unsafe {
+            let base = at.cast::<perex::binding::ProgramWitness>().read();
+            for (i, pad) in padding.iter_mut().enumerate() {
+                let same = |byte: u8| {
+                    at.cast::<perex::binding::ProgramWitness>().write(base);
+                    at.add(i).write(byte);
+                    at.cast::<perex::binding::ProgramWitness>().read() == base
+                };
+                *pad = same(0x00) && same(0xFF);
+            }
+        }
+        padding
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,7 +227,7 @@ impl<'scope> GcProgram<'scope> {
     /// them before (#10166).
     pub(crate) fn witness(&self) -> Option<perex::binding::ProgramWitness> {
         self.root
-            .with_const_ptr::<ProgramCell, _>(|cell| unsafe { (*cell).witness })
+            .with_const_ptr::<ProgramCell, _>(|cell| unsafe { (*cell).witness.get() })
     }
 
     /// Record what validating this program established. `witness` must come
@@ -157,7 +247,7 @@ impl<'scope> GcProgram<'scope> {
         );
         // A plain-data store into a pointer-free leaf: no allocation, no barrier.
         root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
-            (*(cell as *mut ProgramCell)).witness = Some(witness);
+            (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness);
         });
     }
 
@@ -210,9 +300,9 @@ impl<'scope> GcProgram<'scope> {
 /// Clear a freshly allocated program cell's whole payload, then write its
 /// prefix: an empty count-sized cell whose words emission fills.
 ///
-/// The arena hands out recycled bytes uncleared, and `witness: None` and
-/// `registers: None` store only their discriminants, so without the clear the
-/// unused option payloads (and the padding after an odd word count) keep the
+/// The arena hands out recycled bytes uncleared, and an empty witness and
+/// `registers: None` store only their markers, so without the clear the
+/// unused payloads (and the padding after an odd word count) keep the
 /// previous occupant's words. Nothing reads them, but the whole-heap from-space
 /// scan does, and on tsc they were stale nursery addresses it reported as
 /// offenders in every regex program cell (16 per run, deterministic). The
@@ -232,7 +322,7 @@ unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
         // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
         cell.cast::<u8>().write_bytes(0, payload);
         std::ptr::addr_of_mut!((*cell).word_count).write(words);
-        std::ptr::addr_of_mut!((*cell).witness).write(None);
+        std::ptr::addr_of_mut!((*cell).witness).write(WitnessWords::NONE);
         std::ptr::addr_of_mut!((*cell).registers).write(None);
     }
 }
@@ -241,7 +331,7 @@ unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
 /// `perex_program`), for tests.
 #[cfg(test)]
 pub(crate) unsafe fn cell_witness(program: *const u8) -> Option<perex::binding::ProgramWitness> {
-    unsafe { (*(program as *const ProgramCell)).witness }
+    unsafe { (*(program as *const ProgramCell)).witness.get() }
 }
 
 /// Overwrite the witness stored in the program cell at `program`, for tests.
@@ -250,7 +340,10 @@ pub(crate) unsafe fn set_cell_witness(
     program: *const u8,
     witness: Option<perex::binding::ProgramWitness>,
 ) {
-    unsafe { (*(program as *mut ProgramCell)).witness = witness };
+    unsafe {
+        (*(program as *mut ProgramCell)).witness =
+            witness.map_or(WitnessWords::NONE, WitnessWords::new)
+    };
 }
 
 // How many `with_words` views of any program cell are live on this thread, so
@@ -445,7 +538,7 @@ impl InPlace {
     /// them before (#10166).
     #[inline(always)]
     pub(crate) fn witness(&self) -> Option<perex::binding::ProgramWitness> {
-        self.with_cell(|cell| unsafe { (*cell).witness })
+        self.with_cell(|cell| unsafe { (*cell).witness.get() })
     }
 
     /// Record what validating this program established; see
@@ -455,7 +548,9 @@ impl InPlace {
         #[cfg(debug_assertions)]
         debug_assert_eq!(PROGRAM_VIEWS.with(std::cell::Cell::get), 0);
         // A plain-data store into a pointer-free leaf: no allocation, no barrier.
-        self.with_cell(|cell| unsafe { (*(cell as *mut ProgramCell)).witness = Some(witness) });
+        self.with_cell(|cell| unsafe {
+            (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness)
+        });
     }
 
     /// The register count recorded in the program cell, if any.
@@ -691,5 +786,47 @@ mod program_cell_tests {
                 );
             }
         }
+    }
+
+    /// A witness whose every byte, padding included, holds `fill`: the
+    /// padding a typed copy of it carries is not the witness's value.
+    fn witness_filled(fill: u8) -> perex::binding::ProgramWitness {
+        let image = [u64::from_ne_bytes([fill; 8]); WITNESS_WORDS];
+        // SAFETY: a witness is plain integers; any image is a valid one.
+        unsafe {
+            image
+                .as_ptr()
+                .cast::<perex::binding::ProgramWitness>()
+                .read()
+        }
+    }
+
+    /// A recorded witness's words are a function of the witness alone: the
+    /// padding of the value it was copied from must not reach the cell, which
+    /// the from-space scan reads word by word.
+    #[test]
+    fn a_recorded_witness_does_not_carry_its_source_padding() {
+        let padding = witness_padding();
+        assert!(
+            padding.iter().any(|&pad| pad),
+            "the witness type has padding: the probe must find it"
+        );
+        for fill in [0x00u8, 0xA5, 0xFF] {
+            let witness = witness_filled(fill);
+            let stored = WitnessWords::new(witness);
+            assert_eq!(stored.get(), Some(witness), "the witness reads back");
+            let bytes: Vec<u8> = stored.words.iter().flat_map(|w| w.to_ne_bytes()).collect();
+            for (i, &pad) in padding.iter().enumerate() {
+                if pad {
+                    assert_eq!(
+                        bytes[i], 0,
+                        "padding byte {i} of a {fill:#x} witness reached the cell"
+                    );
+                } else {
+                    assert_eq!(bytes[i], fill, "field byte {i} of a {fill:#x} witness");
+                }
+            }
+        }
+        assert_eq!(WitnessWords::NONE.get(), None);
     }
 }

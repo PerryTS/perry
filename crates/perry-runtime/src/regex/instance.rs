@@ -17,15 +17,17 @@ crate::perry_thread_local! {
 /// collecting action here, so no handle is needed for it.
 pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
-    let mut receiver = crate::object::object_alloc_plain_born(2, shape);
-    if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
-        receiver = prepare_shape(receiver);
-    }
+    let (mut receiver, born_on_memo) = crate::object::object_alloc_plain_born(2, shape);
+    let rep = born_on_memo.unwrap_or_else(|| {
+        if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
+            receiver = prepare_shape(receiver);
+        }
+        crate::object::shapes::shape_rep_by_id(unsafe {
+            crate::object::shapes::object_shape_stamp(receiver)
+        })
+    });
     let data = js_nanbox_pointer(data() as i64).to_bits();
     unsafe {
-        let rep = crate::object::shapes::shape_rep_by_id(
-            crate::object::shapes::object_shape_stamp(receiver),
-        );
         let plain = crate::object::field_rep::slot_rep(rep, 0) == crate::object::field_rep::REP_ANY
             && crate::object::field_rep::slot_rep(rep, 1) == crate::object::field_rep::REP_ANY;
         if plain && !crate::gc::newborn_parent_needs_barrier(receiver as usize) {
@@ -44,34 +46,6 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
         }
     }
     receiver
-}
-
-/// The object-header word (`class_id | ShapeId << 32`) a literal site's
-/// inline birth (`literal::inline_birth`) stamps on a RegExp whose two slots
-/// it writes raw: `re`'s, when `re`
-/// carries this agent's birth shape and both of its lanes are `Any`. That
-/// shape is marked externally carried, so a site holding the word never
-/// names a pruned shape.
-///
-/// # Safety
-/// `re` is a live RegExp just born by [`new`].
-pub(super) unsafe fn inline_birth_header_word(re: *mut RegExpHeader) -> Option<u64> {
-    let shape = crate::object::shapes::object_shape_stamp(re);
-    if shape == 0 || shape != BIRTH_SHAPE.with(Cell::get) {
-        return None;
-    }
-    let rep = crate::object::shapes::shape_rep_by_id(shape);
-    if (0..2).any(|slot| {
-        crate::object::field_rep::slot_rep(rep, slot) != crate::object::field_rep::REP_ANY
-    }) {
-        return None;
-    }
-    let descriptor = crate::object::shapes::shape_descriptor_by_id(shape)?;
-    if descriptor.live_inline_slot_count != 2 {
-        return None;
-    }
-    crate::object::shapes::note_external_shape_carrier(Some(descriptor));
-    Some(u64::from((*re).class_id) | (u64::from(shape) << 32))
 }
 
 #[cold]

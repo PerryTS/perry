@@ -93,16 +93,14 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
         Type::Boolean,
     )]);
     assert!(ir.contains("call i64 @js_regexp_literal("), "{ir}");
-    assert!(
-        ir.contains("private global [2 x i64] zeroinitializer"),
-        "{ir}"
-    );
+    assert!(ir.contains("private global i64 0"), "{ir}");
     assert_generic(&ir);
 }
 
-/// A literal evaluation is one call to the shared runtime entry, whose
-/// common path is the inline birth: the site emits no birth sequence (no
-/// inline arena bump, no birth seed) and pays only the call and its operands.
+/// A literal evaluation is one call to the shared runtime entry, whose birth
+/// is the runtime's ordinary RegExp birth: the site emits no birth sequence
+/// (no inline arena bump, no birth seed) and pays only the call and its
+/// operands.
 #[test]
 fn literal_site_is_one_call_to_the_shared_birth_entry() {
     let ir = compile(vec![function(
