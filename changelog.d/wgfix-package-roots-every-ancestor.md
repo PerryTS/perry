@@ -1,0 +1,1 @@
+Enumerate installed packages through every ancestor `node_modules`, nearest first, including bun stores. Deduplicate canonical package roots without sorting away resolution priority. A package-local bookkeeping directory such as Perry's `node_modules/.cache/perry` no longer hides ancestor packages or prevents recompiling an installed JavaScript entry.
