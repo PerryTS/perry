@@ -10,6 +10,71 @@ extern "C" fn getter_seven(_this: f64) -> f64 {
 }
 
 #[test]
+fn keyed_symbol_holder_and_key_evacuate_and_still_hit() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "keyed_symbol_holder_and_key_evacuate_and_still_hit",
+    ) {
+        return;
+    }
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _scan = ConservativeScanDisabledGuard::new();
+    for scanner in [
+        read_holder::scan_read_holder_roots_mut,
+        crate::object::scan_object_cache_roots_mut,
+        crate::object::scan_shape_cache_roots_mut,
+        crate::object::shapes::scan_shape_table_rekey_mut,
+        crate::symbol::scan_symbol_side_table_roots_mut,
+    ] {
+        gc_register_mutable_root_scanner(scanner);
+    }
+    unsafe {
+        let sym = alloc_nursery_test_symbol();
+        crate::symbol::test_seed_symbol_pointer_root(sym);
+        let key = f64::from_bits(ptr_bits(sym));
+        let proto = crate::object::js_object_alloc(0, 4);
+        crate::symbol::js_object_set_symbol_property(
+            f64::from_bits(ptr_bits(proto as usize)),
+            key,
+            17.0,
+        );
+        let mid = crate::object::js_object_create(f64::from_bits(ptr_bits(proto as usize)));
+        let recv = crate::object::js_object_create(mid);
+        js_shadow_slot_set(0, recv.to_bits());
+        js_shadow_slot_set(1, key.to_bits());
+        let mut site = std::ptr::null_mut();
+        assert_eq!(
+            read_holder::keyed::js_dyn_index_get_site(&mut site, recv, key),
+            17.0
+        );
+        let hit = || {
+            read_holder::keyed::test_answer(
+                site,
+                (js_shadow_slot_get(0) & POINTER_MASK) as *const ObjectHeader,
+                js_shadow_slot_get(1),
+            )
+        };
+        assert_eq!(hit(), Some(17.0f64.to_bits()));
+        let minor = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(minor.copying_nursery.copied_objects >= 4);
+        assert_ne!(js_shadow_slot_get(0), recv.to_bits(), "receiver must move");
+        assert_ne!(js_shadow_slot_get(1), key.to_bits(), "symbol key must move");
+        assert_eq!(
+            hit(),
+            Some(17.0f64.to_bits()),
+            "saved key, hop and holder must rewrite"
+        );
+        let generic = crate::symbol::js_object_get_symbol_property(
+            f64::from_bits(js_shadow_slot_get(0)),
+            f64::from_bits(js_shadow_slot_get(1)),
+        );
+        assert_eq!(hit(), Some(generic.to_bits()));
+        let _ = gc_collect_minor();
+        assert_eq!(hit(), Some(17.0f64.to_bits()));
+    }
+}
+
+#[test]
 fn holder_memo_overflow_roots_evacuate_and_still_hit() {
     if !crate::object::method_site::run_with_fresh_worker_gate(
         "holder_memo_overflow_roots_evacuate_and_still_hit",

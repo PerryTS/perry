@@ -1,0 +1,1 @@
+Symbol property reads share the computed-key holder entries and their shape validation, including untyped dynamic index sites. Typed own-symbol guards compare receiver shapes and exact key words; generic ordinary-symbol lookups read accessor attributes directly from canonical keys.

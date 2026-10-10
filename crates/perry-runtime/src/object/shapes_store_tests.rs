@@ -300,10 +300,11 @@ fn lifted_descriptor_mirrors_the_record_and_names_its_address() {
 /// 56 -> 64 is the record-owned ConstFn extension pointer; no side table
 /// or pointer to a heap closure participates in shape identity.
 /// The [[Prototype]] itself is NOT in the record: it is one word per prototype
-/// identity (`shapes_prototype`), so the record stays one cache line.
+/// identity (`shapes_prototype`). 64 -> 72 borrows that stable cell address
+/// to remove identity decoding and directory indexing from a prototype hop.
 #[test]
-fn the_record_geometry_is_free_and_facts_key_is_o1() {
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 64, "record grew");
+fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
+    assert_eq!(std::mem::size_of::<ShapeRecord>(), 72, "record grew");
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
 
     // `facts_key` folds the keys ADDRESS; it must never dereference it.
@@ -381,7 +382,7 @@ fn special_body_identity_uses_record_owned_extension() {
     assert_eq!(special.special_constfn_mask(), 1);
     assert_eq!(special.constfn_infos(), &a);
     assert_eq!(special.position_bound_raw(), old.position_bound_raw());
-    assert_eq!(std::mem::size_of::<ShapeRecord>(), 64);
+    assert_eq!(std::mem::size_of::<ShapeRecord>(), 72);
     assert!(special.facts_match_proto_with_special(
         0x40,
         1,

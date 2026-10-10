@@ -285,6 +285,12 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    #[inline(always)]
+    pub(crate) fn prototype_word(self) -> u64 {
+        // SAFETY: this handle borrows a live slab record of this agent.
+        unsafe { (*self.0.as_ptr()).prototype_word() }
+    }
+
     #[inline]
     pub(crate) fn proto_id(self) -> u64 {
         // A live slab record; the identity is immutable.
@@ -4958,13 +4964,14 @@ unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) ->
 unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
-    let proto_id = (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id;
+    let record = &*ShapeSlab::agent_record(object_shape_stamp(obj));
+    let proto_id = record.proto_id;
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
         // CLASS is an implied link, rather than an instance override.
         return 0;
     }
     if proto_id != PROTO_ID_NULL {
-        return shapes_prototype::identity_prototype_word(proto_id);
+        return record.prototype_word();
     }
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
         Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,

@@ -703,7 +703,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[I64, I64, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_object_get_field_by_key_site",
+        DOUBLE,
+        &[PTR, I64, I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_dyn_index_get_site", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`

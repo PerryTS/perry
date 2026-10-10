@@ -1082,6 +1082,7 @@ js_domain_remove	f64	i64,f64
 js_domain_run	f64	i64,f64,ptr
 js_drain_queued_microtasks	void	
 js_dyn_index_get	f64	f64,f64
+js_dyn_index_get_site	f64	ptr,f64,f64
 js_dyn_index_set	f64	f64,f64,f64
 js_dyn_index_set_strict	f64	f64,f64,f64,i32s
 js_dynamic_add	f64	f64,f64
@@ -2553,6 +2554,7 @@ js_object_freeze	f64	f64
 js_object_from_entries	f64	f64
 js_object_get_class_id	i32u	ptr
 js_object_get_field	i64	ptr,i32u
+js_object_get_field_by_key_site	f64	ptr,i64,ptr,f64,f64
 js_object_get_field_by_name	i64	ptr,ptr
 js_object_get_field_by_name_boxed	f64	f64,ptr
 js_object_get_field_by_name_f64	f64	ptr,ptr

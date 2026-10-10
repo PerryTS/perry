@@ -1,98 +1,121 @@
-//! Shape-guarded own Symbol property loads.
+//! Symbol reads share the computed-key holder record and its roots.
+use crate::expr::receiver_range::{emit_fused_receiver_test, emit_handle};
 use crate::expr::FnCtx;
-use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
-/// Emit a weak monomorphic IC for an exact own Symbol-keyed data property.
-///
-/// The cache stores raw bits, not roots.  Its epoch is advanced by every
-/// Symbol-property mutation and completed GC, so a moved/reclaimed receiver or
-/// value cannot hit and the cache cannot keep otherwise-dead objects alive.
+/// The first keyed way's own inline entry is an emitted shape/key guard.
+/// Inherited, spill, absent and refused receivers use the same runtime front.
 pub(crate) fn lower_symbol_property_get_ic(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
     sym_box: &str,
 ) -> String {
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = crate::expr::inline_cache_global_name(ctx, site_id);
-    ctx.ic_globals.push(cache_name.clone());
-
-    let probe_idx = ctx.new_block("symic.probe");
-    let shape_idx = ctx.new_block("symic.shape");
-    let shape_label = ctx.block_label(shape_idx);
-    let hit_idx = ctx.new_block("symic.hit");
-    let miss_idx = ctx.new_block("symic.miss");
-    let merge_idx = ctx.new_block("symic.merge");
-    let probe_label = ctx.block_label(probe_idx);
-    let hit_label = ctx.block_label(hit_idx);
-    let miss_label = ctx.block_label(miss_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    // #9708: the cache sits behind a pointer slot that the miss handler fills
-    // on the first prime. The probe's three loads go through the pointer, so
-    // an absent cache branches straight to the miss — the edge a fresh
-    // (all-zero) global took anyway, since a zero epoch never matches.
-    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let cache_ref = ic_slot.cache.clone();
-    let cache_slot_ref = ic_slot.slot_ref.clone();
-    ctx.block()
-        .cond_br(&ic_slot.present, &probe_label, &miss_label);
-
-    ctx.current_block = probe_idx;
-    let epoch = ctx
+    let slot = super::keyed_slot(ctx);
+    let cache = ctx.block().load(PTR, &slot);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    let bits = ctx.block().bitcast_double_to_i64(obj_box);
+    let receiver = emit_fused_receiver_test(ctx.block(), &bits);
+    let raw = emit_handle(ctx.block(), &receiver.biased);
+    let workers = ctx
         .block()
-        .load_atomic_acquire(I64, "@PERRY_SYMBOL_PROPERTY_IC_EPOCH", 8);
-    let cached_epoch_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
-    let cached_epoch = ctx.block().load_atomic_acquire(I64, &cached_epoch_ptr, 8);
-    let epoch_matches = ctx.block().icmp_eq(I64, &epoch, &cached_epoch);
-    let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
-    let cached_obj_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
-    let cached_obj = ctx.block().load(I64, &cached_obj_ptr);
-    let obj_matches = ctx.block().icmp_eq(I64, &obj_bits, &cached_obj);
-    let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
-    let cached_sym_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
-    let cached_sym = ctx.block().load(I64, &cached_sym_ptr);
-    let sym_matches = ctx.block().icmp_eq(I64, &sym_bits, &cached_sym);
-    let identity_matches = ctx.block().and(I1, &obj_matches, &sym_matches);
-    let hit = ctx.block().and(I1, &epoch_matches, &identity_matches);
-    ctx.block().cond_br(&hit, &shape_label, &miss_label);
-
-    ctx.current_block = shape_idx;
-    let raw = ctx.block().and(I64, &obj_bits, POINTER_MASK_I64);
+        .load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+    let primary = ctx.block().icmp_eq(I8, &workers, "0");
+    let ok = ctx.block().and(I1, &present, &receiver.is_object_pointer);
+    let ok = ctx.block().and(I1, &ok, &primary);
+    let probe = ctx.new_block("symic.probe");
+    let hit = ctx.new_block("symic.hit");
+    let miss = ctx.new_block("symic.miss");
+    let merge = ctx.new_block("symic.merge");
+    let probe_l = ctx.block_label(probe);
+    let hit_l = ctx.block_label(hit);
+    let miss_l = ctx.block_label(miss);
+    let merge_l = ctx.block_label(merge);
+    ctx.block().cond_br(&ok, &probe_l, &miss_l);
+    ctx.current_block = probe;
     let shape_addr = ctx.block().add(I64, &raw, "4");
     let shape_ptr = ctx.block().inttoptr(I64, &shape_addr);
     let shape = ctx.block().load(I32, &shape_ptr);
     let shape = ctx.block().zext(I32, &shape, I64);
-    let entry_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
-    let entry = ctx.block().load(I64, &entry_ptr);
-    let cached_shape = ctx.block().lshr(I64, &entry, "32");
-    let shape_matches = ctx.block().icmp_eq(I64, &shape, &cached_shape);
-    ctx.block().cond_br(&shape_matches, &hit_label, &miss_label);
-
-    ctx.current_block = hit_idx;
-    let slot = ctx.block().and(I64, &entry, "4294967295");
-    let offset = ctx.block().shl(I64, &slot, "3");
+    let token = ctx.block().or(I64, &shape, "4611686018427387904");
+    // HolderEntry starts at its receiver word; KEY follows its eight words.
+    let word = |ctx: &mut FnCtx<'_>, i: usize| {
+        let ptr = ctx.block().gep(I64, &cache, &[(I64, &i.to_string())]);
+        ctx.block().load(I64, &ptr)
+    };
+    let base = perry_abi::PIC_HOLDER_RECV_WORD;
+    let recv = word(ctx, perry_abi::PIC_HOLDER_RECV_WORD - base);
+    let holder = word(ctx, perry_abi::PIC_HOLDER_OBJ_WORD - base);
+    let kind = word(ctx, perry_abi::PIC_HOLDER_KIND_WORD - base);
+    let key = word(ctx, perry_abi::PIC_HOLDER_STATE_WORD - base);
+    let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
+    let same_shape = ctx.block().icmp_eq(I64, &token, &recv);
+    let same_key = ctx.block().icmp_eq(I64, &sym_bits, &key);
+    let own = ctx.block().icmp_eq(I64, &holder, "0");
+    let inline = ctx.block().icmp_ult(I64, &kind, "2147483648");
+    let ok = ctx.block().and(I1, &same_shape, &same_key);
+    let ok = ctx.block().and(I1, &ok, &own);
+    let ok = ctx.block().and(I1, &ok, &inline);
+    ctx.block().cond_br(&ok, &hit_l, &miss_l);
+    ctx.current_block = hit;
+    let offset = ctx.block().shl(I64, &kind, "3");
     let fields = ctx.block().add(I64, &raw, "16");
     let addr = ctx.block().add(I64, &fields, &offset);
-    let cached_value_ptr = ctx.block().inttoptr(I64, &addr);
-    let cached_value_bits = ctx.block().load(I64, &cached_value_ptr);
-    let cached_value = ctx.block().bitcast_i64_to_double(&cached_value_bits);
+    let ptr = ctx.block().inttoptr(I64, &addr);
+    let value = ctx.block().load(DOUBLE, &ptr);
     let hit_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = miss_idx;
-    let miss_value = ctx.block().call(
+    ctx.block().br(&merge_l);
+    ctx.current_block = miss;
+    let value_miss = ctx.block().call(
         DOUBLE,
-        "js_object_get_symbol_property_ic_miss",
-        &[(DOUBLE, obj_box), (DOUBLE, sym_box), (PTR, &cache_slot_ref)],
+        "js_object_get_field_by_key_site",
+        &[
+            (PTR, &slot),
+            (I64, "0"),
+            (I64, &raw),
+            (DOUBLE, sym_box),
+            (DOUBLE, obj_box),
+        ],
     );
     let miss_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
+    ctx.block()
+        .phi(DOUBLE, &[(&value, &hit_end), (&value_miss, &miss_end)])
+}
 
-    ctx.current_block = merge_idx;
+/// Separate property-key tags before the numeric array guards. Both branches
+/// retain the original dynamic dispatch when their shape proof fails.
+pub(super) fn lower_unknown_key_get(ctx: &mut FnCtx<'_>, obj: &str, key: &str) -> String {
+    let bits = ctx.block().bitcast_double_to_i64(key);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let ptr = ctx.block().icmp_eq(I64, &tag, "32765");
+    let heap_string = ctx.block().icmp_eq(I64, &tag, "32767");
+    let short_string = ctx.block().icmp_eq(I64, &tag, "32761");
+    let property = ctx.block().or(I1, &ptr, &heap_string);
+    let property = ctx.block().or(I1, &property, &short_string);
+    let named = ctx.new_block("dynkey.property");
+    let numeric = ctx.new_block("dynkey.numeric");
+    let merge = ctx.new_block("dynkey.merge");
+    let named_l = ctx.block_label(named);
+    let numeric_l = ctx.block_label(numeric);
+    let merge_l = ctx.block_label(merge);
+    ctx.block().cond_br(&property, &named_l, &numeric_l);
+    ctx.current_block = named;
+    let slot = super::keyed_slot(ctx);
+    let named_value = ctx.block().call(
+        DOUBLE,
+        "js_dyn_index_get_site",
+        &[(PTR, &slot), (DOUBLE, obj), (DOUBLE, key)],
+    );
+    let named_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = numeric;
+    let numeric_value = super::lower_inline_dyn_typed_array_get(ctx, obj, key, false);
+    let numeric_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
     ctx.block().phi(
         DOUBLE,
-        &[(&cached_value, &hit_end), (&miss_value, &miss_end)],
+        &[(&named_value, &named_end), (&numeric_value, &numeric_end)],
     )
 }

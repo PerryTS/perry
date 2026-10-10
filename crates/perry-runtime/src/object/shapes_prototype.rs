@@ -14,10 +14,10 @@
 //!   CLASS words also represent unbuilt declared holders as `undefined`; a
 //!   negative probe admits only the empty word.
 //! * One word per IDENTITY, not per shape record: every shape of one
-//!   prototype names the same word, and the record stays one cache line. The
+//!   prototype names the same word. The
 //!   words live in stable pages (an address never moves). The pages are
-//!   published to a thread-local directory, so a read is the record's
-//!   `proto_id` plus two loads. The prototype funnel
+//!   addressed directly by `ShapeRecord.proto_cell`, so a record's prototype
+//!   read is one load. The prototype funnel
 //!   (`shapes::transition_object_shape_prototype`) writes the word before any
 //!   shape names the identity.
 //! * Who reads it: a function constructor's instance, the receiver the funnel
@@ -169,6 +169,11 @@ impl ProtoWords {
         self.publish();
     }
 
+    pub(super) fn identity_slot_ensure(&mut self, proto_id: u64) -> Option<*mut u64> {
+        let (band, index) = word_key(proto_id)?;
+        Some(self.slot_ensure(band, index))
+    }
+
     fn slot_ensure(&mut self, band: usize, index: usize) -> *mut u64 {
         let page = index >> PAGE_SHIFT;
         let pages = &mut self.bands[band];
@@ -276,7 +281,21 @@ pub(crate) fn identity_prototype_word(proto_id: u64) -> u64 {
 pub(crate) fn shape_prototype_word(id: u32) -> u64 {
     // SAFETY: `agent_record` never returns null; an absent id reads the
     // shared empty record, whose identity is the default.
-    identity_prototype_word(unsafe { (*super::shapes_store::ShapeSlab::agent_record(id)).proto_id })
+    unsafe { (*super::shapes_store::ShapeSlab::agent_record(id)).prototype_word() }
+}
+
+impl super::shapes_store::ShapeRecord {
+    /// This record borrows the stable identity word owned by its agent slab.
+    #[inline(always)]
+    pub(crate) fn prototype_word(&self) -> u64 {
+        if self.proto_cell == 0 {
+            0
+        } else {
+            // SAFETY: insertion resolves the cell in this record's own slab;
+            // its boxed page outlives every live record in that slab.
+            unsafe { *(self.proto_cell as usize as *const u64) }
+        }
+    }
 }
 
 /// Make identity `proto_id` name `bits`, before any shape names it (the

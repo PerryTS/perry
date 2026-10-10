@@ -139,35 +139,8 @@ impl OwnSymbolSlot {
     }
 }
 
-/// The two lookups [`has_own_symbol_property`] mirrors (accessor table, then
-/// the raw `SYMBOL_PROPERTIES` data table), returning what they found.
-pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
-    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
-        return Some(OwnSymbolSlot::Accessor {
-            get: acc.get,
-            set: acc.set,
-        });
-    }
-    let obj_key = obj_key_from_f64(obj_f64);
-    let sym_key = sym_key_from_f64(sym_f64);
-    if obj_key == 0 || sym_key == 0 {
-        return None;
-    }
-    if crate::object::shaped_symbols::owner(obj_key).is_some() {
-        return crate::object::shaped_symbols::get(obj_key, sym_key).map(OwnSymbolSlot::Data);
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    if let Some(map) = guard.as_ref() {
-        if let Some(entries) = map.get(&obj_key) {
-            for &(sk, vb) in entries.iter() {
-                if sk == sym_key {
-                    return Some(OwnSymbolSlot::Data(vb));
-                }
-            }
-        }
-    }
-    None
-}
+mod own;
+pub(crate) use own::own_symbol_slot;
 
 /// Words in a per-site Symbol-keyed read cache: `[epoch, obj_bits, sym_bits,
 /// packed_shape_and_slot]`. Word 0 is published last with release ordering and read
@@ -469,13 +442,33 @@ unsafe fn resolve_explicit_object_prototype_symbol(
     sym_f64: f64,
     receiver: f64,
 ) -> Option<f64> {
-    explicit_prototype_symbol_slot(obj_f64, sym_f64).map(|slot| slot.read(receiver))
+    explicit_prototype_symbol_lookup(obj_f64, sym_f64).map(|lookup| match lookup {
+        PrototypeSymbolLookup::Slot(slot) => slot.read(receiver),
+        PrototypeSymbolLookup::Proxy(proxy) => {
+            crate::proxy::proxy_get_from_prototype(proxy, sym_f64, receiver)
+        }
+    })
+}
+
+enum PrototypeSymbolLookup {
+    Slot(OwnSymbolSlot),
+    Proxy(f64),
+}
+
+unsafe fn explicit_prototype_symbol_slot(obj: f64, sym: f64) -> Option<OwnSymbolSlot> {
+    match explicit_prototype_symbol_lookup(obj, sym)? {
+        PrototypeSymbolLookup::Slot(slot) => Some(slot),
+        PrototypeSymbolLookup::Proxy(_) => None,
+    }
 }
 
 /// The recorded and intrinsic-array prototype walk behind
 /// [`resolve_explicit_object_prototype_symbol`], stopping at the nearest
 /// holder without invoking it.
-unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
+unsafe fn explicit_prototype_symbol_lookup(
+    obj_f64: f64,
+    sym_f64: f64,
+) -> Option<PrototypeSymbolLookup> {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let mut owner = receiver_ptr_from_value_bits(obj_f64.to_bits())?;
     let mut visited_buf = [0usize; 16];
@@ -509,8 +502,12 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
         if proto_bits == TAG_NULL {
             return None;
         }
+        let proto = f64::from_bits(proto_bits);
+        if crate::proxy::js_proxy_is_proxy(proto) != 0 {
+            return Some(PrototypeSymbolLookup::Proxy(proto));
+        }
         if let Some(slot) = own_symbol_slot(f64::from_bits(proto_bits), sym_f64) {
-            return Some(slot);
+            return Some(PrototypeSymbolLookup::Slot(slot));
         }
         let proto_ptr = receiver_ptr_from_value_bits(proto_bits)?;
         // Cycle detection.
@@ -534,7 +531,7 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
         {
             let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
             if let Some(slot) = crate::object::object_proto_chain_symbol_slot(proto_obj, sym_f64) {
-                return Some(slot);
+                return Some(PrototypeSymbolLookup::Slot(slot));
             }
         }
         owner = proto_ptr;
@@ -729,7 +726,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // read with symbol keys (`col[entityKind]`, `col[Table.Symbol.*]`) while
     // building a relational query.
     if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
-        return crate::proxy::js_proxy_get(obj_f64, sym_f64);
+        return crate::proxy::proxy_get_with_receiver(obj_f64, sym_f64, receiver_f64);
     }
     // A `Date` is a `DateCell` (NaN-boxed pointer, NOT an `ObjectHeader`). A
     // symbol-keyed read (`d[Symbol.toPrimitive]`, `d[Symbol.iterator]`) must

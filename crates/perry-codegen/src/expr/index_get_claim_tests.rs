@@ -328,7 +328,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
         "arrlike.lazy.call",
         // and the runtime entries only those arms called
         "js_lazy_array_index_probe",
-        "js_dyn_index_get",
+        "call double @js_dyn_index_get(",
         "js_number_coerce",
     ] {
         assert!(
@@ -336,6 +336,12 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
             "`{absent}` must no longer be emitted at a dynamic element-read site:\n{ir}"
         );
     }
+    // The property-key dispatch arm owns the keyed holder site. It is
+    // separate from the numeric tier's single packed-arraylike exit.
+    let property = super::class_field_barrier_tests::block_body(&ir, "dynkey.property.")
+        .expect("the property-key dispatch block exists");
+    assert_eq!(property.matches("call double @js_dyn_index_get_site(").count(), 1);
+    assert!(!property.contains("@js_packed_arraylike_index_get("));
     // The inline hits themselves: a guarded ordinary-Array element load, and
     // the elements-backed Array-subclass probe's own load.
     let array_load = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.array_load.")
@@ -552,13 +558,14 @@ fn dynamic_symbol_read_ir(symbol_init: Expr) -> String {
 }
 
 #[test]
-fn proven_symbol_key_skips_registry_probe_and_uses_weak_own_property_ic() {
+fn proven_symbol_key_uses_the_keyed_shape_guard() {
     let ir = dynamic_symbol_read_ir(Expr::SymbolNew(None));
     assert!(
         ir.contains("symic.hit")
-            && ir.contains("load atomic i64, ptr @PERRY_SYMBOL_PROPERTY_IC_EPOCH acquire")
-            && ir.contains("call double @js_object_get_symbol_property_ic_miss("),
-        "the weak epoch-guarded Symbol property IC was not emitted:\n{ir}"
+            && ir.contains("4611686018427387904")
+            && ir.contains("call double @js_object_get_field_by_key_site(")
+            && !ir.contains("@PERRY_SYMBOL_PROPERTY_IC_EPOCH"),
+        "the exact-key ShapeId Symbol guard was not emitted:\n{ir}"
     );
     assert!(
         !ir.contains("call i32 @js_is_symbol("),
@@ -595,7 +602,9 @@ fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
         byte_offset: 0,
     });
     assert!(
-        !ir.contains("symic.hit")
+        ir.contains("dynkey.property")
+            && ir.contains("call double @js_dyn_index_get_site(")
+            && !ir.contains("symic.hit")
             && !ir.contains("call double @js_object_get_symbol_property_ic_miss("),
         "a TypeScript Symbol annotation without initializer provenance must not enter the exact-Symbol IC:\n{ir}"
     );

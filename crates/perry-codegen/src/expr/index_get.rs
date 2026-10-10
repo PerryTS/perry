@@ -1304,9 +1304,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // falling back to `js_dyn_index_get` on any guard miss. Removes
                     // the per-element out-of-line call + `lookup_typed_array_kind` +
                     // `js_number_coerce` on bcrypt's hot Int32Array `S[i]`/`P[i]`.
-                    Ok(lower_inline_dyn_typed_array_get(
-                        ctx, &obj_box, &idx_d, false,
-                    ))
+                    Ok(symbol_ic::lower_unknown_key_get(ctx, &obj_box, &idx_d))
                 });
             }
             // Three cases:
@@ -1584,10 +1582,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "object[index]",
                         TypedFeedbackContract::object_get_by_name(),
                     );
+                    let slot = keyed_slot(ctx);
                     Ok(ctx.block().call(
                         DOUBLE,
-                        "js_typed_feedback_object_get_field_by_key_f64",
+                        "js_object_get_field_by_key_site",
                         &[
+                            (crate::types::PTR, &slot),
                             (I64, &site_id),
                             (I64, &obj_handle),
                             (DOUBLE, key_box),
@@ -1698,10 +1698,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 // #10753: the by-key entry answers from shapes before it
                 // takes the by-value read (see the dynamic-string arm above).
+                let slot = keyed_slot(ctx);
                 let v_str = ctx.block().call(
                     DOUBLE,
-                    "js_typed_feedback_object_get_field_by_key_f64",
+                    "js_object_get_field_by_key_site",
                     &[
+                        (crate::types::PTR, &slot),
                         (I64, &site_id),
                         (I64, &str_obj_handle),
                         (DOUBLE, &idx_box),
@@ -1784,4 +1786,13 @@ pub(crate) fn lower_record_next(
     value_slot: &str,
 ) -> Result<(String, String)> {
     guarded_array::lower_record_next(ctx, array, index, protocol, record, index_slot, value_slot)
+}
+
+/// A keyed read owns one lazy PIC slot, just like a named read.
+pub(super) fn keyed_slot(ctx: &mut FnCtx<'_>) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = crate::expr::inline_cache_global_name(ctx, site);
+    ctx.ic_globals.push(name.clone());
+    format!("@{name}")
 }

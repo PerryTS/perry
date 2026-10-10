@@ -145,9 +145,7 @@ pub(crate) struct ShapeRecord {
     /// ONE field so the megamorphic read confirm (`js_object_read_confirm`)
     /// answers "is the guess a position of this shape" with one compare —
     /// `guess < position_bound` — instead of a flag test and a `min`.
-    /// Offset 40; the special-lane mask uses the former padding at 44, and
-    /// `rep` follows at 48. The extension word at 56 makes the record
-    /// 64 bytes; ordinary shapes keep any reverse edge in that word.
+    /// Offsets: bound 40, special mask 44, rep 48, extras 56, prototype cell 64.
     position_bound: u32,
     /// For a `REP_SPECIAL` lane, one means ConstFn and zero reserves the
     /// NoPointer interpretation for P5. This uses the old padding at 44;
@@ -162,6 +160,9 @@ pub(crate) struct ShapeRecord {
     /// [`ShapeExtras`] address. Ordinary reverse edges need no allocation.
     /// Fixed width keeps the slab layout identical on ILP32/LP64.
     extras: u64,
+    /// Borrowed stable identity-word address; zero for DEFAULT/null/per-object.
+    /// GC rewrites the word, not this derived address; no new identity fact.
+    pub(super) proto_cell: u64,
 }
 
 // Derived once from the immutable key prefix on slab publication. Owned
@@ -225,12 +226,13 @@ const _: () = {
 };
 const _: () = assert!(super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MAX);
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 64);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 72);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, special_constfn_mask) == 44);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, rep) == 48);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, extras) == 56);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, proto_cell) == 64);
 
 impl ShapeRecord {
     #[inline]
@@ -273,6 +275,7 @@ impl ShapeRecord {
         special_constfn_mask: 0,
         rep: 0,
         extras: 0,
+        proto_cell: 0,
     };
 
     #[inline]
@@ -403,6 +406,7 @@ impl ShapeRecord {
             special_constfn_mask: 0,
             rep: 0,
             extras: 0,
+            proto_cell: 0,
         };
         record.refresh_positional();
         record
@@ -579,6 +583,7 @@ impl ShapeRecord {
     #[inline(always)]
     pub(super) fn with_proto_id(mut self, proto_id: u64) -> ShapeRecord {
         self.proto_id = proto_id;
+        self.proto_cell = 0;
         self
     }
 
@@ -1304,6 +1309,12 @@ impl ShapeSlab {
             record.proto_id
         );
         let band = band as u8;
+        // Resolve once in this slab: workers install their own cells, and
+        // boxed word pages remain stable even when their directory grows.
+        record.proto_cell = self
+            .protos
+            .identity_slot_ensure(record.proto_id)
+            .map_or(0, |slot| slot as usize as u64);
         record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
         let dir = self.dir_mut(band);

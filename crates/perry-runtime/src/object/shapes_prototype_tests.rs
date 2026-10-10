@@ -159,3 +159,113 @@ fn s7b_constructor_heritage_is_not_an_instance_holder_word() {
     );
     assert!(crate::object::class_holder_prototype(cid).is_null());
 }
+
+#[test]
+fn c3_identity_cell_is_stable_across_directory_growth_and_gc_rewrite() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proto = js_object_alloc(0, 0);
+    let receiver = js_object_alloc(0, 0);
+    object_link_class_default_prototype(receiver as usize, bits(proto));
+    let stamp = unsafe { super::super::object_shape_stamp(receiver) };
+    let record = super::super::ShapeSlab::agent_record(stamp);
+    let cell = unsafe { (*record).proto_cell as usize as *mut u64 };
+    assert!(!cell.is_null());
+    assert_eq!(unsafe { *cell }, bits(proto));
+    let pid = unsafe { (*record).proto_id };
+    // Force the directory to grow after this page's address was borrowed.
+    super::write_identity_word(1 << 18, crate::value::TAG_UNDEFINED);
+    assert_eq!(identity_word_slot(pid), Some(cell));
+    let replacement = js_object_alloc(0, 0);
+    // The collector's forwarding visitor writes this exact existing slot.
+    unsafe { *cell = bits(replacement) };
+    assert_eq!(shape_prototype_word(stamp), bits(replacement));
+    super::write_identity_word(pid, bits(proto));
+    let before = shape_prototype_word(stamp);
+    prune_dead_shape_prototypes(&|addr| addr == proto as usize);
+    assert_eq!(unsafe { *cell }, 0);
+    assert_eq!(shape_prototype_word(stamp), 0);
+    // Negative control: an answer copied out of the cell before pruning is
+    // stale. A live cell read must distinguish the two.
+    assert_ne!(
+        before,
+        shape_prototype_word(stamp),
+        "negative control: skipped live cell load"
+    );
+}
+
+#[test]
+fn c3_unrooted_prototype_collection_clears_the_stable_cell() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let cell = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let proto = js_object_alloc(0, 0);
+        let receiver = js_object_alloc(0, 0);
+        object_link_class_default_prototype(receiver as usize, bits(proto));
+        let stamp = unsafe { super::super::object_shape_stamp(receiver) };
+        let record = super::super::ShapeSlab::agent_record(stamp);
+        let cell = unsafe { (*record).proto_cell as usize as *const u64 };
+        assert_eq!(unsafe { *cell }, bits(proto));
+        cell
+    };
+    // Native locals are not registered shadow roots. Both carriers are dead;
+    // the identity page remains stable after their slab records are pruned.
+    crate::gc::js_gc_collect();
+    assert_eq!(
+        unsafe { *cell },
+        0,
+        "dead prototype word survived a full collection"
+    );
+}
+
+#[test]
+fn c3_holder_hit_matches_generic_get_across_shape_link_mutations() {
+    use crate::object::method_site::read_holder::{prime_read_holder, read_holder_hit};
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "c3_holder_hit_matches_generic_get_across_shape_link_mutations",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let first = js_object_alloc(0, 1);
+    let second = js_object_alloc(0, 1);
+    let recv = js_object_alloc(0, 1);
+    let key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    crate::object::js_object_set_field_by_name(first, key, 13.0);
+    crate::object::js_object_set_field_by_name(second, key, 29.0);
+    object_link_class_default_prototype(recv as usize, bits(first));
+    let mut slot: crate::object::PicCacheSlot = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            prime_read_holder(recv, key, &mut slot).unwrap().as_number(),
+            13.0
+        );
+        assert_eq!(
+            read_holder_hit(recv, &mut slot),
+            Some(13.0),
+            "fixture must hit"
+        );
+        for stage in 0..7 {
+            match stage {
+                0 => crate::object::js_object_set_field_by_name(first, key, 17.0),
+                1 => crate::object::js_object_set_field_by_name(recv, key, 19.0),
+                2 => {
+                    crate::object::js_object_delete_field(recv, key);
+                }
+                3 => object_set_user_prototype(recv as usize, bits(second)),
+                4 => {
+                    crate::object::js_object_delete_field(second, key);
+                }
+                5 => object_set_user_prototype(recv as usize, crate::value::TAG_NULL),
+                _ => object_set_user_prototype(recv as usize, bits(first)),
+            }
+            let generic = crate::object::js_object_get_field_by_name(recv, key).bits();
+            if let Some(hit) = read_holder_hit(recv, &mut slot) {
+                assert_eq!(hit.to_bits(), generic, "stale hit at stage {stage}");
+            }
+            let answer =
+                crate::object::js_object_get_field_ic(recv as i64, key, 190_731, &mut slot);
+            assert_eq!(answer.to_bits(), generic, "Get mismatch at stage {stage}");
+        }
+    }
+}
