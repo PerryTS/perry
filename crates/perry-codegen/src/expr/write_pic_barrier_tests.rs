@@ -782,3 +782,42 @@ fn store_ic_emits_no_constfn_admission_for_a_value_that_cannot_be_a_closure() {
         );
     }
 }
+
+#[test]
+fn constructed_scalar_rhs_omits_every_store_bookkeeping_instruction() {
+    for value in [
+        Expr::Compare {
+            op: perry_hir::CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(VALUE)),
+            right: Box::new(Expr::Number(80.0)),
+        },
+        Expr::Binary {
+            op: perry_hir::BinaryOp::BitOr,
+            left: Box::new(Expr::LocalGet(VALUE)),
+            right: Box::new(Expr::Number(0.0)),
+        },
+        Expr::Unary {
+            op: perry_hir::UnaryOp::Not,
+            operand: Box::new(Expr::LocalGet(VALUE)),
+        },
+    ] {
+        let ir = write_pic_ir("scalar_store_cost", value);
+        assert!(
+            block(&ir, HIT_STORE).unwrap().contains("store double"),
+            "slot store must remain: {ir}"
+        );
+        for helper in [ADDREF, BARRIER_CALL] {
+            assert_eq!(
+                ir.matches(helper).count(),
+                0,
+                "scalar bookkeeping instruction ratchet: {ir}"
+            );
+        }
+        assert!(!ir.contains(CLASSIFY), "no scalar pointer guard: {ir}");
+    }
+    let control = write_pic_ir("scalar_store_control", Expr::LocalGet(VALUE));
+    assert!(
+        control.contains(CLASSIFY) && control.contains(BARRIER_CALL),
+        "unknown values must retain their barrier: {control}"
+    );
+}

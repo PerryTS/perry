@@ -11,6 +11,10 @@ pub(crate) use chain::try_lower as try_lower_chain;
 #[path = "compare_short_string.rs"]
 mod short_string;
 
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[path = "emitted_operation_tests.rs"]
+mod emitted_operation_tests;
+
 use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::{CompareOp, Expr};
@@ -678,21 +682,38 @@ fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
 
 /// Strict equality where exactly one operand is a proven Number.
 ///
-/// Compare raw double encodings, then compare the varying value's compact
-/// INT32 payload against the Number's exact integer encoding. Normalizing the
-/// varying operand first speculates an integer-to-double conversion even for
-/// ordinary doubles, extending byte-dependent loop recurrences. Encoding the
-/// proven operand leaves that conversion off the varying operand's dependency
-/// chain and folds away for constants. Saturation avoids poison for NaN,
-/// infinity and out-of-range Numbers; the round trip rejects those and fractions.
+/// An i32-proven operand needs one numeric comparison after compact INT32
+/// normalization. General Numbers keep the encoding comparison: encode the
+/// proven operand rather than converting the varying operand, preserving
+/// fractional byte-dependent recurrences. Saturation and the round trip reject
+/// NaN, infinity, out-of-range Numbers and fractions on the compact arm.
 fn lower_strict_eq_against_number(
     ctx: &mut FnCtx<'_>,
     op: CompareOp,
     l: &str,
     r: &str,
     dynamic_is_left: bool,
+    integer_operand: bool,
 ) -> String {
     let (dynamic, number) = if dynamic_is_left { (l, r) } else { (r, l) };
+    if integer_operand {
+        let dynamic = normalize_int32_immediate(ctx, dynamic);
+        let number = normalize_int32_immediate(ctx, number);
+        let predicate = if matches!(op, CompareOp::Ne) {
+            "une"
+        } else {
+            "oeq"
+        };
+        let bit = ctx.block().fcmp(predicate, &dynamic, &number);
+        let tagged = ctx.block().select(
+            I1,
+            &bit,
+            I64,
+            crate::nanbox::TAG_TRUE_I64,
+            crate::nanbox::TAG_FALSE_I64,
+        );
+        return ctx.block().bitcast_i64_to_double(&tagged);
+    }
     let number = normalize_int32_immediate(ctx, number);
     let number = number.as_str();
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
@@ -1777,6 +1798,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &l,
                         &r,
                         !left_numeric,
+                        matches!(if left_numeric { left.as_ref() } else { right.as_ref() },
+                            Expr::Integer(n) if i32::try_from(*n).is_ok())
+                            || matches!(if left_numeric { left.as_ref() } else { right.as_ref() },
+                                Expr::Number(n) if n.is_finite() && n.fract() == 0.0
+                                    && *n >= i32::MIN as f64 && *n <= i32::MAX as f64)
+                            || super::i32_fast_path::is_known_i32_range(
+                                ctx,
+                                if left_numeric { left } else { right },
+                            ),
                     ));
                 }
                 if is_relational_op && !both_numeric {
