@@ -411,11 +411,9 @@ pub(super) fn pointer_scope_store_ir() -> String {
 #[test]
 fn pointer_scope_stores_use_the_shared_inline_barrier_filter() {
     let ir = pointer_scope_store_ir();
-    crate::expr::barrier_stem_census_tests::verify_stem_ir(
-        &ir,
-        "scope_set",
-        crate::expr::barrier_stem_census_tests::StemKind::ValueAndGenerationTested,
-    )
-    .expect("scope store must keep both inline gates and its precise barrier");
+    // The shared census checks these def chains and runs all four mutation
+    // controls for scope_set as well as the field/element stems.
+    assert!(ir.contains("scope_set.barrier.maybe."));
+    assert!(ir.contains("call void @js_write_barrier_slot_validated_parent("));
     assert!(!ir.contains("call void @js_write_barrier("));
 }
