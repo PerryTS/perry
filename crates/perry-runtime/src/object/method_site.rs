@@ -1245,7 +1245,7 @@ fn prime_candidate(receiver: MissReceiver, _name: &[u8]) -> bool {
         MissReceiver::Function { word, base, keyed } => {
             base || (keyed
                 && super::shapes::shape_object_kind_by_id((word >> 32) as u32)
-                    == Some(super::shapes::ShapeObjectKind::Function))
+                    .is_some_and(super::shapes::ShapeObjectKind::is_function_layout))
         }
         MissReceiver::Payload | MissReceiver::Other => false,
     }

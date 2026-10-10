@@ -18,8 +18,8 @@ pub(super) unsafe fn prime_function(
     let closure = addr as *const crate::closure::ClosureHeader;
     let id = (*closure).shape_id;
     if id == crate::closure::shape::function_dictionary_shape()
-        || super::super::shapes::shape_object_kind_by_id(id)
-            != Some(super::super::shapes::ShapeObjectKind::Function)
+        || !super::super::shapes::shape_object_kind_by_id(id)
+            .is_some_and(super::super::shapes::ShapeObjectKind::is_function_layout)
     {
         refuse(2);
         return;
@@ -156,6 +156,31 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn bound_function_receiver_keeps_inherited_method_sites() {
+        if !run_with_fresh_worker_gate("bound_function_receiver_keeps_inherited_method_sites") {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let f = crate::closure::js_closure_alloc(crate::fn_info!(target, 1), 0);
+            let bound = crate::closure::js_function_bind(
+                crate::value::js_nanbox_pointer(f as i64),
+                std::ptr::null(),
+                0,
+            );
+            for name in [b"bind".as_slice(), b"call", b"apply"] {
+                let mut slot: MethodSiteSlot = std::ptr::null_mut();
+                prime(&mut slot, bound, name, 1);
+                assert!(
+                    memo_hit(&mut slot, bound.to_bits()).is_some(),
+                    "a bound shape still proves its intrinsic prototype"
+                );
+            }
+        }
+    }
+
     #[test]
     fn function_implicit_own_key_refusal_is_counted() {
         let _lock = crate::gc::global_side_table_test_lock();

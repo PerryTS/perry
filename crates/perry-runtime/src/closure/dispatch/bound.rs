@@ -340,7 +340,7 @@ unsafe fn dispatch_symbol_bound_method(
 /// Refs #2840.
 #[inline]
 pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64]) -> f64 {
-    // Ordinary binds have exactly five internal slots. Only the resolved
+    // Only the resolved
     // layout has an operand slot, so other binds skip its info admission.
     if (*closure).capture_count == BOUND_FUNCTION_CAPTURES + 1 {
         if let Some(result) = super::bound_intrinsic::dispatch(closure, args) {
@@ -632,7 +632,13 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
     let ptr_handle = scope.root_raw_mut_ptr(ptr as *mut u8);
     let (name_value, ptr_raw) = ptr_handle.across_mut::<u8, _>(|| {
         let closure = ptr as *const ClosureHeader;
-        let name_hint = js_closure_get_capture_f64(closure, 3);
+        let name_hint = if crate::closure::real_capture_count((*closure).capture_count)
+            >= BOUND_FUNCTION_CAPTURES
+        {
+            js_closure_get_capture_f64(closure, 3)
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
         let target_name = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
             let hdr = crate::builtins::js_string_coerce(name_hint);
             crate::object::has_own_helpers::str_from_string_header(hdr)
@@ -659,8 +665,8 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 ///
 /// `.name` reads as `"bound " + target.name` and `.length` as
 /// `max(0, target.length - boundArgs.length)`, matching Node — but neither is
-/// built eagerly (#10084). `.length`'s numeric value is cheap to compute
-/// (no string work) and is stored eagerly as before; `.name`'s `"bound "`
+/// built eagerly for untouched compiled targets. Observable target metadata
+/// is snapshotted in the extended layout; `.name`'s `"bound "`
 /// string and the `set_builtin_property_attrs` calls a prior version made
 /// unconditionally for both are gone from this function entirely — absent a
 /// dynamic-prop table entry, a closure's `name`/`length` already default to
@@ -670,8 +676,12 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 /// those calls were redundant. `.name`'s string is built lazily by
 /// `bound_function_lazy_name`, on first actual read. Refs #2840.
 /// Capture slots of a `Function.prototype.bind` result: target, bound `this`,
-/// partial-args array (raw pointer or 0), `.name` snapshot, bound length.
+/// partial-args array (raw pointer or 0), and optionally the observable
+/// `.name` snapshot and bound length.
 pub(crate) const BOUND_FUNCTION_CAPTURES: u32 = 5;
+/// Untouched compiled targets need only target, receiver and partial args.
+/// Their body info and declared name remain immutable after property edits.
+const BOUND_FUNCTION_LAZY_CAPTURES: u32 = 3;
 
 /// The `.length` a bind recorded in its bound closure's capture 4, or `None`
 /// when `closure` is not a bind result or the length lives as an own
@@ -687,9 +697,23 @@ pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
         return None;
     }
     let c = closure as *const ClosureHeader;
-    if (*c).code() != BOUND_FUNCTION_FUNC_PTR
-        || crate::closure::real_capture_count((*c).capture_count) < BOUND_FUNCTION_CAPTURES
-    {
+    if (*c).code() != BOUND_FUNCTION_FUNC_PTR {
+        return None;
+    }
+    let count = crate::closure::real_capture_count((*c).capture_count);
+    if count == BOUND_FUNCTION_LAZY_CAPTURES {
+        let target = crate::value::JSValue::from_bits(js_closure_get_capture_f64(c, 0).to_bits())
+            .as_pointer::<ClosureHeader>();
+        // This layout is born only from a proven compiled target. Its info is
+        // immutable even if the target's own length/name change after bind.
+        let info = (*target).info.as_ref()?;
+        return Some(
+            crate::closure::info_length(info)
+                .or_else(|| crate::closure::info_arity(info))
+                .unwrap_or(0),
+        );
+    }
+    if count < BOUND_FUNCTION_CAPTURES {
         return None;
     }
     let v = crate::value::JSValue::from_bits(js_closure_get_capture_f64(c, 4).to_bits());
@@ -698,6 +722,59 @@ pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_function_bind(
+    target_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    use crate::value::JSValue;
+    let target = JSValue::from_bits(target_value.to_bits());
+    if args_len <= 1 && target.is_pointer() {
+        let closure = target.as_pointer::<ClosureHeader>();
+        // A boxed callable uses the same live-header/body admission as calls.
+        // The property-bag probe additionally classified heap generation and
+        // shape before this independent birth-shape proof.
+        let info = crate::closure::get_valid_info(closure);
+        if !info.is_null() {
+            // The same birth-shape metadata proof used by the observable
+            // path below, before any roots, receiver probes or allocations.
+            // Object receivers also need no boxing for ordinary bodies.
+            if info.as_ref().is_some_and(|info| {
+                info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0
+            }) && (*closure).shape_id == crate::closure::shape::birth_shape_for_body(info)
+            {
+                let receiver = if args_len == 0 || args_ptr.is_null() {
+                    crate::value::TAG_UNDEFINED
+                } else {
+                    (*args_ptr).to_bits()
+                };
+                let this = JSValue::from_bits(receiver);
+                if (*info).flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0
+                    && !(this.is_undefined()
+                        || this.is_null()
+                        || (this.is_pointer()
+                            && crate::symbol::js_is_symbol(f64::from_bits(receiver)) == 0)
+                        || crate::object::class_ref_id(f64::from_bits(receiver)).is_some())
+                {
+                    return function_bind_observable(target_value, args_ptr, args_len);
+                }
+                // The fixed birth shares the nursery bump and collecting
+                // installer, and roots only when that bump refuses.
+                let bound = crate::closure::alloc::closure_alloc_bound_function(
+                    target_value.to_bits(), receiver,
+                );
+                crate::gc::runtime_write_barrier_root_raw_ptr(bound);
+                return f64::from_bits(JSValue::pointer(bound as *mut u8).bits());
+            }
+        }
+    }
+    function_bind_observable(target_value, args_ptr, args_len)
+}
+
+/// Observable metadata, partial arguments, built-ins and sloppy receiver
+/// boxing retain the spec-ordered rooted birth. Kept out of the common frame.
+#[cold]
+#[inline(never)]
+unsafe fn function_bind_observable(
     target_value: f64,
     args_ptr: *const f64,
     args_len: usize,
