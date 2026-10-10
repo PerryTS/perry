@@ -1,6 +1,7 @@
 mod region_class;
 pub(crate) use region_class::{
-    classify_heap_generation, classify_heap_space_in_range, uniform_heap_generation,
+    classify_heap_generation, classify_heap_space_in_range, classify_region_ownership,
+    uniform_heap_generation,
 };
 mod maintenance;
 pub(crate) use maintenance::shrink_page_tables;
@@ -15,6 +16,18 @@ pub(crate) const GENERATION_PAGE_SHIFT: usize = 12;
 // churn before the first GC.
 pub(crate) const GENERATION_CLASS_SHIFT: usize = 20;
 pub(crate) const GENERATION_PAGE_SIZE: usize = 1 << GENERATION_PAGE_SHIFT;
+
+/// Which heap owns an address, from arena region metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegionOwnership {
+    /// A live region of this thread's heap.
+    Current,
+    /// A live region of another thread's heap. Every native thread owns its
+    /// heap and its collector; this collector never marks or moves it.
+    OtherHeap,
+    /// Not in any live arena region this thread can attribute.
+    Outside,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeapGeneration {

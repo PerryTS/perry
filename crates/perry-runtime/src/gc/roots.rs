@@ -517,9 +517,15 @@ pub extern "C" fn perry_ffi_gc_register_mutable_root_scanner_named(
 /// with raw GC pointer fields expose those through RuntimeRootVisitor instead.
 #[no_mangle]
 pub extern "C" fn js_gc_register_global_root(ptr: i64) {
-    let root = ptr as *mut u64;
+    register_global_root(ptr as *mut u64);
+}
+
+/// The registration behind [`js_gc_register_global_root`]. A verification
+/// failure unwinds from here; across the C ABI it aborts the process.
+pub(super) fn register_global_root(root: *mut u64) {
     if !root.is_null() {
         unsafe {
+            super::root_words::verify_jsvalue_root_word(*root, "global");
             runtime_write_barrier_root_nanbox(*root);
         }
     }
@@ -1687,11 +1693,11 @@ pub(super) fn nanboxed_root_header(
     valid_ptrs: &ValidPointerSet,
 ) -> Option<*mut GcHeader> {
     let _ = valid_ptrs;
-    let word = decode_nanboxed_root_word(value_bits)?;
-    if !super::root_words::owns_precise_root_addr(word.addr()) {
+    let Some(word) = decode_nanboxed_root_word(value_bits) else {
+        super::root_words::verify_jsvalue_root_word(value_bits, "copy-only");
         return None;
-    }
-    Some(unsafe { header_from_user_ptr(word.addr() as *const u8) })
+    };
+    super::root_words::admit_precise_root_addr(word.addr())
 }
 
 #[inline]
@@ -1711,7 +1717,9 @@ pub(super) fn mark_copy_only_scanner_bits(
     let Some(header) = nanboxed_root_header(bits, valid_ptrs) else {
         return None;
     };
-    mark_precise_root(PreciseRoot::JSValue(bits), valid_ptrs);
+    unsafe {
+        super::root_words::mark_admitted_root_header(header, false);
+    }
     if pin_discoveries && pin_conservative_root_header(header) {
         return Some(unsafe { (*header).size as usize });
     }

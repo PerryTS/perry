@@ -1097,3 +1097,18 @@ pub(super) fn f64_lanes(slots: impl IntoIterator<Item = u32>) -> u64 {
         .into_iter()
         .fold(REP_ANY, |rep, slot| with_slot_rep(rep, slot, REP_F64))
 }
+
+/// Observe the release precise-root path: verification off for this thread.
+pub(super) struct PreciseRootVerificationOff(bool);
+
+impl PreciseRootVerificationOff {
+    pub(super) fn new() -> Self {
+        Self(PRECISE_ROOT_VERIFICATION.with(|on| on.replace(false)))
+    }
+}
+
+impl Drop for PreciseRootVerificationOff {
+    fn drop(&mut self) {
+        PRECISE_ROOT_VERIFICATION.with(|on| on.set(self.0));
+    }
+}

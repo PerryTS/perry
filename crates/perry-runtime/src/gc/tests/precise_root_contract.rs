@@ -5,6 +5,10 @@ use super::support::*;
 
 #[test]
 fn numeric_address_bits_are_not_precise_roots() {
+    // The release decoder: a subnormal number is never a root. Verification
+    // rejects one that names a live object of this heap as a bare-address
+    // producer (bare_heap_addresses_in_jsvalue_roots_fail_loudly).
+    let _release = PreciseRootVerificationOff::new();
     let _guard = GcTestIsolationGuard::new();
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -82,7 +86,12 @@ fn global_liveness_witness(mistype: bool) {
 #[test]
 fn mistyped_nonpointer_sabotage_fails_the_liveness_witness() {
     global_liveness_witness(false);
-    let failure = std::panic::catch_unwind(|| global_liveness_witness(true));
+    // Verification rejects the bare address at registration; the release
+    // path (verification off) still loses the object, caught by survival.
+    let failure = std::panic::catch_unwind(|| {
+        let _release = PreciseRootVerificationOff::new();
+        global_liveness_witness(true)
+    });
     let payload = failure.expect_err("mistyped root must fail the survival assertion");
     let message = payload
         .downcast_ref::<String>()

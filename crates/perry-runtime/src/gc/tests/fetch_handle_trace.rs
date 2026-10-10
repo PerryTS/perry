@@ -246,6 +246,9 @@ fn a_pool_id_stored_during_incremental_marking_reaches_the_provider() {
 
 #[test]
 fn provider_edges_obey_the_precise_jsvalue_contract() {
+    // Release decoding of a provider edge holding a live address as a number;
+    // verification reports such a producer (precise_root_ownership tests).
+    let _release = PreciseRootVerificationOff::new();
     let _guard = GcTestIsolationGuard::new();
     clear_marks();
     clear_mark_seeds();
