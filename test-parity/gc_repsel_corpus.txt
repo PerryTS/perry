@@ -998,3 +998,6 @@ test_gap_gc_11929_inline_births
 # Inline RegExp literal births around the site root word, and the fused .test
 # site calling the builtin directly with an in-place search (cc/rxdirect).
 test_gap_gc_regexp_direct_birth
+
+# Numeric for-of source custody across moving collections.
+test_gap_array_record_numeric_poll_refresh

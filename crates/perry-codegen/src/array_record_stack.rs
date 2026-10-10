@@ -184,6 +184,19 @@ fn managed_field(r: &Record, id: u32) -> Option<usize> {
 pub(crate) fn read_local(ctx: &mut FnCtx<'_>, id: u32) -> Option<String> {
     let r = ctx.array_stack_records.get(&id)?.clone();
     let field = managed_field(&r, id)?;
+    // A call-free numeric region already owns a poll-refreshed descriptor.
+    // Consume its promotable box just as an ordinary receiver binding does.
+    // The record remains rooted, and the poll reloads the descriptor from this
+    // payload home after evacuation; cold edges read the record directly.
+    if field == 0 {
+        if let Some(slot) = ctx
+            .receiver_descriptors
+            .rooted_box_slot(id)
+            .map(str::to_owned)
+        {
+            return Some(ctx.block().load(DOUBLE, &slot));
+        }
+    }
     Some(ctx.block().load_volatile(DOUBLE, &r.fields[field]))
 }
 pub(crate) fn write_local(ctx: &mut FnCtx<'_>, id: u32, value: &str, expr: &Expr) -> bool {

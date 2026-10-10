@@ -250,6 +250,14 @@ mod tests {
         emit_record_payload(ty, bound, false)
     }
     fn emit_record_payload(ty: Type, bound: Option<Expr>, union: bool) -> String {
+        emit_record_payload_stack(ty, bound, union, false)
+    }
+    fn emit_record_payload_stack(
+        ty: Type,
+        bound: Option<Expr>,
+        union: bool,
+        stack: bool,
+    ) -> String {
         let array_id = if union { 6 } else { 0 };
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_counted");
@@ -362,6 +370,24 @@ mod tests {
                 ),
             );
         }
+        if stack {
+            m.init.insert(3, local(7, Type::Any, Expr::Undefined));
+            let Stmt::For {
+                condition: Some(Expr::Compare { right, .. }),
+                ..
+            } = m.init.last_mut().unwrap()
+            else {
+                panic!("record loop")
+            };
+            let Expr::NativeMethodCall { args, .. } = right.as_mut() else {
+                panic!("bound")
+            };
+            let Expr::NativeMethodCall { args, .. } = &mut args[3] else {
+                panic!("step")
+            };
+            args[0] = Expr::LocalGet(array_id);
+            args[1] = Expr::LocalGet(7);
+        }
         let ir = String::from_utf8(
             crate::compile_module(
                 &m,
@@ -379,6 +405,22 @@ mod tests {
         let rest = &ir[start..];
         rest[..rest.find("\n}\n").unwrap()].to_owned()
     }
+    #[test]
+    fn numeric_stack_record_reads_poll_refreshed_receiver() {
+        for ty in [Type::Array(Box::new(Type::Number)), Type::Any] {
+            let ir = emit_record_payload_stack(ty, None, true, true);
+            assert!(ir.contains("record.capture"), "{ir}");
+            let body = ir.find("\nfor.packed_f64_fast.body.").expect(&ir);
+            let exit = ir[body..].find("\nfor.packed_f64_fast.exit.").expect(&ir);
+            let fast = &ir[body..body + exit];
+            assert!(
+                !fast.contains("load volatile double"),
+                "per-element record reload: {ir}"
+            );
+            assert!(ir.contains("alloca [6 x ptr addrspace(1)]"), "{ir}");
+        }
+    }
+
     #[test]
     fn unified_record_payload_carries_the_entry_admission_without_reclassification() {
         let ir = emit_record_payload(Type::Array(Box::new(Type::Number)), None, true);
