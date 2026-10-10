@@ -339,7 +339,7 @@ pub(super) unsafe fn dispatch_common(
                 // What fails is CreateDataProperty for the NEW index, not a
                 // write to an existing read-only one, so node words this the
                 // same for freeze / seal / preventExtensions.
-                crate::array::throw_non_extensible_array_push(unsafe { (*arr_ptr).length });
+                crate::array::throw_non_extensible_array_push(arr_ptr);
             }
             crate::array::guard_writable_length(arr_ptr);
             let mut arr = arr_ptr;

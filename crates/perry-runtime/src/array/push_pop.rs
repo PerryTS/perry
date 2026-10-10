@@ -36,8 +36,20 @@ fn array_length_is_non_writable_with_flags(arr: *const ArrayHeader, flags: u16) 
 /// receiver `CreateDataProperty` for the new index fails, and `Throw=true`
 /// makes that a TypeError. Node words it exactly this way for
 /// `preventExtensions`, `seal` AND `freeze`.
+///
+/// The failing index is the receiver's CURRENT length, so this takes the
+/// receiver and reads it through the resolved head itself: a caller holding
+/// the address it was handed (which a growth may have left as a forwarding
+/// stub) must not be able to report a stale word as the index.
 #[cold]
-pub(crate) fn throw_non_extensible_array_push(index: u32) -> ! {
+pub(crate) fn throw_non_extensible_array_push(arr: *const ArrayHeader) -> ! {
+    let head = clean_arr_ptr(arr);
+    let index = if head.is_null() {
+        0
+    } else {
+        // SAFETY: `clean_arr_ptr` returned the live resolved head.
+        unsafe { (*head).length }
+    };
     crate::collection_iter::throw_type_error(&format!(
         "Cannot add property {index}, object is not extensible"
     ));
@@ -971,7 +983,7 @@ pub(crate) fn push_spec_if_plain(arr: *mut ArrayHeader, value: f64) -> Option<*m
     if flags & crate::gc::OBJ_FLAG_FROZEN == 0
         && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
     {
-        throw_non_extensible_array_push(unsafe { (*plain).length });
+        throw_non_extensible_array_push(plain);
     }
     crate::string::js_string_addref_if_heap_string(value);
     Some(unsafe { js_array_push_f64_resolved(plain, value) })
