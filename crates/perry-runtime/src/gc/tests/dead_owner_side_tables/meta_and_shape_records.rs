@@ -725,7 +725,7 @@ fn test_s7b_class_identity_word_rewrites_a_young_holder_of_an_old_carrier() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _force = ForcedEvacuationTestGuard::on();
     let _age = crate::gc::tenuring::set_survivals_for_test(1);
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     let cid = 190_708;
     let owner = crate::object::js_object_alloc(cid, 0);
     js_shadow_slot_set(0, ptr_bits(owner as usize));

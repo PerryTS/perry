@@ -24,7 +24,6 @@ fn object_create_refreshes_its_prototype_when_birth_allocation_moves_it() {
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
     let proto = crate::object::js_object_alloc(0, 0);
     // Pre-mark so the injected collection lands in the newborn allocation,
     // rather than in the prototype's first meta-record allocation.
@@ -72,7 +71,6 @@ fn object_create_retains_its_descriptor_bag_across_birth_collection() {
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     let proto = crate::object::js_object_alloc(0, 0);

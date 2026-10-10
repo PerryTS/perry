@@ -1077,7 +1077,7 @@ fn s7b_class_identity_word_survives_a_speculative_promotion_rollback() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _promote = InPlacePromotionTestGuard::enabled(1000);
     clear_young_survival_for_tests();
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_prototype_words_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     let rollbacks = first_cycle_promotion_rollbacks();
     let proto = crate::object::js_object_alloc(0, 1);
     crate::object::js_object_set_field(proto, 0, crate::JSValue::number(42.0));

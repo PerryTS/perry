@@ -64,6 +64,7 @@ mod perex_strings;
 #[cfg(feature = "regex-engine")]
 mod perex_work_policy;
 mod prototype_addr_cache;
+mod regexp_birth_shape;
 mod regexp_last_index;
 mod segment_record_keys;
 mod side_table_scanners;
