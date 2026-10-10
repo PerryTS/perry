@@ -113,7 +113,7 @@ def measure(root, names, thp_off=False):
             env['PERRY_GC_DIAG'] = '1'
             result = run([str(root / 'verify' / arm / name), *args], cwd, env)
             (root / 'verify' / arm / (name + '.gcdiag')).write_bytes(result.stderr)
-            diag[arm] = {'exit': result.returncode, 'full': len(re.findall(rb'\[gc\] GC #\d+ start:', result.stderr))}
+            diag[arm] = {'exit': result.returncode, 'full': len(re.findall(rb'^\[gc-full\] ', result.stderr, re.M))}
         report['programs'][name] = {'trials': rows, 'medians': medians, 'collections': diag}
         dest.write_text(json.dumps(report, indent=2))
         print(name, medians, diag, flush=True)
