@@ -263,11 +263,8 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     // element is a constant `true`, never a scan.
     #[inline]
     fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<ConcatPart> {
-        let bits = bits_value.to_bits();
-        let tag = bits >> 48;
-        let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
-        if is_plain_f64
-            && (0.0..=999_999_999.0).contains(&bits_value)
+        // Ordered finite bounds reject every NaN-boxed non-number too.
+        if (0.0..=999_999_999.0).contains(&bits_value)
             && (bits_value as u32) as f64 == bits_value
         {
             let len = fast_itoa_u32(bits_value as u32, buf);
@@ -867,13 +864,12 @@ pub extern "C" fn js_string_concat_value(
         0
     };
 
-    // Fast path: value is a number (no NaN-boxing tag in upper 16 bits → plain f64).
-    // This covers the hot `"item_" + i` pattern.
+    // Use the value model's numeric classification for every IEEE f64,
+    // including negatives and NaN payloads; format into the result directly.
     let bits = value.to_bits();
-    let tag = bits >> 48;
-    let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
+    let is_number = crate::value::JSValue::from_bits(bits).is_number();
 
-    if is_plain_f64 {
+    if is_number {
         // Format the number into a stack buffer
         let mut num_buf = [0u8; 32]; // max f64 string is ~24 chars
         let num_len = format_number_into(value, &mut num_buf);
@@ -1014,21 +1010,9 @@ pub extern "C" fn js_string_concat_value(
 /// `utf16_len` soundness reason as `js_string_concat_box`'s SSO arm.
 #[no_mangle]
 pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value: f64) -> f64 {
-    // Same "plain f64" test as `js_string_concat_value`'s fast path; the SSO
-    // arm additionally wants a small non-negative integer so the digit count
-    // comes from `fast_itoa_u32`.
-    let bits = value.to_bits();
-    let tag = bits >> 48;
-    let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
-    // `"" + n` is `Number::toString(n)` exactly, so an integer whose text fits
-    // SSO is packed straight from the value, the way `String(n)` / `${n}` /
-    // `n.toString()` do it (#10762). The admission is `is_number()`, not
-    // `is_plain_f64`: that test reads a negative number's sign bit as a tag
-    // (`0x8000.. >= 0x7FF8`), so the arm below — and `js_string_concat_value`'s
-    // own fast path — send every negative number to `js_jsvalue_to_string` and
-    // a heap string. Anything this declines still falls through unchanged, so
-    // a longer result keeps the concat memo.
-    if crate::value::JSValue::from_bits(bits).is_number()
+    // Ordered integer bounds reject NaN-boxed values and avoid validating a
+    // prefix when the number cannot fit the formatter's SSO range.
+    if (-9_999.0..=99_999.0).contains(&value)
         && is_valid_string_ptr(prefix)
         && unsafe { (*prefix).byte_len } == 0
     {
@@ -1040,8 +1024,7 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
     // which on the baseline x86-64 target is a libm `trunc` call (#10762). NaN
     // fails the range test, and the range test runs first, so the cast only
     // ever sees a value it can represent.
-    if is_plain_f64
-        && (0.0..=999_999_999.0).contains(&value)
+    if (0.0..=999_999_999.0).contains(&value)
         && (value as u32) as f64 == value
         && is_valid_string_ptr(prefix)
     {
@@ -1460,9 +1443,9 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
             continue;
         }
 
-        // Plain f64 (no NaN-box tag in upper 16 bits). Format inline.
-        let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
-        if is_plain_f64 {
+        // All IEEE f64 numbers use inline formatting, including negatives.
+        let is_number = crate::value::JSValue::from_bits(bits).is_number();
+        if is_number {
             let len = format_number_into(value, num_bufs[i].write([0u8; 32]));
             piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
@@ -1626,10 +1609,9 @@ pub extern "C" fn js_value_concat_string(
     };
 
     let bits = value.to_bits();
-    let tag = bits >> 48;
-    let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
+    let is_number = crate::value::JSValue::from_bits(bits).is_number();
 
-    if is_plain_f64 {
+    if is_number {
         let mut num_buf = [0u8; 32];
         let num_len = format_number_into(value, &mut num_buf);
 

@@ -68,8 +68,9 @@ impl JSValue {
         // Perry-owned tags occupy the positive qNaN band 0x7FF9..=0x7FFF.
         // Keep IEEE f64 values, including canonical qNaN 0x7FF8 and negative
         // NaN payloads, classified as numbers.
-        let tag = self.bits & TAG_MASK;
-        !(SHORT_STRING_TAG..=STRING_TAG).contains(&tag)
+        // The tag band occupies this whole bit interval, including payloads.
+        // Comparing the original word removes the per-check tag mask.
+        !(SHORT_STRING_TAG..0x8000_0000_0000_0000).contains(&self.bits)
     }
 
     /// Check if this is undefined
@@ -372,5 +373,24 @@ impl std::fmt::Debug for JSValue {
 impl Default for JSValue {
     fn default() -> Self {
         Self::undefined()
+    }
+}
+
+#[cfg(test)]
+mod number_tag_interval_tests {
+    use super::*;
+
+    #[test]
+    fn every_tag_and_payload_boundary_keeps_its_numeric_classification() {
+        // The reference uses the tag model directly, independently of the
+        // implementation's full-word interval. Include both signs, every
+        // tag and payload boundaries, so tagged values never become numbers.
+        for tag in 0..=u16::MAX {
+            for payload in [0, 1, 0x1234_5678_9abc, 0xffff_ffff_fffe, 0xffff_ffff_ffff] {
+                let bits = (u64::from(tag) << 48) | payload;
+                let expected = !(0x7ff9..=0x7fff).contains(&tag);
+                assert_eq!(JSValue::from_bits(bits).is_number(), expected, "{bits:016x}");
+            }
+        }
     }
 }
