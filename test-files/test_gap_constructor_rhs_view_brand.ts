@@ -1,0 +1,12 @@
+"use strict";
+export {};
+const SavedU8 = Uint8Array;
+const b = Buffer.from("ab");
+console.log("views", b instanceof Uint8Array, b instanceof SavedU8, new Uint8Array(2) instanceof SavedU8);
+console.log("other kinds", b instanceof Uint16Array, new DataView(new ArrayBuffer(4)) instanceof SavedU8, new ArrayBuffer(4) instanceof SavedU8);
+const replacement = function Replacement() {};
+(globalThis as any).Uint8Array = replacement;
+console.log("replacement", b instanceof (Uint8Array as any), b instanceof SavedU8);
+(globalThis as any).Uint8Array = SavedU8;
+Object.setPrototypeOf(b, {});
+console.log("changed prototype", b instanceof SavedU8);

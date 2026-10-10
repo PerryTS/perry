@@ -140,9 +140,9 @@ pub use class_meta::{
 };
 pub(crate) use class_meta::{
     identify_global_builtin_constructor, report_dispatch_miss,
-    text_encoding_stream_new_with_constructor, validate_web_compression_stream_format,
-    CLASS_ID_COMPRESSION_STREAM, CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM,
-    CLASS_ID_TEXT_ENCODER_STREAM,
+    shared_global_builtin_constructor_body, text_encoding_stream_new_with_constructor,
+    validate_web_compression_stream_format, CLASS_ID_COMPRESSION_STREAM,
+    CLASS_ID_DECOMPRESSION_STREAM, CLASS_ID_TEXT_DECODER_STREAM, CLASS_ID_TEXT_ENCODER_STREAM,
 };
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{class_prototype_set, synthetic_class_id_for_function};

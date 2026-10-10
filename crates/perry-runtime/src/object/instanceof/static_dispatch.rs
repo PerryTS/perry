@@ -42,6 +42,17 @@ pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
 
 #[no_mangle]
 pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
+    instanceof_with_constructor(value, class_id, None)
+}
+
+/// The same native/class dispatch with the evaluated RHS, when available.
+/// A builtin alias must walk against its own prototype, even after its global
+/// binding has been replaced. Static class-id callers retain their contract.
+pub(super) fn instanceof_with_constructor(
+    value: f64,
+    class_id: u32,
+    constructor: Option<f64>,
+) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let true_val = f64::from_bits(TAG_TRUE);
@@ -140,8 +151,42 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             };
         }
     }
+    native_with_constructor(value, class_id, constructor)
+}
+
+/// Native dispatch after the caller has handled hooks, proxies and primitives.
+/// Dynamic callers have also proved the actual RHS's intrinsic body identity;
+/// repeating the static class-hook dispatch would add no observable work.
+pub(super) fn native_with_constructor(value: f64, class_id: u32, constructor: Option<f64>) -> f64 {
+    let true_val = f64::from_bits(crate::value::TAG_TRUE);
+    let false_val = f64::from_bits(crate::value::TAG_FALSE);
     let scope = crate::gc::RuntimeHandleScope::new();
     let rooted_value = scope.root_nanbox_f64(value);
+    let constructor = constructor.map(|rhs| scope.root_nanbox_f64(rhs));
+    let result = native_instanceof(value, class_id, &rooted_value, constructor.as_ref());
+    if result.to_bits() == crate::value::TAG_TRUE
+        || heap_builtin_name(class_id).is_some()
+        || constructor.is_none()
+    {
+        return result;
+    }
+    // Native handles use brand checks, but an ordinary object may inherit the
+    // actual constructor's prototype. Keep that final walk in this same scope.
+    if ordinary_has_instance_prototype_walk_rooted(&rooted_value, constructor.as_ref().unwrap()) {
+        true_val
+    } else {
+        false_val
+    }
+}
+
+fn native_instanceof(
+    mut value: f64,
+    class_id: u32,
+    rooted_value: &crate::gc::RuntimeHandle<'_>,
+    constructor: Option<&crate::gc::RuntimeHandle<'_>>,
+) -> f64 {
+    let true_val = f64::from_bits(crate::value::TAG_TRUE);
+    let false_val = f64::from_bits(crate::value::TAG_FALSE);
     // #11256: Object.create(Builtin.prototype) has no native brand, but is
     // still an instance of Builtin. Ordinary objects may store their chain
     // through a synthetic class id rather than per-object prototype metadata.
@@ -152,9 +197,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
         let matches = if ordinary {
-            prototype_instanceof_builtin(value, name)
+            prototype_instanceof_builtin(rooted_value, name, constructor)
         } else {
-            recorded_prototype_instanceof_builtin(value, name)
+            recorded_prototype_instanceof_builtin(rooted_value, name, constructor)
         };
         value = rooted_value.get_nanbox_f64();
         if matches == Some(true) {
@@ -163,10 +208,25 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // A miss is final when the value's own prototype is materialized:
         // the walk read the authoritative chain. Without one, the chain is
         // carried by the class id, which the paths below still follow.
-        if matches == Some(false)
-            && crate::object::prototype_chain::object_static_prototype(value_addr(value)).is_some()
-        {
-            return false_val;
+        if matches == Some(false) {
+            let addr = value_addr(value);
+            let terminal = ordinary
+                && unsafe {
+                    crate::object::shapes::object_shape_record(addr as *const ObjectHeader)
+                }
+                .is_some_and(|record| {
+                    matches!(
+                        record.proto_id(),
+                        crate::object::shapes::PROTO_ID_DEFAULT
+                            | crate::object::shapes::PROTO_ID_NULL
+                    )
+                });
+            // A terminal shape is as authoritative as a physical link: its
+            // completed walk cannot be overridden by a native brand/subclass
+            // fallback. Only unresolved class links need that continuation.
+            if terminal || crate::object::prototype_chain::object_static_prototype(addr).is_some() {
+                return false_val;
+            }
         }
     }
 
@@ -204,7 +264,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
             && crate::object::prototype_chain::object_static_prototype(addr).is_some()
         {
-            let function = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+            let function = constructor
+                .as_ref()
+                .map(|rhs| rhs.get_nanbox_f64())
+                .unwrap_or_else(|| js_get_global_this_builtin_value(b"Function".as_ptr(), 8));
             if ordinary_has_instance_prototype_walk(rooted_value.get_nanbox_f64(), function) {
                 return true_val;
             }
@@ -214,7 +277,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if class_id == CLASS_ID_URL {
         let addr = value_addr(value);
         let branded = addr != 0 && crate::url::is_url_object_shape(addr as *mut ObjectHeader);
-        return if branded || recorded_prototype_instanceof_builtin(value, "URL") == Some(true) {
+        return if branded
+            || recorded_prototype_instanceof_builtin(rooted_value, "URL", constructor) == Some(true)
+        {
             true_val
         } else {
             false_val
@@ -580,7 +645,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         };
     }
     if class_id == CLASS_ID_PROMISE {
-        if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Promise") {
+        if let Some(matches) =
+            recorded_prototype_instanceof_builtin(rooted_value, "Promise", constructor)
+        {
             return if matches { true_val } else { false_val };
         }
         return if crate::promise::js_value_is_promise(value) != 0 {
@@ -666,30 +733,15 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return if is_array { true_val } else { false_val };
     }
 
-    // Typed arrays — Int8Array..Float16Array reserved IDs (0xFFFF0030..3B).
-    // The pointer can arrive as either a NaN-boxed POINTER_TAG value or a
-    // raw bitcast f64, so handle both forms.
-    if (0xFFFF0030..=0xFFFF003B).contains(&class_id) {
-        let addr = if jsval.is_pointer() {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else {
-            let top16 = (bits >> 48) as u16;
-            // #10694: a raw word must be allocator-owned before the brand read.
-            if top16 == 0 && bits >= 0x1000 && crate::buffer::header_is_owned(bits as usize) {
-                bits as usize
-            } else {
-                0
-            }
-        };
-        if addr != 0 {
-            if let Some(actual_kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-                let want_id = crate::typedarray::class_id_for_kind(actual_kind);
-                if want_id == class_id {
-                    return true_val;
-                }
-            }
-        }
-        return false_val;
+    // Both per-kind constructor values and legacy byte-view ids use the
+    // shared classifier, so Node Buffer retains its Uint8Array superclass.
+    if (crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY)
+        .contains(&class_id)
+    {
+        let matches = super::super::view_brand::view_brand(value)
+            .and_then(super::super::view_brand::ViewBrand::typed_array_kind)
+            .is_some_and(|kind| crate::typedarray::class_id_for_kind(kind) == class_id);
+        return if matches { true_val } else { false_val };
     }
 
     // Only objects (pointers) can be instances of classes
@@ -740,7 +792,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 _ => None,
             };
             if let Some(name) = builtin_name {
-                if let Some(matches) = recorded_prototype_instanceof_builtin(value, name) {
+                if let Some(matches) =
+                    recorded_prototype_instanceof_builtin(rooted_value, name, constructor)
+                {
                     return if matches { true_val } else { false_val };
                 }
             }
@@ -825,7 +879,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             // shape, and its later schema classes made an earlier ZodError
             // fail `instanceof Error` even though getPrototypeOf still showed
             // `ZodError -> Error -> Object`.
-            if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Error") {
+            if let Some(matches) =
+                recorded_prototype_instanceof_builtin(rooted_value, "Error", constructor)
+            {
                 return if matches { true_val } else { false_val };
             }
         }

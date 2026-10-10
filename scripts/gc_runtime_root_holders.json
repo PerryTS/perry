@@ -3006,10 +3006,6 @@
       "name": "THROW_NOT_CALLABLE_COUNT"
     },
     {
-      "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-      "name": "IN_FN_PROTO_FALLBACK"
-    },
-    {
       "file": "crates/perry-runtime/src/cluster.rs",
       "name": "CLUSTER_GC_REGISTERED"
     },

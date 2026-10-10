@@ -19,9 +19,9 @@ use crate::types::{DOUBLE, I32, I64};
 use super::{
     can_lower_expr_as_i32_in_current_region, emit_gated_root_nanbox_store,
     emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
-    emit_shadow_slot_update_for_expr, emit_write_barrier, is_global_this_builtin_function_name,
-    lower_expr, lower_expr_as_i32, lower_pod_local_reassignment, materialize_pod_value_copy,
-    nanbox_string_inline, FnCtx, TrustedBoxCapturePtr,
+    emit_shadow_slot_update_for_expr, emit_write_barrier, lower_expr, lower_expr_as_i32,
+    lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
+    TrustedBoxCapturePtr,
 };
 
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
@@ -279,6 +279,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //     the namespace-member class case `Lib.A`) lower as
             //     INT32-tagged class ids → typeof reads "number". Emit
             //     "function" to match JS spec for class objects.
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = operand.as_ref()
+            {
+                if matches!(object.as_ref(), Expr::GlobalGet(_))
+                    && super::is_global_this_builtin_name(property)
+                {
+                    super::property_get::globalget::emit_global_value_installs(ctx, property);
+                    let value =
+                        super::property_get::globalget::lower_optional_global_read(ctx, property)?;
+                    let handle = ctx
+                        .block()
+                        .call(I64, "js_value_typeof", &[(DOUBLE, &value)]);
+                    return Ok(nanbox_string_inline(ctx.block(), &handle));
+                }
+            }
             let typeof_short_circuit = typeof_compile_time_answer(ctx, operand.as_ref());
             if let Some(s) = typeof_short_circuit {
                 let idx = ctx.strings.intern(s);
@@ -1115,34 +1131,6 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
                     Some("function")
                 } else {
                     None
-                }
-            } else if matches!(object.as_ref(), Expr::GlobalGet(_)) {
-                // Issue #623: `(globalThis as any).process` /
-                // `globalThis.console` — known Node globals that are
-                // objects in spec. The codegen lowers
-                // `globalThis.<name>` to a generic property read that
-                // produces a stub double; typeof would read "number"
-                // without this short-circuit. Function-shaped globals
-                // (Buffer, Promise, URL, etc.) intentionally fall
-                // through so `typeof Buffer === "function"` keeps
-                // working through the existing class-ref path.
-                //
-                // lodash followup: built-in constructors exposed on
-                // globalThis (`Array`, `Object`, `Function`, …) now
-                // also lower the bare PropertyGet to a real value
-                // (a backing-object pointer materialized by
-                // `js_get_global_this`'s singleton populator).
-                // Without the typeof short-circuit, `typeof
-                // globalThis.Array` would read "object" (the value
-                // is a real pointer); spec says "function". Math /
-                // JSON / Reflect stay "object" — they're namespaces,
-                // not constructors.
-                match property.as_str() {
-                    "process" | "console" | "globalThis" | "performance" | "navigator"
-                    | "crypto" | "localStorage" | "sessionStorage" => Some("object"),
-                    "Math" | "JSON" | "Reflect" | "Atomics" | "Intl" | "Temporal" => Some("object"),
-                    n if is_global_this_builtin_function_name(n) => Some("function"),
-                    _ => None,
                 }
             } else if let Expr::NativeModuleRef(module) = object.as_ref() {
                 // #1343: `typeof <nativeModule>.<member>` (e.g.

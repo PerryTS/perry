@@ -451,6 +451,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Heap-pointer receiver: (masked obj_handle, key_handle, per-site IC cache
     // SLOT, per-site packed MRU word) -> field value.
     module.declare_function("js_object_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
+    module.declare_function("js_global_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
     // First-read D3: a generic read site's ShapeId miss asks this GC leaf
     // first (the agent's shape-directory mirror or null, receiver payload,
     // the key as its pool global holds it, the site's cache slot and compact
@@ -459,6 +460,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // cannot read the agent's pointer block inline. Both GC leaves.
     module.declare_function(
         "js_object_get_field_ic_front",
+        DOUBLE,
+        &[PTR, I64, I64, PTR, PTR],
+    );
+    module.declare_function(
+        "js_object_get_own_field_ic_front",
         DOUBLE,
         &[PTR, I64, I64, PTR, PTR],
     );

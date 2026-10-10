@@ -87,6 +87,48 @@ fn bigint_and_symbol_values_stay_recognised_as_constructors() {
 }
 
 #[test]
+fn shared_constructor_identity_is_birth_data_not_public_name() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let info = crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0));
+    let ctor = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        info,
+        1 | crate::closure::NO_THIS_REBIND_FLAG,
+    ));
+    let index = GLOBAL_THIS_BUILTIN_CONSTRUCTORS
+        .iter()
+        .position(|name| *name == "Uint8Array")
+        .unwrap();
+    ctor.with_mut_ptr(|ptr| {
+        crate::closure::js_closure_set_capture_bits(
+            ptr,
+            0,
+            JSValue::int32(index as i32 + 1).bits(),
+        );
+        native_module::set_bound_native_closure_name(ptr, "Set");
+    });
+    let value = ctor.with_const_ptr(|ptr: *const crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(ptr as i64)
+    });
+    assert_eq!(
+        class_registry::identify_global_builtin_constructor(value),
+        Some("Uint8Array")
+    );
+
+    // A public constructor name and the same shared code are not a birth
+    // identity. This negative control would pass under the old name recovery.
+    let ordinary = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
+    ordinary.with_mut_ptr(|ptr| native_module::set_bound_native_closure_name(ptr, "Uint8Array"));
+    let value = ordinary.with_const_ptr(|ptr: *const crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(ptr as i64)
+    });
+    assert_eq!(
+        class_registry::identify_global_builtin_constructor(value),
+        None
+    );
+}
+
+#[test]
 fn map_group_by_and_regexp_escape_are_statics_of_their_constructors() {
     let group_by = static_member(builtin("Map"), "groupBy");
     assert!(

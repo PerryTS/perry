@@ -1369,6 +1369,7 @@ js_get_string_pointer_unified	AllocOnly
 js_getenv	AllocOnly
 js_getenv_value	AllocOnly
 js_global_assign_existing_or_throw	Reenters
+js_global_get_field_ic_slow	Reenters
 js_global_get_optional	Reenters
 js_global_get_or_throw_unresolved	Reenters
 js_global_or_console_property_by_name	Reenters
@@ -2086,6 +2087,7 @@ js_object_get_field_ic_nonptr	Reenters
 js_object_get_field_ic_overflow_load	Reenters
 js_object_get_field_ic_slow	Reenters
 js_object_get_index_polymorphic	Reenters
+js_object_get_own_field_ic_front	Leaf
 js_object_get_own_field_or_undef	Reenters
 js_object_get_own_field_or_undef_learn	Reenters
 js_object_get_own_property_descriptor	Reenters

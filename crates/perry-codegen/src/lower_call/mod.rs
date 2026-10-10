@@ -628,9 +628,17 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
                 }
             }
         }
+        if name == "js_global_get_optional" {
+            if let [Expr::String(key)] = args {
+                return crate::expr::property_get::globalget::lower_optional_global_read(ctx, key);
+            }
+        }
         if name == "js_global_get_or_throw_unresolved" {
             let off = ctx.strings.pending_call_offset();
             crate::expr::calls::emit_call_location_at(ctx, off);
+            if let [Expr::String(key)] = args {
+                return crate::expr::property_get::globalget::lower_global_builtin_read(ctx, key);
+            }
         }
     }
 

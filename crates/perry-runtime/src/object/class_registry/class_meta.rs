@@ -338,101 +338,14 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     if !is_valid_obj_ptr(ptr as *const u8) {
         return None;
     }
-    // Identify by the closure's read-only `func_ptr` rather than the
-    // GC-movable ClosureHeader address. Both the date-fns ctor closure
-    // and the (later-evacuated) ctor closure carry the same
-    // `global_this_builtin_noop_thunk` function pointer, so this match
-    // survives GC moves. The per-name lookup must then walk the
-    // globalThis singleton's keys to recover the constructor name —
-    // accept the extra hop only when the func_ptr matches.
+    // Dedicated bodies prove their intrinsic declaration directly. A shared
+    // body's immutable capture supplies that declaration instead of a public
+    // property or a search through the writable global object.
     unsafe {
         if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
         let func_ptr = (*ptr).code() as usize;
-        let is_global_builtin_func = func_ptr
-            == global_this_builtin_noop_thunk as *const u8 as usize
-            || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize
-            // ArrayBuffer / SharedArrayBuffer / DataView carry the shared
-            // construct-only call thunk (populate.rs). When one is captured into
-            // a variable and constructed — `const D = DataView; new D(buf)`,
-            // `Reflect.construct(DataView, …)`, `class X extends DataView` — the
-            // dynamic-`new` path lands here and must recognize the thunk so the
-            // singleton walk recovers the name and construct.rs's
-            // "ArrayBuffer"/"SharedArrayBuffer"/"DataView" arms build it, instead
-            // of falling through to invoke the bare-call thunk (which throws
-            // "Constructor requires 'new'"). Minified bundles capture these
-            // globals into locals pervasively (the Claude Code cli.js bundle
-            // fails at module init without this). Regression from the thunk swap
-            // in 06e1ab349 — before it these carried the recognized noop thunk.
-            || func_ptr == construct_only_builtin_call_thunk as *const u8 as usize
-            // #4102: `Array`/`Object`/`Date` constructor *values* carry their own
-            // coercion thunks (not the shared noop thunk), so the dynamic
-            // `instanceof` / reflective `@@hasInstance` path could not recover
-            // their name. Accept those thunks too; the singleton walk below maps
-            // each back to "Array"/"Object"/"Date".
-            || func_ptr == global_this_array_thunk as *const u8 as usize
-            || func_ptr == global_this_object_thunk as *const u8 as usize
-            // #10423: `Function` carries its own call thunk now; `new F(…)` /
-            // `Reflect.construct(Function, …)` must still route to the
-            // from-strings constructor in construct.rs.
-            || func_ptr == global_this_function_call_thunk as *const u8 as usize
-            || func_ptr == global_this_date_thunk as *const u8 as usize
-            || func_ptr == global_this_blob_thunk as *const u8 as usize
-            || func_ptr == global_this_file_thunk as *const u8 as usize
-            || func_ptr == global_this_headers_thunk as *const u8 as usize
-            || func_ptr == global_this_request_thunk as *const u8 as usize
-            || func_ptr == global_this_response_thunk as *const u8 as usize
-            || func_ptr == global_this_string_thunk as *const u8 as usize
-            || func_ptr == global_this_number_thunk as *const u8 as usize
-            || func_ptr == global_this_boolean_thunk as *const u8 as usize
-            || func_ptr == global_this_bigint_thunk as *const u8 as usize
-            || func_ptr == global_this_symbol_thunk as *const u8 as usize
-            || func_ptr == error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == type_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == range_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == reference_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == syntax_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == eval_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == uri_error_constructor_call_thunk as *const u8 as usize
-            || func_ptr == webcrypto_illegal_constructor_thunk as *const u8 as usize
-            // Map/Set/WeakMap/WeakSet/WeakRef constructor *values* carry their
-            // own "requires 'new'" thunks (global_this.rs). When obtained as a
-            // value and constructed via `new $WeakMap()` (e.g. qs's
-            // `side-channel`/`get-intrinsic` reads `%WeakMap%` into a variable),
-            // the call lands here, not the static codegen path. Accept the
-            // thunks so the singleton walk recovers the name and the match arms
-            // below dispatch into the real factory instead of invoking the
-            // bare-call thunk (which throws "Constructor WeakMap requires 'new'").
-            || func_ptr == map_constructor_call_thunk as *const u8 as usize
-            || func_ptr == set_constructor_call_thunk as *const u8 as usize
-            // #2889's own arm handles `new (rebound RegExp)(...)`, but this
-            // recognition step never accepted RegExp's dedicated thunk, so it
-            // never reached that arm: `const RegExpCtor = RegExp; new
-            // RegExpCtor(pattern)` (socket-lib's rolldown-bundled primordials
-            // module does exactly this) fell through to the generic
-            // empty-object path, producing an object `.source`/`.flags`
-            // readers reject as an unbranded receiver.
-            || func_ptr == regexp_constructor_call_thunk as *const u8 as usize
-            || func_ptr == weak_map_constructor_call_thunk as *const u8 as usize
-            || func_ptr == weak_set_constructor_call_thunk as *const u8 as usize
-            || func_ptr == weak_ref_constructor_call_thunk as *const u8 as usize
-            // `class X extends Promise` needs its parent VALUE recognized as the
-            // Promise constructor (for the runtime `new Subclass` /
-            // `NewPromiseCapability(Subclass)` path). The Promise ctor value
-            // carries `promise_constructor_call_thunk`.
-            || func_ptr == promise_constructor_call_thunk as *const u8 as usize
-            || func_ptr
-                == crate::messaging::js_message_channel_constructor_call_error as *const u8
-                    as usize
-            || func_ptr
-                == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
-            || func_ptr
-                == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
-                    as usize;
-        if !is_global_builtin_func {
-            return None;
-        }
         // #5989: dedicated per-builtin thunks map to their name DIRECTLY —
         // without consulting globalThis. The name-record/singleton-walk
         // fallbacks below break the moment user code REASSIGNS the global
@@ -442,7 +355,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         // identification returned None, and `Reflect.construct(original,
         // args, newTarget)` fell to the generic tail → unbranded "Invalid
         // Date" instances). Only the SHARED thunks (noop, typed-array)
-        // still need the walk.
+        // carry an immutable declaration capture instead.
         let direct: Option<&'static str> =
             if func_ptr == global_this_date_thunk as *const u8 as usize {
                 Some("Date")
@@ -506,63 +419,41 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         if direct.is_some() {
             return direct;
         }
-    }
-    // Prefer the per-closure built-in `.name` record. Full-suite Rust tests
-    // temporarily seed GLOBAL_THIS_PTR with GC fixture pointers; relying only
-    // on the singleton walk below makes unrelated tests race with constructor
-    // identity for globals such as TextEncoderStream.
-    let name_value = crate::value::JSValue::from_bits(
-        crate::closure::closure_get_dynamic_prop(ptr as usize, "name").to_bits(),
-    );
-    if name_value.is_string() {
-        let name_ptr = name_value.as_string_ptr();
-        if !name_ptr.is_null() {
-            let name_bytes = unsafe {
-                let data = (name_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                std::slice::from_raw_parts(data, (*name_ptr).byte_len as usize)
-            };
-            if let Ok(name) = std::str::from_utf8(name_bytes) {
-                for builtin in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
-                    if builtin == name {
-                        return Some(builtin);
-                    }
-                }
-            }
-        }
-    }
-    // Find which builtin name maps to this exact closure header on the
-    // singleton. Walk via the existing
-    // `js_get_global_this_builtin_value` helper — short loop (≤ ~50
-    // entries), only fires on the constructFrom hot path.
-    //
-    // #7497: the same ordering defect `js_get_global_this_builtin_value` had,
-    // and worse here — the loop below allocates a fresh key string on EVERY
-    // iteration, so a `globalThis` address read once before the loop is exposed
-    // to ~50 collection points instead of one. Root it and re-read the address
-    // after each allocation.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let global_handle = scope.root_nanbox_f64(js_get_global_this());
-    // #7497 (CodeRabbit): the SEARCHED value needs the same treatment. `jv` was
-    // computed at entry and never refreshed; if a key allocation evacuates the
-    // ClosureHeader, the `globalThis` field slot is rewritten to the new address
-    // while `jv.bits()` still names from-space, the equality below never matches,
-    // and the caller silently falls through to the generic construct tail.
-    let func_handle = scope.root_nanbox_f64(func_value);
-    for name in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
-        let (key, global_this_f64) = global_handle.across_nanbox(|| {
-            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
-        });
-        let global_obj =
-            crate::value::js_nanbox_get_pointer(global_this_f64) as *const ObjectHeader;
-        if global_obj.is_null() {
+        // Shared bodies receive their intrinsic declaration identity at birth.
+        // Public `.name` is mutable and may be an accessor; it is never an
+        // identity proof and must not run during constructor classification.
+        if !shared_global_builtin_constructor_body(func_ptr)
+            || (*ptr).capture_count & crate::closure::NO_THIS_REBIND_FLAG == 0
+            || crate::closure::real_capture_count((*ptr).capture_count) != 1
+        {
             return None;
         }
-        let v = js_object_get_field_by_name(global_obj, key);
-        if v.bits() == func_handle.get_nanbox_f64().to_bits() {
-            return Some(name);
+        let identity = JSValue::from_bits(crate::closure::js_closure_get_capture_bits(ptr, 0));
+        if !identity.is_int32() {
+            return None;
         }
+        let index = identity.as_int32();
+        if index <= 0 {
+            return None;
+        }
+        GLOBAL_THIS_BUILTIN_CONSTRUCTORS
+            .get(index as usize - 1)
+            .copied()
     }
-    None
+}
+
+/// Existing shared constructor bodies whose declaration identity is an input
+/// to the closure. This is also used by the global constructor birth path.
+#[inline]
+pub(crate) fn shared_global_builtin_constructor_body(code: usize) -> bool {
+    code == global_this_builtin_noop_thunk as *const u8 as usize
+        || code == typed_array_constructor_call_thunk as *const u8 as usize
+        || code == construct_only_builtin_call_thunk as *const u8 as usize
+        || code == webcrypto_illegal_constructor_thunk as *const u8 as usize
+        || code == crate::messaging::js_message_channel_constructor_call_error as *const u8 as usize
+        || code == crate::messaging::js_message_port_constructor_call_error as *const u8 as usize
+        || code
+            == crate::messaging::js_broadcast_channel_constructor_call_error as *const u8 as usize
 }
 
 #[cfg(feature = "global-text")]

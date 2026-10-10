@@ -86,6 +86,42 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
+    read_site_front(dir, obj_biased, key_bits, cache_slot, packed, true)
+}
+
+/// Positive own-slot proofs from the same read site. An environment binding
+/// must distinguish an absent property from a stored undefined, so inherited
+/// absence answers decline here and its cold adapter resolves HasBinding.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_get_own_field_ic_front(
+    dir: *const u8,
+    obj_biased: i64,
+    key_bits: u64,
+    cache_slot: *mut PicCacheSlot,
+    packed: *const AtomicU64,
+) -> f64 {
+    read_site_front(dir, obj_biased, key_bits, cache_slot, packed, false)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_GET_OWN_FIELD_IC_FRONT: unsafe extern "C" fn(
+    *const u8,
+    i64,
+    u64,
+    *mut PicCacheSlot,
+    *const AtomicU64,
+) -> f64 = js_object_get_own_field_ic_front;
+
+#[inline(always)]
+unsafe fn read_site_front(
+    dir: *const u8,
+    obj_biased: i64,
+    key_bits: u64,
+    cache_slot: *mut PicCacheSlot,
+    packed: *const AtomicU64,
+    inherited: bool,
+) -> f64 {
     let obj =
         (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     let shape_id = (*obj).parent_class_id;
@@ -142,7 +178,7 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
     // key that is NOT own on this receiver, as facts of the receiver's shape
     // and the holder's. Asked last, so an own-key read pays nothing for it.
     // A GC leaf like everything above: it reads site words and object words.
-    if !cache.is_null() {
+    if inherited && !cache.is_null() {
         if let Some(bits) = crate::object::method_site::read_holder::primary_entry_answer(
             &*cache,
             (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64,
@@ -284,6 +320,82 @@ mod tests {
 
     fn guess(slot: u64) -> u64 {
         (slot << 32) | 0xFFFF_FFFF
+    }
+
+    #[test]
+    fn own_front_distinguishes_stored_undefined_from_cached_absence() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        // This fixture compares read-site shape answers. Keep its raw operand
+        // region nonmoving; the TypeScript stress fixtures exercise relocation.
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key = scope.root_string_ptr(atom(b"binding_front_undefined"));
+        for padding in [12, 20] {
+            let prototype = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            prototype.with_mut_ptr(|p: *mut ObjectHeader| {
+                crate::object::js_object_set_prototype_of(
+                    crate::value::js_nanbox_pointer(p as i64),
+                    f64::from_bits(crate::value::TAG_NULL),
+                );
+            });
+            let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
+            obj.with_mut_ptr(|o: *mut ObjectHeader| {
+                prototype.with_mut_ptr(|p: *mut ObjectHeader| {
+                    crate::object::js_object_set_prototype_of(
+                        crate::value::js_nanbox_pointer(o as i64),
+                        crate::value::js_nanbox_pointer(p as i64),
+                    );
+                });
+            });
+            for i in 0..padding {
+                let name = format!("binding_padding_{i}");
+                let field = scope.root_string_ptr(atom(name.as_bytes()));
+                obj.with_mut_ptr(|o| {
+                    field.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 1.0))
+                });
+            }
+            let mut slot = std::ptr::null_mut();
+            let packed = AtomicU64::new(super::PACKED_GET_EMPTY);
+            obj.with_mut_ptr(|o| {
+                key.with_const_ptr(|k| unsafe {
+                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                    crate::object::js_object_set_field_by_name(o, k, undefined);
+                    crate::object::field_get_set::js_object_get_field_ic_slow(
+                        o as i64, k, &mut slot, &packed,
+                    );
+                    let dir = crate::object::shapes::ordinary_dir_addr();
+                    let biased = (o as i64).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR as i64);
+                    let key_bits = crate::value::js_nanbox_string(k as i64).to_bits();
+                    assert_eq!(
+                        super::js_object_get_own_field_ic_front(
+                            dir, biased, key_bits, &mut slot, &packed,
+                        ).to_bits(),
+                        crate::value::TAG_UNDEFINED,
+                        "stored undefined is a positive own-slot hit, including spill"
+                    );
+                    crate::object::js_object_delete_field(o, k);
+                    // The ordinary property site can memoize absence. A binding
+                    // site must decline that same memo so HasBinding can throw.
+                    crate::object::field_get_set::js_object_get_field_ic_slow(
+                        o as i64, k, &mut slot, &packed,
+                    );
+                    assert_eq!(
+                        super::js_object_get_field_ic_front(
+                            dir, biased, key_bits, &mut slot, &packed,
+                        ).to_bits(),
+                        crate::value::TAG_UNDEFINED,
+                        "negative control: a property read serves cached absence"
+                    );
+                    assert_eq!(
+                        super::js_object_get_own_field_ic_front(
+                            dir, biased, key_bits, &mut slot, &packed,
+                        ).to_bits(),
+                        crate::value::TAG_HOLE,
+                        "a binding read requires presence"
+                    );
+                });
+            });
+        }
     }
 
     /// The confirm answers exactly one thing: the receiver's own inline slot at

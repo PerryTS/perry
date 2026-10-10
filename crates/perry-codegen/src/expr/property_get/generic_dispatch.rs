@@ -317,6 +317,28 @@ pub(crate) fn lower_generic_property_get(
     property: &str,
     byte_offset: u32,
 ) -> Result<String> {
+    lower_property_site(ctx, object, property, byte_offset, None)
+}
+
+/// Global environment references share the ordinary site's shape-validated
+/// slot loads. On a miss, resolve the binding before evaluating its getter.
+pub(crate) fn lower_global_property_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    required: bool,
+) -> Result<String> {
+    lower_property_site(ctx, object, property, 0, Some(required))
+}
+
+fn lower_property_site(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+    global_reference: Option<bool>,
+) -> Result<String> {
+    let global_binding = global_reference == Some(true);
     let obj_box = lower_expr(ctx, object)?;
     // #5247: record this access's source location right after the receiver is
     // evaluated and before the nullish-receiver throw path (the inline diamond
@@ -377,7 +399,10 @@ pub(crate) fn lower_generic_property_get(
     // reproduces the same branch ladder and calls the same entries, so behavior is
     // unchanged; only the inline monomorphic fast-load is traded away. Mirrors the
     // class-field GET/SET full-outline (#5334 lever B / #5391 path 2).
-    if crate::codegen::full_outline_ic_enabled() {
+    // Every environment-reference read retains the shape diamond and spill
+    // front, including optional typeof reads. A required binding uses positive
+    // own-slot proofs; an optional read may also accept inherited/absent answers.
+    if crate::codegen::full_outline_ic_enabled() && global_reference.is_none() {
         // Per-site monomorphic IC cache, allocated identically to the inline path
         // (below) so the helper's `js_object_get_field_ic_miss` cache-priming is
         // unchanged.
@@ -1106,7 +1131,11 @@ pub(crate) fn lower_generic_property_get(
     let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
     let val_miss = ctx.block().call(
         DOUBLE,
-        "js_object_get_field_ic_slow",
+        if global_binding {
+            "js_global_get_field_ic_slow"
+        } else {
+            "js_object_get_field_ic_slow"
+        },
         &[
             (I64, &miss_handle),
             (I64, &miss_key_handle),
@@ -1156,7 +1185,11 @@ pub(crate) fn lower_generic_property_get(
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let answered = ctx.block().call(
             DOUBLE,
-            "js_object_get_field_ic_front",
+            if global_binding {
+                "js_object_get_own_field_ic_front"
+            } else {
+                "js_object_get_field_ic_front"
+            },
             &[
                 (PTR, &dir),
                 (I64, &front_recv),

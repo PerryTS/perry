@@ -653,39 +653,6 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
     )
 }
 
-/// Subset of `is_global_this_builtin_name` whose `typeof` is `"function"`
-/// in spec (constructors). Used by the `Expr::TypeOf` short-circuit so
-/// `typeof globalThis.Array === "function"`. Math/JSON/Reflect are
-/// namespaces — they keep `typeof === "object"` via the existing match
-/// arms.
-pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
-    is_global_this_builtin_name(name)
-        && !matches!(
-            name,
-            "globalThis"
-                | "global"
-                | "self"
-                | "onmessage"
-                | "onmessageerror"
-                | "onerror"
-                | "console"
-                | "Math"
-                | "JSON"
-                | "Reflect"
-                | "Intl"
-                | "WebAssembly"
-                | "Temporal"
-                | "performance"
-                | "process"
-                | "navigator"
-                | "print"
-                | "crypto"
-                | "localStorage"
-                | "sessionStorage"
-                | "Bun"
-        )
-}
-
 /// SSO-safe variant of `unbox_to_i64` for NaN-boxed string operands.
 ///
 /// The plain `unbox_to_i64(bitcast double → i64; and POINTER_MASK_I64)`

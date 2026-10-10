@@ -516,15 +516,22 @@ pub(crate) fn rebind_explicit_this_allocates(target: f64, this_arg: f64) -> bool
         return false;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x100000 || !crate::closure::is_closure_ptr(ptr) {
-        return false;
-    }
     let header = ptr as *const ClosureHeader;
-    if crate::closure::closure_is_arrow(header) {
+    // Use the same live-header/info proof as value-call dispatch. The old
+    // shape + page-ownership probe duplicated that dispatch's validation.
+    let info = crate::closure::get_valid_info(header);
+    if info.is_null() {
         return false;
     }
     let raw_count = unsafe { (*header).capture_count };
     if raw_count & CAPTURES_THIS_FLAG == 0 || raw_count & NO_THIS_REBIND_FLAG != 0 {
+        return false;
+    }
+    // Most explicit-this callees do not capture a receiver. Their capture
+    // word already proves that no clone can be needed; only a capturing
+    // body needs the arrow fact. The header was validated above, so read its
+    // static info directly rather than validating the same closure again.
+    if unsafe { (*info).flags } & crate::codegen_abi::FN_ARROW != 0 {
         return false;
     }
     let count = crate::closure::real_capture_count(raw_count) as usize;
