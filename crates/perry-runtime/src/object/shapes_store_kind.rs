@@ -23,9 +23,10 @@
 //! | `OrdinaryUnmarked` | not admitted | clear |
 //! | `OrdinaryNumericProof` | admitted | set |
 //! | `NativeNamespace` | not admitted | clear |
+//! | `OrdinaryNativeAlias` | admitted | clear |
 //!
-//! so `kind == Ordinary` is the whole store admission, and a word published
-//! only for an `Ordinary` shape needs no per-object test on its hit path.
+//! Ordinary and OrdinaryNativeAlias shapes admit stores. The native alias
+//! affects read fallback; its writable own slots follow the same store rules.
 //!
 //! The rules that keep the kind true (DESIGN R1-R6):
 //!
@@ -90,6 +91,11 @@ pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) ->
 pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeObjectKind {
     if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         ShapeObjectKind::NativeNamespace
+    } else if !(*obj).meta.is_null()
+        && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
+        && receiver_admits_plain_store(obj)
+    {
+        ShapeObjectKind::OrdinaryNativeAlias
     } else if receiver_admits_plain_store(obj) {
         ShapeObjectKind::Ordinary
     } else {
@@ -120,7 +126,10 @@ pub(crate) unsafe fn mint_kind(
 /// stores asks (charter step 3; the 4b lane's store regions pack with it).
 #[inline]
 pub(crate) fn shape_admits_plain_store(shape_id: u32) -> bool {
-    super::shape_object_kind_by_id(shape_id) == Some(ShapeObjectKind::Ordinary)
+    matches!(
+        super::shape_object_kind_by_id(shape_id),
+        Some(ShapeObjectKind::Ordinary | ShapeObjectKind::OrdinaryNativeAlias)
+    )
 }
 
 /// R6, the invariant: `obj`'s shape kind agrees with its per-object record.

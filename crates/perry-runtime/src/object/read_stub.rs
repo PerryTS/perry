@@ -102,6 +102,13 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
         return;
     }
+    // Admission belongs to publication. Alias registration changes the shape,
+    // so a hit on an admitted shape needs no second shape-kind lookup.
+    if crate::object::shapes::shape_object_kind_by_id(token as u32)
+        == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNativeAlias)
+    {
+        return;
+    }
     READ_STUB.with(|t| {
         let bucket = &t[bucket_of(token, key_bits)];
         let entry = (token, key_bits, slot);

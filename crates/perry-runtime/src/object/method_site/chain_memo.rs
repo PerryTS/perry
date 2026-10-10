@@ -253,7 +253,10 @@ unsafe fn hop_admitted(addr: usize) -> bool {
     meta.is_null()
         || ((*meta).elements == 0
             && (*meta).dictionary_keys == 0
-            && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0)
+            && (*meta).flags
+                & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                == 0)
 }
 
 /// The next hop after `hop`, when `hop`'s shape pins it: a serial identity

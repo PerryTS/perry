@@ -1,0 +1,6 @@
+// Run with the existing PERRY_STORE_CENSUS=1 on a normal lane executable.
+// A refusal is site-owned diagnostics; no production key-indexed state.
+config = { max_map_keys = 131072; missing_probes = warn; }
+uprobe:@BINARY@:js_packed_add_refused /pid == cpid/ {
+  @refusal[arg4, arg0, str(arg1 + 20, *(uint32*)uptr(arg1 + 4) + 1), arg2, arg3] = count();
+}

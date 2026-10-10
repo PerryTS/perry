@@ -1013,12 +1013,6 @@
       "why": "Megamorphic dynamic-write stub cache: 4096 ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because stub_key_bits admits only SSO immediates (and short ASCII heap strings folded to the SSO bits of their content) and rejects every key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry is rejected by dyn_ic_try_store's per-hit shape-token/flags/slot-bound revalidation."
     },
     {
-      "file": "crates/perry-runtime/src/proxy/put_value/packed_add.rs",
-      "name": "ADD_SITES",
-      "verdict": "not_a_gc_pointer",
-      "why": "The registry of static-key store sites that published a key-add memo: each entry is the address of a site record, a module global emitted by codegen (`@perry_ic_N_packed_set`, `[4 x i64]`) that lives for the process, or a leaked Box in a unit test. A site record holds only numbers (ShapeIds, a slot, a generation, and a pointer to a Box-leaked way array of the same numbers), never a GC heap address or a NaN-boxed value. The registry is walked after every full trace only to NOTE the named ShapeIds as cache carriers (`note_packed_add_carriers`); it neither marks nor rewrites anything."
-    },
-    {
       "file": "crates/perry-runtime/src/pty/mod.rs",
       "name": "EXIT_SINK",
       "verdict": "test_only",

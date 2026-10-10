@@ -1,5 +1,5 @@
 use super::*;
-use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
+use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap};
 use crate::object::class_image::ImageTable;
 use std::borrow::Cow;
 use std::sync::RwLock;
@@ -64,6 +64,7 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
     // literal-only ids never register a declaration name.
     super::registration::publish_unbuilt_holder(class_id);
     crate::object::class_value::note_intrinsic_registration(class_id, "name");
+    refresh_anon_declaration_role(class_id);
 }
 
 /// Look up the user-visible name of a registered class. Returns `None`
@@ -567,7 +568,7 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
 /// drizzle's `value.constructor === Object` duck checks, and the standard
 /// `({}).constructor === Object` semantics all match Node. The HIR
 /// lowering registers each anon shape's id here at module init.
-pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<PtrHashSet<u32>>>> =
+pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<PtrHashMap<u32, bool>>>> =
     ImageTable::new(|image| &image.anon_shape_class_ids);
 
 /// Mark `class_id` as a synthetic anon-shape class so `.constructor`
@@ -590,10 +591,9 @@ pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<PtrHashSet<u32>>>> =
 /// before this was written: object literals ARE anon shapes, so such a flag is
 /// true in essentially every real program and the lock is taken anyway.
 ///
-/// The set is INSERT-ONLY — the registrar below only ever calls `insert`, and
-/// nothing removes — which is what makes an open-addressed mirror sound with
-/// no reclamation scheme: an entry, once published, stays valid for the life
-/// of the image.
+/// Membership is insert-only, so the open-addressed mirror needs no
+/// reclamation: a published id stays valid for the life of the image. Its
+/// declaration-role bit is refreshed when declaration metadata is registered.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
     if class_id == 0 {
@@ -603,12 +603,13 @@ pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
     // not yet see it falls through to the locked set below, which the write
     // guard is about to update. The reverse order would let a reader miss in
     // both.
-    super::super::class_image::anon_fast_insert(class_id);
     let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(new_ptr_hash_set());
+        *guard = Some(new_ptr_hash_map());
     }
-    guard.as_mut().unwrap().insert(class_id);
+    let declared = declaration_has_identity(class_id);
+    super::super::class_image::anon_fast_insert(class_id, declared);
+    guard.as_mut().unwrap().insert(class_id, declared);
 }
 
 /// True when `class_id` is marked as an anon shape but is really a DECLARED
@@ -628,11 +629,51 @@ pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
 /// A registered class NAME plus a published CLASS holder word is positive
 /// evidence of a real declared class; an anon shape has neither.
 pub fn declared_class_outranks_anon_shape(class_id: u32) -> bool {
-    is_anon_shape_class_id(class_id)
-        && class_name_for_id(class_id).is_some()
+    anonymous_class_role(class_id) == Some(true)
+}
+
+/// One metadata read supplies both anonymous membership and declaration
+/// precedence: None for a non-member, false for a plain record, true for a
+/// colliding declaration. Shape minting must not probe membership separately.
+pub(crate) fn anonymous_class_role(class_id: u32) -> Option<bool> {
+    if class_id == 0 {
+        return None;
+    }
+    if let Some(role) = super::super::class_image::anon_role_lookup(class_id) {
+        return role;
+    }
+    ANON_SHAPE_CLASS_IDS
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref()?.get(&class_id).copied())
+}
+
+/// Registration-time projection, stored in the existing anonymous class
+/// metadata. No name cloning, method enumeration or second registry walk is
+/// required when an object shape is minted.
+fn declaration_has_identity(class_id: u32) -> bool {
+    let named = CLASS_NAMES.read().ok().is_some_and(|g| {
+        g.as_ref()
+            .is_some_and(|names| names.contains_key(&class_id))
+    });
+    named
         && crate::object::shapes::identity_prototype_word(
             crate::object::shapes::class_identity_proto_id(class_id),
         ) != 0
+}
+
+/// Called after either declaration input is registered; supports any module
+/// initialization order, including an anonymous marking before the class.
+pub(crate) fn refresh_anon_declaration_role(class_id: u32) {
+    let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
+    if let Some(role) = guard.as_mut().and_then(|map| map.get_mut(&class_id)) {
+        // Serialize projection with anonymous registration. Input registrars
+        // release their own locks first, so a late refresh cannot overwrite
+        // a complete declaration with an earlier partial snapshot.
+        let declared = declaration_has_identity(class_id);
+        *role = declared;
+        super::super::class_image::anon_fast_insert(class_id, declared);
+    }
 }
 
 /// True if `class_id` was registered via `js_register_anon_shape_class_id`.
@@ -645,7 +686,7 @@ pub fn is_anon_shape_class_id(class_id: u32) -> bool {
     }
     if let Ok(guard) = ANON_SHAPE_CLASS_IDS.read() {
         if let Some(set) = guard.as_ref() {
-            return set.contains(&class_id);
+            return set.contains_key(&class_id);
         }
     }
     false
@@ -654,6 +695,74 @@ pub fn is_anon_shape_class_id(class_id: u32) -> bool {
 #[cfg(test)]
 mod anon_shape_collision_tests {
     use super::*;
+
+    #[test]
+    fn declaration_role_survives_member_retirement() {
+        let id = 0x4322_1000;
+        unsafe {
+            js_register_anon_shape_class_id(id);
+            js_register_class_name(id, b"SymbolOnly".as_ptr(), 10);
+            crate::object::js_register_class_method(
+                id as i64,
+                b"@@iterator".as_ptr(),
+                10,
+                0x1000,
+                0,
+                0,
+                0,
+            );
+        }
+        assert_eq!(anonymous_class_role(id), Some(true));
+        super::super::registration::invalidate_class_string_member_order(id, "@@iterator", false);
+        assert_eq!(
+            anonymous_class_role(id),
+            Some(true),
+            "a declaration keeps its identity after delete"
+        );
+    }
+
+    #[test]
+    fn declaration_role_is_projected_for_every_registration_order() {
+        for (offset, order) in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = 0x4322_0000 + offset as u32;
+            let mut seen = [false; 3];
+            for operation in order {
+                unsafe {
+                    match operation {
+                        0 => js_register_anon_shape_class_id(id),
+                        1 => js_register_class_name(id, b"".as_ptr(), 0),
+                        2 => crate::object::js_register_class_method(
+                            id as i64,
+                            b"m".as_ptr(),
+                            1,
+                            0x1000,
+                            1,
+                            0,
+                            0,
+                        ),
+                        _ => unreachable!(),
+                    }
+                }
+                seen[operation] = true;
+                assert_eq!(declared_class_outranks_anon_shape(id), seen[0] && seen[1]);
+                assert_eq!(
+                    anonymous_class_role(id),
+                    seen[0].then_some(seen[1]),
+                    "one projection preserves membership and precedence"
+                );
+            }
+        }
+    }
 
     fn seed_declared_class(class_id: u32, name: &str, method: &str) {
         unsafe { js_register_class_name(class_id, name.as_ptr(), name.len() as u32) };

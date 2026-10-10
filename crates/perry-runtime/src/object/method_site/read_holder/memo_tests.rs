@@ -57,7 +57,7 @@ fn alternating_terminals_and_deep_hops_hit_and_invalidate_independently() {
             );
             assert_eq!(
                 unsafe {
-                    primary_entry_answer(&cache, token(i)).or_else(|| {
+                    primary_entry_answer(&cache, token(i), &*receivers[i]).or_else(|| {
                         let bits = class_entry_answer(&cache, &*receivers[i], token(i));
                         (bits != crate::value::TAG_HOLE).then_some(bits)
                     })

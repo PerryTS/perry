@@ -175,7 +175,7 @@ fn packed_set_flags_special_with_the_site_body_and_keeps_other_slots() {
 }
 
 #[test]
-fn packed_add_serves_only_the_site_body_of_a_special_successor() {
+fn packed_add_serves_only_the_shape_body_of_a_special_successor() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_gc = crate::gc::GcSuppressScope::new();
     let method = key(b"cached_cf_append_method");
@@ -230,13 +230,13 @@ fn packed_add_serves_only_the_site_body_of_a_special_successor() {
     assert_eq!(stamp(second), final_id, "same-body memo shares final id");
     assert_stored(second, method, b);
 
-    // A foreign body through the miss appends on its own shape and leaves the
-    // site's memo and body as they were.
+    // A foreign body through the miss appends on its own shape. Its entry
+    // replaces this pre-shape's answer; the value guard preserves correctness.
     let fourth = birth();
     js_put_value_set_packed_miss(fourth, method, foreign, 0, &mut slot, &site.set);
     assert_ne!(stamp(fourth), final_id);
     assert_stored(fourth, method, foreign);
-    assert_eq!(site.add_shapes.load(Ordering::Relaxed), shapes);
+    assert_eq!(site.add_shapes.load(Ordering::Relaxed) as u32, pre);
     assert_eq!(site.constfn_info.load(Ordering::Relaxed), body_of(a));
     let replacement = closure(true);
     js_put_value_set_packed_miss(second, method, replacement, 0, &mut slot, &site.set);
@@ -248,15 +248,86 @@ fn packed_add_serves_only_the_site_body_of_a_special_successor() {
         0
     );
     assert_stored(second, method, replacement);
-    // The overwrite deprecated the ConstFn lane, which moved the validity
-    // word: the memo no longer serves its successor.
+    // Observing two bodies at one pre-shape generalized the successor. Both
+    // bodies now use one shape transition without a repeated lookup.
     let fifth = birth();
     assert_eq!(stamp(fifth), pre);
+    let value = closure(false);
     assert_eq!(
-        unsafe { super::super::packed_add::packed_add_try(site, fifth, closure(false)) },
-        None
+        unsafe { super::super::packed_add::packed_add_try(site, fifth, value) }.map(f64::to_bits),
+        Some(value.to_bits())
     );
-    assert_eq!(stamp(fifth), pre);
+    assert_eq!(
+        shape_descriptor_by_id(stamp(fifth))
+            .unwrap()
+            .special_constfn_mask,
+        0
+    );
+    assert_stored(fifth, method, value);
+}
+
+#[test]
+fn different_pre_shapes_at_one_add_site_keep_their_own_bodies() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let method = key(b"cached_cf_two_shapes_method");
+    let branch = key(b"cached_cf_two_shapes_branch");
+    let first = birth();
+    let second = birth();
+    crate::object::js_object_set_field_by_name(object(second), branch, 3.0);
+    let (pre_a, pre_b) = (stamp(first), stamp(second));
+    assert_ne!(pre_a, pre_b);
+    let site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut slot: PackedSetWaysSlot = std::ptr::null_mut();
+    js_put_value_set_packed_miss(first, method, closure(false), 0, &mut slot, &site.set);
+    js_put_value_set_packed_miss(second, method, closure(true), 0, &mut slot, &site.set);
+    assert_eq!(
+        site.constfn_info.load(Ordering::Relaxed),
+        body_of(closure(false))
+    );
+    for other_body in [false, true] {
+        let fresh = birth();
+        if other_body {
+            crate::object::js_object_set_field_by_name(object(fresh), branch, 4.0);
+        }
+        assert_eq!(stamp(fresh), if other_body { pre_b } else { pre_a });
+        let value = closure(other_body);
+        assert_eq!(
+            unsafe { super::super::packed_add::packed_add_try(site, fresh, value) }
+                .map(f64::to_bits),
+            Some(value.to_bits())
+        );
+        assert_eq!(stamp(fresh), stamp(if other_body { second } else { first }));
+        assert_stored(fresh, method, value);
+    }
+}
+
+#[test]
+fn different_bodies_at_one_pre_shape_share_one_transition() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let method = key(b"cached_cf_one_shape_method");
+    let first = birth();
+    let second = birth();
+    let pre = stamp(first);
+    assert_eq!(stamp(second), pre);
+    let site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut slot: PackedSetWaysSlot = std::ptr::null_mut();
+    js_put_value_set_packed_miss(first, method, closure(false), 0, &mut slot, &site.set);
+    js_put_value_set_packed_miss(second, method, closure(true), 0, &mut slot, &site.set);
+    let final_id = stamp(second);
+    for other in [false, true, false, true] {
+        let fresh = birth();
+        assert_eq!(stamp(fresh), pre);
+        let value = closure(other);
+        assert_eq!(
+            unsafe { super::super::packed_add::packed_add_try(site, fresh, value) }
+                .map(f64::to_bits),
+            Some(value.to_bits())
+        );
+        assert_eq!(stamp(fresh), final_id);
+        assert_stored(fresh, method, value);
+    }
 }
 
 #[test]

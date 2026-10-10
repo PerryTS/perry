@@ -31,7 +31,7 @@ pub(crate) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_lo
 // allocation cannot inherit a proof sibling from reused `ObjectMeta` storage.
 // The payload rides evacuation with its owner, with no side-table re-key.
 //
-//     bit 0       prototype-semantic divergence
+//     bit 0       native fallback after ordinary undefined
 //     bit 1       payload valid
 //     bit 2       compact nonnegative-int entity proof (mode 2)
 //     bit 3       user-origin prototype signal

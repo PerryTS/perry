@@ -32,6 +32,7 @@ pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
 pub(crate) use put_value::note_packed_add_carriers;
+pub(crate) use put_value::scan_packed_add_roots_mut;
 pub(crate) use put_value::scan_setter_site_roots_mut;
 pub use put_value::{js_proxy_set, js_put_value_set};
 pub(crate) use put_value::{

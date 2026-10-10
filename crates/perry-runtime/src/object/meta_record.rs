@@ -43,13 +43,12 @@ pub struct ObjectMeta {
     /// Reserved words preserve the offsets addressed by emitted code.
     /// Descriptor facts live exclusively in holder shapes.
     pub reserved_descriptor_words: [u64; 2],
-    /// Object-only state and compact scalar proof payloads. Bit 0 records
-    /// prototype-semantic divergence (including runtime wiring); bit 3 records
-    /// that a user-facing operation chose the prototype. Keeping those signals
-    /// separate prevents internal wiring from masquerading as
-    /// `Object.setPrototypeOf`. Bits 1..2 and 8..63 hold the packed Array-subclass numeric-prefix
-    /// proof payload (verified bound and unproven twin ShapeId). The
-    /// address-reuse-safe authority is the ShapeId proof kind.
+    /// Object state and compact scalar proof payloads. Bit 0 records native
+    /// fallback after an ordinary undefined read; shape minting projects that
+    /// fact into OrdinaryNativeAlias. Bits 3..4 are unused. Bits 1..2 and
+    /// 8..63 hold the packed Array-subclass numeric-prefix proof payload
+    /// (verified bound and unproven twin ShapeId). The address-reuse-safe
+    /// authority for that proof is the ShapeId kind.
     pub flags: u64,
     /// #6812: object-owned overflow storage — a `GC_TYPE_ARRAY` buffer
     /// (`*mut ArrayHeader` bits, 0 = none) holding the NaN-boxed values of

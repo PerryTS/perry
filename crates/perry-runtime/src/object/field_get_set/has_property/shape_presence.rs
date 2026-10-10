@@ -55,7 +55,10 @@ pub(super) unsafe fn try_shape_has_property(receiver: f64, key: f64) -> Option<b
         let meta = (*obj).meta;
         if !meta.is_null()
             && ((*meta).elements != 0
-                || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
+                || (*meta).flags
+                    & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                        | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                    != 0)
         {
             return None;
         }

@@ -798,6 +798,11 @@ pub(super) fn get_field_ic_miss_impl(
     if gc_kind == Some(crate::gc::GC_TYPE_OBJECT)
         && unsafe { super::super::native_this_alias::object_alias(obj) }.is_some()
     {
+        if let Some(value) =
+            unsafe { crate::object::method_site::read_holder::prime_alias(obj, key, cache_slot) }
+        {
+            return value;
+        }
         return js_object_get_field_by_name_f64(obj, key);
     }
     // An accessor can run JS and collect, so this lives in the collecting
@@ -1425,7 +1430,7 @@ unsafe fn pic_outlined_other_hit(
             }
         }
     }
-    crate::object::method_site::read_holder::primary_entry_answer(c, token)
+    crate::object::method_site::read_holder::primary_entry_answer(c, token, obj_handle)
         .or_else(|| {
             let bits =
                 crate::object::method_site::read_holder::class_entry_answer(c, obj_handle, token);

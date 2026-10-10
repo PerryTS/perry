@@ -173,7 +173,7 @@ const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0xF << RECORD_KIND_SHIFT;
 /// The frequently decoded kind is one contiguous field.
 /// The record stays 64 bytes; `kind_codes_round_trip` pins the encoding.
-const RECORD_KIND_MAX_CODE: u32 = 10;
+const RECORD_KIND_MAX_CODE: u32 = 11;
 const _: () = assert!(RECORD_KIND_MAX_CODE <= 15);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
@@ -318,7 +318,7 @@ impl ShapeRecord {
     pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
         debug_assert_eq!(summary & !crate::object::key_attrs::SUMMARY_KEY_BITS, 0);
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
-            | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
+            | ((u32::from(summary) << RECORD_SUMMARY_SHIFT) & RECORD_SUMMARY_MASK);
         // The summary is an input of the positional bit (an accessor key).
         self.refresh_positional();
         self
@@ -357,7 +357,9 @@ impl ShapeRecord {
 
     #[inline]
     pub(super) fn object_kind(&self) -> ShapeObjectKind {
-        match (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT {
+        let code = (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT;
+        match code {
+            0 => ShapeObjectKind::Ordinary,
             1 => ShapeObjectKind::Class,
             2 => ShapeObjectKind::Dictionary,
             3 => ShapeObjectKind::Function,
@@ -368,7 +370,7 @@ impl ShapeRecord {
             8 => ShapeObjectKind::FunctionBoundCall,
             9 => ShapeObjectKind::FunctionBoundApply,
             10 => ShapeObjectKind::FunctionBound,
-            _ => ShapeObjectKind::Ordinary,
+            _ => ShapeObjectKind::OrdinaryNativeAlias,
         }
     }
 
@@ -386,6 +388,7 @@ impl ShapeRecord {
         // that reported the wrong one would be a wrong identity match,
         // because `facts_match` compares the full enum.
         let kind_code = object_kind.code() as u32;
+        debug_assert!(kind_code <= RECORD_KIND_MAX_CODE, "kind has no packed decoder");
         let kind_bits = kind_code << RECORD_KIND_SHIFT;
         debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
         let mut record = ShapeRecord {
