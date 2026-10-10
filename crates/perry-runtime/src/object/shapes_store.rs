@@ -173,7 +173,7 @@ const RECORD_WEAK_SET: u32 = 1 << 31;
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0xF << RECORD_KIND_SHIFT;
 /// The frequently decoded kind is one contiguous field.
-/// The record stays 64 bytes; `kind_codes_round_trip` pins the encoding.
+/// `kind_codes_round_trip` pins the encoding independently of record width.
 const RECORD_KIND_MAX_CODE: u32 = 11;
 const _: () = assert!(RECORD_KIND_MAX_CODE <= 15);
 /// Charter step 3: the summary of the attributes the shape's keys carry —

@@ -124,7 +124,7 @@ pub(super) fn try_listen_on_turnloop(
             let server = get_handle_mut::<HttpServer>(server_handle)?;
             server.bound_port = bound_port;
             server.bound_host = host.to_string();
-            server.listening = true;
+            server.set_listening(true);
             let _ = id;
             Some(true)
         }

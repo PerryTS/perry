@@ -11,6 +11,14 @@ pub(crate) fn lower_symbol_property_get_ic(
     sym_box: &str,
 ) -> String {
     let slot = super::keyed_slot(ctx);
+    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        return ctx.block().call(
+            DOUBLE,
+            "js_dyn_index_get_site",
+            &[(PTR, &slot), (DOUBLE, obj_box), (DOUBLE, sym_box)],
+        );
+    }
+
     let cache = ctx.block().load(PTR, &slot);
     let present = ctx.block().icmp_ne(PTR, &cache, "null");
     let bits = ctx.block().bitcast_double_to_i64(obj_box);
@@ -37,16 +45,22 @@ pub(crate) fn lower_symbol_property_get_ic(
     let shape = ctx.block().load(I32, &shape_ptr);
     let shape = ctx.block().zext(I32, &shape, I64);
     let token = ctx.block().or(I64, &shape, "4611686018427387904");
-    // HolderEntry starts at its receiver word; KEY follows its eight words.
-    let word = |ctx: &mut FnCtx<'_>, i: usize| {
-        let ptr = ctx.block().gep(I64, &cache, &[(I64, &i.to_string())]);
+    // Keyed reads and runtime reads use one SharedEntry format.
+    let word = |ctx: &mut FnCtx<'_>, offset: usize| {
+        let ptr = ctx.block().gep(I8, &cache, &[(I64, &offset.to_string())]);
         ctx.block().load(I64, &ptr)
     };
-    let base = perry_abi::PIC_HOLDER_RECV_WORD;
-    let recv = word(ctx, perry_abi::PIC_HOLDER_RECV_WORD - base);
-    let holder = word(ctx, perry_abi::PIC_HOLDER_OBJ_WORD - base);
-    let kind = word(ctx, perry_abi::PIC_HOLDER_KIND_WORD - base);
-    let key = word(ctx, perry_abi::PIC_HOLDER_STATE_WORD - base);
+    let recv = word(ctx, perry_abi::KEYED_HOLDER_TOKEN_OFFSET);
+    let holder = word(ctx, perry_abi::METHOD_CHAIN_HOLDER_OFFSET);
+    let kind = word(ctx, perry_abi::METHOD_CHAIN_SLOT_OFFSET);
+    let key = word(ctx, perry_abi::KEYED_HOLDER_KEY_OFFSET);
+    let absent_ptr = ctx.block().gep(
+        I8,
+        &cache,
+        &[(I64, &perry_abi::KEYED_HOLDER_ABSENT_OFFSET.to_string())],
+    );
+    let absent = ctx.block().load(I8, &absent_ptr);
+    let data = ctx.block().icmp_eq(I8, &absent, "0");
     let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
     let same_shape = ctx.block().icmp_eq(I64, &token, &recv);
     let same_key = ctx.block().icmp_eq(I64, &sym_bits, &key);
@@ -55,6 +69,7 @@ pub(crate) fn lower_symbol_property_get_ic(
     let ok = ctx.block().and(I1, &same_shape, &same_key);
     let ok = ctx.block().and(I1, &ok, &own);
     let ok = ctx.block().and(I1, &ok, &inline);
+    let ok = ctx.block().and(I1, &ok, &data);
     ctx.block().cond_br(&ok, &hit_l, &miss_l);
     ctx.current_block = hit;
     let offset = ctx.block().shl(I64, &kind, "3");

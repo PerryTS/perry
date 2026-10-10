@@ -187,18 +187,18 @@ pub(super) fn trigger_id_from_options(options: f64) -> u64 {
     // Node's constructor first validates the option and then consumes it,
     // making an accessor observable twice. Preserve that exact ordering; the
     // `requireManualDestroy` option is read after both trigger-id reads.
-    let first_trigger_value = object_field(options, b"triggerAsyncId");
+    let first_trigger_value = object_field(options, crate::runtime_state_key!(b"triggerAsyncId"));
     if !JSValue::from_bits(first_trigger_value.to_bits()).is_undefined() {
         let _ = trigger_async_id_or_throw(first_trigger_value);
     }
-    let trigger_value = object_field(options, b"triggerAsyncId");
+    let trigger_value = object_field(options, crate::runtime_state_key!(b"triggerAsyncId"));
     let trigger_value_kind = JSValue::from_bits(trigger_value.to_bits());
     let trigger_id = if trigger_value_kind.is_undefined() {
         execution_async_id_u64()
     } else {
         trigger_async_id_or_throw(trigger_value)
     };
-    let _ = object_field(options, b"requireManualDestroy");
+    let _ = object_field(options, crate::runtime_state_key!(b"requireManualDestroy"));
     trigger_id
 }
 

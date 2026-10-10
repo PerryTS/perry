@@ -233,21 +233,21 @@ fn options_object(o: &Rot13Opts) -> f64 {
     if let Some(hwm) = o.readable_hwm {
         set_visible_own_value(
             obj.get_nanbox_f64(),
-            hidden_key(b"readableHighWaterMark"),
+            crate::runtime_state_key!(b"readableHighWaterMark"),
             hwm,
         );
     }
     if let Some(hwm) = o.writable_hwm {
         set_visible_own_value(
             obj.get_nanbox_f64(),
-            hidden_key(b"writableHighWaterMark"),
+            crate::runtime_state_key!(b"writableHighWaterMark"),
             hwm,
         );
     }
     if !o.decode_strings {
         set_visible_own_value(
             obj.get_nanbox_f64(),
-            hidden_key(b"decodeStrings"),
+            crate::runtime_state_key!(b"decodeStrings"),
             f64::from_bits(TAG_FALSE),
         );
     }
@@ -276,7 +276,11 @@ pub(crate) fn new_rot13(o: Rot13Opts) -> f64 {
     ));
     CREATED.fetch_add(1, Ordering::SeqCst);
     init_transform_in_place(stream.get_nanbox_f64(), opts.get_nanbox_f64());
-    set_visible_own_value(stream.get_nanbox_f64(), hidden_key(b"_rotPost"), 2.0);
+    set_visible_own_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"_rotPost"),
+        2.0,
+    );
     stream.get_nanbox_f64()
 }
 
@@ -501,8 +505,16 @@ fn new_slow_sink(source: f64, hwm: f64) -> f64 {
         crate::fn_info!(slow_sink_write, 3; with_declared(3)),
         &[source.get_nanbox_f64()],
     );
-    set_visible_own_value(opts.get_nanbox_f64(), hidden_key(b"write"), w);
-    set_visible_own_value(opts.get_nanbox_f64(), hidden_key(b"highWaterMark"), hwm);
+    set_visible_own_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"write"),
+        w,
+    );
+    set_visible_own_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"highWaterMark"),
+        hwm,
+    );
     js_node_stream_writable_new(opts.get_nanbox_f64())
 }
 
@@ -688,7 +700,7 @@ fn new_source() -> f64 {
         crate::object::js_object_alloc(0, 1) as *const u8
     ));
     let r = closure0(crate::fn_info!(source_read_noop, 1; with_declared(1)), &[]);
-    set_visible_own_value(opts.get_nanbox_f64(), hidden_key(b"read"), r);
+    set_visible_own_value(opts.get_nanbox_f64(), crate::runtime_state_key!(b"read"), r);
     js_node_stream_readable_new(opts.get_nanbox_f64())
 }
 
@@ -978,7 +990,11 @@ fn z11_subclass_transform_override_wins_and_super_runs_the_codec() {
         crate::fn_info!(subclass_transform_calls_super, 3; with_declared(3)),
         &[],
     );
-    set_visible_own_value(sub_proto.get_nanbox_f64(), hidden_key(b"_transform"), over);
+    set_visible_own_value(
+        sub_proto.get_nanbox_f64(),
+        crate::runtime_state_key!(b"_transform"),
+        over,
+    );
     let obj = scope.root_nanbox_f64(crate::object::js_object_create(sub_proto.get_nanbox_f64()));
     assert!(np::attach_stream_to_object(
         obj.get_nanbox_f64(),
@@ -1041,15 +1057,19 @@ fn g2_js_transform_holds_its_callback_while_the_readable_side_is_full() {
         crate::fn_info!(sync_identity_transform, 3; with_declared(3)),
         &[],
     );
-    set_visible_own_value(opts.get_nanbox_f64(), hidden_key(b"transform"), xf);
     set_visible_own_value(
         opts.get_nanbox_f64(),
-        hidden_key(b"readableHighWaterMark"),
+        crate::runtime_state_key!(b"transform"),
+        xf,
+    );
+    set_visible_own_value(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableHighWaterMark"),
         2.0,
     );
     set_visible_own_value(
         opts.get_nanbox_f64(),
-        hidden_key(b"writableHighWaterMark"),
+        crate::runtime_state_key!(b"writableHighWaterMark"),
         2.0,
     );
     let t = scope.root_nanbox_f64(js_node_stream_transform_new(opts.get_nanbox_f64()));
@@ -1197,7 +1217,11 @@ fn lazy_state_is_built_once_on_first_method_or_state_read() {
             super::super::this_value(std::ptr::null(), value);
         }
         let state = scope.root_nanbox_f64(
-            get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"_readableState")).unwrap(),
+            get_hidden_value(
+                stream.get_nanbox_f64(),
+                crate::runtime_state_key!(b"_readableState"),
+            )
+            .unwrap(),
         );
         assert_eq!(
             get_hidden_value(stream.get_nanbox_f64(), hidden_hwm_key()),
@@ -1206,15 +1230,18 @@ fn lazy_state_is_built_once_on_first_method_or_state_read() {
         assert_eq!(
             get_hidden_value(
                 stream.get_nanbox_f64(),
-                hidden_key(b"writableHighWaterMark")
+                crate::runtime_state_key!(b"writableHighWaterMark")
             ),
             Some(19.0)
         );
         constructors::ensure_lazy_stream(stream.get_nanbox_f64());
         assert_eq!(
-            get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"_readableState"))
-                .unwrap()
-                .to_bits(),
+            get_hidden_value(
+                stream.get_nanbox_f64(),
+                crate::runtime_state_key!(b"_readableState")
+            )
+            .unwrap()
+            .to_bits(),
             state.get_nanbox_u64()
         );
         destroy_stream(stream.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED));

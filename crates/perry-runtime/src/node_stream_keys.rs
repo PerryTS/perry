@@ -244,6 +244,7 @@ pub(super) fn hidden_readable_live_push_key() -> Slot {
 }
 
 #[inline]
+#[cfg(test)]
 pub(super) fn readable_flowing_key() -> *mut crate::string::StringHeader {
     hidden_key(b"readableFlowing")
 }

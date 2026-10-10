@@ -30,12 +30,7 @@ impl KeyRef<'_> {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct KeyedEntry {
-    holder: HolderEntry,
-    key: u64,
-}
+use super::shared::SharedEntry as KeyedEntry;
 #[repr(C)]
 pub struct KeyedCache {
     entries: [KeyedEntry; WAYS],
@@ -44,11 +39,11 @@ pub struct KeyedCache {
     registered: bool,
 }
 
-// The emitted own-symbol guard reads the first way through these offsets.
-const _: () = assert!(std::mem::offset_of!(KeyedCache, entries) == 0);
-const _: () = assert!(std::mem::offset_of!(KeyedEntry, holder) == 0);
-const _: () = assert!(std::mem::offset_of!(KeyedEntry, key) == 8 * 8);
-const _: () = assert!(std::mem::size_of::<KeyedEntry>() == 9 * 8);
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::offset_of!(KeyedCache, entries) == 0);
+    assert!(std::mem::size_of::<KeyedEntry>() == 56);
+};
 
 /// Only shape-matchable receiver words enter the hit path. Every other cell's
 /// honest +4 word misses; no receiver classification is repeated on a hit.
@@ -69,20 +64,10 @@ unsafe fn answer(cache: &KeyedCache, recv: *const ObjectHeader, key: u64) -> Opt
     let stamp = (*recv).parent_class_id;
     let token = (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64;
     for entry in &cache.entries {
-        let c = &entry.holder;
-        if entry.key != key || c[HOLDER_RECV] != token {
+        if entry.identity_key != key || entry.token != token {
             continue;
         }
-        // An own entry names no particular receiver. Its token pins the slot
-        // and two receivers of the same shape load their respective values.
-        if c[HOLDER_OBJ] == 0 {
-            if c[HOLDER_KIND] == HOLDER_ABSENT_DEPTH1 {
-                return Some(crate::value::TAG_UNDEFINED);
-            }
-            return holder_slot_value(recv as usize, c[HOLDER_KIND] as u32)
-                .filter(|&v| v != crate::value::TAG_HOLE);
-        }
-        return saved_entry_answer(c, token, recv);
+        return entry.read_value(recv);
     }
     None
 }
@@ -244,10 +229,10 @@ unsafe fn dynamic_key_walk(recv: *const ObjectHeader, key: KeyRef<'_>) -> Option
 unsafe fn publish_keyed(cache: &mut KeyedCache, recv: *const ObjectHeader, key: u64, w: &Walk) {
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     let available = cache.entries.iter().position(|e| {
-        e.holder[HOLDER_RECV] == 0
-            || (e.key == key && e.holder[HOLDER_RECV] == token)
-            || crate::object::shapes::shape_is_retired(e.holder[HOLDER_RECV] as u32)
-            || (e.holder[HOLDER_OBJ] != 0 && holder_entry_retired(&e.holder))
+        e.token == 0
+            || (e.identity_key == key && e.token == token)
+            || crate::object::shapes::shape_is_retired(e.token as u32)
+            || (e.holder != 0 && crate::object::shapes::shape_is_retired(e.holder_shape))
     });
     let i = if let Some(i) = available {
         i
@@ -260,25 +245,30 @@ unsafe fn publish_keyed(cache: &mut KeyedCache, recv: *const ObjectHeader, key: 
         cache.next = (cache.next + 1) % WAYS as u32;
         i
     };
-    let mut c = HolderEntry([0; HOLDER_STATE - HOLDER_RECV]);
-    c[HOLDER_OBJ] = w.holder as i64;
-    c[HOLDER_SHAPE] = (u64::from(w.holder_shape) | u64::from(w.hops[2].1) << 32) as i64;
-    c[HOLDER_KIND] = match (w.depth, w.slot) {
-        (1, Some(s)) => i64::from(s),
-        (1, None) => HOLDER_ABSENT_DEPTH1,
-        (d, s) => {
-            (HOLDER_STUB
-                | if s.is_none() { HOLDER_ABSENT_BIT } else { 0 }
-                | (d as u64) << HOLDER_DEPTH_SHIFT
-                | u64::from(s.unwrap_or(0))) as i64
-        }
-    };
-    for h in 0..HOLDER_MAX_DEPTH - 1 {
-        c[HOLDER_HOPS + h] = w.hops[h].0 as i64;
+    let old = &cache.entries[i];
+    if old.depth > 1 {
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            old.hops,
+            old.depth - 1,
+        )));
     }
-    c[HOLDER_HOP_SHAPES] = (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64;
-    c[HOLDER_RECV] = token;
-    cache.entries[i] = KeyedEntry { holder: c, key };
+    let depth = if w.holder == 0 { 0 } else { w.depth };
+    let hops = if depth > 1 {
+        Box::into_raw(Box::<[Hop]>::from(&w.hops[..depth - 1])) as *mut Hop
+    } else {
+        std::ptr::null_mut()
+    };
+    cache.entries[i] = KeyedEntry {
+        token,
+        identity_key: key,
+        holder: w.holder,
+        holder_shape: w.holder_shape,
+        slot: w.slot.unwrap_or(0),
+        absent: w.slot.is_none(),
+        depth,
+        hops,
+        ..KeyedEntry::EMPTY
+    };
     if !cache.registered {
         HOLDER_SITES
             .lock()
@@ -291,9 +281,8 @@ unsafe fn publish_keyed(cache: &mut KeyedCache, recv: *const ObjectHeader, key: 
 pub(super) unsafe fn scan_roots(site: usize, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let cache = &mut *(site as *mut KeyedCache);
     for e in &mut cache.entries {
-        if e.holder[HOLDER_RECV] != 0 {
-            visitor.visit_nanbox_u64_slot(&mut e.key);
-            scan_entry_roots(&mut e.holder, visitor);
+        if e.token != 0 {
+            e.scan(visitor);
         }
     }
 }

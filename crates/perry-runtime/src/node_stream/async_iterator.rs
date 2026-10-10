@@ -84,15 +84,16 @@ extern "C" fn ns_readable_source_iterator_fulfilled(
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
     let done = object_ptr_from_value(result).is_none_or(|obj| {
-        crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            hidden_key(b"done"),
-        )) != 0
+        crate::value::js_is_truthy(unsafe { crate::runtime_state_key!(b"done").read_object(obj) })
+            != 0
     });
     if done {
         iterator_mark_done(iterator);
         iterator_set_stream_ended(iterator);
-        if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+        if let Some(stream) = get_hidden_value(
+            iterator,
+            crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
+        ) {
             mark_stream_ended(stream);
         }
     } else {
@@ -109,7 +110,10 @@ extern "C" fn ns_readable_source_iterator_rejected(
     let iterator = js_closure_get_capture_f64(closure, 0);
     iterator_mark_done(iterator);
     iterator_set_stream_ended(iterator);
-    if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+    if let Some(stream) = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
+    ) {
         call_source_iterator_return(stream);
         destroy_stream(stream, reason);
     }
@@ -143,7 +147,7 @@ fn readable_iterator_chunk_result(value: f64) -> f64 {
 
 fn destroy_on_return_from_options(opts: f64) -> bool {
     !matches!(
-        get_hidden_value(opts, hidden_key(b"destroyOnReturn")),
+        get_hidden_value(opts, crate::runtime_state_key!(b"destroyOnReturn")),
         Some(value) if value.to_bits() == TAG_FALSE
     )
 }
@@ -151,22 +155,28 @@ fn destroy_on_return_from_options(opts: f64) -> bool {
 fn iterator_destroys_on_return(iterator: f64) -> bool {
     get_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_DESTROY_ON_RETURN_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_DESTROY_ON_RETURN_KEY),
     )
     .is_none_or(|value| crate::value::js_is_truthy(value) != 0)
 }
 
 fn iterator_has_yielded(iterator: f64) -> bool {
-    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_INDEX_KEY))
-        .and_then(jsvalue_as_f64)
-        .is_some_and(|index| index > 0.0)
+    get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_INDEX_KEY),
+    )
+    .and_then(jsvalue_as_f64)
+    .is_some_and(|index| index > 0.0)
 }
 
 fn iterator_local_index(iterator: f64) -> u32 {
-    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_INDEX_KEY))
-        .and_then(jsvalue_as_f64)
-        .unwrap_or(0.0)
-        .max(0.0) as u32
+    get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_INDEX_KEY),
+    )
+    .and_then(jsvalue_as_f64)
+    .unwrap_or(0.0)
+    .max(0.0) as u32
 }
 
 /// Record that a chunk has been handed to the consumer (drives
@@ -174,20 +184,23 @@ fn iterator_local_index(iterator: f64) -> u32 {
 fn note_yield(iterator: f64) {
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_INDEX_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_INDEX_KEY),
         (iterator_local_index(iterator) + 1) as f64,
     );
 }
 
 fn iterator_is_done(iterator: f64) -> bool {
-    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_DONE_KEY))
-        .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+    get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_DONE_KEY),
+    )
+    .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
 fn iterator_mark_done(iterator: f64) {
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_DONE_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_DONE_KEY),
         f64::from_bits(TAG_TRUE),
     );
 }
@@ -195,20 +208,26 @@ fn iterator_mark_done(iterator: f64) {
 // ── iterator-local queue / pending-slot / state accessors ──────────────────
 
 fn iterator_enqueue(iterator: f64, chunk: f64) {
-    let existing = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_QUEUE_KEY))
-        .filter(|v| is_array_like_value(*v))
-        .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
+    let existing = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_QUEUE_KEY),
+    )
+    .filter(|v| is_array_like_value(*v))
+    .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
     let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
     let arr = crate::array::js_array_push_f64(arr, chunk);
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_QUEUE_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_QUEUE_KEY),
         box_pointer(arr as *const u8),
     );
 }
 
 fn iterator_dequeue(iterator: f64) -> Option<f64> {
-    let value = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_QUEUE_KEY))?;
+    let value = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_QUEUE_KEY),
+    )?;
     if !is_array_like_value(value) {
         return None;
     }
@@ -231,14 +250,17 @@ fn iterator_dequeue(iterator: f64) -> Option<f64> {
 
 /// Append a pending pull to the back of the FIFO queue.
 fn iterator_push_pending(iterator: f64, promise: *mut crate::promise::Promise) {
-    let existing = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))
-        .filter(|v| is_array_like_value(*v))
-        .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
+    let existing = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_PENDING_KEY),
+    )
+    .filter(|v| is_array_like_value(*v))
+    .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
     let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
     let arr = crate::array::js_array_push_f64(arr, box_pointer(promise as *const u8));
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_PENDING_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_PENDING_KEY),
         box_pointer(arr as *const u8),
     );
 }
@@ -246,7 +268,10 @@ fn iterator_push_pending(iterator: f64, promise: *mut crate::promise::Promise) {
 /// Take the oldest pending pull off the front of the FIFO queue, or `None`
 /// when no `next()` is currently awaiting.
 fn iterator_shift_pending(iterator: f64) -> Option<*mut crate::promise::Promise> {
-    let value = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))?;
+    let value = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_PENDING_KEY),
+    )?;
     if !is_array_like_value(value) {
         return None;
     }
@@ -261,12 +286,15 @@ fn iterator_shift_pending(iterator: f64) -> Option<*mut crate::promise::Promise>
 
 /// Whether any `next()` is currently awaiting a chunk.
 fn iterator_has_pending(iterator: f64) -> bool {
-    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))
-        .filter(|v| is_array_like_value(*v))
-        .is_some_and(|v| {
-            let arr = raw_ptr_from_value(v) as *mut crate::array::ArrayHeader;
-            crate::array::js_array_length(arr) != 0
-        })
+    get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_PENDING_KEY),
+    )
+    .filter(|v| is_array_like_value(*v))
+    .is_some_and(|v| {
+        let arr = raw_ptr_from_value(v) as *mut crate::array::ArrayHeader;
+        crate::array::js_array_length(arr) != 0
+    })
 }
 
 /// Resolve every outstanding pending pull with `{done:true}` (used on `end` and
@@ -289,23 +317,33 @@ fn iterator_reject_all_pending(iterator: f64, reason: f64) {
 }
 
 fn iterator_stream_ended(iterator: f64) -> bool {
-    has_truthy_hidden(iterator, hidden_key(READABLE_ITERATOR_ENDED_KEY))
+    has_truthy_hidden(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_ENDED_KEY),
+    )
 }
 
 fn iterator_set_stream_ended(iterator: f64) {
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_ENDED_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_ENDED_KEY),
         f64::from_bits(TAG_TRUE),
     );
 }
 
 fn iterator_stored_error(iterator: f64) -> Option<f64> {
-    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_ERROR_KEY))
+    get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_ERROR_KEY),
+    )
 }
 
 fn iterator_set_error(iterator: f64, err: f64) {
-    set_hidden_value(iterator, hidden_key(READABLE_ITERATOR_ERROR_KEY), err);
+    set_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_ERROR_KEY),
+        err,
+    );
 }
 
 // ── persistent stream-event listeners feeding the iterator ─────────────────
@@ -346,12 +384,14 @@ pub(crate) fn readable_handle_async_iterator(value: f64) -> Option<f64> {
 }
 
 fn uses_method_listeners(stream: f64) -> bool {
-    has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY))
-        || is_readable_handle(stream)
+    has_truthy_hidden(
+        stream,
+        crate::runtime_state_key!(METHOD_LISTENER_READABLE_KEY),
+    ) || is_readable_handle(stream)
 }
 
 pub(super) fn is_foreign_readable(stream: f64) -> bool {
-    has_truthy_hidden(stream, hidden_key(FOREIGN_READABLE_KEY))
+    has_truthy_hidden(stream, crate::runtime_state_key!(FOREIGN_READABLE_KEY))
 }
 
 /// Pause/resume an event-backed readable through both stream models. Foreign
@@ -360,29 +400,23 @@ pub(super) fn is_foreign_readable(stream: f64) -> bool {
 /// owns the actual producer. Keeping that source paused whenever no iterator
 /// pull is waiting gives `Readable.toWeb()` one-file-chunk backpressure instead
 /// of eagerly buffering the complete file on its first read (#9616).
-fn call_foreign_flow_method(stream: f64, method: &[u8]) {
+fn call_foreign_flow_method(stream: f64, method: crate::runtime_state_key::NamedStateKey) {
     if !is_foreign_readable(stream) && !is_readable_handle(stream) {
         return;
     }
     unsafe {
-        crate::object::js_native_call_method(
-            stream,
-            method.as_ptr() as *const i8,
-            method.len(),
-            std::ptr::null(),
-            0,
-        );
+        method.call_value(stream, std::ptr::null(), 0);
     }
 }
 
 fn pause_iterator_source(stream: f64) {
     pause_readable_stream(stream);
-    call_foreign_flow_method(stream, b"pause");
+    call_foreign_flow_method(stream, crate::runtime_state_key!(b"pause"));
 }
 
 fn resume_iterator_source(stream: f64) {
     resume_readable_stream(stream);
-    call_foreign_flow_method(stream, b"resume");
+    call_foreign_flow_method(stream, crate::runtime_state_key!(b"resume"));
 }
 
 fn iterator_from_listener(closure: *const ClosureHeader) -> f64 {
@@ -420,7 +454,10 @@ extern "C" fn ns_readable_iter_on_data(
     } else {
         iterator_enqueue(iterator, chunk);
     }
-    if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
+    if let Some(stream) = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
+    ) {
         if iterator_has_pending(iterator) {
             resume_iterator_source(stream);
         } else {
@@ -519,7 +556,7 @@ fn attach_iterator_listener(
     let cb_value = box_pointer(cb as *const u8);
     set_hidden_value(iterator, hidden_key(store_key), cb_value);
     if uses_method_listeners(stream) {
-        call_stream_listener_method(stream, b"on", event, cb_value);
+        call_stream_listener_method(stream, crate::runtime_state_key!(b"on"), event, cb_value);
         return;
     }
     add_stream_listener_for_event(stream, string_value(event), cb_value);
@@ -528,16 +565,15 @@ fn attach_iterator_listener(
 /// `stream.<method>(event, cb)` through the object's own dispatch, for a stream
 /// whose listener registry is not node:stream's (see
 /// [`METHOD_LISTENER_READABLE_KEY`]).
-fn call_stream_listener_method(stream: f64, method: &[u8], event: &[u8], cb_value: f64) {
+fn call_stream_listener_method(
+    stream: f64,
+    method: crate::runtime_state_key::NamedStateKey,
+    event: &[u8],
+    cb_value: f64,
+) {
     let args = [string_value(event), cb_value];
     unsafe {
-        crate::object::js_native_call_method(
-            stream,
-            method.as_ptr() as *const i8,
-            method.len(),
-            args.as_ptr(),
-            args.len(),
-        );
+        method.call_value(stream, args.as_ptr(), args.len());
     }
 }
 
@@ -546,12 +582,15 @@ fn call_stream_listener_method(stream: f64, method: &[u8], event: &[u8], cb_valu
 /// Nothing is delivered synchronously here — `resume` only schedules the
 /// resume/drain microtasks, so this never re-enters the event loop.
 fn iterator_ensure_attached(iterator: f64, stream: f64) {
-    if has_truthy_hidden(iterator, hidden_key(READABLE_ITERATOR_ATTACHED_KEY)) {
+    if has_truthy_hidden(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_ATTACHED_KEY),
+    ) {
         return;
     }
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_ATTACHED_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_ATTACHED_KEY),
         f64::from_bits(TAG_TRUE),
     );
 
@@ -590,10 +629,8 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
 
     if is_readable_handle(stream) {
         let state = unsafe {
-            crate::object::js_native_call_method(
+            crate::runtime_state_key!(b"_perryIteratorState").call_value(
                 stream,
-                b"_perryIteratorState".as_ptr() as *const i8,
-                19,
                 std::ptr::null(),
                 0,
             )
@@ -611,10 +648,8 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
         }
         if state == 3.0 {
             let reason = unsafe {
-                crate::object::js_native_call_method(
+                crate::runtime_state_key!(b"_perryIteratorError").call_value(
                     stream,
-                    b"_perryIteratorError".as_ptr() as *const i8,
-                    19,
                     std::ptr::null(),
                     0,
                 )
@@ -642,13 +677,18 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
     resume_iterator_source(stream);
 }
 
-fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &'static [u8]) {
-    if let Some(cb_value) = get_hidden_value(iterator, hidden_key(store_key)) {
+fn remove_iterator_listener(
+    iterator: f64,
+    stream: f64,
+    event: &[u8],
+    store_key: crate::runtime_state_key::NamedStateKey,
+) {
+    if let Some(cb_value) = get_hidden_value(iterator, store_key) {
         if uses_method_listeners(stream) {
-            call_stream_listener_method(stream, b"off", event, cb_value);
+            call_stream_listener_method(stream, crate::runtime_state_key!(b"off"), event, cb_value);
             set_hidden_value(
                 iterator,
-                hidden_key(store_key),
+                hidden_key(store_key.bytes),
                 f64::from_bits(TAG_UNDEFINED),
             );
             return;
@@ -656,20 +696,43 @@ fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key:
         remove_stream_listener_for_event(stream, string_value(event), cb_value);
         set_hidden_value(
             iterator,
-            hidden_key(store_key),
+            hidden_key(store_key.bytes),
             f64::from_bits(TAG_UNDEFINED),
         );
     }
 }
 
 fn iterator_remove_listeners(iterator: f64) {
-    let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) else {
+    let Some(stream) = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
+    ) else {
         return;
     };
-    remove_iterator_listener(iterator, stream, b"data", READABLE_ITERATOR_DATA_CB_KEY);
-    remove_iterator_listener(iterator, stream, b"end", READABLE_ITERATOR_END_CB_KEY);
-    remove_iterator_listener(iterator, stream, b"error", READABLE_ITERATOR_ERROR_CB_KEY);
-    remove_iterator_listener(iterator, stream, b"close", READABLE_ITERATOR_CLOSE_CB_KEY);
+    remove_iterator_listener(
+        iterator,
+        stream,
+        b"data",
+        crate::runtime_state_key!(READABLE_ITERATOR_DATA_CB_KEY),
+    );
+    remove_iterator_listener(
+        iterator,
+        stream,
+        b"end",
+        crate::runtime_state_key!(READABLE_ITERATOR_END_CB_KEY),
+    );
+    remove_iterator_listener(
+        iterator,
+        stream,
+        b"error",
+        crate::runtime_state_key!(READABLE_ITERATOR_ERROR_CB_KEY),
+    );
+    remove_iterator_listener(
+        iterator,
+        stream,
+        b"close",
+        crate::runtime_state_key!(READABLE_ITERATOR_CLOSE_CB_KEY),
+    );
 }
 
 fn settle_iterator_return_value(value: f64) {
@@ -695,13 +758,7 @@ pub(super) fn call_source_iterator_return(stream: f64) {
         return;
     };
     let returned = unsafe {
-        crate::object::js_native_call_method(
-            source_iterator,
-            b"return".as_ptr() as *const i8,
-            6,
-            std::ptr::null(),
-            0,
-        )
+        crate::runtime_state_key!(b"return").call_value(source_iterator, std::ptr::null(), 0)
     };
     settle_iterator_return_value(returned);
 }
@@ -717,7 +774,7 @@ extern "C" fn ns_readable_iterator_next(
     }
     let Some(stream) = get_hidden_value(
         iterator.get_nanbox_f64(),
-        hidden_key(READABLE_ITERATOR_STREAM_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
     ) else {
         return readable_iterator_done();
     };
@@ -729,10 +786,8 @@ extern "C" fn ns_readable_iterator_next(
         {
             let source_iterator = scope.root_nanbox_f64(source_iterator);
             let next = match catch_pipeline_throw(|| unsafe {
-                crate::object::js_native_call_method(
+                crate::runtime_state_key!(b"next").call_value(
                     source_iterator.get_nanbox_f64(),
-                    b"next".as_ptr() as *const i8,
-                    4,
                     std::ptr::null(),
                     0,
                 )
@@ -827,14 +882,14 @@ extern "C" fn ns_readable_iterator_return(
     // behind outstanding pulls waits for the last pull before tearing down.
     let stream = get_hidden_value(
         iterator.get_nanbox_f64(),
-        hidden_key(READABLE_ITERATOR_STREAM_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
     );
     if stream.is_some_and(uses_async_generator_ordering)
         && iterator_has_pending(iterator.get_nanbox_f64())
     {
         let queue = get_hidden_value(
             iterator.get_nanbox_f64(),
-            hidden_key(READABLE_ITERATOR_PENDING_KEY),
+            crate::runtime_state_key!(READABLE_ITERATOR_PENDING_KEY),
         )
         .unwrap();
         let arr = raw_ptr_from_value(queue) as *mut crate::array::ArrayHeader;
@@ -855,7 +910,7 @@ extern "C" fn ns_readable_iterator_return(
     let already_done = iterator_is_done(iterator.get_nanbox_f64());
     let attached = has_truthy_hidden(
         iterator.get_nanbox_f64(),
-        hidden_key(READABLE_ITERATOR_ATTACHED_KEY),
+        crate::runtime_state_key!(READABLE_ITERATOR_ATTACHED_KEY),
     );
     let aborting = !already_done
         && attached
@@ -867,20 +922,20 @@ extern "C" fn ns_readable_iterator_return(
         // An iterator's own AbortError is handled during generator cleanup.
         if let Some(stream) = get_hidden_value(
             iterator.get_nanbox_f64(),
-            hidden_key(READABLE_ITERATOR_STREAM_KEY),
+            crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
         ) {
             let stream = scope.root_nanbox_f64(stream);
             remove_iterator_listener(
                 iterator.get_nanbox_f64(),
                 stream.get_nanbox_f64(),
                 b"data",
-                READABLE_ITERATOR_DATA_CB_KEY,
+                crate::runtime_state_key!(READABLE_ITERATOR_DATA_CB_KEY),
             );
             remove_iterator_listener(
                 iterator.get_nanbox_f64(),
                 stream.get_nanbox_f64(),
                 b"end",
-                READABLE_ITERATOR_END_CB_KEY,
+                crate::runtime_state_key!(READABLE_ITERATOR_END_CB_KEY),
             );
         }
     } else {
@@ -893,7 +948,7 @@ extern "C" fn ns_readable_iterator_return(
     {
         if let Some(stream) = get_hidden_value(
             iterator.get_nanbox_f64(),
-            hidden_key(READABLE_ITERATOR_STREAM_KEY),
+            crate::runtime_state_key!(READABLE_ITERATOR_STREAM_KEY),
         ) {
             let stream = scope.root_nanbox_f64(stream);
             call_source_iterator_return(stream.get_nanbox_f64());
@@ -1055,10 +1110,14 @@ pub extern "C" fn js_make_single_value_async_iterator(value: f64) -> f64 {
     let iterator = box_pointer(obj as *const u8);
     let v = crate::value::JSValue::from_bits(value.to_bits());
     let empty = v.is_undefined() || v.is_null();
-    set_hidden_value(iterator, hidden_key(SINGLE_VALUE_ITERATOR_VALUE_KEY), value);
     set_hidden_value(
         iterator,
-        hidden_key(READABLE_ITERATOR_DONE_KEY),
+        crate::runtime_state_key!(SINGLE_VALUE_ITERATOR_VALUE_KEY),
+        value,
+    );
+    set_hidden_value(
+        iterator,
+        crate::runtime_state_key!(READABLE_ITERATOR_DONE_KEY),
         f64::from_bits(if empty { TAG_TRUE } else { TAG_FALSE }),
     );
     install_async_iterator_symbol(
@@ -1077,8 +1136,11 @@ extern "C" fn single_value_iterator_next(
         return readable_iterator_done();
     }
     iterator_mark_done(iterator);
-    let value = get_hidden_value(iterator, hidden_key(SINGLE_VALUE_ITERATOR_VALUE_KEY))
-        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+    let value = get_hidden_value(
+        iterator,
+        crate::runtime_state_key!(SINGLE_VALUE_ITERATOR_VALUE_KEY),
+    )
+    .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
     resolved_promise(iterator_result(value, false))
 }
 
@@ -1099,7 +1161,7 @@ extern "C" fn single_value_iterator_return(
 pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
     set_hidden_value(
         stream,
-        hidden_key(FOREIGN_READABLE_KEY),
+        crate::runtime_state_key!(FOREIGN_READABLE_KEY),
         f64::from_bits(TAG_TRUE),
     );
     install_readable_async_iterator_symbol(stream);
@@ -1177,7 +1239,7 @@ pub(crate) fn install_readable_async_iterator_symbol_on_prototype(proto: f64) {
 pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64) {
     set_hidden_value(
         stream,
-        hidden_key(METHOD_LISTENER_READABLE_KEY),
+        crate::runtime_state_key!(METHOD_LISTENER_READABLE_KEY),
         f64::from_bits(TAG_TRUE),
     );
     install_foreign_readable_async_iterator_symbol(stream);

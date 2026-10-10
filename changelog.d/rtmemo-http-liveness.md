@@ -1,0 +1,1 @@
+Replace HTTP server and HTTP/2 client liveness scans of the shared handle registry with a maintained per-agent count. Existing lifecycle fields determine each contribution; ref/unref, deferred events, close, and payload removal update the count. Worker ownership and primary pump threads preserve agent isolation. Add lifecycle and request-handle removal tests.

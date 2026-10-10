@@ -25,6 +25,7 @@ pub(crate) fn register_turnloop_server_session(
     local_settings: Http2SettingsState,
 ) -> i64 {
     let session_handle = register_handle(Http2SessionHandle {
+        activity_count: crate::server::server::activity::new_session_count(false),
         socket_value: socket,
         socket_incarnation: perry_ext_net::native_transport::snapshot(socket),
         owner_agent: perry_ffi::agent_post::current_agent(),
@@ -137,8 +138,7 @@ pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
     let notify = match get_handle_mut::<Http2SessionHandle>(session_handle) {
         Some(session) => {
             let first = !session.closed;
-            session.closed = true;
-            session.destroyed = true;
+            session.mark_closed();
             session.connecting = false;
             session.turnloop_conn = 0;
             first

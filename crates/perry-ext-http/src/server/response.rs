@@ -1630,19 +1630,10 @@ pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -
     sr.standalone = true;
     sr.send_date = false;
     if JsValue::from_bits(req.get().to_bits()).is_pointer() {
-        extern "C" {
-            fn js_object_get_field_by_name(
-                obj: *const perry_ffi::ObjectHeader,
-                key: *const StringHeader,
-            ) -> JsValue;
-        }
-        let key = alloc_string("method");
-        let m = js_object_get_field_by_name(
-            (req.get().to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
-            key.as_raw(),
-        );
+        thread_local! { static METHOD: perry_ffi::StateKeySite = const { perry_ffi::StateKeySite::new() }; }
+        let m = METHOD.with(|site| site.get(req.get(), b"method"));
         // Heap or inline SSO (`"GET"`, `"POST"` built at runtime, #11519).
-        if let Some(method) = JsValue::from_bits(m.bits()).to_owned_string() {
+        if let Some(method) = JsValue::from_bits(m.to_bits()).to_owned_string() {
             sr.standalone_req_method = Some(method);
         }
     }
@@ -1765,18 +1756,10 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
 pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
     let scope = perry_ffi::TransientRootScope::enter();
     let socket = scope.root_nanbox(socket);
-    extern "C" {
-        fn js_native_call_method_str_key(
-            object: f64,
-            name_handle: i64,
-            args_ptr: *const f64,
-            args_len: usize,
-        ) -> f64;
-    }
-    let name = scope.root_addr(alloc_string("write").as_raw() as i64);
+    thread_local! { static WRITE: perry_ffi::StateKeySite = const { perry_ffi::StateKeySite::new() }; }
     let chunk_val = f64::from_bits(JsValue::from_string_ptr(alloc_string(chunk).as_raw()).bits());
     let args = [chunk_val];
-    let _ = js_native_call_method_str_key(socket.get(), name.get(), args.as_ptr(), 1);
+    let _ = WRITE.with(|site| site.call(socket.get(), b"write", &args));
 }
 
 fn jsvalue_truthy(value: f64) -> bool {

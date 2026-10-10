@@ -22,10 +22,12 @@
 collector regex ^perry_runtime::gc::policy::gc_check_trigger -- the allocation-point trigger (RFC A1/A2): OldReclaim full, the slack valve, a mutator assist, or a direct minor can run inside it
 collector regex flush_deferred_gc_request|gc::roots::exit_gc_root_lock$ -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523). Anchored: exit_gc_root_lock_noncollecting (the #11523 fix) never flushes
 collector regex ^perry_runtime::gc::gc_collect_(minor|full) -- the minor and full collectors themselves
-collector regex ^perry_runtime::gc::copying::run_copied_minor_attempt -- the copying (moving) minor
+# The diagnostic scan can be fully inlined/removed in optimized archives.
+# Both names seed the same copying collector. Combining them keeps the rule
+# live when only the caller remains, without changing the seed set.
+collector regex ^perry_runtime::gc::(native_stack_scan::|copying::run_copied_minor_attempt) -- diagnostic native-stack scan inside the copying collector, including archives without a standalone scan symbol
 collector contains gc::roots::stack_maps::visit_stack_map_root_slots -- reads (and rewrites) the native frame roots of every generated frame: the chokepoint every precise collection passes
 collector contains gc::roots::mark_mutable_root_slots -- the mutable-root marking walk (frames, shadow stack, registered scanners) of every precise collection
-collector regex ^perry_runtime::gc::native_stack_scan:: -- the conservative native-stack scan (the valve / OldReclaim / emergency arms)
 collector regex ^<*perry_runtime::gc::cycle::registered_root_scan:: -- a budgeted cycle's RootScan subphase, reachable from a mutator assist (RFC arm A-assist)
 collector regex ^perry_runtime::gc::(mod::)?gc_try_emergency_reclaim -- emergency full collection when a block reservation fails (RFC arm A-emerg)
 poll exact js_gc_collect -- explicit gc(): a declared poll (RFC D1), never cut

@@ -3978,3 +3978,8 @@ js_iterator_close_on_throw	Reenters
 js_iterator_delegate_return	Reenters
 js_iterator_delegate_throw	Reenters
 perry_class_value_dir_cell	Leaf
+js_object_alloc_plain	Reenters
+js_method_site_chain_value	Leaf
+js_dyn_index_get_site	Reenters
+js_object_get_field_by_key_site	Reenters
+js_packed_add_chain_valid	Leaf

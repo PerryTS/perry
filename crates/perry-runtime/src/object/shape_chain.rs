@@ -246,6 +246,16 @@ impl ShapeChain {
         }
     }
 
+    pub(crate) fn into_raw_parts(self) -> (*mut ShapeHop, usize) {
+        let proof = std::mem::ManuallyDrop::new(self);
+        (proof.hops, proof.len)
+    }
+
+    /// The caller owns exactly this block and must drop or reconstitute it once.
+    pub(crate) unsafe fn from_raw_parts(hops: *mut ShapeHop, len: usize) -> Self {
+        Self { hops, len }
+    }
+
     #[inline]
     pub(crate) unsafe fn valid(&self) -> bool {
         std::slice::from_raw_parts(self.hops, self.len)

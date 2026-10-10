@@ -861,7 +861,7 @@ pub(super) fn release_on_destroy(stream: f64) {
     #[cfg(test)]
     if stream_sabotage("release_in_finalizer_only")
         || (stream_sabotage("skip_release_autodestroy")
-            && has_truthy_hidden(stream, hidden_key(b"readableEnded")))
+            && has_truthy_hidden(stream, crate::runtime_state_key!(b"readableEnded")))
     {
         return;
     }

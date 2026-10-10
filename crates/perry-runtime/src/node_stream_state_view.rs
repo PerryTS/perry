@@ -123,7 +123,7 @@ fn bool_bits(value: bool) -> f64 {
 /// The stream a state view belongs to, from the accessor's receiver.
 fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
     let this = this.as_f64();
-    get_hidden_value(this, hidden_key(STREAM_STATE_OWNER_KEY))
+    get_hidden_value(this, crate::runtime_state_key!(STREAM_STATE_OWNER_KEY))
 }
 
 fn hidden_array_or_empty(stream: f64, key: impl StateKey) -> f64 {
@@ -155,7 +155,10 @@ fn readable_field(stream: f64, field: &str) -> f64 {
         "flowing" => readable_flowing_value(stream),
         // `ended` is "EOF was pushed"; `readableEnded` is the readable side's
         // own flag (a Duplex's writable `end()` must not set it).
-        "ended" => bool_bits(has_truthy_hidden(stream, hidden_key(b"readableEnded"))),
+        "ended" => bool_bits(has_truthy_hidden(
+            stream,
+            crate::runtime_state_key!(b"readableEnded"),
+        )),
         "endEmitted" => bool_bits(has_truthy_hidden(stream, hidden_end_emitted_key())),
         "readableListening" => bool_bits(
             stream_listener_count_for_event(stream, literal_string_value(b"readable")) > 0,
@@ -171,8 +174,10 @@ fn readable_field(stream: f64, field: &str) -> f64 {
 fn writable_field(stream: f64, field: &str) -> f64 {
     match field {
         "objectMode" => bool_bits(has_truthy_hidden(stream, hidden_writable_object_mode_key())),
-        "highWaterMark" => get_hidden_value(stream, hidden_key(b"writableHighWaterMark"))
-            .unwrap_or_else(|| default_hwm(false)),
+        "highWaterMark" => {
+            get_hidden_value(stream, crate::runtime_state_key!(b"writableHighWaterMark"))
+                .unwrap_or_else(|| default_hwm(false))
+        }
         "length" => writable_length(stream),
         "corked" => writable_corked_count(stream),
         "finalCalled" => bool_bits(has_truthy_hidden(
@@ -180,7 +185,10 @@ fn writable_field(stream: f64, field: &str) -> f64 {
             hidden_writable_final_invoked_key(),
         )),
         "needDrain" => bool_bits(writable_need_drain(stream)),
-        "ending" | "ended" => bool_bits(has_truthy_hidden(stream, hidden_key(b"writableEnded"))),
+        "ending" | "ended" => bool_bits(has_truthy_hidden(
+            stream,
+            crate::runtime_state_key!(b"writableEnded"),
+        )),
         "finished" => bool_bits(has_truthy_hidden(stream, hidden_finish_emitted_key())),
         "decodeStrings" => get_hidden_value(stream, hidden_writable_decode_strings_key())
             .unwrap_or_else(|| bool_bits(true)),
@@ -195,7 +203,10 @@ fn writable_field(stream: f64, field: &str) -> f64 {
 fn common_field(stream: f64, field: &str) -> f64 {
     match field {
         "destroyed" => bool_bits(stream_destroyed(stream)),
-        "closed" => bool_bits(has_truthy_hidden(stream, hidden_key(b"closed"))),
+        "closed" => bool_bits(has_truthy_hidden(
+            stream,
+            crate::runtime_state_key!(b"closed"),
+        )),
         "closeEmitted" => bool_bits(has_truthy_hidden(stream, STREAM_CLOSE_EMITTED_KEY)),
         "errored" => readable_hidden_error(stream).unwrap_or(f64::from_bits(TAG_NULL)),
         "errorEmitted" => bool_bits(readable_hidden_error(stream).is_some()),
@@ -332,7 +343,7 @@ fn state_proto(kind: usize) -> f64 {
 }
 
 /// Attach a fresh `_readableState` / `_writableState` view to `stream`.
-fn install_state_view(stream: f64, kind: usize, property: &'static [u8]) {
+fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_key::NamedStateKey) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(state_proto(kind));
@@ -352,17 +363,24 @@ fn install_state_view(stream: f64, kind: usize, property: &'static [u8]) {
         raw_ptr_from_value(view.get_nanbox_f64()),
         proto.get_nanbox_f64().to_bits(),
     );
-    let property_key = hidden_key(property);
     // node's own enumerable `_readableState` / `_writableState`.
-    set_visible_own_value(stream.get_nanbox_f64(), property_key, view.get_nanbox_f64());
+    set_visible_own_value(stream.get_nanbox_f64(), property, view.get_nanbox_f64());
 }
 
 pub(super) fn install_readable_state_view(stream: f64) {
-    install_state_view(stream, READABLE_KIND, b"_readableState");
+    install_state_view(
+        stream,
+        READABLE_KIND,
+        crate::runtime_state_key!(b"_readableState"),
+    );
 }
 
 pub(super) fn install_writable_state_view(stream: f64) {
-    install_state_view(stream, WRITABLE_KIND, b"_writableState");
+    install_state_view(
+        stream,
+        WRITABLE_KIND,
+        crate::runtime_state_key!(b"_writableState"),
+    );
 }
 
 /// Node sets `closeEmitted` right before `'close'` would be emitted, whether

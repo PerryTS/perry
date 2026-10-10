@@ -489,8 +489,8 @@ mod tests {
         let http_close_callback = young_gc_root();
         let mut http = http_server(http_handler, listener_map("request", http_listener));
         http.once_listeners = listener_map("connection", http_once_listener);
-        http.deferred_listen_cbs.push(http_listen_callback);
-        http.deferred_close_cbs.push(http_close_callback);
+        server::register_listen_callback(&mut http, http_listen_callback);
+        server::queue_deferred_close_emit(&mut http, http_close_callback);
         let http_handle = register_handle(http);
 
         let https_handler = young_gc_root();

@@ -67,7 +67,11 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
     for i in 0..snapshot_len(&dests) {
         let dest = snapshot_at(&dests, i);
         if is_small_native_handle_destination(dest) {
-            let ret = call_small_native_pipe_method(dest, b"write", &[chunk.get_nanbox_f64()]);
+            let ret = call_small_native_pipe_method(
+                dest,
+                crate::runtime_state_key!(b"write"),
+                &[chunk.get_nanbox_f64()],
+            );
             if ret.to_bits() == TAG_FALSE {
                 let _ = pause_readable_stream(stream.get_nanbox_f64());
                 add_pipe_drain_listener(stream.get_nanbox_f64(), snapshot_at(&dests, i));
@@ -118,7 +122,7 @@ pub(in crate::node_stream) fn end_pipe_destinations(stream: f64) {
     for i in 0..snapshot_len(&dests) {
         let dest = snapshot_at(&dests, i);
         if is_small_native_handle_destination(dest) {
-            let _ = call_small_native_pipe_method(dest, b"end", &[]);
+            let _ = call_small_native_pipe_method(dest, crate::runtime_state_key!(b"end"), &[]);
             continue;
         }
         let dest_scope = RuntimeHandleScope::new();

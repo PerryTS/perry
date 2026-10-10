@@ -220,26 +220,14 @@ pub(super) fn state_slot_in(
 
 /// One of the emitter state keys of `target` (`_events`, `_eventsCount`,
 /// `_maxListeners`): its own slot when the shape holds it, else `[[Get]]`.
-pub(super) fn state_get(target: f64, memo: &'static StateMemo, name: &[u8]) -> f64 {
-    match state_slot(target, memo, name) {
-        // SAFETY: `state_slot` resolved `slot` on the live object.
-        Some((obj, slot, _)) => f64::from_bits(unsafe { slot_bits(obj, slot) }),
-        None => get_named(target, name),
-    }
+pub(super) fn state_get(target: f64, key: crate::runtime_state_key::NamedStateKey) -> f64 {
+    key.read_value(target)
 }
 
 /// `target.<state key> = value`: an overwrite of its own slot when the shape
 /// holds it and the receiver is not frozen, else `[[Set]]`.
-pub(super) fn state_set(target: f64, memo: &'static StateMemo, name: &[u8], value: f64) {
-    if let Some((obj, slot, flags)) = state_slot(target, memo, name) {
-        if flags & crate::gc::OBJ_FLAG_FROZEN == 0 {
-            // SAFETY: an own plain data slot of the live object; the funnel
-            // checks the field representation and runs the barrier.
-            unsafe { crate::object::store_object_field_slot(obj, slot as usize, value.to_bits()) };
-            return;
-        }
-    }
-    set_named(target, name, value);
+pub(super) fn state_set(target: f64, key: crate::runtime_state_key::NamedStateKey, value: f64) {
+    key.write_value(target, value);
 }
 
 /// `target[key] = value` answered by `target`'s shape: an overwrite of an
@@ -530,7 +518,7 @@ mod method_body_tests {
         let _no_move = crate::gc::GcSuppressScope::new();
         let target = crate::node_stream::js_event_emitter_object_new(undefined_value());
         let builtin_proto = shape_prototype(ordinary_object(target).unwrap().0).unwrap();
-        let emit = get_named(builtin_proto, b"emit");
+        let emit = get_named(builtin_proto, crate::runtime_state_key!(b"emit"));
         // Keep the aliases inline on a private prototype; the realm's
         // shared prototype may already be full after another unit test.
         let proto =
@@ -542,8 +530,8 @@ mod method_body_tests {
         let other_id = crate::value::JSValue::try_short_string(b"other")
             .unwrap()
             .bits() as i64;
-        set_named(proto, b"alias", emit);
-        set_named(proto, b"other", 42.0);
+        set_named(proto, crate::runtime_state_key!(b"alias"), emit);
+        set_named(proto, crate::runtime_state_key!(b"other"), 42.0);
         let args = [f64::from_bits(
             crate::value::JSValue::try_short_string(b"none")
                 .unwrap()
@@ -556,7 +544,11 @@ mod method_body_tests {
             );
             assert_eq!(shape_method(target, other_id, b"other"), Some(42.0));
             let obj = ordinary_object(target).unwrap().0;
-            set_named(proto, b"non_static_method_id", emit);
+            set_named(
+                proto,
+                crate::runtime_state_key!(b"non_static_method_id"),
+                emit,
+            );
             let holder = ordinary_object(proto).unwrap().0;
             let heap_key = crate::string::intern_ascii_literal(b"non_static_method_id") as i64;
             let memo = crate::object::method_site::own_slot_memo::ProtoSlotMemo::new();
@@ -580,7 +572,7 @@ mod method_body_tests {
                 crate::node_stream::emitter_emit_call(target, other_id, b"other", args.as_ptr(), 1),
                 None
             );
-            set_named(target, b"alias", 13.0);
+            set_named(target, crate::runtime_state_key!(b"alias"), 13.0);
             assert_eq!(
                 crate::node_stream::emitter_emit_call(target, alias_id, b"alias", args.as_ptr(), 1),
                 None

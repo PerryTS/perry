@@ -37,6 +37,7 @@ unsafe extern "C" fn call_deferred_callbacks(data: *mut std::ffi::c_void) -> f64
 /// `deferred_listen_cbs`, which the pump uses to remove it again after
 /// the emit fires.
 pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
+    let was_active = server_is_active(s);
     s.pending_listening_emit = true;
     if callback != 0 {
         s.listeners
@@ -45,6 +46,7 @@ pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
             .push(callback);
         s.deferred_listen_cbs.push(callback);
     }
+    s.finish_activity_change(was_active);
 }
 
 /// Register a `listen(port, cb)` callback ahead of the bind, for a `listen()`
@@ -53,6 +55,7 @@ pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
 /// emit itself is armed by `queue_deferred_listening_emit` once the bind has
 /// succeeded on the owner.
 pub(crate) fn register_listen_callback(s: &mut HttpServer, callback: i64) {
+    let was_active = server_is_active(s);
     if callback != 0 {
         s.listeners
             .entry("listening".to_string())
@@ -60,12 +63,14 @@ pub(crate) fn register_listen_callback(s: &mut HttpServer, callback: i64) {
             .push(callback);
         s.deferred_listen_cbs.push(callback);
     }
+    s.finish_activity_change(was_active);
 }
 
 /// Undo `register_listen_callback` for a posted `listen()` whose bind failed:
 /// Node never runs the callback of a failed listen, and a callback left in
 /// `deferred_listen_cbs` would keep the event loop alive forever.
 pub(crate) fn withdraw_listen_callbacks(s: &mut HttpServer) {
+    let was_active = server_is_active(s);
     let once = std::mem::take(&mut s.deferred_listen_cbs);
     if let Some(ls) = s.listeners.get_mut("listening") {
         for cb in &once {
@@ -74,9 +79,11 @@ pub(crate) fn withdraw_listen_callbacks(s: &mut HttpServer) {
             }
         }
     }
+    s.finish_activity_change(was_active);
 }
 
 pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
+    let was_active = server_is_active(s);
     s.pending_close_emit = true;
     if callback != 0 {
         s.listeners
@@ -85,6 +92,7 @@ pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
             .push(callback);
         s.deferred_close_cbs.push(callback);
     }
+    s.finish_activity_change(was_active);
 }
 
 /// #4903 — fire a server's queued `'listening'` listeners + `listen(cb)`
@@ -115,6 +123,7 @@ where
     let (cbs, async_id): (Vec<i64>, u64) = match get_handle_mut::<T>(server_handle) {
         Some(t) => {
             let s = base_of(t);
+            let was_active = server_is_active(s);
             if !std::mem::take(&mut s.pending_listening_emit) {
                 return 0;
             }
@@ -130,6 +139,7 @@ where
                     }
                 }
             }
+            s.finish_activity_change(was_active);
             (snapshot, s.async_id)
         }
         None => return 0,
@@ -164,6 +174,7 @@ where
     let (callbacks, async_id) = match get_handle_mut::<T>(server_handle) {
         Some(server) => {
             let base = base_of(server);
+            let was_active = server_is_active(base);
             if !std::mem::take(&mut base.pending_close_emit) {
                 return 0;
             }
@@ -176,6 +187,7 @@ where
                     }
                 }
             }
+            base.finish_activity_change(was_active);
             let async_id = std::mem::take(&mut base.async_id);
             (callbacks, async_id)
         }
@@ -391,9 +403,11 @@ unsafe extern "C" fn call_deferred_error_callbacks(data: *mut std::ffi::c_void) 
 pub(crate) fn queue_deferred_error_emit(s: &mut HttpServer, err: ListenError) {
     // Node never emits `'listening'` for a listen that failed, and the
     // `listen(cb)` callback never runs, so a queued one is dropped here.
+    let was_active = server_is_active(s);
     s.pending_listening_emit = false;
     s.listening = false;
     s.pending_error_emit = Some(err);
+    s.finish_activity_change(was_active);
 }
 
 /// Queue a failed `listen()` from a `turnloop_net::NetError`.
@@ -562,8 +576,8 @@ mod listen_error_tests {
     #[test]
     fn queueing_an_error_cancels_a_pending_listening_emit() {
         let mut server = HttpServer::with_handler(0);
-        server.pending_listening_emit = true;
-        server.listening = true;
+        queue_deferred_listening_emit(&mut server, 0);
+        server.set_listening(true);
         queue_deferred_error_emit(&mut server, err("EADDRINUSE", "127.0.0.1", 47421));
         assert!(!server.pending_listening_emit);
         assert!(!server.listening);
