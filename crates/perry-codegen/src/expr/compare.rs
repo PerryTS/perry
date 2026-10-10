@@ -660,6 +660,24 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     )
 }
 
+/// Checked numeric bytes use raw doubles or the undefined tag, never the
+/// compact-integer tag. The same scoped scalar-union proof applies to their
+/// immutable result locals. Keep Number-or-undefined distinct from Number:
+/// two undefined operands still need ordinary identity equality.
+fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(id) => {
+            !ctx.shadow_slot_map.contains_key(id)
+                && !ctx.boxed_vars.contains(id)
+                && ctx.stable_local_type_proof(id).is_some_and(|ty| {
+                    matches!(ty, HirType::Union(types) if !types.is_empty()
+                        && types.iter().all(|ty| matches!(ty, HirType::Number | HirType::Void)))
+                })
+        }
+        _ => super::ta_element_read::byte_read_is_numeric(ctx, expr),
+    }
+}
+
 /// Normalize Perry's compact INT32 immediate to an ordinary IEEE double.
 /// Every other bit pattern is left unchanged. That makes a subsequent `fcmp`
 /// exact for an arbitrary JS value against a proven Number: non-number tags
@@ -685,33 +703,20 @@ fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
 /// proven operand leaves that conversion off the varying operand's dependency
 /// chain and folds away for constants. Saturation avoids poison for NaN,
 /// infinity and out-of-range Numbers; the round trip rejects those and fractions.
-/// Checked numeric bytes use raw doubles or the undefined tag, never the
-/// compact-integer tag. The same scoped scalar-union proof applies to their
-/// immutable result locals. Keep Number-or-undefined distinct from Number:
-/// two undefined operands still need ordinary identity equality.
-fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    match expr {
-        Expr::LocalGet(id) => {
-            !ctx.shadow_slot_map.contains_key(id)
-                && !ctx.boxed_vars.contains(id)
-                && ctx.stable_local_type_proof(id).is_some_and(|ty| {
-                    matches!(ty, HirType::Union(types) if !types.is_empty()
-                        && types.iter().all(|ty| matches!(ty, HirType::Number | HirType::Void)))
-                })
-        }
-        _ => super::ta_element_read::byte_read_is_numeric(ctx, expr),
-    }
-}
-
 fn lower_strict_eq_against_number(
     ctx: &mut FnCtx<'_>,
+    dynamic_expr: &Expr,
     op: CompareOp,
     l: &str,
     r: &str,
     dynamic_is_left: bool,
-    dynamic_expr: &Expr,
+    integer_operand: bool,
 ) -> String {
     let plain = is_plain_number_or_undefined(ctx, dynamic_expr);
+    // Raw checked bytes must not take compact-integer normalization. Keep
+    // this admission compatible with main's integer-operand emitter.
+    let integer_operand = integer_operand && !plain;
+    let _ = integer_operand;
     let (dynamic, number) = if dynamic_is_left { (l, r) } else { (r, l) };
     let number = normalize_int32_immediate(ctx, number);
     let number = number.as_str();
@@ -1801,11 +1806,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if matches!(op, CompareOp::Eq | CompareOp::Ne) && exactly_one_numeric {
                     return Ok(lower_strict_eq_against_number(
                         ctx,
+                        if left_numeric { right } else { left },
                         *op,
                         &l,
                         &r,
                         !left_numeric,
-                        if left_numeric { right } else { left },
+                        matches!(if left_numeric { left.as_ref() } else { right.as_ref() },
+                            Expr::Integer(n) if i32::try_from(*n).is_ok())
+                            || matches!(if left_numeric { left.as_ref() } else { right.as_ref() },
+                                Expr::Number(n) if n.is_finite() && n.fract() == 0.0
+                                    && *n >= i32::MIN as f64 && *n <= i32::MAX as f64)
+                            || super::i32_fast_path::is_known_i32_range(
+                                ctx,
+                                if left_numeric { left } else { right },
+                            ),
                     ));
                 }
                 if is_relational_op && !both_numeric {
