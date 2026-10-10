@@ -14,6 +14,32 @@ thread_local! {
     static TEST_REENTER_BEFORE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Numeric predicates shared by expression and statement-run read regions.
+/// Ordered truthiness excludes both zero and NaN; relational predicates keep
+/// JavaScript's unordered-NaN behavior.
+pub(crate) fn numeric_predicate(ctx: &mut FnCtx<'_>, op: CompareOp, l: &str, r: &str) -> String {
+    let pred = match op {
+        CompareOp::Lt => "olt",
+        CompareOp::Le => "ole",
+        CompareOp::Gt => "ogt",
+        CompareOp::Ge => "oge",
+        CompareOp::Eq | CompareOp::LooseEq => "oeq",
+        CompareOp::Ne | CompareOp::LooseNe => "une",
+    };
+    ctx.block().fcmp(pred, l, r)
+}
+
+pub(crate) fn box_numeric_predicate(ctx: &mut FnCtx<'_>, bit: &str) -> String {
+    let bits = ctx.block().select(
+        I1,
+        bit,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    ctx.block().bitcast_i64_to_double(&bits)
+}
+
 fn named_read<'a>(ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(Recv, &'a str)> {
     let Expr::PropertyGet {
         object, property, ..
@@ -190,22 +216,8 @@ fn emit(
         let r = lower_expr(ctx, right)?;
         note(ctx, Route::RloopF);
         note(ctx, Route::RloopFRep);
-        let pred = match op {
-            CompareOp::Lt => "olt",
-            CompareOp::Le => "ole",
-            CompareOp::Gt => "ogt",
-            CompareOp::Ge => "oge",
-            _ => unreachable!("relational admission above"),
-        };
-        let bit = ctx.block().fcmp(pred, &l, &r);
-        let bits = ctx.block().select(
-            I1,
-            &bit,
-            I64,
-            crate::nanbox::TAG_TRUE_I64,
-            crate::nanbox::TAG_FALSE_I64,
-        );
-        Ok(ctx.block().bitcast_i64_to_double(&bits))
+        let bit = numeric_predicate(ctx, op, &l, &r);
+        Ok(box_numeric_predicate(ctx, &bit))
     })();
     // Restore on compiler error as well as normal paths. No unwind path is
     // lowered while these facts are installed: only a bare load and fcmp.

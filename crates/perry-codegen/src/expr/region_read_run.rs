@@ -57,7 +57,8 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use super::region_guard::{
-    self, emit_miss, emit_prime, emit_r1, emit_slot_loads, state_globals, MAX_KEYS,
+    self, emit_miss, emit_number_check, emit_prime, emit_r1, emit_slot_loads, state_globals,
+    MAX_KEYS,
 };
 use super::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I1};
@@ -225,9 +226,12 @@ pub(crate) fn try_lower_region_add_tree(
             Leaf::Other(_) => other_values[i].clone().expect("lowered above"),
         });
     }
+    for (key, value) in key_values.iter().enumerate() {
+        emit_number_check(ctx, &entry, key, value, &generic_l);
+    }
     let mut all_num: Option<String> = None;
-    for (value, needs) in leaf_values.iter().zip(other_needs_test.iter()) {
-        if !needs {
+    for (i, (value, needs)) in leaf_values.iter().zip(other_needs_test.iter()).enumerate() {
+        if !needs || matches!(plan.leaves[i], Leaf::Region(_)) {
             continue;
         }
         let is_num = crate::stmt::emit_js_value_is_number(ctx, value);

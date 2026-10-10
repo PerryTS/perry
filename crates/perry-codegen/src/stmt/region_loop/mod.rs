@@ -80,7 +80,9 @@ use self::guard::{
     emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, static_class_name,
     static_keys_served, store_admission,
 };
-pub(crate) use self::numeric_expression::try_lower_numeric_compare;
+pub(crate) use self::numeric_expression::{
+    box_numeric_predicate, numeric_predicate, try_lower_numeric_compare,
+};
 use self::plan::{
     accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,
     Recheck,

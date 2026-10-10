@@ -194,11 +194,35 @@ pub(crate) fn emit_slot_loads(ctx: &mut FnCtx<'_>, entry: &Entry, keys: usize) -
     for i in 0..keys {
         let shift = (32 + SLOT_BITS * i as u32).to_string();
         let shifted = ctx.block().lshr(I64, &entry.word, &shift);
-        let slot = ctx.block().and(I64, &shifted, "63");
+        let slot = ctx.block().and(I64, &shifted, "31");
         let field_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
         values.push(ctx.block().load(DOUBLE, &field_ptr));
     }
     values
+}
+
+/// R3 for a numeric key: identity F64 bypasses the tag test entirely. Any
+/// lanes are checked on this carrier before the region performs an operator.
+/// The lane bit and slot came from the same atomic word as the guarded id.
+pub(crate) fn emit_number_check(
+    ctx: &mut FnCtx<'_>,
+    entry: &Entry,
+    key: usize,
+    value: &str,
+    generic_l: &str,
+) {
+    let test = ctx.new_block("region.value.test");
+    let next = ctx.new_block("region.value.number");
+    let test_l = ctx.block_label(test);
+    let next_l = ctx.block_label(next);
+    let mask = (1u64 << (37 + SLOT_BITS * key as u32)).to_string();
+    let lane = ctx.block().and(I64, &entry.word, &mask);
+    let identity_f64 = ctx.block().icmp_ne(I64, &lane, "0");
+    ctx.block().cond_br(&identity_f64, &next_l, &test_l);
+    ctx.current_block = test;
+    let number = crate::stmt::emit_js_value_is_number(ctx, value);
+    ctx.block().cond_br(&number, &next_l, generic_l);
+    ctx.current_block = next;
 }
 
 /// The miss block: prime at most `PRIME_ATTEMPTS` times for the life of the
