@@ -836,3 +836,61 @@ fn weak_collection_header_brand_preserves_map_precedence() {
         record.release_extras();
     }
 }
+
+#[test]
+fn symbol_absence_follows_the_published_immutable_prefix() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = crate::object::object_alloc_plain(0);
+        let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
+        crate::object::js_object_set_field_by_name(object, key, 1.0);
+        let proof = || {
+            super::super::shape_record_by_id(super::super::object_shape_stamp(object))
+                .unwrap()
+                .proves_no_symbols()
+        };
+        assert!(proof(), "the string-only prefix proves absence");
+        let symbol =
+            (crate::symbol::js_symbol_new_empty().to_bits() & crate::value::POINTER_MASK) as usize;
+        assert!(crate::object::shaped_symbols::define(
+            object as usize,
+            symbol,
+            2.0f64.to_bits(),
+            0
+        ));
+        assert!(!proof(), "adding a symbol must replace the absence proof");
+        assert!(crate::object::shaped_symbols::delete(
+            object as usize,
+            symbol
+        ));
+        assert!(
+            proof(),
+            "the surviving immutable string prefix proves absence again"
+        );
+    }
+}
+
+#[test]
+fn mutable_key_lists_cannot_publish_symbol_absence() {
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let keys = crate::array::js_array_alloc(1);
+        let text = crate::string::js_string_from_bytes(b"key".as_ptr(), 3);
+        let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(text));
+        let mut record = ShapeRecord::new(keys as u64, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
+        record.refresh_symbol_presence();
+        assert!(
+            !record.proves_no_symbols(),
+            "owned keys may be edited under the same id"
+        );
+        let mut empty = ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0);
+        empty.refresh_symbol_presence();
+        assert!(empty.proves_no_symbols());
+        empty.proto_id = super::super::PROTO_ID_PER_OBJECT;
+        empty.refresh_symbol_presence();
+        assert!(
+            !empty.proves_no_symbols(),
+            "exotic per-object surfaces are not described by this list"
+        );
+    }
+}

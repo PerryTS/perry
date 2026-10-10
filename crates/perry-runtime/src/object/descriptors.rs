@@ -1652,24 +1652,6 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
 /// `TypeError: Object prototype may only be an Object or null`.
 #[no_mangle]
 pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64) -> f64 {
-    // #2816 prototype validation: only an object or `null` is permitted. A
-    // Symbol is pointer-tagged but not an object, so reject it explicitly.
-    let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
-    let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
-    let proto_ok = proto_jv.is_null()
-        || crate::proxy::js_proxy_is_proxy(proto_value) != 0
-        || (!proto_is_symbol
-            && (unsafe { value_is_object_like(proto_value) }
-                || super::class_ref_id(proto_value).is_some()));
-    if !proto_ok {
-        // V8 renders the offending value: `... an Object or null: 5`.
-        let rendered = unsafe { describe_value_for_type_error(proto_value) };
-        throw_object_type_error_with_suffix(
-            "Object prototype may only be an Object or null: ",
-            &rendered,
-        );
-    }
-
     // #2816: apply the descriptor bag, if one was supplied.
     let props_jv = crate::value::JSValue::from_bits(props_value.to_bits());
     if props_jv.is_undefined() {

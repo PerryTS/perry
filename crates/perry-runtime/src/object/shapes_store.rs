@@ -124,6 +124,7 @@ pub(crate) struct ShapeRecord {
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-11: `ShapeObjectKind`.
     /// Bits 12-14 and 21: births a keyless birth shape served while tracking its
     /// width (#10905). Bit 15: a weak-collection brand; bit 31 distinguishes WeakSet.
+    /// Bit 22: immutable key prefix proves symbol absence (derived, not identity).
     /// attribute SUMMARY bits 16-20 (`key_attrs::SUMMARY_*`), an identity fact.
     /// Bits 24-30: the inline width a keyless birth shape's descendants grow
     /// to (#10905). The two #10905 fields are learned facts of the record,
@@ -163,6 +164,9 @@ pub(crate) struct ShapeRecord {
     extras: u64,
 }
 
+// Derived once from the immutable key prefix on slab publication. Owned
+// mutable lists carry no absence proof. This is not shape identity.
+const RECORD_KEYS_NO_SYMBOLS: u32 = 1 << 22;
 const RECORD_WEAK_COLLECTION: u32 = 1 << 15;
 const RECORD_WEAK_SET: u32 = 1 << 31;
 const RECORD_KIND_SHIFT: u32 = 8;
@@ -205,6 +209,7 @@ const _: () = {
         RECORD_BIRTHS_MASK,
         RECORD_WEAK_COLLECTION,
         RECORD_WEAK_SET,
+        RECORD_KEYS_NO_SYMBOLS,
         RECORD_SUMMARY_MASK,
         RECORD_WIDTH_MASK,
     ];
@@ -1311,6 +1316,7 @@ impl ShapeSlab {
         // A retire-and-reinsert edits facts on a removed copy: the positional
         // bit follows them.
         record.refresh_positional();
+        record.refresh_symbol_presence();
         *cell = record;
         if previous.is_none() {
             self.len += 1;
@@ -1984,3 +1990,6 @@ mod tests;
 
 #[path = "shapes_store_special.rs"]
 mod special;
+
+#[path = "shapes_store_symbol_presence.rs"]
+mod symbol_presence;
