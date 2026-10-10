@@ -231,3 +231,45 @@ pub(super) unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64)
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+#[cfg(test)]
+mod birth_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_records_carry_the_resolved_birth_shape() {
+        let _gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            for accessor in [false, true] {
+                for _ in 0..3 {
+                    let value = if accessor {
+                        build_accessor_descriptor(
+                            f64::from_bits(crate::value::TAG_UNDEFINED),
+                            f64::from_bits(crate::value::TAG_UNDEFINED),
+                            true,
+                            false,
+                        )
+                    } else {
+                        build_data_descriptor(17.0, false, true, false)
+                    };
+                    let object = extract_obj_ptr(value);
+                    let (_, birth_id) = crate::object::shape_cache_get_with_id(if accessor {
+                        0x0D_E5_C1
+                    } else {
+                        0x0D_E5_C0
+                    });
+                    assert_ne!(birth_id, 0, "the allocator must resolve its key list");
+                    assert_eq!(
+                        crate::object::shapes::object_shape_id(object),
+                        birth_id,
+                        "a plain descriptor record must carry the resolved birth facts",
+                    );
+                    assert_eq!(
+                        crate::object::shapes::shape_object_kind_by_id(birth_id),
+                        Some(crate::object::shapes::ShapeObjectKind::Ordinary),
+                    );
+                }
+            }
+        }
+    }
+}

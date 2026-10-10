@@ -80,7 +80,7 @@ unsafe fn object_assign_set_string_key(
 /// nothing can intercept a write for the key, `[[Set]]` performs this exact
 /// definition and is the path that teaches the lattice its key-add edge;
 /// otherwise the general definition runs.
-unsafe fn object_define_string_key(
+pub(crate) unsafe fn object_define_string_key(
     target: *mut ObjectHeader,
     key_ptr: *const crate::StringHeader,
     value_f64: f64,
@@ -327,7 +327,16 @@ unsafe fn positional_prototype_shape_keys(
         }
         // GC_STORE_AUDIT(STACK): `out` is the caller's on-stack snapshot, not
         // GC-managed storage; no collection runs while the proof reads it.
-        slot.write(super::object_keys(obj));
+        // A shape with no accessor or read-only data key cannot intercept
+        // any source key. Keep walking its prototype, but do not re-look up
+        // names in a list whose summary already proves every match harmless.
+        slot.write(
+            if shape.summary & super::key_attrs::SUMMARY_BLOCKS_STORE == 0 {
+                super::ObjectKeys::NONE
+            } else {
+                super::object_keys(obj)
+            },
+        );
         proto = positional_shape_prototype(obj)?;
     }
     None
@@ -663,6 +672,27 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     if !target_value.is_pointer() {
         return target_f64;
     }
+    // A proxy has no heap header. Feed it to the same descriptor-driven
+    // copy used whenever [[Set]] can run code, before any heap admission.
+    // That funnel preserves source key order and target set/define traps.
+    if crate::proxy::js_proxy_is_proxy(target_f64) != 0 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(target_f64);
+        let source = scope.root_nanbox_f64(source_f64);
+        if !matches!(
+            source.get_nanbox_u64(),
+            crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+        ) {
+            let source = scope.root_nanbox_f64(js_object_coerce(source.get_nanbox_f64()));
+            object_assign_enumerated_source(
+                define,
+                crate::value::js_nanbox_get_pointer(target.get_nanbox_f64()) as *mut ObjectHeader,
+                false,
+                source.get_nanbox_f64(),
+            );
+        }
+        return target.get_nanbox_f64();
+    }
     let tgt_raw = target_value.as_pointer::<u8>() as usize;
     // A real `ObjectHeader` is heap-allocated and #[repr(C)] with u64 /
     // pointer fields, so a valid object pointer is always 8-byte aligned.
@@ -738,41 +768,19 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         return target_f64;
     }
 
-    // #8149: a registered BUFFER source — a node `Buffer` / `Uint8Array` (whose
-    // own enumerable properties ARE its byte indices, so
-    // `{...Buffer.from([1,2,3])}` is `{"0":1,"1":2,"2":3}` in node), or an
-    // `ArrayBuffer` / `DataView` (which own only whatever the user assigned).
-    // A `BufferHeader` is not an `ObjectHeader`; the walk below reached the
-    // `try_read_gc_header` triage and answered `{}` for an arena-backed buffer,
-    // and an EXTERNAL one has no `GcHeader` at all, so the byte it reads there
-    // is allocator bookkeeping that can classify as anything. Enumerate through
-    // the shared buffer own-key helper instead.
-    if let Some(keys) =
-        crate::object::field_get_set::enumeration::registered_buffer_own_keys(src_raw)
-    {
-        // The key string and the write funnel both allocate, so the target can
-        // move on every iteration: read it through the handle AT the call
-        // (`with_mut_ptr`) rather than binding a pre-loop copy.
+    // Byte views have their own property surface. Use the existing
+    // descriptor-driven copy, including symbols and accessors, instead of
+    // a second string-only loop with a raw source address across stores.
+    if crate::buffer::is_registered_buffer(src_raw) {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let tgt_h = scope.root_raw_mut_ptr(target);
-        for name in keys {
-            let value = crate::object::field_get_set::enumeration::registered_buffer_own_value(
-                src_raw, &name,
-            );
-            let value_h = scope.root_nanbox_f64(value);
-            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
-                object_assign_set_string_key(
-                    define,
-                    tgt,
-                    target_is_array,
-                    key_ptr,
-                    value_h.get_nanbox_f64(),
-                )
-            });
-        }
-        return tgt_h
-            .with_mut_ptr::<ObjectHeader, _>(|tgt| crate::value::js_nanbox_pointer(tgt as i64));
+        let target = scope.root_nanbox_f64(target_f64);
+        object_assign_enumerated_source(
+            define,
+            crate::value::js_nanbox_get_pointer(target.get_nanbox_f64()) as *mut ObjectHeader,
+            target_is_array,
+            source_f64,
+        );
+        return target.get_nanbox_f64();
     }
 
     // An `Error` source. Like the buffer and closure arms around it, an

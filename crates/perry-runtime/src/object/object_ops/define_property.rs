@@ -245,6 +245,25 @@ pub(crate) unsafe fn define_own_property_decoded(
     if crate::proxy::js_proxy_is_proxy(f64::from_bits(receiver.get_nanbox_u64())) != 0 {
         return crate::proxy::proxy_define_own_property_decoded(scope, receiver, key, descriptor);
     }
+    // A complete, default-attribute data definition is exactly
+    // CreateDataProperty. Use its existing shape-owned definition mechanism:
+    // it proves the receiver's extensibility and the key's current facts,
+    // and never consults or invokes an inherited setter.
+    if descriptor.has(DESC_VALUE)
+        && !descriptor.has(DESC_GET)
+        && !descriptor.has(DESC_SET)
+        && descriptor.flag(b"writable") == Some(true)
+        && descriptor.flag(b"enumerable") == Some(true)
+        && descriptor.flag(b"configurable") == Some(true)
+        && super::super::define_own_data::define_own_data_from_shape(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            f64::from_bits(descriptor.read(DESC_VALUE).bits()),
+        )
+        .is_some()
+    {
+        return true;
+    }
     super::super::reflect_support::reflect_define_property_decoded(scope, receiver, key, descriptor)
 }
 

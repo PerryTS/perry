@@ -537,50 +537,11 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
     scope: &'scope crate::gc::RuntimeHandleScope,
     descriptor_value: f64,
 ) -> Option<DescView<'scope>> {
-    let jv = crate::value::JSValue::from_bits(descriptor_value.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let addr = jv.as_pointer::<u8>() as usize;
-    match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
-        _ => return None,
-    }
-    // RegExp cells are OBJECT-typed exotics; class instances can carry
-    // prototype getters named like a field; accessor-backed own fields
-    // (`get value() {…}` in the literal) fire on [[Get]]; a custom
-    // [[Prototype]] contributes inherited fields. All → general path.
-    if super::super::exotic_expando::exotic_expando_kind(addr).is_some() {
-        return None;
-    }
-    let obj = addr as *const ObjectHeader;
-    // A nonzero class_id is usually just a LITERAL SHAPE id (every object
-    // literal gets one) — only a real class with a prototype surface (vtable
-    // methods/getters, `C.prototype.x = …` assignments, or a parent chain)
-    // could contribute inherited/accessor-backed descriptor fields. Literal
-    // shapes have none of those registries populated, so three cheap misses
-    // admit them; any registered surface falls back to the general path.
-    let class_id = (*obj).class_id;
-    if class_id != 0 {
-        if super::super::class_registry::get_parent_class_id(class_id).is_some() {
-            return None;
-        }
-        if crate::object::shapes::identity_prototype_word(
-            crate::object::shapes::PROTO_ID_CLASS | u64::from(class_id),
-        ) != 0
-        {
-            return None;
-        }
-    }
-    if crate::object::descriptor_state::object_has_descriptors(addr) {
-        return None;
-    }
-    if super::super::prototype_chain::object_static_prototype(addr).is_some()
-        || (class_id != 0
-            && (!super::super::class_registry::synthetic_class_prototype_object(class_id)
-                .is_null()
-                || !super::super::class_registry::class_decl_prototype_object(class_id).is_null()))
-    {
+    let (obj, shape) = super::super::descriptors::own_keys::ordinary_data_shape(descriptor_value)?;
+    if !matches!(
+        shape.proto_id,
+        crate::object::shapes::PROTO_ID_DEFAULT | crate::object::shapes::PROTO_ID_NULL
+    ) {
         return None;
     }
 
@@ -614,7 +575,10 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         }
     }
     // Absent fields may still be inherited through the (default) prototype.
-    if !view.present.iter().all(|&p| p) && object_prototype_has_desc_field() {
+    if shape.proto_id != crate::object::shapes::PROTO_ID_NULL
+        && !view.present.iter().all(|&p| p)
+        && object_prototype_has_desc_field()
+    {
         return None;
     }
     Some(view)
