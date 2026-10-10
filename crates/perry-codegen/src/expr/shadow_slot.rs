@@ -26,8 +26,9 @@ use crate::types::{I32, I64, PTR};
 /// pointer at all (top-level functions/methods).
 pub(crate) fn try_current_closure_ptr_value(ctx: &mut FnCtx<'_>) -> Option<String> {
     if let Some(slot) = ctx.current_closure_slot.clone() {
-        let bits = ctx.block().load(I64, &slot);
-        return Some(ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64));
+        // The slot is an `i64` root home holding the raw closure pointer
+        // (`codegen/closure.rs`); its reload is already decoded.
+        return Some(ctx.block().load(I64, &slot));
     }
     ctx.current_closure_ptr.clone()
 }
