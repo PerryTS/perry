@@ -66,8 +66,7 @@ mod shapes_worker_seed;
 pub(crate) use shapes_prototype::clear_class_identity_words;
 pub(crate) use shapes_prototype::{
     identity_prototype_word, identity_word_slot, note_full_trace_begin, proto_id_carries_word,
-    prune_dead_shape_prototypes, scan_shape_prototype_words_mut, shape_prototype_word,
-    write_identity_word,
+    prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
 };
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
@@ -5741,6 +5740,21 @@ fn retire_shape_keys_entries(inner: &mut ShapeTableInner, keys: u64) {
     }
 }
 
+/// The shape table's one collector entry: every heap word a shape record
+/// holds, visited by one scanner. A record holds two kinds: its canonical
+/// `keys` word ([`scan_shape_table_keys_mut`]) and, through its `proto_id`,
+/// its identity's [[Prototype]] word
+/// (`shapes_prototype::scan_shape_prototype_words_mut`). One table, one
+/// registration: a collection that repaired a record's keys but not its
+/// prototype word would leave a record that outlives its last receiver (an
+/// external or cache carrier, re-stamped from a scalar memo that never
+/// re-publishes the word) naming a from-space prototype after evacuation
+/// (#12313).
+pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    scan_shape_table_keys_mut(visitor);
+    shapes_prototype::scan_shape_prototype_words_mut(visitor);
+}
+
 /// Metadata-only forwarding repair for the weak descriptor table and
 /// pointer-keyed slot indices. Mark/copy mode does not root anything; live
 /// object scans provide descriptor reachability, and post-copy rewrite follows
@@ -5754,7 +5768,7 @@ fn retire_shape_keys_entries(inner: &mut ShapeTableInner, keys: u64) {
 /// MARKING visit when any of its descriptors is a carrier, which is exactly
 /// the rooting duty the #8112 gate assigns: the keys array must survive while
 /// an old receiver or a cache still names one of its shapes.
-pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     let carrier_notes = SHAPE_CARRIER_YOUNG_KEYS.with(|log| log.borrow_mut().take_sorted());
