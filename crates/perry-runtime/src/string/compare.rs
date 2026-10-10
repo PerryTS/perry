@@ -1140,12 +1140,10 @@ pub extern "C" fn js_string_locale_compare_opts(
 }
 
 /// String.prototype.isWellFormed() — returns NaN-boxed boolean.
-/// A string is well-formed if it contains no lone surrogates.
-/// Lone-surrogate strings are marked with STRING_FLAG_HAS_LONE_SURROGATES at construction.
+/// Construction flags prove well-formedness; unknown raw input is checked.
 #[no_mangle]
 pub extern "C" fn js_string_is_well_formed(s: *const StringHeader) -> f64 {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    use crate::value::{TAG_FALSE, TAG_TRUE};
     if !is_valid_string_ptr(s) {
         return f64::from_bits(TAG_TRUE);
     }
