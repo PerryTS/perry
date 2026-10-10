@@ -18,3 +18,11 @@ Native iterator next capture now shares the receiver/prototype edge proof with
 intrinsic Step and reads the actual next descriptor, including replacements and
 accessors. Entry retains one iterator handle across that read instead of opening
 a second handle scope.
+
+Phase 2 rebases this acquisition change onto current main with the upstream
+RS4GC root-reload budget fix as a dependency. The Buffer instruction blocker
+from the first measurement was isolated to mismatched prebuilt zlib archives:
+swapping only that archive swaps the roughly 6.4 million instruction delta
+between unchanged compiler/runtime arms. Function counters locate the work
+in miniz's compression implementation, not array iterator acquisition. The
+new comparison builds both extension archives with the same Cargo package set.

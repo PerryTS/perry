@@ -370,7 +370,8 @@ mod tests {
                     assert_eq!(
                         super::js_object_get_own_field_ic_front(
                             dir, biased, key_bits, &mut slot, &packed,
-                        ).to_bits(),
+                        )
+                        .to_bits(),
                         crate::value::TAG_UNDEFINED,
                         "stored undefined is a positive own-slot hit, including spill"
                     );
@@ -383,14 +384,16 @@ mod tests {
                     assert_eq!(
                         super::js_object_get_field_ic_front(
                             dir, biased, key_bits, &mut slot, &packed,
-                        ).to_bits(),
+                        )
+                        .to_bits(),
                         crate::value::TAG_UNDEFINED,
                         "negative control: a property read serves cached absence"
                     );
                     assert_eq!(
                         super::js_object_get_own_field_ic_front(
                             dir, biased, key_bits, &mut slot, &packed,
-                        ).to_bits(),
+                        )
+                        .to_bits(),
                         crate::value::TAG_HOLE,
                         "a binding read requires presence"
                     );
