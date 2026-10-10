@@ -215,6 +215,8 @@ fn clean_arr_ptr_rejects_untracked_forwarding_target_without_deref() {
 
 #[test]
 fn growth_preserves_the_custom_prototype_record_when_its_header_bit_is_set() {
+    // Retargeting a real array latches process-wide prototype facts; put them back.
+    let _latch = super::custom_proto_scope_tests::LatchRestore::clear();
     let _global = crate::gc::global_side_table_test_lock();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let proto = crate::object::js_object_alloc(0, 0);

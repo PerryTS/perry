@@ -17,14 +17,14 @@ use std::sync::atomic::Ordering;
 
 /// Hold the typed-feedback lock (every test touching the latch/byte does) and
 /// put both process-wide facts back the way this test found them.
-struct LatchRestore {
+pub(super) struct LatchRestore {
     _lock: std::sync::MutexGuard<'static, ()>,
     latch: bool,
     invalidated: u8,
 }
 
 impl LatchRestore {
-    fn clear() -> Self {
+    pub(super) fn clear() -> Self {
         let _lock = crate::typed_feedback::typed_feedback_test_lock();
         Self {
             _lock,
