@@ -6,6 +6,7 @@
 //! [`retype_landing_pads_for_statepoints`], both called from
 //! `LlFunction::serialize`.
 
+mod decode_fold;
 mod remat;
 
 fn parse_shadow_bind(line: &str) -> Option<(usize, String)> {
@@ -366,7 +367,8 @@ pub(super) fn lower_precise_roots_to_native_stack(
                 report.note_call(root_ptrs.len());
                 crate::statepoint_report::record(report);
             }
-            out
+            // A reload decoded only to address a field becomes one `add`.
+            decode_fold::fuse_reload_decode_offsets(&out)
         }
         None => panic!(
             "perry: native-root lowering could not recognise a root-alloca use in @{} \

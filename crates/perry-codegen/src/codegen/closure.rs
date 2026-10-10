@@ -963,9 +963,12 @@ pub(super) fn compile_closure(
     } else {
         lf.reserve_shadow_slot().map(|idx| {
             let blk = lf.block_mut(0).expect("closure body has an entry block");
+            // An `i64` root home holds the raw pointer: the native-root
+            // lowering encodes it as a JSValue word at rest and decodes each
+            // reload (`function::precise_roots`), so the slot is stored and
+            // read raw here, never re-encoded around that lowering.
             let slot = blk.alloca(I64);
-            let tagged = blk.or(I64, "%this_closure", crate::nanbox::POINTER_TAG_I64);
-            blk.store(I64, &tagged, &slot);
+            blk.store(I64, "%this_closure", &slot);
             blk.call_void(
                 "js_shadow_slot_bind",
                 &[(I32, &idx.to_string()), (PTR, &slot)],
@@ -1676,12 +1679,19 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("no shadow-framed closure body in IR:\n{ir}"));
 
-        // The prologue NaN-boxes `%this_closure` into an alloca and binds that
-        // alloca to a shadow-stack slot, so the collector marks and rewrites it.
-        let tagged = format!("or i64 %this_closure, {}", crate::nanbox::POINTER_TAG_I64);
+        // The prologue stores `%this_closure` into an `i64` root home and binds
+        // that alloca to a shadow-stack slot, so the collector marks and
+        // rewrites it. The home holds the bare pointer: shadow frames decode
+        // bare and NaN-boxed words alike, and the native-root lowering encodes
+        // an `i64` home itself, so codegen must not box it on the way in.
         assert!(
-            body.contains(&tagged),
-            "closure prologue must NaN-box %this_closure for the shadow slot; body:\n{body}"
+            body.contains("store i64 %this_closure, ptr "),
+            "closure prologue must store %this_closure into its rooted slot; body:\n{body}"
+        );
+        assert!(
+            !body.contains("or i64 %this_closure,"),
+            "the closure-pointer home holds the bare pointer, never a re-encoded \
+             word; body:\n{body}"
         );
         assert!(
             body.contains("@js_shadow_slot_bind"),

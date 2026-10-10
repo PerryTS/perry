@@ -1286,7 +1286,7 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
         "expected at least one js_shadow_slot_bind in:\n{f}"
     );
 
-    // The instance's nanbox register: walk each `store double %X, ptr %S`
+    // The instance's register: walk each `store double|i64 %X, ptr %S`
     // backwards through the bit-level nanbox ops to see whether `%X` was
     // produced by an object allocation. That is the `this` slot.
     let def_of: std::collections::HashMap<&str, &str> = f
@@ -1324,11 +1324,14 @@ fn the_inline_ctor_this_slot_is_bound_as_a_shadow_slot() {
 
     let this_slot = f
         .lines()
-        .filter(|l| l.trim_start().starts_with("store double %"))
         .find_map(|l| {
+            // A pooled temporary root stores a raw pointer with an `i64`
+            // access and a JSValue with a `double` access.
+            let l = l.trim_start();
             let (val, rest) = l
-                .trim_start()
-                .strip_prefix("store double ")?
+                .strip_prefix("store double ")
+                .or_else(|| l.strip_prefix("store i64 "))
+                .filter(|v| v.starts_with('%'))?
                 .split_once(", ")?;
             let slot = rest.strip_prefix("ptr ")?.trim();
             reaches_alloc(val.trim(), &def_of, 8).then(|| slot.to_string())

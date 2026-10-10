@@ -1,0 +1,3 @@
+### Fixes
+
+- Restore TypeScript's compile under the default per-function RS4GC budget. Since statepoint root homes hold JSValue words at rest, every reload of a raw-pointer home was decoded with a mask before its address arithmetic; tsc's module closure grew from 1,510,834 to 1,603,268 post-rewrite instructions, over the 1,572,864 budget. A reload decoded only to address one field is now a single `add` with the tag folded into the displacement (1,512,706). The closure-pointer home and pooled temporary roots no longer re-encode values around the root lowering, which removes a redundant second mask per capture access and the `i64`/`double` bitcast round trips on temporary roots.
