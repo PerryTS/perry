@@ -1,0 +1,1 @@
+Order ASCII punctuation and symbols before digits and letters in the approximate, table-free `String.prototype.localeCompare` comparator. Reuse those weights in the scalar walk and contextual lowercase fallback, preserving canonical equivalence, lowercase-first case order, and non-ASCII ordering. No collation data or dependency is added.

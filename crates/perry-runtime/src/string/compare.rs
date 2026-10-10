@@ -878,13 +878,12 @@ impl<'a> LowerChars<'a> {
 /// U+03A3, the only scalar whose lowercase mapping depends on its context.
 const GREEK_CAPITAL_SIGMA: u32 = 0x03A3;
 
-/// Primary (case-insensitive) collation pass: order the two inputs exactly as
-/// `a.to_lowercase().cmp(&b.to_lowercase())` would, without allocating either
-/// lowercased form.
-///
-/// Comparing the lowercased scalar streams by code point is equivalent to
-/// `String::cmp`, because UTF-8 (and WTF-8) byte order and code point order
-/// agree.
+#[path = "compare/ascii.rs"]
+mod ascii;
+use ascii::locale_primary_weight;
+
+/// Primary comparison of lowercase streams with the ASCII class refinement,
+/// without allocating either lowercase form.
 ///
 /// Returns `None` when a context-dependent mapping is reached before the
 /// answer is decided — the caller's signal to fall back to the allocating
@@ -900,7 +899,7 @@ fn locale_primary_cmp(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> Option<std::cmp::Orderi
         let x = a_bytes[i].to_ascii_lowercase();
         let y = b_bytes[i].to_ascii_lowercase();
         if x != y {
-            return Some(x.cmp(&y));
+            return Some(locale_primary_weight(x.into()).cmp(&locale_primary_weight(y.into())));
         }
         i += 1;
     }
@@ -922,7 +921,7 @@ fn locale_primary_cmp_scalars(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> Option<std::cmp
             (LowerStep::Cp(_), LowerStep::End) => return Some(Ordering::Greater),
             (LowerStep::Cp(x), LowerStep::Cp(y)) => {
                 if x != y {
-                    return Some(x.cmp(&y));
+                    return Some(locale_primary_weight(x).cmp(&locale_primary_weight(y)));
                 }
             }
         }
@@ -935,21 +934,21 @@ fn locale_primary_cmp_scalars(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> Option<std::cmp
 /// behavior where 'a' < 'A').
 ///
 /// Both passes are allocation-free and short-circuit at the first difference;
-/// see [`locale_primary_cmp`]. The ordering is deliberately unchanged from the
-/// allocating formulation it replaced (#10094).
+/// see [`locale_primary_cmp`]. ASCII punctuation/symbols precede digits and letters.
 fn locale_compare_default(a_str: Wtf8Str<'_>, b_str: Wtf8Str<'_>) -> f64 {
     // Case-insensitive primary comparison.
     let primary = match locale_primary_cmp(a_str, b_str) {
         Some(ordering) => ordering,
         None => {
-            // Final sigma reached before the answer was decided. Rare enough
-            // to be worth two allocations rather than a second, divergent copy
-            // of the Final_Sigma rule here. Comparing the lowercased forms as
-            // bytes is the same order as comparing them as code points —
-            // WTF-8 byte order and code point order agree.
+            // Resolve final sigma with the existing allocating lowercase rule.
             let a_lower = wtf8::to_lowercase(a_str);
             let b_lower = wtf8::to_lowercase(b_str);
-            a_lower.cmp(&b_lower)
+            // WTF-8 byte order agrees with scalar order. The same weights
+            // preserve non-ASCII byte order, so no second decode is needed.
+            a_lower
+                .iter()
+                .map(|&c| locale_primary_weight(c.into()))
+                .cmp(b_lower.iter().map(|&c| locale_primary_weight(c.into())))
         }
     };
     match primary {
@@ -997,8 +996,8 @@ fn locale_compare_default(a_str: Wtf8Str<'_>, b_str: Wtf8Str<'_>) -> f64 {
 /// 1. **Canonical equivalence.** Decomposed and precomposed spellings of the
 ///    same text compare equal — a mandatory part of the `localeCompare`
 ///    contract (see [`locale_compare_canonical`]).
-/// 2. **Primary: case-insensitive *code point* order** — the order of the two
-///    `toLowerCase` forms, including the contextual final-sigma rule.
+/// 2. **Primary: case-insensitive code point order**, with ASCII punctuation
+///    and symbols before digits and letters, including contextual final sigma.
 /// 3. **Tertiary: case.** Strings that differ only in case order lowercase
 ///    first, matching the default Unicode tertiary weight (`'a' < 'A'`).
 ///
@@ -1006,7 +1005,7 @@ fn locale_compare_default(a_str: Wtf8Str<'_>, b_str: Wtf8Str<'_>) -> f64 {
 /// the result differs from Node/ICU wherever root collation reorders the code
 /// point space: accented letters sort after the whole unaccented alphabet
 /// instead of beside their base letter (`ä` is U+00E4, above `z` at U+007A),
-/// and symbols and emoji sort after letters instead of before them. So
+/// and non-ASCII symbols and emoji sort after letters instead of before them. So
 /// `"ä".localeCompare("😀")` is negative here and positive in Node. Note that
 /// the "correct" answer is locale-dependent even with a table — German sorts
 /// `ä` with `a`, Swedish after `z` — which is part of why one untailored table
@@ -1561,13 +1560,11 @@ mod locale_collation_tests {
         super::locale_compare_canonical(Wtf8Str::from_str(a), Wtf8Str::from_str(b), compare)
     }
 
-    /// The formulation this replaced, kept verbatim as the oracle: lowercase
-    /// both sides with `str::to_lowercase` and compare the results. If the
-    /// streaming walk ever disagrees with this, the ordering has moved.
+    /// Allocating reference with the same documented primary classes.
     fn reference_compare(a_str: &str, b_str: &str) -> f64 {
         let a_lower = a_str.to_lowercase();
         let b_lower = b_str.to_lowercase();
-        match a_lower.cmp(&b_lower) {
+        match super::ascii::reference_primary_cmp(&a_lower, &b_lower) {
             Ordering::Less => return -1.0,
             Ordering::Greater => return 1.0,
             Ordering::Equal => {}
@@ -1597,7 +1594,6 @@ mod locale_collation_tests {
         }
     }
 
-    /// Spans every class the issue names *except* WTF-8 lone surrogates:
     /// ASCII (incl. case-only and long-common-prefix pairs), Latin-1 accented
     /// letters in both precomposed and decomposed spellings, CJK, emoji, bare
     /// combining marks, and the two special case mappings (U+0130, U+03A3).
@@ -1686,11 +1682,8 @@ mod locale_collation_tests {
         ]
     }
 
-    /// Behaviour preservation, the issue's first acceptance criterion: the
-    /// allocation-free walk must return exactly what the two-`to_lowercase`
-    /// formulation returned, on every ordered pair. The corpus must also reach
-    /// all three arms — the ASCII byte loop, the scalar walk, and the
-    /// contextual fallback — or a green run would prove nothing.
+    /// Compare the streaming walk to an independently allocating reference
+    /// across the ASCII, scalar, and contextual fallback arms.
     #[test]
     fn matches_the_allocating_reference_on_every_pair() {
         let corpus = corpus();
