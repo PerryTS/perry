@@ -15,6 +15,7 @@ use std::fs;
 use std::path::PathBuf;
 
 mod detect_tests;
+mod flat_export_collision;
 mod hoist_scanner;
 mod source_graph;
 
