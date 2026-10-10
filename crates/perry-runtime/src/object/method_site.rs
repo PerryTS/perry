@@ -44,9 +44,10 @@
 //!   a value overwrite is seen by loading the slot on every hit.
 //!
 //! What the prime refuses (they keep the ordinary dispatch): non-ordinary
-//! receivers other than shape-described functions (class objects,
+//! receivers other than shape-described functions and canonical Array/Map/Set
+//! kinds (`builtin_receiver.rs`); class objects,
 //! native-module namespaces, dictionaries,
-//! `Object.prototype`, typed-array prototypes, exotic read receivers),
+//! `Object.prototype`, typed-array prototypes, exotic read receivers,
 //! accessors, spill slots, and any value that is not a plain closure the call can enter directly for
 //! this site's argument count (bound functions, fixed-ABI rest / `arguments` bodies,
 //! the no-op builtin thunk, class constructors, closures that capture `this`).
@@ -97,6 +98,7 @@
 
 use crate::object::ObjectHeader;
 
+mod builtin_receiver;
 pub(crate) mod chain_memo;
 mod function_receiver;
 mod holder_prime;
@@ -383,6 +385,9 @@ unsafe fn method_site_miss_object(
     args_ptr: *const f64,
     argc: usize,
 ) -> f64 {
+    if let Some(result) = builtin_receiver::call_hit(slot, recv, args_ptr, argc) {
+        return result;
+    }
     let _ = stats_report_enabled();
     MISSES.fetch_add(1, Ordering::Relaxed);
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -408,6 +413,11 @@ unsafe fn method_site_miss_object(
         if let Some(result) =
             crate::native_payload::try_payload_method_fast_dispatch(recv, name, args_ptr, argc)
         {
+            return result;
+        }
+    }
+    if matches!(receiver, MissReceiver::Other) {
+        if let Some(result) = builtin_receiver::call_miss(slot, recv, method_id, args_ptr, argc) {
             return result;
         }
     }
@@ -632,15 +642,16 @@ pub unsafe extern "C-unwind" fn js_method_site_lookup(
 ) -> f64 {
     *code_out = 0;
     if bare_collection(recv.to_bits()) {
-        return f64::from_bits(METHOD_SITE_BY_NAME_DIRECT);
+        return builtin_receiver::lookup(slot, recv, method_id, argc, code_out)
+            .unwrap_or_else(|| f64::from_bits(METHOD_SITE_BY_NAME_DIRECT));
     }
     lookup_entry(slot, recv, method_id, argc, code_out)
 }
 
 /// [`js_method_site_lookup`] past the bare-collection answer: the memo hit,
-/// else [`prepare`]. Out of line, so that answer (the one a hot split site
-/// on a collection takes on every call, `counts.set(k, f(v))`) runs in a
-/// frameless leaf instead of paying this body's prologue.
+/// else the builtin receiver's same holder memo, then [`prepare`]. Kept
+/// out of line so the collection entrance does not pay an ordinary receiver's
+/// lookup frame (`counts.set(k, f(v))`).
 #[inline(never)]
 unsafe fn lookup_entry(
     slot: *mut MethodSiteSlot,
@@ -653,13 +664,15 @@ unsafe fn lookup_entry(
         *code_out = code;
         return f64::from_bits(value);
     }
+    if let Some(value) = builtin_receiver::lookup(slot, recv, method_id, argc, code_out) {
+        return value;
+    }
     prepare(slot, recv, method_id, argc)
 }
 
-/// A Map or a Set with no metadata record: it has no own property, and the
-/// dispatcher answers its methods by name without reading any prototype slot
-/// (a patched builtin prototype takes the compile-time route, #11394), so its
-/// read is unobservable and no memo entry describes it.
+/// A Map or a Set with no metadata record: its canonical receiver kind proves
+/// absence of own properties and a custom prototype. Its builtin holder memo
+/// can snapshot the selected method; unsupported bodies retain by-name dispatch.
 #[inline(always)]
 unsafe fn bare_collection(bits: u64) -> bool {
     let addr = (bits & crate::value::POINTER_MASK) as usize;
@@ -814,7 +827,8 @@ pub unsafe extern "C-unwind" fn js_method_site_call_split(
                 site_id, recv, method_id, args_ptr, argc,
             )
         }
-        _ => js_method_site_call_value(value, recv, args_ptr, argc),
+        _ => builtin_receiver::call_selected(slot, value, recv, args_ptr, argc)
+            .unwrap_or_else(|| js_method_site_call_value(value, recv, args_ptr, argc)),
     }
 }
 
