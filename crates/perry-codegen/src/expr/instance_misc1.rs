@@ -68,8 +68,8 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_string_literal_global,
-    emit_write_barrier, extract_array_of_object_shape, i32_bool_to_nanbox, lower_array_literal,
-    lower_expr, lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
+    extract_array_of_object_shape, i32_bool_to_nanbox, lower_array_literal, lower_expr,
+    lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
     unbox_to_i64, FnCtx,
 };
 
