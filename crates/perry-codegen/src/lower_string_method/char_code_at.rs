@@ -7,7 +7,6 @@
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
-use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64};
 
 use crate::lower_string_concat::str_operand_handle_tag_dispatched;
@@ -66,6 +65,10 @@ const SHORT_STRING_HIGH_BITS: &str = "551911719040"; // 0x80_8080_8080
 /// No allocation and no call occur between the receiver re-read and the byte
 /// load, so no collection can move the header underneath the fast path.
 ///
+/// The existing receiver tag checks are the admission authority, including
+/// calls reached through the tag-guarded Any-string dispatcher. A static type
+/// hint must not exclude a runtime-proven string from this same emitter.
+///
 /// Gated on `static_string_lowering_enabled()` (`PERRY_STATIC_STRING_LOWERING`)
 /// — the same knob the sibling inline `.length` fast path uses, so this adds
 /// no new mode.
@@ -76,7 +79,7 @@ pub(super) fn lower_char_code_at_inline(
     idx_d: &str,
 ) -> Option<String> {
     use crate::nanbox::POINTER_MASK_I64;
-    if !crate::expr::static_string_lowering_enabled() || !is_string_expr(ctx, object) {
+    if !crate::expr::static_string_lowering_enabled() {
         return None;
     }
 
@@ -207,3 +210,7 @@ pub(super) fn lower_char_code_at_inline(
         ],
     ))
 }
+
+#[cfg(test)]
+#[path = "char_code_at_tests.rs"]
+mod tests;

@@ -100,7 +100,10 @@ fn try_lower_tag_guarded_string_method(
     }
     let generic_recv = group.reread_emitted(ctx, rooted_recv);
     let generic_args = group.reread_all(ctx)?;
-    let generic_value = super::console_promise::emit_native_method_str_dispatch(
+    // The receiver tag already selected the guarded builtin arm. Its miss
+    // uses the same dispatcher-only fallback as the other builtin guards;
+    // an ordinary method site here duplicates lookup code and a `this` root.
+    let generic_value = super::console_promise::emit_native_method_str_dispatch_plain(
         ctx,
         property,
         call_byte_offset,
