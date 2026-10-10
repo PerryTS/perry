@@ -2,7 +2,9 @@
 //! file-size gate, #1987). Shares the parent module's constants, hidden-key
 //! accessors and state primitives via `use super::*`.
 use super::*;
+use crate::gc::RuntimeHandle;
 use crate::value::JSValue;
+use birth::{PublicField as F, PublicInit};
 
 /// Coerce a NaN-boxed value to an `f64` if it is numeric (handling both the
 /// int32-boxed and double representations). Returns `None` for non-numbers.
@@ -43,11 +45,9 @@ pub(super) fn opt_bool(opts: f64, key: crate::runtime_state_key::NamedStateKey) 
 }
 
 pub(super) fn resolve_object_mode(
-    opts: f64,
+    opts: &RuntimeHandle<'_>,
     specific_object_mode: crate::runtime_state_key::NamedStateKey,
 ) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let opts = scope.root_nanbox_f64(opts);
     opt_bool(opts.get_nanbox_f64(), specific_object_mode)
         || opt_bool(
             opts.get_nanbox_f64(),
@@ -74,33 +74,38 @@ pub(super) fn default_hwm(object_mode: bool) -> f64 {
     }
 }
 
+/// Constructor helpers borrow the builder's existing roots. Options can
+/// invoke user getters and collect, so reload the receiver after each read.
 /// Initialize visible lifecycle flags shared by all stream sides.
-pub(super) fn init_lifecycle_state(stream: f64, opts: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    let opts = scope.root_nanbox_f64(opts);
-
-    set_hidden_value(
+pub(super) fn init_lifecycle_state(
+    stream: &RuntimeHandle<'_>,
+    opts: &RuntimeHandle<'_>,
+    init: PublicInit,
+) {
+    init.set(
         stream.get_nanbox_f64(),
-        crate::runtime_state_key!(b"destroyed"),
+        F::Destroyed,
         f64::from_bits(TAG_FALSE),
     );
-    set_stream_emit_close(stream.get_nanbox_f64(), opts.get_nanbox_f64());
+    set_stream_emit_close(stream, opts);
+    let capture_rejections = opt_bool(
+        opts.get_nanbox_f64(),
+        crate::runtime_state_key!(b"captureRejections"),
+    );
     set_hidden_value(
         stream.get_nanbox_f64(),
         hidden_capture_rejections_key(),
-        f64::from_bits(
-            if opt_bool(
-                opts.get_nanbox_f64(),
-                crate::runtime_state_key!(b"captureRejections"),
-            ) {
-                TAG_TRUE
-            } else {
-                TAG_FALSE
-            },
-        ),
+        f64::from_bits(if capture_rejections {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }),
     );
-    set_visible_closed(stream.get_nanbox_f64(), false);
+    init.set(
+        stream.get_nanbox_f64(),
+        F::Closed,
+        f64::from_bits(TAG_FALSE),
+    );
 }
 
 pub(super) fn set_visible_readable(stream: f64, readable: bool) {
@@ -225,20 +230,20 @@ pub(super) fn mark_stream_closed(stream: f64) {
 /// Initialize the readable side of a stream: direction flag, buffered byte
 /// counter, effective readable highWaterMark, and the visible
 /// `readableHighWaterMark` / `destroyed` properties (#1534/#1539).
-pub(super) fn init_readable_state(stream: f64, opts: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    let opts = scope.root_nanbox_f64(opts);
-
-    set_stream_auto_destroy(stream.get_nanbox_f64(), opts.get_nanbox_f64());
+pub(super) fn init_readable_state(
+    stream: &RuntimeHandle<'_>,
+    opts: &RuntimeHandle<'_>,
+    init: PublicInit,
+) {
+    set_stream_auto_destroy(stream, opts);
     set_hidden_value(
         stream.get_nanbox_f64(),
         hidden_readable_flag_key(),
         f64::from_bits(TAG_TRUE),
     );
-    set_hidden_value(
+    init.set(
         stream.get_nanbox_f64(),
-        crate::runtime_state_key!(b"destroyed"),
+        F::Destroyed,
         f64::from_bits(TAG_FALSE),
     );
     set_hidden_value(
@@ -252,10 +257,8 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
         crate::runtime_state_key!(b"readableLength"),
         0.0,
     );
-    let readable_object_mode = resolve_object_mode(
-        opts.get_nanbox_f64(),
-        crate::runtime_state_key!(b"readableObjectMode"),
-    );
+    let readable_object_mode =
+        resolve_object_mode(opts, crate::runtime_state_key!(b"readableObjectMode"));
     set_hidden_value(
         stream.get_nanbox_f64(),
         Slot::ReadableObjectMode,
@@ -279,7 +282,7 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
         #[cfg(test)]
         if std::env::var_os("PERRY_TEST_STREAM_MODE_REREAD").is_some() {
             return default_hwm(resolve_object_mode(
-                opts.get_nanbox_f64(),
+                opts,
                 crate::runtime_state_key!(b"readableObjectMode"),
             ));
         }
@@ -301,44 +304,55 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
         hidden_readable_pending_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
+    let pipes = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    set_hidden_value(stream.get_nanbox_f64(), hidden_stream_pipes_key(), pipes);
     set_hidden_value(
         stream.get_nanbox_f64(),
-        hidden_stream_pipes_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
+        crate::runtime_state_key!(b"readable"),
+        f64::from_bits(TAG_TRUE),
     );
-    set_visible_readable(stream.get_nanbox_f64(), true);
-    set_visible_readable_ended(stream.get_nanbox_f64(), false);
-    set_visible_readable_did_read(stream.get_nanbox_f64(), false);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableEnded"),
+        f64::from_bits(TAG_FALSE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableDidRead"),
+        f64::from_bits(TAG_FALSE),
+    );
     let encoding = opt_string_value(
         opts.get_nanbox_f64(),
         crate::runtime_state_key!(b"encoding"),
     )
     .unwrap_or(f64::from_bits(TAG_NULL));
-    set_visible_readable_encoding(stream.get_nanbox_f64(), encoding);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"readableEncoding"),
+        encoding,
+    );
     install_readable_state_view(stream.get_nanbox_f64());
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.
-pub(super) fn init_writable_state(stream: f64, opts: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    let opts = scope.root_nanbox_f64(opts);
-
-    set_stream_auto_destroy(stream.get_nanbox_f64(), opts.get_nanbox_f64());
+pub(super) fn init_writable_state(
+    stream: &RuntimeHandle<'_>,
+    opts: &RuntimeHandle<'_>,
+    init: PublicInit,
+) {
+    set_stream_auto_destroy(stream, opts);
     set_hidden_value(
         stream.get_nanbox_f64(),
         hidden_writable_flag_key(),
         f64::from_bits(TAG_TRUE),
     );
-    set_hidden_value(
+    init.set(
         stream.get_nanbox_f64(),
-        crate::runtime_state_key!(b"destroyed"),
+        F::Destroyed,
         f64::from_bits(TAG_FALSE),
     );
-    let writable_object_mode = resolve_object_mode(
-        opts.get_nanbox_f64(),
-        crate::runtime_state_key!(b"writableObjectMode"),
-    );
+    let writable_object_mode =
+        resolve_object_mode(opts, crate::runtime_state_key!(b"writableObjectMode"));
     set_hidden_value(
         stream.get_nanbox_f64(),
         crate::runtime_state_key!(b"writableObjectMode"),
@@ -393,26 +407,54 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
         hidden_writable_default_encoding_key(),
         default_encoding,
     );
-    set_writable_length(stream.get_nanbox_f64(), 0.0);
-    set_writable_need_drain(stream.get_nanbox_f64(), false);
+    set_hidden_value(stream.get_nanbox_f64(), hidden_writable_length_key(), 0.0);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableLength"),
+        0.0,
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        hidden_writable_need_drain_key(),
+        f64::from_bits(TAG_FALSE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableNeedDrain"),
+        f64::from_bits(TAG_FALSE),
+    );
     set_pending_writable_finish_callback(stream.get_nanbox_f64(), None);
-    set_writable_corked_count(stream.get_nanbox_f64(), 0.0);
+    set_hidden_value(stream.get_nanbox_f64(), hidden_writable_corked_key(), 0.0);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableCorked"),
+        0.0,
+    );
+    let buffered = box_pointer(crate::array::js_array_alloc(0) as *const u8);
     set_hidden_value(
         stream.get_nanbox_f64(),
         hidden_writable_buffered_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
+        buffered,
     );
-    set_visible_writable(stream.get_nanbox_f64(), true);
-    set_visible_writable_ended(stream.get_nanbox_f64(), false);
-    set_visible_writable_finished(stream.get_nanbox_f64(), false);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writable"),
+        f64::from_bits(TAG_TRUE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableEnded"),
+        f64::from_bits(TAG_FALSE),
+    );
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        crate::runtime_state_key!(b"writableFinished"),
+        f64::from_bits(TAG_FALSE),
+    );
     install_writable_state_view(stream.get_nanbox_f64());
 }
 
-pub(super) fn init_duplex_state(stream: f64, opts: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let stream = scope.root_nanbox_f64(stream);
-    let opts = scope.root_nanbox_f64(opts);
-
+pub(super) fn init_duplex_state(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle<'_>) {
     let allow_half_open = if get_hidden_value(
         opts.get_nanbox_f64(),
         crate::runtime_state_key!(b"allowHalfOpen"),
@@ -431,9 +473,9 @@ pub(super) fn init_duplex_state(stream: f64, opts: f64) {
     );
 }
 
-pub(super) fn init_abort_signal_state(stream: f64, opts: f64) {
-    if let Some(signal) = options_signal(opts) {
-        attach_abort_signal(signal, stream);
+pub(super) fn init_abort_signal_state(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle<'_>) {
+    if let Some(signal) = options_signal(opts.get_nanbox_f64()) {
+        attach_abort_signal(signal, stream.get_nanbox_f64());
     }
 }
 
@@ -444,6 +486,10 @@ pub(super) fn init_abort_signal_state(stream: f64, opts: f64) {
 // sibling via `use super::*`. Items referenced through the parent module's
 // `pub use constructors::*` glob are re-exported by name below.
 // ─────────────────────────────────────────────────────────────────
+
+#[path = "node_stream_constructors/birth.rs"]
+mod birth;
+pub(crate) use birth::alloc_initialized_stream_shell;
 
 #[path = "node_stream_constructors/builders.rs"]
 mod builders;

@@ -48,6 +48,7 @@ pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
     let opts = scope.root_nanbox_f64(opts);
     let t = || this.get_nanbox_f64();
     let o = || opts.get_nanbox_f64();
+    let public = super::birth::PublicInit::new(how);
     install_stream_state_layout(t());
     let subclass_read = match how {
         StreamInit::Subclass => subclass_hook(t(), crate::runtime_state_key!(b"_read")),
@@ -55,8 +56,7 @@ pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
     }
     .map(|read| scope.root_nanbox_f64(read));
     if let Some(read) = read_callback_from_options(o()) {
-        let bound = rebind_callback_this(read, t());
-        set_hidden_value(t(), hidden_read_key(), bound);
+        set_hidden_value(t(), hidden_read_key(), read);
     } else if let Some(read) = &subclass_read {
         set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
     } else if how == StreamInit::Direct {
@@ -66,11 +66,11 @@ pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
             f64::from_bits(TAG_TRUE),
         );
     }
-    init_lifecycle_state(t(), o());
-    init_readable_state(t(), o());
-    install_common_lifecycle_callbacks(t(), o());
-    init_abort_signal_state(t(), o());
-    invoke_construct_callback(t(), o());
+    init_lifecycle_state(&this, &opts, public);
+    init_readable_state(&this, &opts, public);
+    install_common_lifecycle_callbacks(&this, &opts);
+    init_abort_signal_state(&this, &opts);
+    invoke_construct_callback(&this, &opts);
 }
 
 #[no_mangle]
@@ -348,6 +348,7 @@ pub(crate) fn init_writable_in_place(this: f64, opts: f64, how: StreamInit) {
     let opts = scope.root_nanbox_f64(opts);
     let t = || this.get_nanbox_f64();
     let o = || opts.get_nanbox_f64();
+    let public = super::birth::PublicInit::new(how);
     install_stream_state_layout(t());
     let (subclass_write, subclass_writev) = match how {
         StreamInit::Subclass => (
@@ -359,23 +360,21 @@ pub(crate) fn init_writable_in_place(this: f64, opts: f64, how: StreamInit) {
         StreamInit::Direct => (None, None),
     };
     if let Some(write) = write_callback_from_options(o()) {
-        let bound = rebind_callback_this(write, t());
-        set_hidden_value(t(), hidden_write_key(), bound);
+        set_hidden_value(t(), hidden_write_key(), write);
     } else if let Some(write) = &subclass_write {
         set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
     }
     if let Some(writev) = writev_callback_from_options(o()) {
-        let bound = rebind_callback_this(writev, t());
-        set_hidden_value(t(), hidden_writev_key(), bound);
+        set_hidden_value(t(), hidden_writev_key(), writev);
     } else if let Some(writev) = &subclass_writev {
         set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
     }
-    init_lifecycle_state(t(), o());
-    init_writable_state(t(), o());
-    install_common_lifecycle_callbacks(t(), o());
-    install_writable_lifecycle_callbacks(t(), o());
-    init_abort_signal_state(t(), o());
-    invoke_construct_callback(t(), o());
+    init_lifecycle_state(&this, &opts, public);
+    init_writable_state(&this, &opts, public);
+    install_common_lifecycle_callbacks(&this, &opts);
+    install_writable_lifecycle_callbacks(&this, &opts);
+    init_abort_signal_state(&this, &opts);
+    invoke_construct_callback(&this, &opts);
 }
 
 #[no_mangle]
@@ -409,6 +408,7 @@ pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
     let opts = scope.root_nanbox_f64(opts);
     let t = || this.get_nanbox_f64();
     let o = || opts.get_nanbox_f64();
+    let public = super::birth::PublicInit::new(how);
     install_stream_state_layout(t());
     let hook = |name: crate::runtime_state_key::NamedStateKey| match how {
         StreamInit::Subclass => subclass_hook(t(), name).map(|v| scope.root_nanbox_f64(v)),
@@ -419,22 +419,19 @@ pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
     let subclass_writev = hook(crate::runtime_state_key!(b"_writev"));
     let custom_sink = || set_hidden_value(t(), Slot::WritableCustomSink, f64::from_bits(TAG_TRUE));
     if let Some(read) = read_callback_from_options(o()) {
-        let bound = rebind_callback_this(read, t());
-        set_hidden_value(t(), hidden_read_key(), bound);
+        set_hidden_value(t(), hidden_read_key(), read);
     } else if let Some(read) = &subclass_read {
         set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
     }
     if let Some(write) = write_callback_from_options(o()) {
-        let bound = rebind_callback_this(write, t());
-        set_hidden_value(t(), hidden_write_key(), bound);
+        set_hidden_value(t(), hidden_write_key(), write);
         custom_sink();
     } else if let Some(write) = &subclass_write {
         set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
         custom_sink();
     }
     if let Some(writev) = writev_callback_from_options(o()) {
-        let bound = rebind_callback_this(writev, t());
-        set_hidden_value(t(), hidden_writev_key(), bound);
+        set_hidden_value(t(), hidden_writev_key(), writev);
         custom_sink();
     } else if let Some(writev) = &subclass_writev {
         set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
@@ -452,14 +449,18 @@ pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
             install_methods_on_existing_object(obj, t(), &methods, &["_write"]);
         }
     }
-    init_lifecycle_state(t(), o());
-    init_readable_state(t(), o());
-    init_writable_state(t(), o());
-    init_duplex_state(t(), o());
-    install_common_lifecycle_callbacks(t(), o());
-    install_writable_lifecycle_callbacks(t(), o());
-    init_abort_signal_state(t(), o());
-    invoke_construct_callback(t(), o());
+    init_lifecycle_state(&this, &opts, public);
+    init_readable_state(&this, &opts, public);
+    // `_readableState` assignment can invoke an inherited setter and expose
+    // this receiver. After that publication, writable fields must honor any
+    // descriptors the setter installed, even for a direct Duplex.
+    let writable_public = super::birth::PublicInit::new(StreamInit::Subclass);
+    init_writable_state(&this, &opts, writable_public);
+    init_duplex_state(&this, &opts);
+    install_common_lifecycle_callbacks(&this, &opts);
+    install_writable_lifecycle_callbacks(&this, &opts);
+    init_abort_signal_state(&this, &opts);
+    invoke_construct_callback(&this, &opts);
 }
 
 #[no_mangle]
@@ -536,8 +537,7 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
         StreamInit::Direct => None,
     };
     if let Some(callback) = transform_callback_from_options(o()) {
-        let bound = rebind_callback_this(callback, t());
-        set_hidden_value(t(), hidden_transform_callback_key(), bound);
+        set_hidden_value(t(), hidden_transform_callback_key(), callback);
     } else if let Some(callback) = &subclass_transform {
         set_hidden_value(
             t(),
@@ -546,8 +546,7 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
         );
     }
     if let Some(flush) = transform_flush_from_options(o()) {
-        let bound = rebind_callback_this(flush, t());
-        set_hidden_value(t(), hidden_transform_flush_key(), bound);
+        set_hidden_value(t(), hidden_transform_flush_key(), flush);
     } else if let Some(flush) = &subclass_flush {
         set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
     }

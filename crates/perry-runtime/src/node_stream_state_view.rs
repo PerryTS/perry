@@ -347,22 +347,25 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(state_proto(kind));
-    let view = scope.root_nanbox_f64(box_pointer(
-        crate::object::js_object_alloc(0, 1) as *const u8
-    ));
-    let owner_key = hidden_key(STREAM_STATE_OWNER_KEY);
-    set_hidden_value(view.get_nanbox_f64(), owner_key, stream.get_nanbox_f64());
-    // Keyed by the view's address in the descriptor side table; nothing
-    // allocates between this read and the install.
-    crate::object::set_builtin_property_attrs(
-        raw_ptr_from_value(view.get_nanbox_f64()),
-        String::from_utf8_lossy(STREAM_STATE_OWNER_KEY).into_owned(),
-        PropertyAttrs::new(true, false, true),
-    );
-    crate::object::prototype_chain::object_set_user_prototype(
-        raw_ptr_from_value(view.get_nanbox_f64()),
-        proto.get_nanbox_f64().to_bits(),
-    );
+    // The owner and its attributes are one birth layout, shared through the
+    // existing canonical keys trie. No per-view key-add or descriptor edit.
+    let view = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let attrs = crate::object::key_attrs::attr_bits_to_entry(
+            PropertyAttrs::new(true, false, true).bits,
+        );
+        let view = unsafe {
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs(
+                &[("__perry_stream_state_owner", stream.get_nanbox_f64())],
+                &[attrs],
+            )
+        };
+        crate::object::prototype_chain::object_link_created_prototype(
+            view as usize,
+            proto.get_nanbox_u64(),
+        );
+        scope.root_nanbox_f64(box_pointer(view as *const u8))
+    };
     // node's own enumerable `_readableState` / `_writableState`.
     set_visible_own_value(stream.get_nanbox_f64(), property, view.get_nanbox_f64());
 }

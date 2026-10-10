@@ -149,9 +149,17 @@ pub(super) fn alloc_stream_instance(name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(stream_prototype_value(name));
     if !JSValue::from_bits(proto.get_nanbox_u64()).is_pointer() {
-        return box_pointer(crate::object::js_object_alloc(0, 0) as *const u8);
+        // The writable constructor `.prototype` can be replaced by a
+        // primitive. Keep the ordinary fallback prototype while still
+        // allocating the data layout required by slot initialization.
+        let ordinary = scope.root_nanbox_f64(box_pointer(
+            crate::object::js_object_alloc(0, 0) as *const u8
+        ));
+        proto.set_nanbox_f64(crate::object::js_object_get_prototype_of(
+            ordinary.get_nanbox_f64(),
+        ));
     }
-    crate::object::js_object_create(proto.get_nanbox_f64())
+    super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64())
 }
 
 /// Does `value`'s prototype chain reach `stream.<name>.prototype`? (node's
