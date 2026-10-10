@@ -78,6 +78,20 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    construct_function_impl(func_value, args_ptr, args_len, std::ptr::null())
+}
+
+unsafe fn construct_function_impl(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    site: *const std::sync::atomic::AtomicU64,
+) -> f64 {
+    if let Some(entry) = site::validated_class_entry(site, func_value) {
+        return construct_class_object_entry(
+            func_value, args_ptr, args_len, func_value, Some(entry), site::capture_slot(site),
+        );
+    }
     // #10507: an ordinary compiled function is none of the exotic callees
     // below — a fact of its body, read once from its info.
     if let Some(closure) = compiled_function::ordinary_compiled_function(func_value) {
@@ -90,8 +104,22 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // A class value (its function object, or the legacy immediate) constructs
     // its class: decided first, one closure probe, before the exotic arms.
     if let Some(class_cid) = constructor_class_ref_id(func_value) {
-        return construct_registered_class_ref(
-            class_cid, class_cid, func_value, args_ptr, args_len,
+        let entry = site::resolved_site_constructor(site, u64::MAX - 1, class_cid);
+        return construct_registered_class_ref_entry(
+            class_cid, class_cid, func_value, args_ptr, args_len, entry,
+        );
+    }
+    if is_class_object_value(func_value) {
+        let object = JSValue::from_bits(func_value.to_bits()).as_pointer::<ObjectHeader>();
+        let entry = site::site_constructor(site, object);
+        let capture_slot = site::capture_slot(site);
+        return construct_class_object_entry(
+            func_value,
+            args_ptr,
+            args_len,
+            func_value,
+            entry,
+            capture_slot,
         );
     }
     // `new <primitive>()` is a TypeError — a primitive is never a constructor
@@ -800,132 +828,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             _ => {}
         }
     }
-    // #1789/#1787: `new (classObjectValue)(args)` — the callee is a heap
-    // class object (the value a class EXPRESSION evaluates to, e.g.
-    // `const C = mk(x); new C()`). Read its class_id (the compile-time
-    // template) and allocate an instance stamped with it, so instance
-    // methods dispatch and `x instanceof C` matches.
-    //
-    // #1787: then REPLAY the class's constructor on the instance. The
-    // constructor can't be inlined at the `new` site — the callee is a
-    // runtime value, and the class's captured environment lived where the
-    // class EXPRESSION was evaluated (e.g. inside the `mk(tag)` factory),
-    // not at the (possibly far-away) construction site. So the codegen
-    // ClassExprFresh lowering snapshots those captures onto this class
-    // object as the `__perry_ctor_caps` own array, and registers the
-    // standalone `<prefix>__<class>_constructor` symbol in
-    // `CLASS_CONSTRUCTORS`. Replaying it here runs the instance-field
-    // initializers (literal AND captured) and the constructor body —
-    // matching what the static `new ClassName()` path does inline.
-    if is_class_object_value(func_value) {
-        // Root the class object: its pointer is both the constructor value and
-        // the private-brand identity for the instance.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let class_handle = scope.root_nanbox_f64(func_value);
-        let obj = crate::value::JSValue::from_bits(class_handle.get_nanbox_f64().to_bits())
-            .as_pointer::<ObjectHeader>();
-        let class_cid = js_object_get_class_id(obj);
-        if class_cid != 0 {
-            // The template's own record, named by the class object; an image
-            // static, so it stays put across every allocation below.
-            let cell = unsafe { super::super::field_get_set::class_object_template_cell(obj) };
-            let inst =
-                construct_class_object_instance(class_handle.get_nanbox_f64(), class_cid, cell);
-            // #7280: root the instance across the replay — see the long note
-            // in `construct_registered_class_ref`. The replay runs a user
-            // constructor body, so a bare `*mut ObjectHeader` held across it
-            // is an unrooted receiver and this arm returns the pre-move
-            // address. Reproduced by `new C()` where `C = mk()` is a class
-            // EXPRESSION value.
-            let inst_handle = scope.root_raw_mut_ptr(inst);
-            // Every evaluation gets a distinct brand despite sharing its
-            // class id. Stamp it before replay, where private access may occur.
-            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                super::super::field_get_set::stamp_private_evaluation_brand(
-                    inst,
-                    class_handle.get_nanbox_f64(),
-                );
-            });
-            // Replay the class's registered constructor (instance-field
-            // initializers + body) on the fresh instance, filling the
-            // capture params from the snapshotted `__perry_ctor_caps`. The
-            // mechanism lives in `class_constructors` to keep this file under
-            // the 2,000-line CI gate.
-            // Publish this exact class evaluation as newTarget while replaying
-            // the standalone constructor. Dynamic builtin `super()` uses it
-            // to give a replacement receiver the evaluation-specific
-            // prototype and private brand (#9503).
-            let prev_new_target = crate::object::js_new_target_get();
-            let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
-            let active_new_target = class_handle.get_nanbox_f64();
-            crate::object::js_new_target_set(active_new_target);
-            let prev_current_new_target =
-                CURRENT_NEW_TARGET.with(|value| value.replace(active_new_target.to_bits()));
-            let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-            let ctor_result = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                super::super::class_constructors::replay_class_object_constructor(
-                    class_handle.get_nanbox_f64(),
-                    class_cid,
-                    inst,
-                    args_ptr,
-                    args_len,
-                )
-            });
-            CURRENT_NEW_TARGET
-                .with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
-            crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
-            // The standalone constructor publishes its final `this` when a
-            // dynamic super-constructor can replace the provisional receiver.
-            // A class-object replay used to discard that result and return the
-            // allocation above, so writes after `super()` landed on an object
-            // that `new` never exposed (#9503). Return an actual replacement
-            // immediately; when the constructor retained the allocation, keep
-            // the native-backing completion paths below unchanged.
-            let current_inst = inst_handle
-                .with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64));
-            if constructor_return_overrides_this(ctor_result)
-                && ctor_result.to_bits() != current_inst.to_bits()
-            {
-                return ctor_result;
-            }
-            // A template recorded without heritage, of a class with no
-            // declared parent, has no builtin in its chain to back.
-            let heritage = cell.is_none_or(|cell| unsafe { cell.has_heritage() })
-                || get_parent_class_id(class_cid).is_some_and(|parent| parent != 0);
-            if !heritage {
-                return current_inst;
-            }
-            // `class X extends Request/Response {}` constructed via the dynamic
-            // (class-expression value) path: the replayed ctor's `super()`
-            // can't statically route an aliased parent, so attach the native
-            // fetch handle here when the registered parent is a fetch builtin
-            // and the instance didn't already get one. Refs `@hono/node-server`.
-            if let Some(kind) = fetch_parent_kind_in_chain(class_cid) {
-                let has_handle = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                    super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_some()
-                });
-                if !has_handle {
-                    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                        super::super::attach_fetch_handle_for_construction(
-                            inst, kind, args_ptr, args_len,
-                        )
-                    });
-                }
-            }
-            // Class-expression values can also extend Promise and reach this
-            // dynamic construct path. The synthesized default constructor does
-            // not call construct-only builtins as plain functions; attach the
-            // Promise backing here, matching the ClassRef path below. An
-            // explicit `super(executor)` has already installed it, so avoid
-            // invoking the executor twice.
-            ensure_promise_subclass_backing(&inst_handle, class_cid, args_ptr, args_len);
-            // Re-read: the fetch attachment and Promise executor both allocate.
-            return crate::value::js_nanbox_pointer(
-                inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64
-            );
-        }
-    }
-
     // #321/#4530: `new C(args)` where `C` is a first-class ClassRef, including
     // proxy-forwarded construction. Allocate an instance stamped with the
     // registered class id and replay the standalone constructor so field
@@ -1328,6 +1230,8 @@ fn new_target_class_id(new_target: f64) -> Option<u32> {
 
 include!("construct/class_return.rs");
 include!("construct/class_object.rs");
+mod site;
+pub use site::{js_class_value_super_construct_site, js_new_function_construct_site};
 include!("construct/promise_subclass.rs");
 
 unsafe fn construct_registered_class_ref(
@@ -1336,6 +1240,24 @@ unsafe fn construct_registered_class_ref(
     new_target: f64,
     args_ptr: *const f64,
     args_len: usize,
+) -> f64 {
+    construct_registered_class_ref_entry(
+        target_cid,
+        instance_cid,
+        new_target,
+        args_ptr,
+        args_len,
+        None,
+    )
+}
+
+unsafe fn construct_registered_class_ref_entry(
+    target_cid: u32,
+    instance_cid: u32,
+    new_target: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    entry: Option<(usize, u32, u32)>,
 ) -> f64 {
     let inst = if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
         crate::object::alloc::alloc_class_instance_with_keys(
@@ -1396,8 +1318,8 @@ unsafe fn construct_registered_class_ref(
     let prev_current_new_target =
         CURRENT_NEW_TARGET.with(|value| value.replace(new_target.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-    let ctor_result = super::super::class_constructors::replay_registered_class_constructor(
-        target_cid, inst, args_ptr, args_len,
+    let ctor_result = super::super::class_constructors::construct_registered_class_resolved(
+        target_cid, inst, args_ptr, args_len, entry,
     );
     let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
     CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));

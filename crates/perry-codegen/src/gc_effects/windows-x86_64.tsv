@@ -1800,6 +1800,8 @@ js_net_validate_tos	Reenters
 js_new_from_handle	Leaf
 js_new_function_construct	Reenters
 js_new_function_construct_apply	Reenters
+js_new_function_construct_site	Reenters
+js_class_value_super_construct_site	Reenters
 js_new_function_construct_with_new_target	Reenters
 js_new_instance	Reenters
 js_new_target_get	Leaf

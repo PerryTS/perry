@@ -13,6 +13,9 @@ use std::sync::RwLock;
 use super::class_registry::call_vtable_method;
 use super::ObjectHeader;
 
+mod entry;
+use entry::{call_class_object_captured_entry, call_class_object_constructor_entry};
+
 /// Replace the capture array carried by one heap class-expression value.
 /// Invalid/undefined owners are intentional no-ops: the lowering emits guarded
 /// refresh sites along every assignment path, including paths that skipped the
@@ -205,7 +208,7 @@ pub unsafe extern "C" fn js_register_class_constructor(
 
 /// Look up a class's registered constructor
 /// `(fn_ptr, total_param_count, sig_cap_count)`.
-fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32, u32)> {
+pub(crate) fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32, u32)> {
     CLASS_CONSTRUCTORS
         .read()
         .ok()?
@@ -1078,6 +1081,17 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
         if let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(cur) {
+            if sig_caps == 0 && lookup_class_constructor_flags(cur) == (false, false, None) {
+                return call_vtable_method(
+                    ctor_ptr,
+                    this_raw,
+                    args_ptr,
+                    args_len,
+                    total_params,
+                    false,
+                    false,
+                );
+            }
             // #5957: signature-truth user/cap split + rest-aware packing (see
             // `js_super_construct_apply`). This flat dispatcher is the one the
             // dynamic-parent super leg reaches (`js_fetch_or_value_super` →
@@ -1325,7 +1339,16 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, true)
+    replay_class_object_constructor_impl(
+        classobj_value,
+        class_cid,
+        inst,
+        args_ptr,
+        args_len,
+        true,
+        None,
+        None,
+    )
 }
 
 unsafe fn replay_class_object_super_constructor(
@@ -1335,7 +1358,68 @@ unsafe fn replay_class_object_super_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, false)
+    replay_class_object_constructor_impl(
+        classobj_value,
+        class_cid,
+        inst,
+        args_ptr,
+        args_len,
+        false,
+        None,
+        None,
+    )
+}
+
+/// A construct site already resolved this evaluation's own compiled entry.
+pub(crate) unsafe fn construct_class_object_resolved(
+    classobj_value: f64,
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+    entry: Option<(usize, u32, u32)>,
+    capture_slot: Option<(u32, u32)>,
+) -> f64 {
+    // The construction boundary owns roots for this exact evaluation and
+    // receiver, and has installed its heritage pin and private brand. A
+    // validated own entry needs no replay setup or duplicate brand lookup.
+    if let Some((ctor_ptr, total_params, 0)) = entry {
+        if lookup_class_constructor_flags(class_cid) == (false, false, None) {
+            return call_class_object_constructor_entry(
+                classobj_value,
+                inst,
+                args_ptr,
+                args_len,
+                ctor_ptr,
+                total_params,
+            );
+        }
+    }
+    if let (Some(entry), Some(capture_slot)) = (entry, capture_slot) {
+        if lookup_class_constructor_flags(class_cid) == (false, false, None) {
+            if let Some(result) = call_class_object_captured_entry(
+                classobj_value,
+                class_cid,
+                inst,
+                args_ptr,
+                args_len,
+                entry,
+                capture_slot,
+            ) {
+                return result;
+            }
+        }
+    }
+    replay_class_object_constructor_impl(
+        classobj_value,
+        class_cid,
+        inst,
+        args_ptr,
+        args_len,
+        false,
+        entry,
+        capture_slot,
+    )
 }
 
 unsafe fn replay_class_object_constructor_impl(
@@ -1345,6 +1429,8 @@ unsafe fn replay_class_object_constructor_impl(
     args_ptr: *const f64,
     args_len: usize,
     pin_constructing_class: bool,
+    entry: Option<(usize, u32, u32)>,
+    capture_slot: Option<(u32, u32)>,
 ) -> f64 {
     // Callers scope their argument read with `with_mut_ptr`; establish this
     // function's own roots before any constructor-replay path can allocate.
@@ -1397,7 +1483,10 @@ unsafe fn replay_class_object_constructor_impl(
     let mut ctor_cid = class_cid;
     let mut depth = 0usize;
     let found = loop {
-        if let Some(found) = lookup_class_constructor(ctor_cid) {
+        if let Some(found) = entry
+            .filter(|_| ctor_cid == class_cid)
+            .or_else(|| lookup_class_constructor(ctor_cid))
+        {
             break Some(found);
         }
         match super::class_registry::get_parent_class_id(ctor_cid) {
@@ -1416,6 +1505,40 @@ unsafe fn replay_class_object_constructor_impl(
         });
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+
+    if ctor_cid == class_cid
+        && sig_caps == 0
+        && lookup_class_constructor_flags(ctor_cid) == (false, false, None)
+    {
+        return inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            call_class_object_constructor_entry(
+                classobj_handle.get_nanbox_f64(),
+                inst,
+                args_ptr,
+                args_len,
+                ctor_ptr,
+                total_params,
+            )
+        });
+    }
+
+    if ctor_cid == class_cid && lookup_class_constructor_flags(ctor_cid) == (false, false, None) {
+        if let Some(capture_slot) = capture_slot {
+            if let Some(result) = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                call_class_object_captured_entry(
+                    classobj_handle.get_nanbox_f64(),
+                    class_cid,
+                    inst,
+                    args_ptr,
+                    args_len,
+                    (ctor_ptr, total_params, sig_caps),
+                    capture_slot,
+                )
+            }) {
+                return result;
+            }
+        }
+    }
 
     // Read the snapshotted captures (an own array, in capture-param order).
     // When the implicit derived constructor walk resolves an ancestor, follow
@@ -1533,11 +1656,12 @@ unsafe fn replay_class_object_constructor_impl(
 /// ClassRef callee. Unlike class-expression values, class declarations do not
 /// carry per-evaluation capture slots on a heap class object, so only the
 /// user-provided `new` arguments are forwarded.
-pub(crate) unsafe fn replay_registered_class_constructor(
+pub(crate) unsafe fn construct_registered_class_resolved(
     class_cid: u32,
     inst: *mut ObjectHeader,
     args_ptr: *const f64,
     args_len: usize,
+    entry: Option<(usize, u32, u32)>,
 ) -> f64 {
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
@@ -1552,7 +1676,10 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     let mut ctor_cid = class_cid;
     let mut depth = 0usize;
     let found = loop {
-        if let Some(found) = lookup_class_constructor(ctor_cid) {
+        if let Some(found) = entry
+            .filter(|_| ctor_cid == class_cid)
+            .or_else(|| lookup_class_constructor(ctor_cid))
+        {
             break Some(found);
         }
         match super::class_registry::get_parent_class_id(ctor_cid) {
@@ -1569,6 +1696,18 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+
+    if sig_caps == 0 && lookup_class_constructor_flags(ctor_cid) == (false, false, None) {
+        return call_vtable_method(
+            ctor_ptr,
+            inst as i64,
+            args_ptr,
+            args_len,
+            total_params,
+            false,
+            false,
+        );
+    }
 
     // A function-nested class declaration may carry a decl-site capture
     // snapshot (see CLASS_CAPTURE_VALUES). The ctor's trailing
@@ -1603,6 +1742,47 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         false,
         false,
     )
+}
+
+#[cfg(test)]
+mod construct_entry_tests {
+    use super::*;
+
+    extern "C" fn root_count(_: f64) -> f64 {
+        crate::gc::RuntimeHandleScope::active_len_for_tests() as f64
+    }
+
+    #[test]
+    fn capless_entry_does_not_open_a_replay_frame() {
+        unsafe {
+            let cid = 0x6f24;
+            let code = root_count as *const () as usize;
+            js_register_class_constructor(cid as i64, code as i64, 0, 0);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(cid, 0));
+            let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(cid, 0));
+            let class_value = class
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+            let expected = instance.with_mut_ptr::<ObjectHeader, _>(|p| {
+                call_class_object_constructor_entry(class_value, p, std::ptr::null(), 0, code, 0)
+            });
+            let actual = instance.with_mut_ptr::<ObjectHeader, _>(|p| {
+                construct_class_object_resolved(
+                    class_value,
+                    cid,
+                    p,
+                    std::ptr::null(),
+                    0,
+                    Some((code, 0, 0)),
+                    None,
+                )
+            });
+            assert_eq!(
+                actual, expected,
+                "a validated own entry must bypass replay setup"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2136,6 +2136,8 @@ js_net_validate_tos	i32s	f64
 js_new_from_handle	f64	f64,i64,i64
 js_new_function_construct	f64	f64,ptr,usize
 js_new_function_construct_apply	f64	f64,f64
+js_new_function_construct_site	f64	f64,ptr,usize,ptr
+js_class_value_super_construct_site	f64	f64,f64,ptr,usize,ptr
 js_new_function_construct_with_new_target	f64	f64,ptr,usize,f64
 js_new_instance	f64	i64,i64,i64,i64,i64
 js_new_target_get	f64	
