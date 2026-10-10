@@ -115,7 +115,6 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         crate::object::scan_object_cache_roots_mut,
         crate::object::scan_shape_cache_roots_mut,
         crate::object::shapes::scan_shape_table_rekey_mut,
-        crate::object::shapes::scan_shape_prototype_words_mut,
         crate::string::scan_intern_table_roots_mut,
     ] {
         crate::gc::gc_register_mutable_root_scanner(scanner);

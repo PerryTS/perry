@@ -898,11 +898,16 @@ fn once_wrap(target: f64, event: f64, listener: f64) -> f64 {
     js_closure_set_capture_f64(wrapper, 2, listener.get_nanbox_f64());
     js_closure_set_capture_f64(wrapper, 3, f64::from_bits(super::TAG_FALSE));
     let wrapper = scope.root_nanbox_f64(super::box_pointer(wrapper as *const u8));
-    set_named(
-        wrapper.get_nanbox_f64(),
-        crate::runtime_state_key!(b"listener"),
-        listener.get_nanbox_f64(),
-    );
+    // `.listener` is observable through rawListeners(), so retain an ordinary
+    // function property, born at its fixed slot instead of added afterward.
+    unsafe {
+        let installed = crate::closure::props::bag_born_with_attrs(
+            super::raw_ptr_from_value(wrapper.get_nanbox_f64()),
+            &[("listener", listener.get_nanbox_f64())],
+            &[],
+        );
+        debug_assert!(installed, "a fresh once wrapper has no property bag");
+    }
     wrapper.get_nanbox_f64()
 }
 
