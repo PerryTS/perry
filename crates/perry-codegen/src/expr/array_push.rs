@@ -70,7 +70,7 @@ use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
     emit_may_carry_heap_pointer_check, emit_root_nanbox_store_on_block,
-    emit_typed_feedback_register_site, emit_write_barrier,
+    emit_typed_feedback_register_site,
     emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
     lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
@@ -384,10 +384,7 @@ pub(super) fn emit_push_writeback(
             "js_closure_set_capture_bits",
             &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
         );
-        // Gen-GC Phase C2: the realloc'd array head stored into the closure
-        // capture is a (possibly young) heap pointer — barrier the closure
-        // parent.
-        emit_write_barrier(ctx, &closure_ptr, &new_bits);
+        // The runtime capture setter owns the precise slot barrier.
     } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
         ctx.block().store(DOUBLE, new_box, &slot);
     } else if let Some(global_name) = ctx.module_globals.get(&array_id).cloned() {

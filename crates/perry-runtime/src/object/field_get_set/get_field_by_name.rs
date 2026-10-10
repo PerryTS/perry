@@ -4,6 +4,8 @@
 
 use super::*;
 
+mod shape_inherited;
+
 /// Wall 10 — read a property a framework attached to a native registry handle
 /// via `Object.setPrototypeOf(handle, proto)` (Express's `res`/`req`). The link
 /// is keyed by the handle id in `OBJECT_PROTOTYPES`. Returns `None` (so the
@@ -933,6 +935,9 @@ fn get_field_by_name_past_data_probe(
                 obj = size_arm_obj.get_raw_const_ptr::<ObjectHeader>();
             }
         }
+    }
+    if let Some(value) = unsafe { shape_inherited::get(obj, key) } {
+        return value;
     }
     // WeakMap / WeakSet instance — a VALUE read of the collection methods
     // (`w.add`, `wm.set`, `typeof w.has`; react-server-dom's chunk-preload

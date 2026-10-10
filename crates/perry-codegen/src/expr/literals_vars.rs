@@ -816,9 +816,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .and(I64, &box_ptr, crate::nanbox::POINTER_MASK_I64);
                     ctx.block()
                         .call_void(setter, &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: `++`/`--` on a BigInt yields a heap
-                    // pointer via js_numeric_step — barrier the box parent.
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    // Only the trusted setter omits its own precise barrier.
+                    if ctx.trusted_box_captures {
+                        emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    }
                     return Ok(if *prefix { new } else { old });
                 }
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
@@ -852,9 +853,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
-                // Gen-GC Phase C2: barrier — closure is the parent (BigInt
-                // `++`/`--` can store a young heap pointer).
-                emit_write_barrier(ctx, &closure_ptr, &new_bits);
+                // The runtime capture setter owns the precise slot barrier.
                 return Ok(if *prefix { new } else { old });
             }
             // Boxed enclosing-scope var: load slot (box ptr), deref,
@@ -885,9 +884,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new_bits = blk.bitcast_double_to_i64(&new);
                     let box_ptr = blk.load(I64, &slot);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
-                    // Gen-GC Phase C2: barrier — box is the parent (BigInt
-                    // `++`/`--` can store a young heap pointer).
-                    emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    // js_box_set_bits owns the precise cell barrier.
                     return Ok(if *prefix { new } else { old });
                 }
             }
@@ -1282,8 +1279,10 @@ pub(crate) fn bind_lowered_value_to_local(
                 let box_ptr = blk.and(I64, &box_ptr, crate::nanbox::POINTER_MASK_I64);
                 let v_bits = blk.bitcast_double_to_i64(v);
                 blk.call_void(setter, &[(I64, &box_ptr), (I64, &v_bits)]);
-                // Gen-GC Phase C2: barrier — box is the parent.
-                emit_write_barrier(ctx, &box_ptr, &v_bits);
+                // Only the trusted setter omits its own precise barrier.
+                if ctx.trusted_box_captures {
+                    emit_write_barrier(ctx, &box_ptr, &v_bits);
+                }
             }
         } else {
             let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
@@ -1292,8 +1291,7 @@ pub(crate) fn bind_lowered_value_to_local(
                 "js_closure_set_capture_bits",
                 &[(I64, &closure_ptr), (I32, &idx_str), (I64, &v_bits)],
             );
-            // Gen-GC Phase C2: barrier — closure is the parent.
-            emit_write_barrier(ctx, &closure_ptr, &v_bits);
+            // The runtime capture setter owns the precise slot barrier.
         }
     } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
         // Box path — only for non-global locals. Module globals
@@ -1308,10 +1306,7 @@ pub(crate) fn bind_lowered_value_to_local(
             let blk = ctx.block();
             let box_ptr = blk.load(I64, &slot);
             blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
-            // Gen-GC Phase C2: barrier — box is the parent (mirror the
-            // captured-box path above; an old box can else miss a young
-            // object/string/array value).
-            emit_write_barrier(ctx, &box_ptr, &v_bits);
+            // js_box_set_bits owns the precise cell barrier.
         }
     } else if crate::expr::store_canonical_local_from_double(ctx, id, v, Some(value)) {
         // Repsel Phase 1: canonical-i32 local — the NaN-safe helper

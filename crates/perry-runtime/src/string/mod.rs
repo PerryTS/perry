@@ -118,6 +118,10 @@ mod io;
 mod iter_object;
 mod locale;
 mod pad;
+mod provenance;
+use provenance::{combine_string_flags, raw_string_metadata};
+#[cfg(test)]
+mod provenance_tests;
 mod raw;
 mod slice_ops;
 mod slice_range;
@@ -219,7 +223,8 @@ pub(crate) use format::js_format_f64;
 /// from user data belongs on the ordinary allocation path.
 #[inline]
 pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
-    intern::intern_dispatch_bytes(0, name.as_ptr(), name.len(), 0, false) as *mut StringHeader
+    let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+    intern::intern_prehashed_bytes(name.as_ptr(), name.len(), hash, false) as *mut StringHeader
 }
 #[cfg(feature = "regex-engine")]
 pub use crate::regex::{js_string_split_js, js_string_split_n};
@@ -298,28 +303,44 @@ pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
 /// byte-level escape scan. String-producing mutations do not propagate this
 /// provenance bit unless they independently prove the resulting payload.
 pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
-/// This exact header's payload was fully validated as generalized WTF-8 and its
-/// `utf16_len` found exact, so a RegExp can bind it again in constant work
-/// (`perex::binding::BoundSubject::new_counted`) instead of decoding it (#10166).
-///
-/// Only the regex subject binding sets it, after a full validation succeeds. It
-/// describes one payload, so it must never reach another string:
-/// `init_string_header` strips it from every constructed string, and the
-/// in-place writers (`js_string_append`, `js_string_append_chain`) clear it on
-/// the destination they change. The flag must not be read as "shared": a
-/// search that reads a string in place (`perex_owner::InPlace`) validates it
-/// without marking it shared, so a later in-place append is what clears it.
+/// This payload is valid generalized WTF-8 with an exact `utf16_len`.
+/// Constructors establish this proof at the raw-byte boundary or directly
+/// from typed encoders. Copies on code-unit boundaries preserve it; concat
+/// intersects its inputs' proof, and append recomputes it for the new payload.
+/// A clear lone-surrogate bit then permits a Rust `&str` borrow without a scan.
+/// Regex uses the SAME proof for `BoundSubject::new_counted`; its checked
+/// binding can also establish it for an otherwise unproved header (#10166).
+/// No header size or payload ABI changes, and no second validity authority.
 pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
+/// Complete a successful checked regex binding's header proof. Legacy byte
+/// producers may have counted WTF-8 without deriving the surrogate flag; the
+/// newly shared proof must certify that flag too before permitting `&str`.
+#[cfg(feature = "regex-engine")]
+pub(crate) unsafe fn mark_wtf8_validated(s: *mut StringHeader) {
+    let lone = (*s).byte_len != (*s).utf16_len
+        && bytes_have_lone_surrogate(slice::from_raw_parts(
+            string_data(s),
+            (*s).byte_len as usize,
+        ));
+    (*s).flags = ((*s).flags & !STRING_FLAG_HAS_LONE_SURROGATES)
+        | STRING_FLAG_WTF8_VALIDATED
+        | if lone {
+            STRING_FLAG_HAS_LONE_SURROGATES
+        } else {
+            0
+        };
+}
+
 /// A static empty string that can be used as a safe fallback for null pointers.
-/// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
+/// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=WTF8_VALIDATED (shared).
 #[no_mangle]
 pub static PERRY_EMPTY_STRING: StringHeader = StringHeader {
     utf16_len: 0,
     byte_len: 0,
     capacity: 0,
     refcount: 0,
-    flags: 0,
+    flags: STRING_FLAG_WTF8_VALIDATED,
 };
 
 /// Get a pointer to the static empty string (for codegen null guards).
@@ -476,7 +497,8 @@ pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHead
 /// are pointer-identical to the same literals elsewhere in the program.
 #[inline]
 pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
-    intern::intern_dispatch_bytes(0, bytes.as_ptr(), bytes.len(), 0, false)
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    intern::intern_prehashed_bytes(bytes.as_ptr(), bytes.len(), hash, false)
 }
 
 /// Header for heap-allocated strings
@@ -898,9 +920,9 @@ pub(crate) unsafe fn init_string_header(
     (*ptr).byte_len = byte_len;
     (*ptr).capacity = capacity;
     (*ptr).refcount = refcount;
-    // A new header never inherits its source's validation (#10166), however a
-    // caller computed `flags`.
-    (*ptr).flags = flags & !STRING_FLAG_WTF8_VALIDATED;
+    // `flags` is the producer's proof for THIS payload. Byte copies preserve
+    // it only on code-unit boundaries; concat/append intersect their inputs.
+    (*ptr).flags = flags;
 }
 
 #[inline]
@@ -1036,7 +1058,8 @@ pub fn str_bytes_ascii_from_jsvalue(
             // ambiguous — a truncated/malformed lead byte can coincidentally
             // match — so only THAT arm pays for the real scan.
             let ascii = (*hdr).utf16_len == byte_len
-                && std::slice::from_raw_parts(data, byte_len as usize).is_ascii();
+                && ((*hdr).flags & STRING_FLAG_WTF8_VALIDATED != 0
+                    || std::slice::from_raw_parts(data, byte_len as usize).is_ascii());
             return Some((data, byte_len, ascii));
         }
     }
@@ -1047,7 +1070,7 @@ pub fn str_bytes_ascii_from_jsvalue(
 /// Skips the `compute_utf16_len` byte scan — sets utf16_len = byte_len directly.
 #[inline]
 pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut StringHeader {
-    js_string_from_bytes_known_utf16(data, len, len, 0)
+    js_string_from_bytes_known_utf16(data, len, len, STRING_FLAG_WTF8_VALIDATED)
 }
 
 /// Allocate an uninitialised ASCII-typed string of `len` bytes and return
@@ -1061,7 +1084,7 @@ pub(crate) fn js_string_from_ascii_bytes(data: *const u8, len: u32) -> *mut Stri
 pub(crate) fn js_string_alloc_ascii_uninit(len: u32) -> (*mut StringHeader, *mut u8) {
     let (ptr, data_ptr) = string_storage_alloc(len);
     unsafe {
-        init_string_header(ptr, len, len, len, 0, 0);
+        init_string_header(ptr, len, len, len, 0, STRING_FLAG_WTF8_VALIDATED);
     }
     (ptr, data_ptr)
 }
@@ -1172,24 +1195,11 @@ pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
         return js_string_from_ascii_bytes(bytes.as_ptr(), len);
     }
 
-    let mut utf16_len = 0u32;
-    let mut has_lone_surrogate = false;
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        let (advance, units, code_point) = wtf8_step(bytes, offset);
-        utf16_len = utf16_len.saturating_add(units as u32);
-        has_lone_surrogate |= units == 1 && (0xD800..=0xDFFF).contains(&code_point);
-        offset = (offset + advance).min(bytes.len());
-    }
+    let (utf16_len, flags) = raw_string_metadata(bytes.as_ptr(), len);
     if utf16_len as usize > MAX_STRING_LENGTH {
         throw_invalid_string_length();
     }
 
-    let flags = if has_lone_surrogate {
-        STRING_FLAG_HAS_LONE_SURROGATES
-    } else {
-        0
-    };
     let result = js_string_from_bytes_known_utf16(bytes.as_ptr(), len, utf16_len, flags);
     concat::canonicalize_surrogate_pairs(result)
 }
@@ -1197,7 +1207,12 @@ pub(crate) fn js_string_from_builder_bytes(bytes: &[u8]) -> *mut StringHeader {
 /// Internal helper: Create a StringHeader from a Rust &str
 #[inline]
 pub(crate) fn js_string_from_str(s: &str) -> *mut StringHeader {
-    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    js_string_from_bytes_known_utf16(
+        s.as_ptr(),
+        s.len() as u32,
+        utf16_count::count(s) as u32,
+        STRING_FLAG_WTF8_VALIDATED,
+    )
 }
 
 /// Get the data pointer for a string
@@ -1268,30 +1283,28 @@ pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 /// Check if string is pure ASCII (utf16_len == byte_len → all single-byte chars)
 #[inline]
 pub(crate) fn is_ascii_string(s: *const StringHeader) -> bool {
-    unsafe { (*s).utf16_len == (*s).byte_len }
+    unsafe {
+        (*s).utf16_len == (*s).byte_len
+            && ((*s).flags & STRING_FLAG_WTF8_VALIDATED != 0
+                || slice::from_raw_parts(string_data(s), (*s).byte_len as usize).is_ascii())
+    }
 }
 
-/// Borrow a header's payload as `&str`, answering `None` for a WTF-8 payload
-/// (lone surrogates), like `std::str::from_utf8(..).ok()` — but without the
-/// scan when the header already proves the answer: `utf16_len == byte_len`
-/// holds iff every byte is a one-byte code unit, i.e. pure ASCII, which is
-/// what nearly every property key is. The generic property-read ladder
-/// decodes the key at several layers per read (`ic_miss`, closure expandos,
-/// accessor and reflection probes, async-resource dispatch), and
-/// `core::str::from_utf8` was 2 % of the claude-code keystroke profile on
-/// those decodes alone.
-///
-/// Same borrow rule as [`string_as_str`]: the slice must not outlive any
-/// call that can move the payload.
+/// Borrow a live header as UTF-8 when its construction proves that encoding.
+/// Unknown raw/FFI payloads still use checked decoding; WTF-8 with lone
+/// surrogates never becomes a Rust `&str`. The borrow cannot span collection.
 ///
 /// # Safety
 /// `s` must point at a live `StringHeader`.
 #[inline]
 pub(crate) unsafe fn header_str_checked<'a>(s: *const StringHeader) -> Option<&'a str> {
-    let len = (*s).byte_len as usize;
-    let bytes = slice::from_raw_parts(string_data(s), len);
-    if (*s).utf16_len as usize == len {
-        Some(str::from_utf8_unchecked(bytes))
+    let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+    if (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0 {
+        if (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+            None
+        } else {
+            Some(str::from_utf8_unchecked(bytes))
+        }
     } else {
         str::from_utf8(bytes).ok()
     }

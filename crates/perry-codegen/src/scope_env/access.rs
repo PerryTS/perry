@@ -116,10 +116,26 @@ pub(crate) fn read_bits(ctx: &mut FnCtx<'_>, id: u32, slot: ScopeSlot, base: &st
 /// Store `bits` into the slot and shade the edge with the scope object as the
 /// barrier parent.
 pub(crate) fn write_bits(ctx: &mut FnCtx<'_>, slot: ScopeSlot, base: &str, bits: &str) {
+    // Abrupt RHS completion performed no store. Preserve the opaque emitter's
+    // terminated-path guard before creating the precise barrier diamond.
+    if ctx.block().is_terminated() {
+        return;
+    }
     let addr = cell_addr(ctx, slot, base);
     let ptr = ctx.block().inttoptr(I64, &addr);
     ctx.block().store(I64, bits, &ptr);
-    crate::expr::emit_write_barrier(ctx, base, bits);
+    // The store just dereferenced this live scope object, so its header is
+    // validated too. Reuse the value/generation filter and precise slot entry
+    // used by field and element stores; never shade a scalar or remember a
+    // young parent unless an incremental mark is active.
+    crate::expr::emit_write_barrier_slot_value_and_generation_tested(
+        ctx,
+        base,
+        base,
+        &addr,
+        bits,
+        "scope_set",
+    );
 }
 
 /// Load `id`'s base and read it. `None` when `id` is not scoped here.
@@ -155,7 +171,7 @@ pub(crate) fn write_back_boxed_local(ctx: &mut FnCtx<'_>, id: u32, new_box: &str
     if let Some(cell) = crate::expr::load_boxed_local_pointer(ctx, id)? {
         ctx.block()
             .call_void("js_box_set_bits", &[(I64, &cell), (I64, &bits)]);
-        crate::expr::emit_write_barrier(ctx, &cell, &bits);
+        // js_box_set_bits owns the precise cell barrier.
     }
     Ok(true)
 }

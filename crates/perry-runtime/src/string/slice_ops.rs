@@ -360,13 +360,13 @@ fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
             bytes.to_ascii_lowercase()
         };
         let len = out.len() as u32;
-        return js_string_from_bytes_known_utf16(out.as_ptr(), len, len, 0);
+        return js_string_from_ascii_bytes(out.as_ptr(), len);
     }
 
     if !upper {
-        if let Ok(text) = std::str::from_utf8(bytes) {
+        if let Some(text) = unsafe { header_str_checked(s) } {
             let out = text.to_lowercase();
-            return js_string_from_bytes(out.as_ptr(), out.len() as u32);
+            return js_string_from_str(&out);
         }
     }
 
@@ -504,52 +504,46 @@ pub extern "C" fn js_string_index_of_from(
     }
 
     unsafe {
-        let h_blen = (*haystack).byte_len as usize;
-        let n_blen = (*needle).byte_len as usize;
-
-        // ASCII fast path: byte offset == UTF-16 offset, use Rust's
-        // optimized Two-Way str::find (avoids O(n*m) naive scan).
-        if is_ascii_string(haystack) {
-            let start = if from_index < 0 {
-                0usize
-            } else {
-                from_index as usize
-            };
-            if n_blen == 0 {
-                return start.min(h_blen) as i32;
-            }
-            if start + n_blen > h_blen {
-                return -1;
-            }
-            let h =
-                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(haystack), h_blen));
-            let n =
-                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(needle), n_blen));
-            return match h[start..].find(n) {
-                Some(pos) => (start + pos) as i32,
-                None => -1,
-            };
+        let start = from_index.max(0).min((*haystack).utf16_len as i32) as usize;
+        if (*needle).byte_len == 0 {
+            return start as i32;
         }
-
-        // Non-ASCII: construct &str, convert UTF-16 from_index to byte offset
-        let h = string_as_str(haystack);
-        let n = string_as_str(needle);
-        let u16_start = if from_index < 0 {
-            0usize
-        } else {
-            from_index as usize
+        let Some(h) = header_str_checked(haystack) else {
+            return search_utf16(haystack, needle, start, false);
         };
-        let byte_start = utf16_offset_to_byte_offset(h.as_bytes(), u16_start);
-        if byte_start > h.len() {
-            if n.is_empty() {
-                return (*haystack).utf16_len as i32;
+        let Some(n) = header_str_checked(needle) else {
+            return search_utf16(haystack, needle, start, false);
+        };
+        let ascii = (*haystack).utf16_len == (*haystack).byte_len;
+        let byte_start = if ascii {
+            start
+        } else {
+            let boundary = super::slice_range::advance(
+                h.as_bytes(),
+                super::slice_range::Boundary::default(),
+                start,
+            );
+            if boundary.low {
+                boundary.byte + wtf8_step(h.as_bytes(), boundary.byte).0
+            } else {
+                boundary.byte
             }
-            return -1;
-        }
-        match h[byte_start..].find(n) {
-            Some(byte_pos) => byte_offset_to_utf16_index(h, byte_start + byte_pos) as i32,
-            None => -1,
-        }
+        };
+        // A one-byte pattern uses the standard library's memchr searcher,
+        // avoiding construction of a Two-Way substring searcher per call.
+        let found = if n.len() == 1 {
+            h[byte_start..].find(n.as_bytes()[0] as char)
+        } else {
+            h[byte_start..].find(n)
+        };
+        found.map_or(-1, |offset| {
+            let byte = byte_start + offset;
+            if ascii {
+                byte as i32
+            } else {
+                utf16_count::count(&h[..byte]) as i32
+            }
+        })
     }
 }
 
@@ -562,25 +556,7 @@ pub extern "C" fn js_string_index_of_from(
 /// behavior (`"ababa".includes("a", Infinity) === false`).
 #[no_mangle]
 pub extern "C" fn js_string_position_to_index(pos_f64: f64) -> i32 {
-    // The typed `includes` lowering passes a raw numeric double here.
-    let n = pos_f64;
-    if n.is_nan() {
-        return 0;
-    }
-    if n == f64::INFINITY {
-        return i32::MAX;
-    }
-    if n == f64::NEG_INFINITY {
-        return 0;
-    }
-    let truncated = n.trunc();
-    if truncated >= i32::MAX as f64 {
-        i32::MAX
-    } else if truncated <= i32::MIN as f64 {
-        i32::MIN
-    } else {
-        truncated as i32
-    }
+    pos_f64 as i32
 }
 
 // `#[used]` keepalive: `js_string_position_to_index` is reached only from
@@ -598,43 +574,93 @@ pub extern "C" fn js_string_last_index_of(
     haystack: *const StringHeader,
     needle: *const StringHeader,
 ) -> i32 {
-    if !is_valid_string_ptr(haystack) {
+    if !is_valid_string_ptr(haystack) || !is_valid_string_ptr(needle) {
         return -1;
     }
-    if !is_valid_string_ptr(needle) {
-        return unsafe { (*haystack).utf16_len as i32 };
-    }
+    let len = unsafe { (*haystack).utf16_len } as usize;
+    string_last_index_at(haystack, needle, len)
+}
 
+fn string_last_index_at(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+    pos: usize,
+) -> i32 {
     unsafe {
-        let n_blen = (*needle).byte_len as usize;
-        if n_blen == 0 {
-            return (*haystack).utf16_len as i32;
+        if (*needle).byte_len == 0 {
+            return pos as i32;
         }
-
-        // ASCII fast path: byte offset == UTF-16 offset, use rfind
-        if is_ascii_string(haystack) {
-            let h_blen = (*haystack).byte_len as usize;
-            if n_blen > h_blen {
-                return -1;
-            }
-            let h =
-                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(haystack), h_blen));
-            let n =
-                std::str::from_utf8_unchecked(slice::from_raw_parts(string_data(needle), n_blen));
-            return match h.rfind(n) {
-                Some(pos) => pos as i32,
-                None => -1,
+        if let (Some(h), Some(n)) = (header_str_checked(haystack), header_str_checked(needle)) {
+            let ascii = (*haystack).utf16_len == (*haystack).byte_len;
+            let boundary = if ascii {
+                pos
+            } else {
+                super::slice_range::advance(
+                    h.as_bytes(),
+                    super::slice_range::Boundary::default(),
+                    pos,
+                )
+                .byte
             };
+            // Include a complete needle beginning at the last permitted start.
+            let mut end = (boundary + n.len()).min(h.len());
+            while !h.is_char_boundary(end) {
+                end -= 1;
+            }
+            let found = if n.len() == 1 {
+                h[..end].rfind(n.as_bytes()[0] as char)
+            } else {
+                h[..end].rfind(n)
+            };
+            return found.map_or(-1, |byte| {
+                if ascii {
+                    byte as i32
+                } else {
+                    utf16_count::count(&h[..byte]) as i32
+                }
+            });
         }
     }
+    search_utf16(haystack, needle, pos, true)
+}
 
-    // Non-ASCII path
-    let h = string_as_str(haystack);
-    let n = string_as_str(needle);
-    match h.rfind(n) {
-        Some(byte_pos) => byte_offset_to_utf16_index(h, byte_pos) as i32,
-        None => -1,
+/// WTF-8 surrogate needles match individual UTF-16 units, including a half
+/// of an astral scalar. Rust-owned scratch never holds a moving heap borrow.
+fn search_utf16(
+    haystack: *const StringHeader,
+    needle: *const StringHeader,
+    pos: usize,
+    reverse: bool,
+) -> i32 {
+    fn units(header: *const StringHeader) -> Vec<u16> {
+        let text = unsafe { wtf8::Wtf8Str::from_header(header) };
+        let mut units = Vec::new();
+        for cp in text.code_points() {
+            if cp >= 0x10000 {
+                units.push((0xd800 + ((cp - 0x10000) >> 10)) as u16);
+                units.push((0xdc00 + ((cp - 0x10000) & 0x3ff)) as u16);
+            } else {
+                units.push(cp as u16);
+            }
+        }
+        units
     }
+    let h = units(haystack);
+    let n = units(needle);
+    if n.is_empty() {
+        return pos.min(h.len()) as i32;
+    }
+    if n.len() > h.len() {
+        return -1;
+    }
+    if reverse {
+        (0..=pos.min(h.len() - n.len()))
+            .rev()
+            .find(|&i| h[i..].starts_with(&n))
+    } else {
+        (pos.min(h.len())..=h.len() - n.len()).find(|&i| h[i..].starts_with(&n))
+    }
+    .map_or(-1, |i| i as i32)
 }
 
 /// `String.prototype.lastIndexOf(searchString, position)` (ECMA-262 §22.1.3.9):
@@ -668,17 +694,5 @@ pub extern "C" fn js_string_last_index_of_from(
         // Empty needle matches at every position; the answer is min(pos, len).
         return pos16 as i32;
     }
-    // Walk matches in ascending UTF-16 order; keep the highest start <= pos16.
-    let h = string_as_str(haystack);
-    let n = string_as_str(needle);
-    let mut best: i32 = -1;
-    for (byte_pos, _) in h.match_indices(n) {
-        let u16idx = byte_offset_to_utf16_index(h, byte_pos) as i64;
-        if u16idx <= pos16 {
-            best = u16idx as i32;
-        } else {
-            break; // ascending — no later match can satisfy <= pos16
-        }
-    }
-    best
+    string_last_index_at(haystack, needle, pos16 as usize)
 }

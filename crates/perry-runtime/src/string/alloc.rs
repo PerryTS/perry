@@ -122,8 +122,8 @@ pub extern "C" fn js_string_new_sso(data: *const u8, len: u32) -> f64 {
 pub extern "C" fn js_string_from_bytes_longlived(data: *const u8, len: u32) -> *mut StringHeader {
     let (ptr, data_ptr) = string_storage_alloc_longlived(len);
     unsafe {
-        let u16len = compute_utf16_len(data, len);
-        init_string_header(ptr, u16len, len, len, 0, 0);
+        let (u16len, flags) = raw_string_metadata(data, len);
+        init_string_header(ptr, u16len, len, len, 0, flags);
         if len > 0 && !data.is_null() {
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
         }
@@ -142,9 +142,9 @@ pub extern "C" fn js_string_from_bytes_with_capacity(
     let (ptr, data_ptr) = string_storage_alloc(capacity);
 
     unsafe {
-        let u16len = compute_utf16_len(data, len);
+        let (u16len, flags) = raw_string_metadata(data, len);
         // shared by default — caller can set refcount to 1 if uniquely owned.
-        init_string_header(ptr, u16len, len, capacity, 0, 0);
+        init_string_header(ptr, u16len, len, capacity, 0, flags);
 
         // Copy string data after header
         if len > 0 && !data.is_null() {
@@ -161,13 +161,8 @@ pub extern "C" fn js_string_from_bytes_with_capacity(
 pub extern "C" fn js_string_from_wtf8_bytes(data: *const u8, len: u32) -> *mut StringHeader {
     let (ptr, data_ptr) = string_storage_alloc(len);
     unsafe {
-        let bytes = if len > 0 && !data.is_null() {
-            slice::from_raw_parts(data, len as usize)
-        } else {
-            &[]
-        };
-        let u16len = compute_utf16_len_wtf8(bytes);
-        init_string_header(ptr, u16len, len, len, 0, STRING_FLAG_HAS_LONE_SURROGATES);
+        let (u16len, flags) = raw_string_metadata(data, len);
+        init_string_header(ptr, u16len, len, len, 0, flags);
         if len > 0 && !data.is_null() {
             ptr::copy_nonoverlapping(data, data_ptr, len as usize);
         }

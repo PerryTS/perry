@@ -102,6 +102,7 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
     ("private_field_set", StemKind::PointerTestedStore),
     ("put.pic", StemKind::PointerTestedStore),
+    ("scope_set", StemKind::ValueAndGenerationTested),
 ];
 
 const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
@@ -1078,6 +1079,7 @@ fn probe_ir(stem: &str) -> String {
         "idxset.runtime_key" => idxset_runtime_key_ir(),
         "private_field_set" => private_field_set_ir(),
         "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
+        "scope_set" => crate::scope_env::pointer_scope_store_ir(),
         other => panic!(
             "VERIFIED_BARRIER_STEMS entry {other:?} has no probe in \
              barrier_stem_census_tests::probe_ir — a registry entry without a \

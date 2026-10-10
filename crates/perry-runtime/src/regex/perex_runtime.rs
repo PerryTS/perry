@@ -583,7 +583,7 @@ pub(crate) fn find_in_place<'mem>(
             place.bytes(),
             (*s).utf16_len as usize,
             (*s).flags & crate::string::STRING_FLAG_WTF8_VALIDATED != 0,
-            || (*s).flags |= crate::string::STRING_FLAG_WTF8_VALIDATED,
+            || crate::string::mark_wtf8_validated(s),
         )?;
         Ok::<_, EngineError>((subject, identity))
     })?;

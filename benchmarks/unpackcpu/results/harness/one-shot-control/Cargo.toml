@@ -1,0 +1,8 @@
+[package]
+name = "baseline-one-shot-control"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[dependencies]
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+miniz_oxide = "=0.9.1"

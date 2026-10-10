@@ -395,9 +395,9 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
             let entry = &(*table)[slot];
             if entry.string_ptr != 0 && entry.hash == hash {
                 let existing = entry.string_ptr as *const StringHeader;
-                if is_valid_string_ptr(existing)
-                    && (*existing).byte_len == byte_len
-                    && intern_content_equals(key, existing, byte_len)
+                if existing == key
+                    || ((*existing).byte_len == byte_len
+                        && intern_content_equals(key, existing, byte_len))
                 {
                     return Some(existing);
                 }
@@ -458,6 +458,23 @@ pub(crate) fn intern_dispatch_bytes(
         }
         hash
     };
+    intern_prehashed_bytes(bytes, byte_len, hash, is_wtf8)
+}
+
+/// One content probe with a hash already supplied by codegen or a caller.
+/// Separating hashing from this body lets runtime literal callers fold FNV at
+/// their call site, while using exactly the existing intern table and roots.
+pub(super) fn intern_prehashed_bytes(
+    bytes: *const u8,
+    byte_len: usize,
+    hash: u64,
+    is_wtf8: bool,
+) -> *const StringHeader {
+    let input = if byte_len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(bytes, byte_len) }
+    };
     let slot = (hash as usize) & INTERN_TABLE_MASK;
 
     let hit = with_intern_table(|table| unsafe {
@@ -467,7 +484,6 @@ pub(crate) fn intern_dispatch_bytes(
         }
         let existing = entry.string_ptr as *const StringHeader;
         if entry.hash == hash
-            && is_valid_string_ptr(existing)
             && (*existing).byte_len as usize == byte_len
             && std::slice::from_raw_parts(
                 (existing as *const u8).add(std::mem::size_of::<StringHeader>()),
@@ -776,18 +792,13 @@ pub(crate) fn intern_lookup_bytes(bytes: &[u8]) -> Option<*const StringHeader> {
     if bytes.is_empty() || bytes.len() > INTERN_MAX_BYTE_LEN as usize {
         return None;
     }
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &b in bytes {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
     let slot = (hash as usize) & INTERN_TABLE_MASK;
     with_intern_table(|table| unsafe {
         let entry = &(*table)[slot];
         if entry.string_ptr != 0 && entry.hash == hash {
             let existing = entry.string_ptr as *const StringHeader;
-            if is_valid_string_ptr(existing)
-                && (*existing).byte_len as usize == bytes.len()
+            if (*existing).byte_len as usize == bytes.len()
                 && std::slice::from_raw_parts(super::string_data(existing), bytes.len()) == bytes
             {
                 return Some(existing);

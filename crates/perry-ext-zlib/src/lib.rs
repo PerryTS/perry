@@ -6,7 +6,7 @@
 //! aren't valid UTF-8, so the wrapper can't go through the standard
 //! `read_string` / `alloc_string` path.
 
-use flate2::read::{DeflateDecoder, DeflateEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder};
+use flate2::read::{DeflateEncoder, ZlibEncoder};
 use flate2::{Compression, GzBuilder};
 use perry_ffi::ErrorKind;
 #[cfg(test)]
@@ -47,10 +47,7 @@ fn gzip_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> 
 }
 
 fn gunzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut decoder = MultiGzDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    Ok(decompressed)
+    stream::decode_bytes(data, stream::Codec::Gunzip)
 }
 
 fn throw_deflate_decode_error(err: IoError) -> ! {
@@ -80,10 +77,7 @@ fn deflate_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8
 }
 
 fn inflate_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut decoder = ZlibDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    Ok(decompressed)
+    stream::decode_bytes(data, stream::Codec::Inflate)
 }
 
 // Raw deflate (RFC 1951 — no zlib header, no adler32 trailer), which is what
@@ -98,10 +92,7 @@ fn deflate_raw_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Ve
 }
 
 fn inflate_raw_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut decoder = DeflateDecoder::new(data);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    Ok(decompressed)
+    stream::decode_bytes(data, stream::Codec::InflateRaw)
 }
 
 fn unzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {

@@ -14,9 +14,10 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 flate2 = "1"
-# flate2's default backend. Streams drive it directly, and the payload
-# accounts its fixed workspace from this pinned version (stream/allocation.rs).
+# One-shot and streaming encoders keep the same pinned backend.
+# Inflate uses the CPU-dispatched provider through stream/inflate_context.rs.
 miniz_oxide = "=0.9.1"
+libz-ng-sys = "=1.1.29"
 adler2 = "2"
 # zstd codecs: `zlib.zstdCompressSync` / `createZstdDecompress`. When `zlib`
 # routes here, perry-stdlib's `compression` module is compiled out — this

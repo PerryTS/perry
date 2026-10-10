@@ -68,8 +68,8 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_string_literal_global,
-    emit_write_barrier, extract_array_of_object_shape, i32_bool_to_nanbox, lower_array_literal,
-    lower_expr, lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
+    extract_array_of_object_shape, i32_bool_to_nanbox, lower_array_literal, lower_expr,
+    lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
     unbox_to_i64, FnCtx,
 };
 
@@ -232,7 +232,7 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
                 (I64, &value_bits),
             ],
         );
-        emit_write_barrier(ctx, &closure_ptr, &value_bits);
+        // The runtime capture setter owns the precise slot barrier.
     } else if crate::expr::store_canonical_local_from_double(ctx, id, value, None) {
         // Repsel Phase 1: canonical-i32 local — the prelowered value entered
         // the (only) i32 slot through the NaN-safe ToInt32 conversion. This

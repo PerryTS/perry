@@ -1,6 +1,6 @@
 //! Codec working memory. Brotli's state and every brotli allocation, and the
 //! inflate state (window and tables), live in the payload's `PayloadBuffer`s,
-//! counted exactly by its `BufferOwner`; brotli reaches them through the
+//! counted exactly by its `BufferOwner`; both codecs reach them through the
 //! owner's C allocator hook. zstd's contexts report `sizeof`. The deflate
 //! compressor boxes its arrays inside miniz_oxide, so its fixed workspace is
 //! accounted from the pinned backend's actual boxed sizes.
@@ -168,16 +168,6 @@ impl<T> Placed<T> {
             _type: PhantomData,
         })
     }
-    /// The buffer's zero bytes, read as a `T` in place (no stack copy).
-    ///
-    /// # Safety
-    /// All-zero bytes are a valid `T`.
-    pub(super) unsafe fn try_zeroed(owner: &BufferOwner) -> Option<Self> {
-        Some(Self {
-            buffer: Self::buffer(owner)?,
-            _type: PhantomData,
-        })
-    }
     fn buffer(owner: &BufferOwner) -> Option<PayloadBuffer> {
         assert!(std::mem::align_of::<T>() <= ALIGN);
         PayloadBuffer::alloc(owner, std::mem::size_of::<T>())
@@ -200,21 +190,6 @@ impl<T> Drop for Placed<T> {
     }
 }
 
-/// miniz_oxide's inflate state, built in its buffer. With the pinned
-/// miniz_oxide 0.9.1 every field of `InflateState` accepts all-zero bytes
-/// (integers, byte arrays, `bool`s, and enums whose zero discriminant exists:
-/// `State::Start`, `TINFLStatus::Done`, `DataFormat::Zlib`), and
-/// `reset(format)` then sets exactly what `InflateState::new(format)` sets.
-pub(super) fn inflate_state(
-    owner: &BufferOwner,
-    format: miniz_oxide::DataFormat,
-) -> std::io::Result<Placed<miniz_oxide::inflate::stream::InflateState>> {
-    let mut state: Placed<miniz_oxide::inflate::stream::InflateState> =
-        unsafe { Placed::try_zeroed(owner) }.ok_or_else(out_of_memory)?;
-    state.reset(format);
-    Ok(state)
-}
-
 pub(super) fn out_of_memory() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::OutOfMemory, "zlib codec state")
 }
@@ -233,37 +208,6 @@ pub(super) fn deflate_bytes() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn in_place_inflate_state_matches_a_constructed_one() {
-        let owner = BufferOwner::new();
-        let input = crate::deflate_bytes(b"in place, not on the stack").unwrap();
-        for format in [miniz_oxide::DataFormat::Zlib, miniz_oxide::DataFormat::Raw] {
-            let mut placed = inflate_state(&owner, format).unwrap();
-            let mut boxed = miniz_oxide::inflate::stream::InflateState::new_boxed(format);
-            let (mut a, mut b) = ([0u8; 64], [0u8; 64]);
-            let ra = miniz_oxide::inflate::stream::inflate(
-                &mut placed,
-                &input,
-                &mut a,
-                miniz_oxide::MZFlush::Finish,
-            );
-            let rb = miniz_oxide::inflate::stream::inflate(
-                &mut boxed,
-                &input,
-                &mut b,
-                miniz_oxide::MZFlush::Finish,
-            );
-            assert_eq!(ra.status, rb.status);
-            assert_eq!(
-                (ra.bytes_consumed, ra.bytes_written),
-                (rb.bytes_consumed, rb.bytes_written)
-            );
-            assert_eq!(a, b);
-            assert_eq!(placed.last_status(), boxed.last_status());
-        }
-        assert_eq!(owner.bytes(), 0);
-    }
 
     #[test]
     fn ffi_buffer_grows_from_empty_and_in_small_steps() {
