@@ -713,7 +713,7 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
         return crate::string::js_number_to_string(value);
     };
 
-    js_string_from_bytes(result.as_ptr(), result.len() as u32)
+    crate::string::js_string_from_str(&result)
 }
 
 /// Abstract ToString for template substitutions. `String(symbol)` is allowed,

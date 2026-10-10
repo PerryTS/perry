@@ -141,7 +141,7 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     // Format the number as a string per JS semantics, on the stack.
     let mut buf = [0u8; 32];
     let len = super::concat::format_number_into(value, &mut buf);
-    js_string_from_bytes(buf.as_ptr(), len as u32)
+    js_string_from_ascii_bytes(buf.as_ptr(), len as u32)
 }
 
 /// NaN-box-returning twin of [`js_number_to_string`] (#10762).
@@ -187,7 +187,7 @@ fn number_to_string_box_general(value: f64) -> f64 {
     if len <= crate::value::SHORT_STRING_MAX_LEN {
         return f64::from_bits(short_ascii_string_bits(&buf, len));
     }
-    let ptr = js_string_from_bytes(buf.as_ptr(), len as u32);
+    let ptr = js_string_from_ascii_bytes(buf.as_ptr(), len as u32);
     f64::from_bits(crate::value::STRING_TAG | ptr as u64)
 }
 
