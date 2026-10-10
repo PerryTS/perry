@@ -614,6 +614,37 @@ pub(crate) unsafe fn state_internal_get(ptr: usize, key: &str) -> Option<f64> {
     object_own_get(state, marker.as_bytes())
 }
 
+/// [`state_internal_get`] of the key `head + tail`, spelled without a heap
+/// allocation for short keys.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn state_internal_get_joined(
+    ptr: usize,
+    head: &[u8],
+    tail: &[u8],
+) -> Option<f64> {
+    let state = state_of(ptr);
+    if state.is_null() {
+        return None;
+    }
+    let len = INTERNAL_PREFIX.len() + head.len() + tail.len();
+    let mut stack = [0u8; 96];
+    let mut heap = Vec::new();
+    let buf: &mut [u8] = if len <= stack.len() {
+        &mut stack[..len]
+    } else {
+        heap.resize(len, 0);
+        &mut heap[..]
+    };
+    let (prefix, rest) = buf.split_at_mut(INTERNAL_PREFIX.len());
+    prefix.copy_from_slice(INTERNAL_PREFIX.as_bytes());
+    let (h, t) = rest.split_at_mut(head.len());
+    h.copy_from_slice(head);
+    t.copy_from_slice(tail);
+    object_own_get(state, buf)
+}
+
 /// # Safety
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn state_internal_set(ptr: usize, key: &str, value: f64) {
@@ -636,6 +667,19 @@ pub(crate) unsafe fn state_internal_remove(ptr: usize, key: &str) -> bool {
     let key_hdr = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
     crate::object::js_object_delete_field(state, key_hdr);
     true
+}
+
+/// The number of keys of the closure's internal state record (tests).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+#[cfg(test)]
+pub(crate) unsafe fn state_key_count(ptr: usize) -> usize {
+    let state = state_of(ptr);
+    if state.is_null() {
+        return 0;
+    }
+    crate::object::object_keys(state).count() as usize
 }
 
 /// True when the closure carries internal state a base/keyed Function shape

@@ -21,11 +21,12 @@ pub(crate) enum ClassDeclarationValueKind {
 }
 
 impl ClassDeclarationValueKind {
-    const fn tag(self) -> char {
+    /// The fixed head of this kind's holder-internal keys.
+    const fn key_head(self) -> &'static [u8] {
         match self {
-            Self::Method => 'm',
-            Self::NonPropertyMethod => 'n',
-            Self::PrivateStaticMethod => 's',
+            Self::Method => b"\x01m:",
+            Self::NonPropertyMethod => b"\x01n:",
+            Self::PrivateStaticMethod => b"\x01s:",
         }
     }
 }
@@ -33,16 +34,17 @@ impl ClassDeclarationValueKind {
 /// The holder-internal key of declaration value (`kind`, `name`):
 /// `"\x01" + tag + ":" + name`.
 ///
-/// The holder's internal namespace has other families: private accessor
-/// pairs and private statics (`#x`) and runtime-internal keys (`__perry_*`,
-/// `#<perry:...>`). None of them starts with `\x01`, and the fixed three-byte
-/// prefix makes (kind, name) -> key injective, so no member name (a computed
-/// `["#x"]()`, or one spelled like this key) can reach another entry.
+/// The holder's internal namespace has other families: private statics
+/// (`#x`), runtime-internal keys (`__perry_*`, `#<perry:...>`) and the
+/// computed-member names of `declarations.rs` (`"\x01k:"`, `"\x01r"`). None
+/// of the others starts with this kind's head, and the fixed three-byte head
+/// makes (kind, name) -> key injective, so no member name (a computed
+/// `["#x"]()`, or one spelled like another key) can reach another entry.
 pub(crate) fn class_declaration_value_key(kind: ClassDeclarationValueKind, name: &str) -> String {
-    let mut key = String::with_capacity(3 + name.len());
-    key.push('\u{1}');
-    key.push(kind.tag());
-    key.push(':');
+    let head = kind.key_head();
+    let mut key = String::with_capacity(head.len() + name.len());
+    // SAFETY: the heads are ASCII.
+    key.push_str(unsafe { std::str::from_utf8_unchecked(head) });
     key.push_str(name);
     key
 }
@@ -338,6 +340,37 @@ pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     class_static_alias_sync(class_id, name);
 }
 
+/// The holder-internal key of the array of a class's declared method
+/// values, one element per member of its declaration (`declarations.rs`),
+/// `undefined` where none was materialized.
+pub(crate) const METHOD_VALUES_KEY: &[u8] = b"\x01v";
+
+/// The array of class `class_id`'s kept method values, if its holder has one.
+fn method_values(holder: usize) -> Option<*mut crate::ArrayHeader> {
+    // SAFETY: this agent's live class function object.
+    let value = unsafe {
+        crate::closure::props::state_internal_get_joined(holder, METHOD_VALUES_KEY, b"")
+    }?;
+    let value = crate::JSValue::from_bits(value.to_bits());
+    value
+        .is_pointer()
+        .then(|| value.as_pointer::<crate::ArrayHeader>() as *mut crate::ArrayHeader)
+}
+
+/// Does (`kind`, `name`) name a method of the declaration, and is that the
+/// kind it is kept as? A name has one kind: `proto_member_has_no_string_key`.
+fn declared_method_index(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &str,
+) -> Option<(usize, usize)> {
+    let non_property = proto_member_has_no_string_key(class_id, name);
+    if non_property != (kind == ClassDeclarationValueKind::NonPropertyMethod) {
+        return None;
+    }
+    super::declarations::class_method_decl_index(class_id, name)
+}
+
 /// Class `class_id`'s declaration value (`kind`, `name`), if its holder
 /// keeps one. Reads only: a class whose holder was never minted has none.
 pub(crate) fn class_declaration_value(
@@ -346,9 +379,21 @@ pub(crate) fn class_declaration_value(
     name: &str,
 ) -> Option<u64> {
     let holder = crate::object::class_value::class_value_if_minted(class_id)? as usize;
-    let key = class_declaration_value_key(kind, name);
-    // SAFETY: this agent's live class function object.
-    unsafe { crate::closure::props::state_internal_get(holder, &key) }.map(f64::to_bits)
+    if kind == ClassDeclarationValueKind::PrivateStaticMethod {
+        // SAFETY: this agent's live class function object.
+        return unsafe {
+            crate::closure::props::state_internal_get_joined(
+                holder,
+                kind.key_head(),
+                name.as_bytes(),
+            )
+        }
+        .map(f64::to_bits);
+    }
+    let (index, _) = declared_method_index(class_id, kind, name)?;
+    let values = method_values(holder)?;
+    let bits = crate::array::js_array_get_f64(values, index as u32).to_bits();
+    (bits != crate::value::TAG_UNDEFINED).then_some(bits)
 }
 
 /// Keep `value_bits` as class `class_id`'s declaration value (`kind`,
@@ -366,37 +411,94 @@ pub(crate) fn class_declaration_value_store(
     let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
         return;
     };
-    let key = class_declaration_value_key(kind, name);
-    // SAFETY: this agent's live, pinned class function object; the internal
-    // write allocates under its own GcSuppressScope and stores through the
-    // state record's barriered slot.
-    unsafe {
-        crate::closure::props::state_internal_set(holder as usize, &key, f64::from_bits(value_bits))
+    let holder = holder as usize;
+    if kind == ClassDeclarationValueKind::PrivateStaticMethod {
+        let key = class_declaration_value_key(kind, name);
+        // SAFETY: this agent's live, pinned class function object; the
+        // internal write allocates under its own GcSuppressScope and stores
+        // through the state record's barriered slot.
+        unsafe {
+            crate::closure::props::state_internal_set(holder, &key, f64::from_bits(value_bits))
+        };
+        return;
+    }
+    let Some((index, count)) = declared_method_index(class_id, kind, name) else {
+        return;
     };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_u64(value_bits);
+    let values = match method_values(holder) {
+        Some(values) => values,
+        None => {
+            let mut arr = crate::array::js_array_alloc(count as u32);
+            let arr_h = scope.root_raw_mut_ptr(arr);
+            for _ in 0..count {
+                arr = crate::array::js_array_push_f64(
+                    arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                );
+                arr_h.set_raw_mut_ptr(arr);
+            }
+            let arr = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();
+            // SAFETY: as above.
+            unsafe {
+                crate::closure::props::state_internal_set(
+                    holder,
+                    // SAFETY: ASCII.
+                    std::str::from_utf8_unchecked(METHOD_VALUES_KEY),
+                    crate::value::js_nanbox_pointer(arr as i64),
+                )
+            };
+            arr_h.get_raw_mut_ptr::<crate::ArrayHeader>()
+        }
+    };
+    // A declaration registered again with more members (unit tests extend a
+    // class member by member) outgrows the array it was kept in.
+    let mut values = values;
+    if crate::array::js_array_length(values) as usize <= index {
+        let arr_h = scope.root_raw_mut_ptr(values);
+        while crate::array::js_array_length(arr_h.get_raw_mut_ptr::<crate::ArrayHeader>()) as usize
+            <= index
+        {
+            let grown = crate::array::js_array_push_f64(
+                arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+            arr_h.set_raw_mut_ptr(grown);
+        }
+        values = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();
+        // SAFETY: as above.
+        unsafe {
+            crate::closure::props::state_internal_set(
+                holder,
+                // SAFETY: ASCII.
+                std::str::from_utf8_unchecked(METHOD_VALUES_KEY),
+                crate::value::js_nanbox_pointer(values as i64),
+            )
+        };
+    }
+    crate::array::js_array_set_f64(values, index as u32, value.get_nanbox_f64());
+}
+
+/// Forget the method value kept for member `index` of class `class_id`'s
+/// declaration (its computed name changed).
+pub(crate) fn class_declaration_value_forget(class_id: u32, index: usize) {
+    let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
+        return;
+    };
+    if let Some(values) = method_values(holder as usize) {
+        crate::array::js_array_set_f64(
+            values,
+            index as u32,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
 }
 
 // ============================================================================
-// Class method vtable registry — enables runtime dispatch for interface-typed
-// and dynamically-typed method calls.  Each class registers its methods and
-// getters at startup; js_native_call_method / js_dynamic_object_get_property
-// look up the vtable by the object's class_id when static dispatch isn't possible.
+// Class member metadata. Instance members are the class's static declaration
+// (`declarations.rs`); dispatch reads the prototype holder's data slots.
 // ============================================================================
-
-/// Entry in the class method vtable
-pub struct VTableMethodEntry {
-    pub func_ptr: usize,
-    pub param_count: u32,
-    pub has_synthetic_arguments: bool,
-    /// Trailing user rest param (`method(a, ...rest)`). Distinct from
-    /// `has_synthetic_arguments`: the rest slot holds only the args from the
-    /// rest position onward, so apply/dynamic dispatch bundles them correctly.
-    pub has_rest: bool,
-    /// The method's closure-convention entry (`<method>__eclo`'s
-    /// `JsFunctionInfo`): the prototype holds a function object running it
-    /// (each evaluation's prototype its own, for a `ClassExprFresh` class).
-    /// 0 for a method registered without one (runtime-built classes).
-    pub entry: usize,
-}
 
 /// The compiled halves of one declared accessor, each 0 when that half is
 /// absent: `get` is `fn(this) -> f64`, `set` is `fn(this, value) -> f64`.
@@ -409,70 +511,10 @@ pub struct AccessorDecl {
     pub set_length: Option<u32>,
 }
 
-/// Per-class vtable: the method dispatch table plus the class's accessor
-/// DECLARATIONS.
-///
-/// `accessors` is class metadata, not a property store. A public instance
-/// accessor is a real accessor property of the class's decl prototype
-/// (`decl_accessors.rs`); this record says what the ClassBody declared so the
-/// prototype installer can build that property and the "does this class chain
-/// declare an accessor named X" filters can answer without materializing a
-/// prototype. No property read or write resolves through it — they go through
-/// the prototype's real property, which `defineProperty` / `delete` may have
-/// changed since.
-///
-#[derive(Default)]
-pub struct ClassVTable {
-    /// Compiler candidate for lazy materialization, never a live lookup answer.
-    pub prototype_birth_shape: u32,
-    pub methods: HashMap<String, VTableMethodEntry>,
-    pub accessors: HashMap<String, AccessorDecl>,
-}
-
-impl ClassVTable {
-    /// Record one compiled half of the accessor `name` (`#x` goes to the
-    /// private record). A zero pointer records nothing.
-    pub(crate) fn declare_accessor_half(&mut self, name: &str, func_ptr: usize, is_setter: bool) {
-        self.declare_accessor_half_with_length(name, func_ptr, is_setter, None);
-    }
-
-    /// [`Self::declare_accessor_half`] recording a setter's spec `.length`.
-    pub(crate) fn declare_accessor_half_with_length(
-        &mut self,
-        name: &str,
-        func_ptr: usize,
-        is_setter: bool,
-        set_length: Option<u32>,
-    ) {
-        if func_ptr == 0 {
-            return;
-        }
-        let decl = self.accessors.entry(name.to_string()).or_default();
-        if is_setter {
-            decl.set = func_ptr;
-            decl.set_length = set_length;
-        } else {
-            decl.get = func_ptr;
-        }
-    }
-
-    /// The declared public accessor `name`, if any.
-    #[inline]
-    pub(crate) fn accessor_decl(&self, name: &str) -> Option<AccessorDecl> {
-        self.accessors.get(name).copied()
-    }
-}
-
-/// Vtable registry of the calling thread's image (#8546 — see
-/// `object/class_image.rs`): class_id -> vtable.
-pub static CLASS_VTABLE_REGISTRY: ImageTable<
-    RwLock<Option<crate::fast_hash::PtrHashMap<u32, ClassVTable>>>,
-> = ImageTable::new(|image| &image.vtables);
-
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
 /// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
 /// (no `this` param — they resolve `this` via `js_static_this_resolve`) and are
-/// NOT in the instance vtable above, so a subclass whose parent is a
+/// NOT instance members, so a subclass whose parent is a
 /// class-expression value (`class Sub extends make(...) {}`) can't resolve an
 /// inherited static method (`Sub.greet()`) at compile time. This table is
 /// walked up the class_id parent chain at runtime by
@@ -502,11 +544,10 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
 
-/// The closure-convention entry registered for method `name` of per-evaluation
-/// class `class_id` (its vtable entry's `entry`), if any.
+/// The closure-convention entry declared for method `name` of class
+/// `class_id`, if any.
 pub(crate) fn class_method_entry(class_id: u32, name: &str) -> Option<usize> {
-    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-    let entry = guard.as_ref()?.get(&class_id)?.methods.get(name)?.entry;
+    let entry = super::declarations::class_method_decl(class_id, name)?.entry as usize;
     (entry != 0).then_some(entry)
 }
 
@@ -1246,14 +1287,7 @@ fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_i
 /// The class's own string-keyed prototype members in ClassBody order, each
 /// with whether it is an accessor (else a method).
 pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
-    let mut names = Vec::new();
-    let mut accessors = Vec::new();
-    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-        if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
-            names.extend(vtable.methods.keys().cloned());
-            accessors.extend(vtable.accessors.keys().cloned());
-        }
-    }
+    let (mut names, accessors) = super::declarations::class_declared_member_names(class_id);
     names.extend(accessors.iter().cloned());
     order_class_string_member_names(class_id, false, &mut names);
     names
@@ -1515,6 +1549,9 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
         });
     });
     proto.with_mut_ptr(|p| install_class_decl_prototype_method_fields(p, class_id));
+    // A computed member the definition has not named yet stops the
+    // installation above; naming it resumes there.
+    super::declarations::note_decl_prototype_born(class_id);
     proto.with_mut_ptr(|p| install_class_decl_prototype_symbol_members(p, class_id));
 
     if parent_proto_bits.is_some() {

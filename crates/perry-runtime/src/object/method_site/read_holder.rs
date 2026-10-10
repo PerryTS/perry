@@ -1951,15 +1951,11 @@ mod tests {
                 crate::object::js_register_class_name(cid, name.as_ptr(), name.len() as u32);
             }
             crate::object::js_register_class_parent(CHILD, BASE);
-            {
-                let mut registry = crate::object::CLASS_VTABLE_REGISTRY.write().unwrap();
-                for (cid, offset) in [(BASE, 989), (CHILD, 990)] {
-                    registry
-                        .get_or_insert_with(crate::fast_hash::new_ptr_hash_map)
-                        .entry(cid)
-                        .or_default()
-                        .prototype_birth_shape = crate::object::shapes::SHAPE_ID_BASE + offset;
-                }
+            for (cid, offset) in [(BASE, 989), (CHILD, 990)] {
+                crate::object::class_registry::declarations::test_declare_birth_shape(
+                    cid,
+                    crate::object::shapes::SHAPE_ID_BASE + offset,
+                );
             }
             let _ = crate::object::class_registry::class_decl_prototype_value(CHILD);
             let recv = crate::object::js_object_alloc(CHILD, 0);

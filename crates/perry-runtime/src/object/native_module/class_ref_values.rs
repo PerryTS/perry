@@ -142,24 +142,20 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
         }
     }
 
-    // The registry is read only to materialize this declaration's function
-    // object. Calls and probes subsequently read the holder's slot.
-    let declaration = {
-        let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-        registry
-            .as_ref()
-            .and_then(|r| r.get(&class_id))
-            .and_then(|c| c.methods.get(method_name))
-            .map(|m| {
+    // The declaration is read only to materialize its function object.
+    // Calls and probes subsequently read the holder's slot.
+    let declaration =
+        crate::object::class_registry::declarations::class_method_decl(class_id, method_name).map(
+            |m| {
                 (
-                    m.func_ptr,
+                    m.code as usize,
                     m.param_count,
-                    m.has_synthetic_arguments,
-                    m.has_rest,
-                    m.entry,
+                    m.has_synthetic_arguments(),
+                    m.has_rest(),
+                    m.entry as usize,
                 )
-            })
-    };
+            },
+        );
     let Some((body, params, synthetic, rest, entry)) = declaration else {
         if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
             method_name.as_bytes(),
@@ -197,13 +193,17 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     value
 }
 
-/// The method value class `class_id`'s holder keeps for `name`, of either
-/// method kind.
+/// The method value class `class_id`'s holder keeps for `name`: one name
+/// has one kind (`proto_member_has_no_string_key` decides it, as the store
+/// below does).
 fn class_kept_method_value(class_id: u32, name: &str) -> Option<u64> {
     use crate::object::class_registry::{class_declaration_value, ClassDeclarationValueKind};
-    class_declaration_value(class_id, ClassDeclarationValueKind::Method, name).or_else(|| {
-        class_declaration_value(class_id, ClassDeclarationValueKind::NonPropertyMethod, name)
-    })
+    let kind = if crate::object::class_registry::proto_member_has_no_string_key(class_id, name) {
+        ClassDeclarationValueKind::NonPropertyMethod
+    } else {
+        ClassDeclarationValueKind::Method
+    };
+    class_declaration_value(class_id, kind, name)
 }
 
 /// A materialized lexical/symbol member, separate from public properties.
@@ -297,22 +297,17 @@ pub(crate) fn class_method_declaration_value(
 }
 
 pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, home: f64) -> f64 {
-    let declaration = {
-        let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-        registry
-            .as_ref()
-            .and_then(|r| r.get(&class_id))
-            .and_then(|c| c.methods.iter().find(|(_, m)| m.entry == entry))
+    let declaration =
+        crate::object::class_registry::declarations::class_method_decl_by_entry(class_id, entry)
             .map(|(name, m)| {
                 (
-                    name.clone(),
-                    m.func_ptr,
+                    name,
+                    m.code as usize,
                     m.param_count,
-                    m.has_synthetic_arguments,
-                    m.has_rest,
+                    m.has_synthetic_arguments(),
+                    m.has_rest(),
                 )
-            })
-    };
+            });
     let Some((name, body, params, synthetic, rest)) = declaration else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
@@ -331,6 +326,10 @@ unsafe extern "C" fn native_class_method(
     let (body, params, synthetic, rest) =
         class_method_value_target(crate::value::POINTER_TAG | closure as u64)
             .expect("materialized native method carries its body");
+    // A method at home in a class expression's evaluation runs under that
+    // evaluation's private brand, as its bound method value would.
+    let home = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0));
+    let brand = super::class_registry::is_class_object_value(home).then_some(home);
     super::class_registry::call_vtable_method_value(
         body,
         this.as_f64(),
@@ -339,7 +338,7 @@ unsafe extern "C" fn native_class_method(
         params,
         synthetic,
         rest,
-        None,
+        brand,
     )
 }
 

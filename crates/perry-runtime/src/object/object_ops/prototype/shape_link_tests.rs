@@ -2,7 +2,6 @@ use super::*;
 
 #[test]
 fn declaration_collision_is_projected_when_the_shape_is_minted() {
-    use crate::object::class_registry::{ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY};
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let id = 0x4321_0011;
@@ -13,26 +12,11 @@ fn declaration_collision_is_projected_when_the_shape_is_minted() {
         crate::object::shapes::PROTO_ID_DEFAULT
     );
     unsafe { crate::object::js_register_class_name(id, b"ShapeCollision".as_ptr(), 14) };
-    let mut table = CLASS_VTABLE_REGISTRY.write().unwrap();
-    table
-        .get_or_insert_with(crate::fast_hash::new_ptr_hash_map)
-        .insert(
-            id,
-            ClassVTable {
-                methods: std::collections::HashMap::from([(
-                    "recur".into(),
-                    VTableMethodEntry {
-                        func_ptr: 0x1000,
-                        param_count: 1,
-                        has_synthetic_arguments: false,
-                        has_rest: false,
-                        entry: 0,
-                    },
-                )]),
-                ..ClassVTable::default()
-            },
-        );
-    drop(table);
+    crate::object::class_registry::declarations::test_declare_member_quiet(
+        id,
+        b"recur",
+        crate::object::class_registry::declarations::test_method_member(0x1000, 1, false, false, 0),
+    );
     let after = crate::object::js_object_alloc(id, 0);
     assert_eq!(
         unsafe { crate::object::shapes::object_shape_identity(after) },

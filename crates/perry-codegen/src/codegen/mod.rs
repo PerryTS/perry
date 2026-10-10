@@ -268,6 +268,7 @@ pub(crate) use static_shape_ids::{
     compatible_final_shape_ids, compatible_final_shapes, slot_may_be_constfn, static_region_slots,
     static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
 };
+mod class_declarations;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;

@@ -1,7 +1,7 @@
 //! Per-image class registries (#8546).
 //!
 //! Every class-id-keyed table that codegen populates at module init —
-//! vtables, static methods and accessors, constructors, parent edges, names,
+//! declarations, static methods and accessors, constructors, parent edges, names,
 //! `.length`s, the `extends Error` / `DataView` / typed-array marks, the
 //! `Symbol.hasInstance` / `Symbol.toStringTag` hooks — used to be a
 //! process-global `static`. Class ids are assigned by codegen from a small
@@ -77,8 +77,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
 
-use super::class_registry::ClassVTable;
-
 /// Number of class ids covered by the dense parent table (`parent_dense`).
 /// See `object/class_meta_registry.rs` for why the hot parent-edge read is an
 /// indexed load rather than a locked hash probe.
@@ -133,7 +131,7 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 /// JS-supplied member names. The inner maps are enumerated on paths that
 /// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
-    pub(crate) vtables: RwLock<Option<PtrHashMap<u32, ClassVTable>>>,
+    pub(crate) declarations: RwLock<super::class_registry::declarations::ClassDeclarationIndex>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
     pub(crate) string_member_orders: RwLock<Option<StringMemberOrderTable>>,
@@ -177,7 +175,7 @@ pub struct ClassImageTables {
 impl ClassImageTables {
     fn new() -> Self {
         Self {
-            vtables: RwLock::new(None),
+            declarations: RwLock::new(Default::default()),
             static_methods: RwLock::new(None),
             static_accessors: RwLock::new(None),
             string_member_orders: RwLock::new(None),

@@ -545,6 +545,13 @@ pub(crate) fn test_seed_class_prototype_method_value_root(
     name: &str,
     value_bits: u64,
 ) {
+    if super::declarations::class_method_decl(class_id, name).is_none() {
+        super::declarations::test_declare_member_quiet(
+            class_id,
+            name.as_bytes(),
+            super::declarations::test_method_member(1, 0, false, false, 0),
+        );
+    }
     crate::object::class_value::class_value_ptr(class_id);
     super::state::class_declaration_value_store(
         class_id,

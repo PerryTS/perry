@@ -654,38 +654,16 @@ pub fn is_anon_shape_class_id(class_id: u32) -> bool {
 #[cfg(test)]
 mod anon_shape_collision_tests {
     use super::*;
-    use crate::object::class_registry::state::{
-        ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY,
-    };
-    use std::collections::HashMap;
 
     fn seed_declared_class(class_id: u32, name: &str, method: &str) {
         unsafe { js_register_class_name(class_id, name.as_ptr(), name.len() as u32) };
-        let mut methods = HashMap::new();
-        methods.insert(
-            method.to_string(),
-            VTableMethodEntry {
-                func_ptr: 0x1000,
-                param_count: 1,
-                has_synthetic_arguments: false,
-                has_rest: false,
-                entry: 0,
-            },
-        );
-        let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
-        if guard.is_none() {
-            // #9203 moved this registry to a PtrHasher map; a plain
-            // `HashMap::new()` infers the default hasher and no longer type-checks.
-            *guard = Some(new_ptr_hash_map());
-        }
-        guard.as_mut().unwrap().insert(
+        crate::object::class_registry::declarations::test_declare_member_quiet(
             class_id,
-            ClassVTable {
-                methods,
-                ..ClassVTable::default()
-            },
+            method.as_bytes(),
+            crate::object::class_registry::declarations::test_method_member(
+                0x1000, 1, false, false, 0,
+            ),
         );
-        drop(guard);
         crate::object::shapes::write_identity_word(
             crate::object::shapes::class_identity_proto_id(class_id),
             crate::value::TAG_UNDEFINED,

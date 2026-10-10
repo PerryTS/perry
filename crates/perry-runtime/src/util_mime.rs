@@ -4,9 +4,8 @@ use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_p
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_get_field_f64, js_object_keys,
     js_object_set_field_by_name, js_object_set_field_f64, js_object_set_keys,
-    js_register_class_getter, js_register_class_id, js_register_class_method,
-    js_register_class_name, js_register_class_setter, set_builtin_property_attrs, ObjectHeader,
-    PropertyAttrs,
+    js_register_class_declaration, js_register_class_id, js_register_class_name,
+    set_builtin_property_attrs, ClassDeclaration, ClassMemberDecl, ObjectHeader, PropertyAttrs,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
@@ -520,44 +519,32 @@ extern "C" fn mime_params_to_string_vtable(this: f64) -> f64 {
     string_value(&serialize_params(&get_mime_params_entries(obj)))
 }
 
-fn register_method(class_id: u32, name: &'static str, func_ptr: usize, param_count: i64) {
-    unsafe {
-        js_register_class_method(
-            class_id as i64,
-            name.as_ptr(),
-            name.len() as i64,
-            func_ptr as i64,
-            param_count,
-            0,
-            // util.MIMEType/MIMEParams methods are fixed-arity natives — no
-            // trailing rest param.
-            0,
-        );
-    }
-}
+/// `util.MIMEType`'s ClassBody members (fixed-arity natives, no rest
+/// parameters).
+static MIME_TYPE_MEMBERS: [ClassMemberDecl; 8] = [
+    ClassMemberDecl::native_method("toString", mime_type_to_string_vtable as *const u8, 0),
+    ClassMemberDecl::native_method("toJSON", mime_type_to_string_vtable as *const u8, 0),
+    ClassMemberDecl::native_accessor("type", mime_type_get_type_vtable as *const u8, false),
+    ClassMemberDecl::native_accessor("subtype", mime_type_get_subtype_vtable as *const u8, false),
+    ClassMemberDecl::native_accessor("essence", mime_type_get_essence_vtable as *const u8, false),
+    ClassMemberDecl::native_accessor("params", mime_type_get_params_vtable as *const u8, false),
+    ClassMemberDecl::native_accessor("type", mime_type_set_type_vtable as *const u8, true),
+    ClassMemberDecl::native_accessor("subtype", mime_type_set_subtype_vtable as *const u8, true),
+];
+static MIME_TYPE_DECLARATION: ClassDeclaration = ClassDeclaration::native(&MIME_TYPE_MEMBERS);
 
-fn register_setter(class_id: u32, name: &'static str, func_ptr: usize) {
-    unsafe {
-        js_register_class_setter(
-            class_id as i64,
-            name.as_ptr(),
-            name.len() as i64,
-            func_ptr as i64,
-            1,
-        );
-    }
-}
-
-fn register_getter(class_id: u32, name: &'static str, func_ptr: usize) {
-    unsafe {
-        js_register_class_getter(
-            class_id as i64,
-            name.as_ptr(),
-            name.len() as i64,
-            func_ptr as i64,
-        );
-    }
-}
+/// `util.MIMEParams`'s ClassBody members.
+static MIME_PARAMS_MEMBERS: [ClassMemberDecl; 8] = [
+    ClassMemberDecl::native_method("get", mime_params_get_vtable as *const u8, 1),
+    ClassMemberDecl::native_method("has", mime_params_has_vtable as *const u8, 1),
+    ClassMemberDecl::native_method("set", mime_params_set_vtable as *const u8, 2),
+    ClassMemberDecl::native_method("delete", mime_params_delete_vtable as *const u8, 1),
+    ClassMemberDecl::native_method("entries", mime_params_entries_vtable as *const u8, 0),
+    ClassMemberDecl::native_method("keys", mime_params_keys_vtable as *const u8, 0),
+    ClassMemberDecl::native_method("values", mime_params_values_vtable as *const u8, 0),
+    ClassMemberDecl::native_method("toString", mime_params_to_string_vtable as *const u8, 0),
+];
+static MIME_PARAMS_DECLARATION: ClassDeclaration = ClassDeclaration::native(&MIME_PARAMS_MEMBERS);
 
 pub fn ensure_mime_classes() {
     INIT_MIME_CLASSES.call_once(|| unsafe {
@@ -573,92 +560,8 @@ pub fn ensure_mime_classes() {
             b"MIMEParams".as_ptr(),
             "MIMEParams".len() as u32,
         );
-
-        register_method(
-            CLASS_ID_MIME_TYPE,
-            "toString",
-            mime_type_to_string_vtable as *const () as usize,
-            0,
-        );
-        register_method(
-            CLASS_ID_MIME_TYPE,
-            "toJSON",
-            mime_type_to_string_vtable as *const () as usize,
-            0,
-        );
-        for (name, getter) in [
-            ("type", mime_type_get_type_vtable as *const () as usize),
-            (
-                "subtype",
-                mime_type_get_subtype_vtable as *const () as usize,
-            ),
-            (
-                "essence",
-                mime_type_get_essence_vtable as *const () as usize,
-            ),
-            ("params", mime_type_get_params_vtable as *const () as usize),
-        ] {
-            register_getter(CLASS_ID_MIME_TYPE, name, getter);
-        }
-        register_setter(
-            CLASS_ID_MIME_TYPE,
-            "type",
-            mime_type_set_type_vtable as *const () as usize,
-        );
-        register_setter(
-            CLASS_ID_MIME_TYPE,
-            "subtype",
-            mime_type_set_subtype_vtable as *const () as usize,
-        );
-
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "get",
-            mime_params_get_vtable as *const () as usize,
-            1,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "has",
-            mime_params_has_vtable as *const () as usize,
-            1,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "set",
-            mime_params_set_vtable as *const () as usize,
-            2,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "delete",
-            mime_params_delete_vtable as *const () as usize,
-            1,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "entries",
-            mime_params_entries_vtable as *const () as usize,
-            0,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "keys",
-            mime_params_keys_vtable as *const () as usize,
-            0,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "values",
-            mime_params_values_vtable as *const () as usize,
-            0,
-        );
-        register_method(
-            CLASS_ID_MIME_PARAMS,
-            "toString",
-            mime_params_to_string_vtable as *const () as usize,
-            0,
-        );
+        js_register_class_declaration(CLASS_ID_MIME_TYPE, &MIME_TYPE_DECLARATION);
+        js_register_class_declaration(CLASS_ID_MIME_PARAMS, &MIME_PARAMS_DECLARATION);
     });
 }
 

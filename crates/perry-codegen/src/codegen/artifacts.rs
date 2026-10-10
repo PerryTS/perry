@@ -594,8 +594,8 @@ pub(super) fn emit_module_artifacts(
 
     // Issue #392: pre-intern every user-class method name into the
     // string pool so `emit_string_pool` (which takes `&strings`) can
-    // emit the `js_register_class_method(class_id, name_ptr, ...)`
-    // calls in module init without needing mutable access to the
+    // emit each class's declaration constant (`class_declarations.rs`)
+    // in module init without needing mutable access to the
     // pool. Only iterate classes DEFINED in this module — the
     // `perry_method_*` symbols for imported classes live in the
     // defining module's object file. `imported_class_prefix` lists
@@ -616,7 +616,7 @@ pub(super) fn emit_module_artifacts(
             let _ = strings.intern(&sm.name);
         }
         // Refs #486: also intern accessor property names so the cross-module
-        // `js_register_class_getter` / setter registration loops in emit_string_pool
+        // declaration constants and static accessor registrations in emit_string_pool
         // can find their bytes_global without re-running through the
         // string pool's mutable interner.
         for (prop, _) in &class.getters {

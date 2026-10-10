@@ -149,6 +149,11 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
     let class = scope.root_raw_mut_ptr(obj);
     let class_id = class.with_const_ptr::<ObjectHeader, _>(|class| (*class).class_id);
     let parent_proto = parent_proto.map(|bits| scope.root_nanbox_u64(bits));
+    // A class expression's computed members are called what THIS
+    // evaluation's definition named them.
+    let _names = class.with_const_ptr::<ObjectHeader, _>(|class| {
+        crate::object::class_registry::declarations::enter_evaluation_names(class, class_id)
+    });
 
     // Every evaluation after the template's first in this agent is born in
     // the shape that one reached (`class_object_template`).

@@ -549,6 +549,7 @@ mod property_key_tests {
                 0,
                 1,
                 0,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
             );
             let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
                 class_id, sym_key, false,
@@ -564,6 +565,7 @@ mod property_key_tests {
                 0,
                 0,
                 2,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
             );
             let value = crate::object::class_registry::class_symbol_getter_value(
                 class_id,

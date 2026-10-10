@@ -211,8 +211,8 @@ mod class_object_template;
 #[cfg(test)]
 pub(crate) use class_object_template::js_class_evaluation_object;
 pub(crate) use class_object_template::{
-    class_object_template_cell, record_instance_link, template_instance, TemplateCell,
-    TemplateInstance, CLASS_TEMPLATE_KEY,
+    class_object_add_internal_for, class_object_template_cell, record_instance_link,
+    template_instance, InternalKey, TemplateCell, TemplateInstance, CLASS_TEMPLATE_KEY,
 };
 mod crypto_key;
 pub(crate) mod entries_shape;

@@ -318,6 +318,9 @@ unsafe fn add_class_template_key(
 pub(crate) enum InternalKey {
     CtorCaps,
     EvaluationPrototype,
+    /// The names this evaluation's definition gave the class's computed
+    /// members (`class_registry::declarations`).
+    ComputedNames,
 }
 
 impl InternalKey {
@@ -326,6 +329,9 @@ impl InternalKey {
             InternalKey::CtorCaps => CTOR_CAPS_KEY,
             InternalKey::EvaluationPrototype => {
                 super::class_object_props::CLASS_EVALUATION_PROTOTYPE_KEY
+            }
+            InternalKey::ComputedNames => {
+                crate::object::class_registry::declarations::CLASS_COMPUTED_NAMES_KEY
             }
         }
     }
@@ -430,6 +436,61 @@ pub extern "C" fn js_class_evaluation_object(
         template,
         parent,
     )
+}
+
+/// [`js_class_evaluation_object_with_prototype`] for a class with computed
+/// members: the evaluation's class object, its prototype not built yet. The
+/// definition names the computed members on it (or, for a declaration, on
+/// the class holder) and [`js_class_evaluation_finish_prototype`] then builds
+/// the prototype in ClassBody order.
+#[no_mangle]
+pub extern "C" fn js_class_evaluation_object_with_parent(
+    template_class_id: u32,
+    field_count: u32,
+    static_field_mask: u32,
+    cell: *const u64,
+    parent: f64,
+) -> i64 {
+    let cell = unsafe { TemplateCell::from_ptr(cell) };
+    let template = cell.and_then(|c| unsafe { c.class_template(field_count, static_field_mask) });
+    class_evaluation_object_impl(
+        template_class_id,
+        field_count,
+        static_field_mask,
+        cell,
+        template,
+        parent,
+    )
+}
+
+/// Build evaluation class object `obj`'s prototype now that its definition
+/// named its computed members. With an evaluated heritage (`has_parent`), it
+/// links to `parent_proto`, the value read and validated before the names,
+/// exactly as [`js_class_evaluation_object_with_prototype`] links it;
+/// otherwise it is built as a first read builds it.
+#[no_mangle]
+pub extern "C" fn js_class_evaluation_finish_prototype(
+    obj: i64,
+    has_parent: i32,
+    parent: f64,
+    parent_proto: f64,
+) {
+    let obj = obj as *mut ObjectHeader;
+    if obj.is_null() {
+        return;
+    }
+    unsafe {
+        if has_parent == 0 {
+            super::class_object_props::class_object_prototype_value(obj);
+            return;
+        }
+        let prototype = if parent.to_bits() == crate::value::TAG_UNDEFINED {
+            None
+        } else {
+            Some(parent_proto.to_bits())
+        };
+        super::class_object_props::finish_class_evaluation_prototype(obj, prototype);
+    }
 }
 
 /// One evaluation, carrying the prototype value already read and validated
@@ -832,7 +893,24 @@ enum ProtoFill {
 /// home capture names class object `class`. `None` when the template
 /// registered no entry for `name`.
 pub(crate) unsafe fn evaluation_method_value(class_id: u32, name: &str, class: f64) -> Option<f64> {
-    let code = super::super::class_registry::class_method_entry(class_id, name)?;
+    let Some(code) = super::super::class_registry::class_method_entry(class_id, name) else {
+        // A computed member is its body: the function object captures it
+        // (at home in, and branded by, this evaluation), never a name to
+        // look up again after a later evaluation renamed the member.
+        let decl = super::super::class_registry::declarations::class_method_decl(class_id, name)
+            .filter(|decl| decl.name.is_null())?;
+        return Some(
+            crate::object::native_module::class_method_declaration_value(
+                class,
+                name,
+                decl.code as usize,
+                decl.param_count,
+                decl.has_synthetic_arguments(),
+                decl.has_rest(),
+                0,
+            ),
+        );
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_nanbox_f64(class);
     Some(

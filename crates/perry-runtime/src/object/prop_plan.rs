@@ -1,7 +1,7 @@
 //! Per-(class_id, interned-key) property STORE-PLAN cache.
 //!
 //! `js_object_set_field_by_name` pays a long interception vet on every store
-//! to a class instance (`class_id != 0`): the `CLASS_VTABLE_REGISTRY` RwLock +
+//! to a class instance (`class_id != 0`): a class-metadata RwLock +
 //! per-level string-hash setter walk, then
 //! `plain_data_write_may_intercept` → `class_instance_set_may_intercept`,
 //! which allocates a Rust `String` for the key and probes the address-keyed

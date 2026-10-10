@@ -706,6 +706,30 @@ pub unsafe extern "C" fn js_register_class_static_method_entry(
     crate::object::class_value::note_intrinsic_registration(class_id as u32, name);
 }
 
+/// A class definition evaluated an instance computed member's key: a class
+/// expression's evaluation (`owner`, its class object) keeps the name;
+/// a declaration's (`owner` undefined) is kept on the class holder.
+fn name_computed_instance_member(
+    owner: f64,
+    class_id: u32,
+    definition_order: i64,
+    name: super::declarations::MemberName,
+) {
+    if is_class_object_value(owner) {
+        // SAFETY: a live per-evaluation class object of this template.
+        unsafe {
+            super::declarations::name_evaluation_computed_member(
+                owner,
+                class_id,
+                definition_order as u32,
+                name,
+            )
+        };
+    } else {
+        super::declarations::name_computed_member(class_id, definition_order as u32, name);
+    }
+}
+
 fn property_key_string(key: f64) -> Option<String> {
     let property_key = unsafe { crate::object::js_to_property_key(key) };
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
@@ -739,6 +763,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     has_rest: i64,
     definition_order: i64,
     entry: i64,
+    owner: f64,
 ) {
     if class_id == 0 || func_ptr == 0 {
         return;
@@ -803,23 +828,19 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 (sym_key == crate::symbol::inspect_custom_symbol_ptr())
                     .then_some("__perry_inspect_custom__")
             });
-            if let Some(method_name) = alias {
-                let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
-                if registry.is_none() {
-                    *registry = Some(crate::fast_hash::new_ptr_hash_map());
-                }
-                let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
-                vtable.methods.insert(
-                    method_name.to_string(),
-                    VTableMethodEntry {
-                        func_ptr: func_ptr as usize,
-                        param_count: param_count as u32,
-                        has_synthetic_arguments: false,
-                        has_rest: has_rest != 0,
-                        entry: 0,
-                    },
-                );
-            }
+            // The member's declaration carries its body; this evaluation
+            // names it (the alias, or no string name at all).
+            name_computed_instance_member(
+                owner,
+                class_id,
+                definition_order,
+                match alias {
+                    Some(method_name) => {
+                        super::declarations::MemberName::Str(method_name.to_string())
+                    }
+                    None => super::declarations::MemberName::NotAString,
+                },
+            );
         }
         let proto = super::state::class_decl_prototype_object(class_id);
         if is_static == 0 && !proto.is_null() {
@@ -878,28 +899,15 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         }
         crate::object::class_value::note_intrinsic_registration(class_id, &name);
     } else {
-        let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
-        if registry.is_none() {
-            *registry = Some(crate::fast_hash::new_ptr_hash_map());
-        }
-        let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
-        vtable.methods.insert(
-            name.clone(),
-            VTableMethodEntry {
-                func_ptr: func_ptr as usize,
-                param_count: param_count as u32,
-                // Computed class methods don't carry synthetic-`arguments`
-                // metadata through this registration path (only `has_rest`),
-                // so they never receive a synthesized arguments object.
-                has_synthetic_arguments: false,
-                has_rest: has_rest != 0,
-                entry: 0,
-            },
+        // The member's declaration carries its body; this evaluation names
+        // it, which also installs it when the decl prototype is waiting for
+        // it (`declarations.rs`).
+        name_computed_instance_member(
+            owner,
+            class_id,
+            definition_order,
+            super::declarations::MemberName::Str(name),
         );
-        // Backfill when reflection already materialized `C.prototype`.
-        drop(registry);
-        let proto = class_decl_prototype_object(class_id);
-        super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
     }
 }
 
@@ -911,6 +919,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
     setter_ptr: i64,
     is_static: i64,
     definition_order: i64,
+    owner: f64,
 ) {
     if class_id == 0 || (getter_ptr == 0 && setter_ptr == 0) {
         return;
@@ -946,6 +955,15 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 entry.1 = setter_ptr as usize;
             }
         });
+        if is_static == 0 {
+            // The declared accessor half has no string name on this class.
+            name_computed_instance_member(
+                owner,
+                class_id,
+                definition_order,
+                super::declarations::MemberName::NotAString,
+            );
+        }
         let proto = super::state::class_decl_prototype_object(class_id);
         if is_static == 0 && !proto.is_null() {
             super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
@@ -963,19 +981,13 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             throw_object_type_error(b"Classes may not have a static property named 'prototype'");
         }
         if is_static == 0 {
-            let newly_declared = class_own_accessor_ptrs(class_id, &name).is_none();
-            let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
-            if registry.is_none() {
-                *registry = Some(crate::fast_hash::new_ptr_hash_map());
-            }
-            let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
-            vtable.declare_accessor_half(&name, getter_ptr as usize, false);
-            vtable.declare_accessor_half(&name, setter_ptr as usize, true);
-            drop(registry);
-            super::decl_accessors::note_instance_accessor_registered(
+            // As for a computed method: the evaluation names the declared
+            // accessor half.
+            name_computed_instance_member(
+                owner,
                 class_id,
-                &name,
-                newly_declared,
+                definition_order,
+                super::declarations::MemberName::Str(name),
             );
         } else {
             {
