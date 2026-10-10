@@ -116,6 +116,11 @@ pub(crate) fn read_bits(ctx: &mut FnCtx<'_>, id: u32, slot: ScopeSlot, base: &st
 /// Store `bits` into the slot and shade the edge with the scope object as the
 /// barrier parent.
 pub(crate) fn write_bits(ctx: &mut FnCtx<'_>, slot: ScopeSlot, base: &str, bits: &str) {
+    // Abrupt RHS completion performed no store. Preserve the opaque emitter's
+    // terminated-path guard before creating the precise barrier diamond.
+    if ctx.block().is_terminated() {
+        return;
+    }
     let addr = cell_addr(ctx, slot, base);
     let ptr = ctx.block().inttoptr(I64, &addr);
     ctx.block().store(I64, bits, &ptr);
