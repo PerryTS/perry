@@ -270,6 +270,18 @@ impl ClassDeclarationIndex {
             // SAFETY: only registered declaration addresses are stored.
             .map(|a| unsafe { &*(a as *const ClassDeclaration) })
     }
+
+    /// Every registered declaration with its class id, in class id order.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (u32, &'static ClassDeclaration)> + '_ {
+        self.dense
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| (i as u32, a))
+            .chain(self.spill.iter().copied())
+            .filter(|&(_, a)| a != 0)
+            // SAFETY: only registered declaration addresses are stored.
+            .map(|(id, a)| (id, unsafe { &*(a as *const ClassDeclaration) }))
+    }
 }
 
 /// The calling thread's image's declaration index (#8546).
@@ -352,9 +364,12 @@ fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[Cl
 // Evaluated names of computed members: traced slots on the class holder.
 // ---------------------------------------------------------------------------
 
-/// The holder-internal key of the name the latest evaluation gave the
-/// computed member with source-order token `order` (see
-/// [`super::state::class_declaration_value_key`] for the namespace).
+/// The holder-internal key of the property key (a string or a symbol) the
+/// latest evaluation gave the computed member with source-order token
+/// `order` (see [`super::state::class_declaration_value_key`] for the
+/// namespace). The key itself, not just its string name, is kept: a realm
+/// that inherits this evaluation (`inherited_evaluation.rs`) re-registers
+/// the member under the same key.
 fn computed_name_key(order: u32) -> String {
     format!("\u{1}k:{order}")
 }
@@ -425,17 +440,65 @@ pub(crate) unsafe fn enter_evaluation_names(
     let len = crate::array::js_array_length(arr);
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        out.push(member_name_of_value(crate::array::js_array_get_f64(arr, i)));
+        // The evaluation keeps names, never keys: the kind is moot.
+        out.push(member_name_of_value(
+            crate::array::js_array_get_f64(arr, i),
+            true,
+        ));
     }
     EVALUATION_NAMES.with(|names| names.borrow_mut().push((class_id, out)));
     Some(EvaluationNamesScope(()))
 }
 
-/// The [`MemberName`] a kept name value stands for.
-fn member_name_of_value(value: f64) -> MemberName {
+/// The instance-member name a computed key that evaluated to symbol
+/// `sym_key` gives its member: a WELL-KNOWN symbol's synthetic method name —
+/// e.g. the minified `[(gm = new WeakMap, Symbol.asyncIterator)]() {…}` comma
+/// form, whose key expression the lowering can't see through statically,
+/// must land in the same synthetic slot the static `[Symbol.asyncIterator]`
+/// lowering uses (every consumer — GetIterator(async), the #5128 symbol-read
+/// binder, `js_to_primitive`, the using-block desugar — resolves these by
+/// that name on the class) — or no string name at all.
+pub(crate) fn member_name_of_symbol(sym_key: usize) -> MemberName {
+    let alias = [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+        ("toPrimitive", "@@toPrimitive"),
+        ("dispose", "__perry_dispose__"),
+        ("asyncDispose", "__perry_async_dispose__"),
+    ]
+    .iter()
+    .find_map(|(wk, method_name)| {
+        let s = crate::symbol::well_known_symbol(wk);
+        (!s.is_null() && s as usize == sym_key).then_some(*method_name)
+    })
+    .or_else(|| {
+        (sym_key == crate::symbol::inspect_custom_symbol_ptr())
+            .then_some("__perry_inspect_custom__")
+    });
+    match alias {
+        Some(name) => MemberName::Str(name.to_string()),
+        None => MemberName::NotAString,
+    }
+}
+
+/// The [`MemberName`] a kept value stands for: a property key the
+/// definition evaluated (string or symbol) for a method (`method`) or an
+/// accessor half, a kept string name, `null` for a member with no string
+/// name, `undefined` for none yet.
+fn member_name_of_value(value: f64, method: bool) -> MemberName {
     let js = crate::JSValue::from_bits(value.to_bits());
     if js.is_undefined() {
         return MemberName::Unnamed;
+    }
+    // SAFETY: a value read from a traced slot.
+    if js.is_pointer() && unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        // SAFETY: as above; a symbol value.
+        let sym_key = unsafe { crate::symbol::sym_key_from_f64(value) };
+        if !method {
+            // An accessor half under a symbol has no string name.
+            return MemberName::NotAString;
+        }
+        return member_name_of_symbol(sym_key);
     }
     if !js.is_any_string() {
         return MemberName::NotAString;
@@ -488,19 +551,33 @@ fn computed_member_name(class_id: u32, member: &ClassMemberDecl) -> MemberName {
     if let Some(name) = scoped {
         return name;
     }
-    let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
-        return MemberName::Unnamed;
+    match computed_key_value(class_id, member.definition_order) {
+        Some(value) => member_name_of_value(value, member.is_method()),
+        None => MemberName::Unnamed,
+    }
+}
+
+/// The property key the latest evaluation of class `class_id`'s definition
+/// visible to this agent gave computed member `definition_order`, if any.
+///
+/// A realm that inherits its spawner's evaluation (a `perry/thread` worker)
+/// has its holder named when the holder is minted, so an unminted holder
+/// of such a class is minted here rather than read as "never evaluated".
+pub(super) fn computed_key_value(class_id: u32, definition_order: u32) -> Option<f64> {
+    let holder = match crate::object::class_value::class_value_if_minted(class_id) {
+        Some(holder) => holder,
+        None if super::inherited_evaluation::inherits_class(class_id) => {
+            crate::object::class_value::class_value_ptr(class_id)
+        }
+        None => return None,
     };
     // SAFETY: this agent's live class function object.
-    let Some(value) = (unsafe {
+    unsafe {
         crate::closure::props::state_internal_get(
             holder as usize,
-            &computed_name_key(member.definition_order),
+            &computed_name_key(definition_order),
         )
-    }) else {
-        return MemberName::Unnamed;
-    };
-    member_name_of_value(value)
+    }
 }
 
 /// The name of `member` of class `class_id`.
@@ -644,6 +721,8 @@ pub(crate) fn note_decl_prototype_born(class_id: u32) {
     let Some(stop) = first_unnamed(class_id, decl) else {
         return;
     };
+    // A realm that inherited a name for this member must hold it by now.
+    super::inherited_evaluation::assert_birth_stop_unnamed(class_id, &decl.members()[stop]);
     let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
         return;
     };
@@ -662,6 +741,35 @@ pub(crate) fn note_decl_prototype_born(class_id: u32) {
 /// evaluations built after it; the decl prototype, which belongs to the
 /// evaluation that built it, is not touched again.
 pub(crate) fn name_computed_member(class_id: u32, definition_order: u32, name: MemberName) {
+    let value = member_name_value(&match name {
+        MemberName::Unnamed => MemberName::NotAString,
+        other => other,
+    });
+    name_computed_member_by_key(class_id, definition_order, value);
+}
+
+/// [`name_computed_member`] from a declaration's definition, which
+/// evaluated the member's key to `property_key` (`ToPropertyKey` done) and
+/// `name` for it. The holder keeps a symbol key itself, so that a realm
+/// inheriting this evaluation re-registers the member under the same symbol;
+/// a string key is kept as its name.
+pub(crate) fn name_computed_member_evaluated(
+    class_id: u32,
+    definition_order: u32,
+    name: MemberName,
+    property_key: f64,
+) {
+    // SAFETY: an evaluated property key.
+    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
+        name_computed_member_by_key(class_id, definition_order, property_key);
+    } else {
+        name_computed_member(class_id, definition_order, name);
+    }
+}
+
+/// [`name_computed_member`] keeping `value` (a string name, a symbol key,
+/// or `null` for no string name) on the holder.
+fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64) {
     let Some(decl) = class_declaration(class_id) else {
         return;
     };
@@ -672,13 +780,10 @@ pub(crate) fn name_computed_member(class_id: u32, definition_order: u32, name: M
     else {
         return;
     };
+    let name = member_name_of_value(value, decl.members()[index].is_method());
     let holder = crate::object::class_value::class_value_ptr(class_id) as usize;
     let previous = computed_member_name(class_id, &decl.members()[index]);
     let key = computed_name_key(definition_order);
-    let value = member_name_value(&match name {
-        MemberName::Unnamed => MemberName::NotAString,
-        ref other => other.clone(),
-    });
     // SAFETY: this agent's live class function object.
     unsafe { crate::closure::props::state_internal_set(holder, &key, value) };
     if previous != name && previous != MemberName::Unnamed {

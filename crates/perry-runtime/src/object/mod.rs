@@ -89,6 +89,8 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+/// A perry/thread worker realm inheriting its spawner's class evaluations.
+pub(crate) use class_registry::inherited_evaluation;
 mod class_super_chain;
 pub(crate) mod class_value;
 #[cfg(test)]

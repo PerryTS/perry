@@ -1,0 +1,6 @@
+main C ["c3","l3",[1,3],"h3",6,"z3","s","constructor,computed,later,computedG,last","Symbol.iterator,effect/Hash,own","o3"]
+main D ["f4",[4],"t4","a4","constructor,first,two,after"]
+types function function function number function 1 | function function function number function 2
+parallelMap 4 same true
+spawn same true
+main again true

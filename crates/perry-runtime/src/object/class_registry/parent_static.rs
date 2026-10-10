@@ -714,6 +714,7 @@ fn name_computed_instance_member(
     class_id: u32,
     definition_order: i64,
     name: super::declarations::MemberName,
+    property_key: f64,
 ) {
     if is_class_object_value(owner) {
         // SAFETY: a live per-evaluation class object of this template.
@@ -726,7 +727,12 @@ fn name_computed_instance_member(
             )
         };
     } else {
-        super::declarations::name_computed_member(class_id, definition_order as u32, name);
+        super::declarations::name_computed_member_evaluated(
+            class_id,
+            definition_order as u32,
+            name,
+            property_key,
+        );
     }
 }
 
@@ -792,54 +798,19 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 (func_ptr as usize, param_count as u32, has_rest != 0),
             );
         });
-        // A computed key that evaluates to a WELL-KNOWN symbol — e.g. the
-        // minified `[(gm = new WeakMap, Symbol.asyncIterator)]() {…}` comma
-        // form, whose key expression the lowering can't see through
-        // statically — must land in the same synthetic vtable slot the
-        // static `[Symbol.asyncIterator]` lowering uses. Every consumer
-        // (GetIterator(async), the #5128 symbol-read binder,
-        // `js_to_primitive`, the using-block desugar) resolves these by the
-        // synthetic NAME on the class; `CLASS_SYMBOL_METHODS` above is not
-        // consulted for instance dispatch. Without the alias,
+        // A computed key that evaluates to a WELL-KNOWN symbol names the
+        // member's synthetic slot (`member_name_of_symbol`); without it,
         // `for await (… of instance)` threw `TypeError: value is not
-        // iterable` for the comma-keyed form.
+        // iterable` for the minified comma-keyed form.
         if is_static == 0 {
-            let alias = [
-                ("iterator", "@@iterator"),
-                ("asyncIterator", "@@asyncIterator"),
-                ("toPrimitive", "@@toPrimitive"),
-                ("dispose", "__perry_dispose__"),
-                ("asyncDispose", "__perry_async_dispose__"),
-            ]
-            .iter()
-            .find_map(|(wk, method_name)| {
-                let s = crate::symbol::well_known_symbol(wk);
-                if s.is_null() {
-                    return None;
-                }
-                let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
-                if sym_key == crate::symbol::sym_key_from_f64(f) {
-                    Some(*method_name)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                (sym_key == crate::symbol::inspect_custom_symbol_ptr())
-                    .then_some("__perry_inspect_custom__")
-            });
             // The member's declaration carries its body; this evaluation
             // names it (the alias, or no string name at all).
             name_computed_instance_member(
                 owner,
                 class_id,
                 definition_order,
-                match alias {
-                    Some(method_name) => {
-                        super::declarations::MemberName::Str(method_name.to_string())
-                    }
-                    None => super::declarations::MemberName::NotAString,
-                },
+                super::declarations::member_name_of_symbol(sym_key),
+                property_key,
             );
         }
         let proto = super::state::class_decl_prototype_object(class_id);
@@ -907,6 +878,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             class_id,
             definition_order,
             super::declarations::MemberName::Str(name),
+            property_key,
         );
     }
 }
@@ -962,6 +934,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 class_id,
                 definition_order,
                 super::declarations::MemberName::NotAString,
+                property_key,
             );
         }
         let proto = super::state::class_decl_prototype_object(class_id);
@@ -988,6 +961,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 class_id,
                 definition_order,
                 super::declarations::MemberName::Str(name),
+                property_key,
             );
         } else {
             {

@@ -54,6 +54,7 @@ pub use declarations::{
 mod decl_prototype_birth;
 mod dispatch;
 pub(crate) mod evaluation_heritage;
+pub(crate) mod inherited_evaluation;
 pub(crate) use evaluation_heritage::{
     active_class_evaluation_parent, instance_pinned_constructing_class, is_self_heritage_value,
     pin_instance_constructing_class, push_active_class_evaluation,
