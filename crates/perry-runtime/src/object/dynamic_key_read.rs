@@ -197,7 +197,7 @@ pub extern "C" fn js_typed_feedback_object_get_field_by_key_f64(
     obj_box: f64,
 ) -> f64 {
     let (obj_bits, key_bits) = (obj_box.to_bits(), key.to_bits());
-    census::record(site_id, key_bits);
+    census::record(key_bits);
     unsafe {
         if let Some(v) = shape_answer(obj_bits, key_bits) {
             return v;

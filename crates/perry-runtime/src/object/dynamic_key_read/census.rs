@@ -1,13 +1,23 @@
-//! Diagnostic counts only: numeric sites and counts, no retained keys or objects.
-use std::collections::BTreeMap;
-use std::sync::Mutex;
+//! Diagnostic counts only: how many computed-read keys were atoms, inline
+//! (SSO) strings, non-atom heap strings or other values. Plain counters; no
+//! key, object or site is retained.
+use std::sync::atomic::{AtomicU64, Ordering};
 
 per_test_global! {
-    static COUNTS: Mutex<BTreeMap<u64, [u64; 4]>> = Mutex::new(BTreeMap::new());
+    static ATOM_KEYS: AtomicU64 = AtomicU64::new(0);
+}
+per_test_global! {
+    static SSO_KEYS: AtomicU64 = AtomicU64::new(0);
+}
+per_test_global! {
+    static HEAP_KEYS: AtomicU64 = AtomicU64::new(0);
+}
+per_test_global! {
+    static OTHER_KEYS: AtomicU64 = AtomicU64::new(0);
 }
 
 #[inline]
-pub(super) fn record(site: u64, key: u64) {
+pub(super) fn record(key: u64) {
     if !crate::object::method_site::stats_report_enabled() {
         return;
     }
@@ -30,18 +40,20 @@ pub(super) fn record(site: u64, key: u64) {
             _ => 3,
         }
     };
-    if let Ok(mut counts) = COUNTS.lock() {
-        counts.entry(site).or_default()[kind] += 1;
-    }
+    match kind {
+        0 => ATOM_KEYS.fetch_add(1, Ordering::Relaxed),
+        1 => SSO_KEYS.fetch_add(1, Ordering::Relaxed),
+        2 => HEAP_KEYS.fetch_add(1, Ordering::Relaxed),
+        _ => OTHER_KEYS.fetch_add(1, Ordering::Relaxed),
+    };
 }
 
 pub(crate) fn report() {
-    if let Ok(counts) = COUNTS.lock() {
-        for (site, c) in counts.iter() {
-            eprintln!(
-                "[key-census] site={site} atom={} sso={} heap={} other={}",
-                c[0], c[1], c[2], c[3]
-            );
-        }
-    }
+    eprintln!(
+        "[key-census] atom={} sso={} heap={} other={}",
+        ATOM_KEYS.load(Ordering::Relaxed),
+        SSO_KEYS.load(Ordering::Relaxed),
+        HEAP_KEYS.load(Ordering::Relaxed),
+        OTHER_KEYS.load(Ordering::Relaxed),
+    );
 }
