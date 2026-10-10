@@ -22,6 +22,7 @@ mod prime;
 mod random;
 mod sign;
 pub(crate) mod util;
+mod wide_digest;
 mod x509;
 
 // Private imports keep sibling modules able to share `pub(super)` helpers.
