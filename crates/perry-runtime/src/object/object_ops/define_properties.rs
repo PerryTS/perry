@@ -37,13 +37,18 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
         let current_properties = || f64::from_bits(properties.get_nanbox_u64());
         let proxy = crate::proxy::js_proxy_is_proxy(current_properties()) != 0;
         let names = if proxy {
-            crate::proxy::js_proxy_own_keys(current_properties())
+            None
         } else {
-            js_object_get_own_property_names(current_properties())
+            Some(super::super::descriptors::OwnNamesSnapshot::collect(
+                &scope,
+                &properties,
+            ))
         };
-        let names = scope.root_raw_mut_ptr(
-            crate::value::js_nanbox_get_pointer(names) as *mut crate::array::ArrayHeader
-        );
+        let proxy_names = proxy.then(|| {
+            scope.root_raw_mut_ptr(extract_obj_ptr(crate::proxy::js_proxy_own_keys(
+                current_properties(),
+            )) as *mut crate::array::ArrayHeader)
+        });
         // Root the name array while enumerating symbols; both snapshots are
         // complete before any per-key own-descriptor/Get callback.
         let symbols = if proxy {
@@ -57,7 +62,10 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
                 crate::array::js_array_length(array)
             })
         };
-        let name_count = length_of(&names);
+        let name_count = names
+            .as_ref()
+            .map(|names| names.count())
+            .unwrap_or_else(|| length_of(proxy_names.as_ref().unwrap()));
         let key_count = name_count + symbols.as_ref().map(length_of).unwrap_or(0);
         // Per-key work runs in its own scope; only the finished record is
         // pushed into `scope`, so records sit back to back from `base`.
@@ -67,9 +75,15 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
             let words = {
                 let key_scope = crate::gc::RuntimeHandleScope::new();
                 let key = key_scope.root_nanbox_f64(match (&symbols, index < name_count) {
-                    (_, true) => names.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
-                        crate::array::js_array_get_f64(array, index)
-                    }),
+                    (_, true) => match &names {
+                        Some(names) => names.key(index),
+                        None => proxy_names
+                            .as_ref()
+                            .unwrap()
+                            .with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+                                crate::array::js_array_get_f64(array, index)
+                            }),
+                    },
                     (Some(symbols), false) => symbols
                         .with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
                             crate::array::js_array_get_f64(array, index - name_count)
@@ -80,18 +94,27 @@ pub extern "C" fn js_object_define_properties(target: f64, properties: f64) -> f
                 // only: the source family answers from its own facts (a
                 // Proxy runs its getOwnPropertyDescriptor trap exactly once),
                 // so no reflection record is built per source key.
-                if js_object_property_is_enumerable(current_properties(), key.get_nanbox_f64())
-                    .to_bits()
-                    != crate::value::TAG_TRUE
-                {
-                    continue;
-                }
-                // The Get result is a JSValue at rest: decode it as-is, never
-                // through the raw-operand admission used for public operands.
-                let bag = key_scope.root_nanbox_f64(super::super::js_object_get_property_key(
-                    current_properties(),
-                    key.get_nanbox_f64(),
-                ));
+                let data = if index < name_count {
+                    names
+                        .as_ref()
+                        .and_then(|names| names.data_value(&properties, index))
+                } else {
+                    None
+                };
+                let bag = if let Some(value) = data {
+                    key_scope.root_nanbox_f64(value)
+                } else {
+                    if js_object_property_is_enumerable(current_properties(), key.get_nanbox_f64())
+                        .to_bits()
+                        != crate::value::TAG_TRUE
+                    {
+                        continue;
+                    }
+                    key_scope.root_nanbox_f64(super::super::js_object_get_property_key(
+                        current_properties(),
+                        key.get_nanbox_f64(),
+                    ))
+                };
                 let descriptor = decode_property_descriptor(&key_scope, &bag);
                 let words = descriptor.collected_words(key.get_nanbox_u64());
                 words

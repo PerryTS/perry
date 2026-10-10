@@ -826,6 +826,10 @@ pub extern "C" fn js_object_alloc_with_shape(
     unsafe {
         (*obj_ptr).class_id = 0;
         (*obj_ptr).parent_class_id = 0;
+        // This allocator births plain records with an explicit data-key list.
+        // Match the cached ordinary birth shape before its existing stamp
+        // validation; otherwise every class-less record remints these facts.
+        super::shapes::store_kind::premark_plain_ordinary(obj_ptr);
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*obj_ptr).meta = ptr::null_mut();
 
