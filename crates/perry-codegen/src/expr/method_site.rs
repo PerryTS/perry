@@ -430,6 +430,10 @@ pub(crate) fn emit_method_site(
     let icf_hit_l = ctx.block_label(icf_hit_idx);
     let cf_call_idx = ctx.new_block("msite.call_constfn");
     let cf_call_l = ctx.block_label(cf_call_idx);
+    let chain_idx = ctx.new_block("msite.chain");
+    let chain_l = ctx.block_label(chain_idx);
+    let storage_idx = ctx.new_block("msite.storage");
+    let storage_l = ctx.block_label(storage_idx);
     let (slot, top, storage_slot) = {
         let blk = ctx.block();
         let sp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_slot)]);
@@ -444,6 +448,24 @@ pub(crate) fn emit_method_site(
         blk.cond_br(&tagged, &cf_kind_l, &own_l);
         (s, top, storage)
     };
+    ctx.current_block = chain_idx;
+    let chain_p = ctx
+        .block()
+        .gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
+    let chain_bits = ctx.block().load(I64, &chain_p);
+    let chain_ptr = ctx.block().inttoptr(I64, &chain_bits);
+    super::shape_chain::guard(ctx, &chain_ptr, &miss_l);
+    let chain_v = super::shape_chain::holder_value(ctx, &chain_ptr, &miss_l);
+    let chain_end = ctx.block().label.clone();
+    ctx.block().br(&value_l);
+    ctx.current_block = storage_idx;
+    let chain = ctx.block().and(
+        I64,
+        &slot,
+        &crate::runtime_abi::METHOD_SITE_CHAIN.to_string(),
+    );
+    let is_chain = ctx.block().icmp_ne(I64, &chain, "0");
+    ctx.block().cond_br(&is_chain, &chain_l, &inh_l);
     // The ConstFn kinds are decoded before the older tags: own ConstFn is
     // exactly bit 59, inherited ConstFn exactly bits 63 and 59.
     ctx.current_block = cf_kind_idx;
@@ -467,7 +489,7 @@ pub(crate) fn emit_method_site(
     {
         let blk = ctx.block();
         let inherited = blk.icmp_slt(I64, &slot, "0");
-        blk.cond_br(&inherited, &inh_l, &other2_l);
+        blk.cond_br(&inherited, &storage_l, &other2_l);
     }
     ctx.current_block = other2_idx;
     let index = {
@@ -681,6 +703,7 @@ pub(crate) fn emit_method_site(
                 (&spill_v, &spill_end),
                 (&bag_v, &bag_end),
                 (&inh_v, &inh_end),
+                (&chain_v, &chain_end),
             ],
         );
         let u = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
@@ -689,7 +712,7 @@ pub(crate) fn emit_method_site(
         u
     };
     ctx.current_block = own_fn_idx;
-    // The plain call block's only predecessor is this own-function check.
+    // Both invocation formats validate this slot before reaching the call block.
     let (own_handle, own_func) = {
         let blk = ctx.block();
         let kp = emit_field_ptr(blk, &own_ub, kind_offset);
@@ -707,7 +730,22 @@ pub(crate) fn emit_method_site(
         let h = emit_handle(blk, &own_ub);
         let retry_idx = ctx.new_block("msite.next_way");
         let retry_l = ctx.block_label(retry_idx);
-        ctx.block().cond_br(&hit, &call_l, &retry_l);
+        // Preserve the direct body's existing hit. A value-format entry has
+        // an unaligned marker that cannot match a function-info pointer, so
+        // its generic validation is confined to the body-mismatch arm.
+        let value_idx = ctx.new_block("msite.value_function");
+        let value_l = ctx.block_label(value_idx);
+        ctx.block().cond_br(&hit, &call_l, &value_l);
+        ctx.current_block = value_idx;
+        let value_entry = ctx.block().icmp_eq(
+            I64,
+            &mi,
+            &crate::runtime_abi::METHOD_SITE_VALUE_INFO.to_string(),
+        );
+        let has_info = ctx.block().icmp_ne(I64, &info, "0");
+        let callable = ctx.block().and(I1, &is_closure, &has_info);
+        let generic = ctx.block().and(I1, &callable, &value_entry);
+        ctx.block().cond_br(&generic, &call_l, &retry_l);
         // next way: resume the word compares after the entry that matched.
         ctx.current_block = retry_idx;
         for (i, next) in way_labels.iter().enumerate() {

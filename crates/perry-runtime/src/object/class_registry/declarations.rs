@@ -343,6 +343,7 @@ fn declaration_registered(class_id: u32, decl: &ClassDeclaration, previous: &[Cl
     }
     if publish {
         super::registration::publish_unbuilt_holder(class_id);
+        super::class_meta::refresh_anon_declaration_role(class_id);
     }
     let mut noted: Vec<&str> = Vec::new();
     for member in decl.members() {

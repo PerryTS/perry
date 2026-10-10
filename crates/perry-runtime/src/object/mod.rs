@@ -56,7 +56,8 @@ pub(crate) mod alloc_plain;
 mod assign;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
-    js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
+    js_object_alloc_null_proto, js_object_alloc_plain, js_object_alloc_with_parent,
+    js_object_coerce,
 };
 #[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
@@ -143,6 +144,7 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 /// the GC contract.
 pub(crate) mod chain_store;
 mod global_this;
+pub(crate) mod shape_chain;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
 #[cfg(feature = "temporal")]
@@ -1784,6 +1786,7 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 }
 
 pub(crate) mod meta_flags;
+pub(crate) use meta_flags::OBJECT_META_FLAG_NATIVE_ALIAS;
 pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE};
 
 pub(crate) mod meta_record;

@@ -223,6 +223,16 @@ pub(crate) fn lower_object_literal(
     let n_str = field_count.to_string();
     let generator_iterator_object = is_generator_iterator_object_literal(props);
 
+    // Source-ordered accessor/computed builders start with this empty literal.
+    // The legacy shape-cache allocator is classless but unmarked; the existing
+    // plain-record funnel records ordinary [[Set]] before the first stamp.
+    if props.is_empty() {
+        let object = ctx
+            .block()
+            .call(I64, "js_object_alloc_plain", &[(I32, "0")]);
+        return Ok(nanbox_pointer_inline(ctx.block(), &object));
+    }
+
     // Fast path: no closure-with-`this` props. Use the shape-cache allocator
     // and write fields by INDEX — this skips the per-field linear key-search
     // done by `js_object_set_field_by_name`. Cuts ~10ns per field on the hot
@@ -262,7 +272,7 @@ pub(crate) fn lower_object_literal(
         Ok("0") | Ok("off") | Ok("false")
     );
 
-    if (!any_method_closure || shape_path_methods_enabled) && field_count > 0 {
+    if !any_method_closure || shape_path_methods_enabled {
         // Build packed keys "k1\0k2\0…" interned in the StringPool (shared
         // across all literals with the same key set + order).
         let mut packed_keys = String::new();

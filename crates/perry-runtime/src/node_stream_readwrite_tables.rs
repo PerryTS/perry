@@ -24,7 +24,7 @@ static NS_OFF2_INFO: JsFunctionInfo = ns_info!(ns_off2, 2).with_declared(2);
 static NS_REMOVE_LISTENER2_INFO: JsFunctionInfo = ns_info!(ns_remove_listener2, 2).with_declared(2);
 static NS_REMOVE_ALL_LISTENERS1_INFO: JsFunctionInfo =
     ns_info!(ns_remove_all_listeners1, 1).with_declared(1);
-static NS_EMIT_REST_INFO: JsFunctionInfo = ns_info!(ns_emit_rest, 2).with_rest(1);
+static NS_EMIT_REST_INFO: JsFunctionInfo = JsFunctionInfo::of_native_args(ns_emit_args, 1);
 static NS_SET_MAX_LISTENERS_INFO: JsFunctionInfo =
     ns_info!(ns_set_max_listeners, 1).with_declared(1);
 static NS_GET_MAX_LISTENERS_INFO: JsFunctionInfo =

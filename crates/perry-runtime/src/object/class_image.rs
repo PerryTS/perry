@@ -73,7 +73,7 @@
 use crate::fast_hash::{PtrHashMap, PtrHashSet};
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
 
@@ -159,14 +159,14 @@ pub struct ClassImageTables {
     pub(crate) extends_typed_array: RwLock<Option<PtrHashSet<u32>>>,
     pub(crate) names: RwLock<Option<PtrHashMap<u32, String>>>,
     pub(crate) lengths: RwLock<Option<PtrHashMap<u32, u32>>>,
-    pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashSet<u32>>>,
+    pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashMap<u32, bool>>>,
     /// Lock-free read mirror of `anon_shape_class_ids`, open-addressed.
     /// `0` is an empty slot; `js_register_anon_shape_class_id` rejects id 0,
     /// so the sentinel is unambiguous. Per IMAGE, like `parent_dense` — a
     /// process-global mirror would answer one image's question out of
     /// another's registrations, since `ImageTable` resolves every access
     /// through `current()`.
-    pub(crate) anon_shape_fast: OnceLock<Box<[AtomicU32]>>,
+    pub(crate) anon_shape_fast: OnceLock<Box<[AtomicU64]>>,
     /// Set when an insert exhausted its probe run: from then on an empty slot
     /// no longer proves absence, so a miss must consult the locked set.
     pub(crate) anon_shape_fast_overflow: AtomicBool,
@@ -384,28 +384,36 @@ fn anon_fast_index(class_id: u32) -> usize {
 }
 
 #[inline]
-fn anon_fast_table() -> &'static [AtomicU32] {
-    current()
-        .anon_shape_fast
-        .get_or_init(|| zeroed_atomic_table(ANON_FAST_SLOTS))
+fn anon_fast_table() -> &'static [AtomicU64] {
+    current().anon_shape_fast.get_or_init(|| unsafe {
+        Box::<[AtomicU64]>::new_zeroed_slice(ANON_FAST_SLOTS).assume_init()
+    })
 }
 
 /// `Some(verdict)` when the calling image's mirror can answer; `None` when the
 /// caller must fall back to the locked set.
 #[inline]
 pub(crate) fn anon_fast_lookup(class_id: u32) -> Option<bool> {
+    anon_role_lookup(class_id).map(|role| role.is_some())
+}
+
+/// Anonymous membership and declaration precedence in the same metadata word.
+/// The low half retains the full class id; bit 32 records the declared role.
+/// None means overflow fallback, Some(None) means not anonymous.
+#[inline]
+pub(crate) fn anon_role_lookup(class_id: u32) -> Option<Option<bool>> {
     let table = anon_fast_table();
     let mut i = anon_fast_index(class_id);
     for _ in 0..ANON_FAST_MAX_PROBE {
         let v = table[i].load(Ordering::Acquire);
-        if v == class_id {
-            return Some(true);
+        if v != 0 && v as u32 == class_id {
+            return Some(Some(v >> 32 != 0));
         }
         if v == 0 {
             return if current().anon_shape_fast_overflow.load(Ordering::Acquire) {
                 None
             } else {
-                Some(false)
+                Some(None)
             };
         }
         i = (i + 1) & ANON_FAST_MASK;
@@ -414,22 +422,25 @@ pub(crate) fn anon_fast_lookup(class_id: u32) -> Option<bool> {
 }
 
 /// Publish `class_id` into the calling image's mirror. Idempotent.
-pub(crate) fn anon_fast_insert(class_id: u32) {
+pub(crate) fn anon_fast_insert(class_id: u32, declared: bool) {
+    let word = u64::from(class_id) | (u64::from(declared) << 32);
     let table = anon_fast_table();
     let mut i = anon_fast_index(class_id);
     for _ in 0..ANON_FAST_MAX_PROBE {
         let v = table[i].load(Ordering::Acquire);
-        if v == class_id {
+        if v != 0 && v as u32 == class_id {
+            table[i].store(word, Ordering::Release);
             return;
         }
         if v == 0
             && table[i]
-                .compare_exchange(0, class_id, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(0, word, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
         {
             return;
         }
-        if table[i].load(Ordering::Acquire) == class_id {
+        if table[i].load(Ordering::Acquire) as u32 == class_id {
+            table[i].store(word, Ordering::Release);
             return;
         }
         i = (i + 1) & ANON_FAST_MASK;

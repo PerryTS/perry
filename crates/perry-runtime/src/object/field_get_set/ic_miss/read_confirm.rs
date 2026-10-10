@@ -182,6 +182,7 @@ unsafe fn read_site_front(
         if let Some(bits) = crate::object::method_site::read_holder::primary_entry_answer(
             &*cache,
             (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64,
+            obj,
         ) {
             return f64::from_bits(bits);
         }

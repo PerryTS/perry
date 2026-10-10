@@ -471,3 +471,176 @@ fn a_clone_identical_to_its_generic_body_drops_the_entry_guard() {
     assert!(!entry.contains("@js_param_type_guard("), "{entry}");
     assert!(entry.contains("read$generic("), "{entry}");
 }
+
+#[test]
+fn key_add_shape_proofs_are_loads_and_keep_the_generic_miss() {
+    let ir = init_ir(
+        "chain_transition.ts",
+        vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(X)),
+            receiver: Box::new(Expr::LocalGet(X)),
+            key: Box::new(Expr::String("extra".to_string())),
+            value: Box::new(Expr::LocalGet(Y)),
+            strict: true,
+        })],
+    );
+    assert!(
+        ir.contains("shape.chain.tail.loop"),
+        "the transition's holders must be compared"
+    );
+    assert!(
+        ir.contains("@js_put_value_set_packed_miss("),
+        "the semantic fallback remains"
+    );
+    assert!(
+        !ir.contains("@js_packed_add_chain_valid("),
+        "a hit must introduce no safepoint"
+    );
+    assert!(
+        !ir.contains("@PERRY_PROTO_VALIDITY"),
+        "unrelated mutations are not inputs"
+    );
+    assert!(
+        ir.contains("load atomic i8, ptr @PERRY_METHOD_SITE_WORKERS_PRESENT monotonic"),
+        "a worker must not dereference the primary agent's proof"
+    );
+    let entry = block_body(&ir, "put.add.chain");
+    assert!(
+        entry.contains("br i1 %"),
+        "the worker gate must control the edge"
+    );
+    assert!(
+        !entry.contains("inttoptr"),
+        "proof reads must follow the gate"
+    );
+}
+
+#[test]
+fn empty_literal_builders_start_with_an_ordinary_shape() {
+    let ir = init_ir(
+        "empty_literal_birth.ts",
+        vec![Stmt::Expr(Expr::Object(Vec::new()))],
+    );
+    assert!(ir.contains("call i64 @js_object_alloc_plain("), "{ir}");
+    assert!(!ir.contains("call i64 @js_object_alloc("), "{ir}");
+}
+
+#[test]
+fn short_chain_prefixes_compare_each_holder_word() {
+    let ir = init_ir(
+        "chain_prefix.ts",
+        vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(X)),
+            receiver: Box::new(Expr::LocalGet(X)),
+            key: Box::new(Expr::String("extra".to_string())),
+            value: Box::new(Expr::LocalGet(Y)),
+            strict: true,
+        })],
+    );
+    let guards: Vec<_> = ir.split("\nshape.chain.prefix.").skip(1).collect();
+    assert_eq!(
+        guards.len(),
+        3,
+        "the short-chain subject must be present: {ir}"
+    );
+    for guard in guards {
+        let block = guard.split("\nshape.chain.prefix.").next().unwrap();
+        assert!(
+            block.contains("icmp eq i64"),
+            "each consumed holder needs a word comparison: {block}"
+        );
+        assert!(
+            block.contains("br i1 %"),
+            "each comparison must control the miss edge: {block}"
+        );
+    }
+}
+
+#[test]
+fn value_method_entries_check_closure_kind_and_info_without_a_body_guard() {
+    let ir = init_ir(
+        "value_method_entry.ts",
+        vec![Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(X)),
+                property: "method".to_string(),
+                byte_offset: 0,
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })],
+    );
+    let value = block_body(&ir, "msite.value_function");
+    assert!(
+        value.contains("icmp ne i64"),
+        "a bodiless closure must miss: {value}"
+    );
+    assert!(
+        value.contains("and i1"),
+        "the closure-kind test must remain: {value}"
+    );
+    let direct = block_body(&ir, "msite.own_fn");
+    assert!(
+        direct.contains("br i1"),
+        "direct entries retain the body guard: {direct}"
+    );
+}
+
+#[test]
+fn four_hop_store_proofs_require_exact_length_and_compare_every_word() {
+    let ir = init_ir(
+        "four_chain_transition.ts",
+        vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(X)),
+            receiver: Box::new(Expr::LocalGet(X)),
+            key: Box::new(Expr::String("extra".to_string())),
+            value: Box::new(Expr::LocalGet(Y)),
+            strict: true,
+        })],
+    );
+    let gate = block_body(&ir, "shape.chain.store");
+    assert!(
+        gate.contains(", 4"),
+        "the four loads require exact length: {gate}"
+    );
+    assert!(gate.contains("icmp eq i64"), "length is compared: {gate}");
+    assert!(
+        gate.contains("br i1"),
+        "the length comparison controls the arm: {gate}"
+    );
+    let short = block_body(&ir, "shape.chain.general");
+    assert!(short.contains("switch i64"));
+    for n in 0..4 {
+        assert!(
+            short.contains(&format!("i64 {n}, label %")),
+            "short length {n} is bounded: {short}"
+        );
+    }
+    let tail = block_body(&ir, "shape.chain.tail.loop");
+    assert!(
+        tail.contains("phi i64 [ 4,"),
+        "deep traversal starts after the shared prefix: {tail}"
+    );
+    assert!(tail.contains("icmp ult i64"));
+    let first = block_body(&ir, "shape.chain.four.");
+    assert!(first.contains("icmp eq i64"));
+    assert!(first.contains("br i1"));
+    let guards: Vec<_> = ir.split("\nshape.chain.prefix.").skip(1).collect();
+    assert_eq!(
+        guards.len(),
+        3,
+        "all shorter lengths share the prefix: {ir}"
+    );
+    for block in guards {
+        let block = block.split("\nshape.chain.prefix.").next().unwrap();
+        assert!(
+            block.contains("icmp eq i64"),
+            "each word remains guarded: {block}"
+        );
+        assert!(
+            block.contains("br i1"),
+            "each mismatch refuses the hit: {block}"
+        );
+    }
+}

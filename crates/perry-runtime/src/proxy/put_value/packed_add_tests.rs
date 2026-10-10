@@ -11,6 +11,27 @@ fn packed_set_site_layout_matches_codegen() {
         8 * PACKED_SET_SITE_WORDS
     );
     assert_eq!(PACKED_SET_SITE_WORDS, 5);
+    assert_eq!(
+        std::mem::size_of::<crate::object::shape_chain::ShapeChain>(),
+        2 * std::mem::size_of::<usize>()
+    );
+    assert_eq!(
+        std::mem::size_of::<crate::object::shape_chain::ShapeHop>(),
+        crate::codegen_abi::SHAPE_CHAIN_HOP_BYTES
+    );
+    assert_eq!(std::mem::offset_of!(AddChain, links), 0);
+    assert_eq!(
+        std::mem::offset_of!(AddChain, rep),
+        2 * std::mem::size_of::<usize>()
+    );
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(
+        std::mem::offset_of!(AddChain, rep),
+        crate::codegen_abi::ADD_CHAIN_REP_OFFSET
+    );
+    let rep_word_offset = (3 * std::mem::size_of::<usize>() + 7) & !7;
+    assert_eq!(std::mem::offset_of!(AddChain, rep_word), rep_word_offset);
+    assert_eq!(std::mem::offset_of!(AddChain, body), rep_word_offset + 8);
     assert_eq!(std::mem::offset_of!(PackedSetSite, add_ways), 24);
     // perry_abi::PACKED_SET_CONSTFN_INFO_WORD: the site's ConstFn body,
     // compared by the emitted ConstFn store check.
@@ -96,8 +117,8 @@ fn packed_add_refuse_bits_match_codegen() {
     // perry-codegen ADD_REFUSE_RESERVED / ADD_REFUSE_GC_FLAGS, read as one
     // little-endian u32 at the GcHeader: obj_type | gc_flags << 8 | _reserved << 16.
     // Charter step 3: the numeric proof is a shape kind, not a refused bit.
-    let reserved = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    assert_eq!(reserved, 0x0C00);
+    let reserved = crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+    assert_eq!(reserved, 0x0400);
     assert_eq!(crate::gc::GC_FLAG_TENURED, 0x20);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, obj_type), 0);
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, gc_flags), 1);
@@ -163,8 +184,8 @@ fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
     assert_eq!((shapes as u32, (shapes >> 32) as u32), (pre, post));
     assert_eq!(site.add_guard.load(Ordering::Relaxed) & ADD_SLOT_MASK, 1);
     assert_eq!(
-        site.add_guard.load(Ordering::Relaxed) >> ADD_SLOT_BITS,
-        add_generation()
+        unsafe { js_packed_add_chain_valid(site.add_guard.load(Ordering::Relaxed)) },
+        1
     );
     let served = unsafe { packed_add_try(site, second, 6.0) };
     assert_eq!(
@@ -182,7 +203,7 @@ fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
 /// Any move of either verdict word refuses the memo: an inherited setter or
 /// non-writable property installed since the prime moves one of them.
 #[test]
-fn a_moved_generation_refuses_the_memo() {
+fn unrelated_generation_keeps_the_memo_but_a_changed_holder_refuses_it() {
     let key = interned(b"added_gen");
     let first = parsed(b"{\"g\":1}");
     let second = parsed(b"{\"g\":2}");
@@ -190,9 +211,16 @@ fn a_moved_generation_refuses_the_memo() {
     miss(site, first, key, 1.0);
     assert_ne!(site.add_shapes.load(Ordering::Relaxed), PACKED_SET_EMPTY);
     crate::object::proto_validity::bump_proto_validity();
-    let pre = stamp(second);
-    assert_eq!(unsafe { packed_add_try(site, second, 2.0) }, None);
-    assert_eq!(stamp(second), pre, "a refused memo changes nothing");
+    assert_eq!(unsafe { packed_add_try(site, second, 2.0) }, Some(2.0));
+    let third = parsed(b"{\"g\":3}");
+    let proto = crate::array::object_prototype_addr_if_resolved() as *mut crate::ObjectHeader;
+    assert!(!proto.is_null());
+    let changed_key = interned(b"__missread2_chain_mutation");
+    unsafe { crate::object::js_object_set_field_by_name(proto, changed_key, 1.0) };
+    let pre = stamp(third);
+    assert_eq!(unsafe { packed_add_try(site, third, 3.0) }, None);
+    assert_eq!(stamp(third), pre, "a refused memo changes nothing");
+    crate::object::js_object_delete_field(proto, changed_key);
 }
 
 /// The site owns both ShapeIds it may stamp: a full trace's carrier
@@ -340,7 +368,7 @@ fn a_number_key_add_memo_carries_the_store_check_flag() {
     let guard = site.add_guard.load(Ordering::Relaxed);
     assert_ne!(guard & ADD_F64_SLOT, 0);
     assert_eq!(guard & ADD_SLOT_MASK, 1);
-    assert_eq!(guard >> ADD_SLOT_BITS, add_generation());
+    assert_eq!(unsafe { js_packed_add_chain_valid(guard) }, 1);
 
     let other = interned(b"p2c_added_string");
     let second = parsed(b"{\"p2c_q\":1}");
@@ -349,4 +377,117 @@ fn a_number_key_add_memo_carries_the_store_check_flag() {
     let site2 = leaked_site();
     miss(site2, second, other, boxed);
     assert_eq!(site2.add_guard.load(Ordering::Relaxed) & ADD_F64_SLOT, 0);
+}
+
+#[test]
+fn a_deprecated_successor_refuses_the_emitted_chain_guard() {
+    let key = interned(b"add_deprecated_successor");
+    let first = parsed(b"{\"representation\":1}");
+    let second = parsed(b"{\"representation\":2}");
+    let site = leaked_site();
+    miss(site, first, key, 5.0);
+    let guard = site.add_guard.load(Ordering::Relaxed);
+    assert_eq!(unsafe { js_packed_add_chain_valid(guard) }, 1);
+    let object = (first.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+    crate::object::js_object_set_field_by_name(object, key, f64::from_bits(crate::value::TAG_TRUE));
+    assert_eq!(unsafe { js_packed_add_chain_valid(guard) }, 0);
+    assert_eq!(unsafe { packed_add_try(site, second, 6.0) }, None);
+}
+
+#[test]
+fn empty_literal_birth_is_plain_before_its_first_shape() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::builtin_prototype_value("Object");
+    let key = interned(b"literal_birth_added");
+    let first = crate::object::js_object_alloc_plain(0);
+    let first = crate::value::js_nanbox_pointer(first as i64);
+    let pre = stamp(first);
+    assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(pre),
+        Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+    );
+    let site = leaked_site();
+    miss(site, first, key, 11.0);
+    assert_eq!(site.add_shapes.load(Ordering::Relaxed) as u32, pre);
+    let second = crate::object::js_object_alloc_plain(0);
+    let second = crate::value::js_nanbox_pointer(second as i64);
+    assert_eq!(stamp(second), pre);
+    assert_eq!(unsafe { packed_add_try(site, second, 22.0) }, Some(22.0));
+}
+
+#[test]
+fn a_worker_with_seeded_ids_cannot_consume_a_primary_add_proof() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::builtin_prototype_value("Object");
+    let first = parsed(b"{\"worker_source\":1}");
+    let pre = stamp(first);
+    let key = interned(b"worker_added");
+    let site = leaked_site();
+    miss(site, first, key, 11.0);
+    let post = stamp(first);
+    assert_ne!(pre, post);
+    unsafe {
+        crate::object::shapes::note_external_shape_carrier(
+            crate::object::shapes::shape_descriptor_by_id(pre),
+        );
+        crate::object::shapes::note_external_shape_carrier(
+            crate::object::shapes::shape_descriptor_by_id(post),
+        );
+    }
+    let seed = crate::object::shapes::worker_shape_seed();
+    let site_addr = site as *const PackedSetSite as usize;
+    std::thread::spawn(move || {
+        // Exercise runtime ownership independently of the emitted worker
+        // gate, without changing that sticky process-wide test input.
+        crate::agent::enter_agent_for_test(u64::MAX - 0x12257);
+        crate::gc::ensure_gc_initialized();
+        crate::object::shapes::install_worker_shape_seed(&seed);
+        let shape = crate::object::shapes::shape_descriptor_by_id(pre).unwrap();
+        assert!(crate::object::shapes::shape_descriptor_by_id(post).is_some());
+        let object = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+            shape.live_inline_slot_count,
+            shape.keys as usize as *mut crate::array::ArrayHeader,
+            pre,
+        );
+        let object = crate::value::js_nanbox_pointer(object as i64);
+        assert_eq!(stamp(object), pre);
+        assert_eq!(
+            unsafe { packed_add_try(site_addr as *const PackedSetSite, object, 22.0) },
+            None,
+            "matching seeded shapes do not authorize a foreign proof"
+        );
+        assert_eq!(stamp(object), pre);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn an_any_append_still_guards_a_typed_prefix() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    crate::object::builtin_prototype_value("Object");
+    let prefix = interned(b"mixed_prefix_number");
+    let key = interned(b"mixed_any_append");
+    let first = crate::object::js_object_alloc_plain(0);
+    crate::object::js_object_set_field_by_name(first, prefix, 1.5);
+    let value = crate::value::js_nanbox_pointer(first as i64);
+    let pre = stamp(value);
+    assert!(crate::object::field_rep_store::shape_slot_is_f64(pre, 0));
+    let site = leaked_site();
+    miss(site, value, key, f64::from_bits(crate::value::TAG_NULL));
+    let guard = site.add_guard.load(Ordering::Relaxed);
+    assert_eq!(unsafe { js_packed_add_chain_valid(guard) }, 1);
+    crate::object::js_object_set_field_by_name(
+        first,
+        prefix,
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+    assert_eq!(
+        unsafe { js_packed_add_chain_valid(guard) },
+        0,
+        "an Any append cannot stamp a successor whose typed prefix was deprecated"
+    );
 }
