@@ -1,8 +1,10 @@
 //! Short-circuit comparison graphs. The graph is compiler-owned control flow,
 //! not a runtime cache: it contains no heap values or learned type information.
 //!
-//! Only stable, ordinary local reads and Number literals can be hoisted. In
+//! Only ordinary local reads and Number literals can be hoisted. In
 //! particular globals, capture cells, writes, getters and calls are excluded.
+//! Assignment outside the graph does not invalidate its reads: the graph
+//! contains no writes, and excluded capture cells cover indirect reassignment.
 //! The non-number arm reloads locals before EACH reached comparison, so a
 //! coercion may collect without leaving a stale pointer in a carried register.
 
@@ -38,7 +40,6 @@ fn operand(ctx: &FnCtx<'_>, expr: &Expr) -> Option<Operand> {
         Expr::Number(n) => Some(Operand::Number(*n)),
         Expr::LocalGet(id)
             if ctx.locals.contains_key(id)
-                && !ctx.reassigned_locals.contains(id)
                 && !ctx.module_globals.contains_key(id)
                 && !ctx.closure_captures.contains_key(id)
                 && !ctx.boxed_vars.contains(id)

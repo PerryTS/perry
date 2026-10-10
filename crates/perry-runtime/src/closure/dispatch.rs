@@ -16,6 +16,7 @@
 use super::*;
 
 mod bound;
+pub(super) mod bound_intrinsic;
 mod calln;
 mod direct;
 mod errors;

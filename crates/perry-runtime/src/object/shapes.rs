@@ -53,13 +53,13 @@ pub(crate) use shapes_linked_birth::{
     complete_layout_generation, declaration_parent_identity, mutation_generation,
     pristine_declaration_holder, stamp_linked_final_shape, stamp_linked_final_shape_requested,
 };
+#[cfg(all(test, feature = "regex-engine"))]
+#[path = "regex_direct_admission_tests.rs"]
+mod regex_direct_admission_tests;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
-#[cfg(all(test, feature = "regex-engine"))]
-#[path = "regex_direct_admission_tests.rs"]
-mod regex_direct_admission_tests;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]
@@ -197,7 +197,7 @@ impl ShapeDescriptor {
     /// set; methods on that key keep the ordinary property read.
     pub(crate) fn implicit_own_keys(&self) -> &'static [&'static [u8]] {
         match self.object_kind {
-            ShapeObjectKind::Function => &[b"name", b"length", b"prototype"],
+            kind if kind.is_function_layout() => &[b"name", b"length", b"prototype"],
             _ => &[],
         }
     }
@@ -977,15 +977,31 @@ pub(crate) enum ShapeObjectKind {
     /// export surface. The namespace brand is part of shape identity, so an
     /// ordinary record with a module name in a data slot cannot impersonate it.
     NativeNamespace,
+    /// A bound call/apply adapter with the ordinary five bound slots plus a
+    /// resolved function operand in slot 5. Appended to preserve every earlier
+    /// ordinal and the direct decoding of ordinary kind-cache entries.
+    FunctionBoundCall,
+    FunctionBoundApply,
 }
 
 impl ShapeObjectKind {
+    #[inline]
+    pub(crate) fn is_function_layout(self) -> bool {
+        matches!(
+            self,
+            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply
+        )
+    }
+
     /// A non-`GC_TYPE_OBJECT` receiver kind: minted in the exotic band.
     #[inline]
     pub(crate) fn is_exotic(self) -> bool {
         matches!(
             self,
-            ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary
+            ShapeObjectKind::Function
+                | ShapeObjectKind::FunctionDictionary
+                | ShapeObjectKind::FunctionBoundCall
+                | ShapeObjectKind::FunctionBoundApply
         )
     }
 
@@ -1016,6 +1032,8 @@ impl ShapeObjectKind {
             ShapeObjectKind::OrdinaryUnmarked => 5,
             ShapeObjectKind::OrdinaryNumericProof => 6,
             ShapeObjectKind::NativeNamespace => 7,
+            ShapeObjectKind::FunctionBoundCall => 8,
+            ShapeObjectKind::FunctionBoundApply => 9,
         }
     }
 }
@@ -1034,6 +1052,8 @@ const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
 const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
 const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
 const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
+const SHAPE_KIND_FUNCTION_BOUND_CALL: u64 = 9;
+const SHAPE_KIND_FUNCTION_BOUND_APPLY: u64 = 10;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -1057,6 +1077,8 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
         SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
         SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
+        SHAPE_KIND_FUNCTION_BOUND_CALL => Some(ShapeObjectKind::FunctionBoundCall),
+        SHAPE_KIND_FUNCTION_BOUND_APPLY => Some(ShapeObjectKind::FunctionBoundApply),
         _ => None,
     }
 }
@@ -1073,6 +1095,8 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
         ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
         ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
+        ShapeObjectKind::FunctionBoundCall => SHAPE_KIND_FUNCTION_BOUND_CALL,
+        ShapeObjectKind::FunctionBoundApply => SHAPE_KIND_FUNCTION_BOUND_APPLY,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
