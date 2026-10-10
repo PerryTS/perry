@@ -21,12 +21,18 @@ macro_rules! closure_call_dispatch {
         /// Route one closure call with a known receiver: a plain body takes
         /// the call as it is, anything else goes down the ladder.
         #[inline(always)]
-        pub(crate) fn $dispatch(closure: *const ClosureHeader, this: JsThis $(, $a: f64)*) -> f64 {
-            let Some(info) = crate::closure::closure_info(closure) else {
-                return dispatch_proxy_callee_or_throw(closure, this, &[$($a),*]);
+        pub(crate) fn $dispatch(closure: *const ClosureHeader, this: JsThis $(, $a: f64)*, checked: Option<&crate::closure::JsFunctionInfo>) -> f64 {
+            let info = match checked {
+                Some(info) => info,
+                None => {
+                    let Some(info) = crate::closure::closure_info(closure) else {
+                        return dispatch_proxy_callee_or_throw(closure, this, &[$($a),*]);
+                    };
+                    info
+                }
             };
             let func_ptr = info.code;
-            if plain_admits(info, $n) {
+            if checked.is_none() && plain_admits(info, $n) {
                 return unsafe {
                     crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, $a)*)
                 };
@@ -50,16 +56,6 @@ macro_rules! closure_call_dispatch {
             }
         }
     };
-}
-
-/// The body a call of `closure` passing `argc` arguments jumps to with its
-/// registers untouched, if there is one: `closure` is a live function object
-/// (the same proof [`get_valid_info`] gives every dispatch) whose body is
-/// plain for `argc` ([`plain_admits`]).
-#[inline(always)]
-fn plain_body(closure: *const ClosureHeader, argc: u32) -> Option<*const u8> {
-    let info = crate::closure::closure_info(closure)?;
-    plain_admits(info, argc).then_some(info.code)
 }
 
 /// Define the per-arity entry `js_closure_call{N}`.
@@ -91,17 +87,20 @@ macro_rules! closure_call_entry {
         pub extern $abi fn $entry(closure: *const ClosureHeader, this: JsThis $(, $a: f64)*) -> f64 {
             #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             {
-                if let Some(code) = plain_body(closure, $n) {
+                let Some(info) = crate::closure::closure_info(closure) else {
+                    return $dispatch(closure, this $(, $a)*, None);
+                };
+                if plain_admits(info, $n) {
                     // SAFETY: `code` is the body of the live function object
                     // `closure`, plain for this argument count.
-                    let body = unsafe { crate::closure::body_call::$body_fn!(code; $($a),*) };
+                    let body = unsafe { crate::closure::body_call::$body_fn!(info.code; $($a),*) };
                     unsafe { become body(closure, this $(, $a)*) }
                 }
                 become $slow(closure, this $(, $a)*)
             }
             #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
             {
-                $dispatch(closure, this $(, $a)*)
+                $dispatch(closure, this $(, $a)*, None)
             }
         }
 
@@ -110,7 +109,12 @@ macro_rules! closure_call_entry {
         #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         #[inline(never)]
         extern $abi fn $slow(closure: *const ClosureHeader, this: JsThis $(, $a: f64)*) -> f64 {
-            $dispatch(closure, this $(, $a)*)
+            // The entry validated this exact live closure and declined its
+            // plain call before tail-jumping here. No allocation, safepoint
+            // or user code separates that proof from this immutable info
+            // load, so neither admission needs to be repeated.
+            let info = unsafe { &*(*closure).info };
+            $dispatch(closure, this $(, $a)*, Some(info))
         }
     };
 }

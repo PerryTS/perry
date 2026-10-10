@@ -587,7 +587,6 @@ pub extern "C" fn js_closure_alloc_init_boxed(
         return js_closure_alloc(info, capture_count);
     }
     let shape_id = super::shape::birth_shape_for_body(info);
-    let values = unsafe { std::slice::from_raw_parts(captures_ptr, actual_count) };
     match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => {
             crate::promise::bump(&CLOSURE_ALLOC_COUNT);
@@ -598,8 +597,25 @@ pub extern "C" fn js_closure_alloc_init_boxed(
                 (*closure).info = info;
                 // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
                 (*closure).props = std::ptr::null_mut();
-                crate::gc::layout_init_pointer_free(closure as *mut u8);
-                closure_install_boxed_captures(closure, values);
+                // The nursery allocator already supplies UNKNOWN. Mixed raw
+                // boxes and tagged words use its tag-checked scan directly;
+                // making the payload pointer-free and then classifying every
+                // capture merely returns it to the same UNKNOWN state.
+                debug_assert_eq!(
+                    (*(raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))
+                        ._reserved & crate::gc::GC_LAYOUT_STATE_MASK,
+                    0, // GC_LAYOUT_UNKNOWN, as supplied by arena allocation.
+                );
+                let slots = closure_capture_slots_mut(closure);
+                // GC_STORE_AUDIT(BARRIERED): every capture is initialized
+                // before publication; UNKNOWN traces raw and tagged words,
+                // and the newborn barrier below shades them when required.
+                std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
+                if crate::gc::newborn_parent_needs_barrier(closure as usize) {
+                    crate::gc::runtime_write_barrier_newborn_slots(
+                        closure as usize, slots, actual_count,
+                    );
+                }
             }
             closure
         }

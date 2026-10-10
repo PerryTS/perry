@@ -39,6 +39,13 @@ fn bulk_boxed_birth_preserves_body_shape_flags_and_fresh_identity() {
             let slots = crate::closure::closure_capture_slots_mut(closure);
             assert_eq!(*slots, ptr_bits(cell as usize), "box identity stays shared");
             assert_eq!(*slots.add(1), captures[1]);
+            let header = header_from_user_ptr(closure as *const u8);
+            assert_ne!((*header).gc_flags & GC_FLAG_ARENA, 0);
+            assert_eq!(
+                (*header)._reserved & GC_LAYOUT_STATE_MASK,
+                GC_LAYOUT_UNKNOWN,
+                "non-collecting boxed birth retains the nursery scan policy"
+            );
         }
     }
 }
