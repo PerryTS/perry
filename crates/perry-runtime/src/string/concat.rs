@@ -94,7 +94,7 @@ pub(crate) fn canonicalize_surrogate_pairs(ptr: *mut StringHeader) -> *mut Strin
         i += 1;
     }
 
-    let new_flags = (flags & STRING_FLAG_VALID_WTF8)
+    let new_flags = (flags & STRING_FLAG_WTF8_VALIDATED)
         | if still_has_lone {
             STRING_FLAG_HAS_LONE_SURROGATES
         } else {
@@ -184,7 +184,7 @@ impl ConcatPart {
             len,
             ascii: true,
             units: len,
-            flags: STRING_FLAG_VALID_WTF8,
+            flags: STRING_FLAG_WTF8_VALIDATED,
             owner: ptr::null(),
         }
     }
@@ -211,7 +211,7 @@ fn concat_string_part(
         });
     }
     let (units, flags) = if ascii {
-        (len, STRING_FLAG_VALID_WTF8)
+        (len, STRING_FLAG_WTF8_VALIDATED)
     } else {
         raw_string_metadata(data, len)
     };
@@ -753,12 +753,12 @@ pub extern "C" fn js_string_concat(
     let (blen_a, u16len_a, flags_a) = if a_valid {
         unsafe { ((*a).byte_len, (*a).utf16_len, (*a).flags) }
     } else {
-        (0, 0, STRING_FLAG_VALID_WTF8)
+        (0, 0, STRING_FLAG_WTF8_VALIDATED)
     };
     let (blen_b, u16len_b, flags_b) = if b_valid {
         unsafe { ((*b).byte_len, (*b).utf16_len, (*b).flags) }
     } else {
-        (0, 0, STRING_FLAG_VALID_WTF8)
+        (0, 0, STRING_FLAG_WTF8_VALIDATED)
     };
     let total_blen = blen_a + blen_b;
 
@@ -908,9 +908,7 @@ pub extern "C" fn js_string_concat_value(
         let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen
-            && unsafe {
-                (*prefix).flags & !(STRING_FLAG_WTF8_VALIDATED | STRING_FLAG_VALID_WTF8) == 0
-            }
+            && unsafe { (*prefix).flags & !STRING_FLAG_WTF8_VALIDATED == 0 }
             && bytes_all_ascii(string_data(prefix), prefix_blen)
             && concat_memo_should_probe();
         let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
@@ -1161,7 +1159,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut total_blen = 0u32;
     let mut total_u16 = 0u32;
-    let mut piece_flags = STRING_FLAG_VALID_WTF8;
+    let mut piece_flags = STRING_FLAG_WTF8_VALIDATED;
 
     for i in 0..n {
         let bits = unsafe { *parts.add(i) }.to_bits();
@@ -1198,7 +1196,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
             (*dest).byte_len = total_blen;
             (*dest).utf16_len = total_u16;
             // The destination's payload just changed; no piece's validation carries over.
-            (*dest).flags = piece_flags & !STRING_FLAG_WTF8_VALIDATED;
+            (*dest).flags = piece_flags;
             return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 canonicalize_surrogate_pairs(dest)
             } else {
@@ -1328,7 +1326,7 @@ fn concat_chain_all_heap_strings_no_collect<const MAX_PARTS: usize>(
 ) -> Option<*mut StringHeader> {
     let mut piece_ptrs: [*const StringHeader; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
-    let mut piece_flags: u32 = STRING_FLAG_VALID_WTF8;
+    let mut piece_flags: u32 = STRING_FLAG_WTF8_VALIDATED;
     let mut total_blen: u32 = 0;
     let mut total_u16: u32 = 0;
 
@@ -1410,7 +1408,7 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
     let mut piece_ptrs: [*const u8; MAX_PARTS] = [std::ptr::null(); MAX_PARTS];
     let mut piece_lens: [u32; MAX_PARTS] = [0; MAX_PARTS];
     let mut piece_u16: [u32; MAX_PARTS] = [0; MAX_PARTS];
-    let mut piece_flags: u32 = STRING_FLAG_VALID_WTF8;
+    let mut piece_flags: u32 = STRING_FLAG_WTF8_VALIDATED;
     let mut total_blen: u32 = 0;
     let mut total_u16: u32 = 0;
 

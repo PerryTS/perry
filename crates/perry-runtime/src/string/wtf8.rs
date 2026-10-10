@@ -81,7 +81,7 @@ impl<'a> Wtf8Str<'a> {
         Wtf8Str {
             bytes: slice::from_raw_parts(string_data(s), len),
             lone: (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
-            known: (*s).flags & STRING_FLAG_VALID_WTF8 != 0,
+            known: (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0,
         }
     }
 

@@ -5,22 +5,22 @@ use super::*;
 /// bounded decoder's count, but cannot grant any unchecked Unicode borrow.
 pub(super) fn raw_string_metadata(data: *const u8, len: u32) -> (u32, u32) {
     if len == 0 {
-        return (0, STRING_FLAG_VALID_WTF8);
+        return (0, STRING_FLAG_WTF8_VALIDATED);
     }
     if data.is_null() {
         return (0, 0);
     }
     let bytes = unsafe { slice::from_raw_parts(data, len as usize) };
     if bytes.is_ascii() {
-        return (len, STRING_FLAG_VALID_WTF8);
+        return (len, STRING_FLAG_WTF8_VALIDATED);
     }
     if let Ok(text) = simdutf8::basic::from_utf8(bytes) {
-        return (utf16_count::count(text) as u32, STRING_FLAG_VALID_WTF8);
+        return (utf16_count::count(text) as u32, STRING_FLAG_WTF8_VALIDATED);
     }
     match valid_wtf8_metadata(bytes) {
         Some((units, lone)) => (
             units,
-            STRING_FLAG_VALID_WTF8
+            STRING_FLAG_WTF8_VALIDATED
                 | if lone {
                     STRING_FLAG_HAS_LONE_SURROGATES
                 } else {
@@ -70,5 +70,5 @@ fn valid_wtf8_metadata(bytes: &[u8]) -> Option<(u32, bool)> {
 /// certify an unknown operand. Empty strings use the proven identity flag.
 #[inline]
 pub(super) fn combine_string_flags(a: u32, b: u32) -> u32 {
-    ((a | b) & !STRING_FLAG_VALID_WTF8) | (a & b & STRING_FLAG_VALID_WTF8)
+    ((a | b) & !STRING_FLAG_WTF8_VALIDATED) | (a & b & STRING_FLAG_WTF8_VALIDATED)
 }

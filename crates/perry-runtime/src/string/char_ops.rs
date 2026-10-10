@@ -482,7 +482,7 @@ pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
             buf.as_ptr(),
             3,
             1,
-            STRING_FLAG_VALID_WTF8 | STRING_FLAG_HAS_LONE_SURROGATES,
+            STRING_FLAG_WTF8_VALIDATED | STRING_FLAG_HAS_LONE_SURROGATES,
         );
     }
     // BMP, non-surrogate → a valid Unicode scalar value.
@@ -493,7 +493,7 @@ pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
         encoded.as_ptr(),
         encoded.len() as u32,
         1,
-        STRING_FLAG_VALID_WTF8,
+        STRING_FLAG_WTF8_VALIDATED,
     )
 }
 
@@ -593,7 +593,7 @@ pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeade
     }
     let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
     let units = cps.iter().map(|&cp| if cp > 0xffff { 2 } else { 1 }).sum();
-    let flags = STRING_FLAG_VALID_WTF8
+    let flags = STRING_FLAG_WTF8_VALIDATED
         | if has_lone_surrogate {
             STRING_FLAG_HAS_LONE_SURROGATES
         } else {
@@ -640,7 +640,7 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
         encoded.as_ptr(),
         encoded.len() as u32,
         2,
-        STRING_FLAG_VALID_WTF8,
+        STRING_FLAG_WTF8_VALIDATED,
     )
 }
 
@@ -666,7 +666,7 @@ pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
     }
     let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
     let units = cps.iter().map(|&cp| if cp > 0xffff { 2 } else { 1 }).sum();
-    let flags = STRING_FLAG_VALID_WTF8
+    let flags = STRING_FLAG_WTF8_VALIDATED
         | if has_lone_surrogate {
             STRING_FLAG_HAS_LONE_SURROGATES
         } else {

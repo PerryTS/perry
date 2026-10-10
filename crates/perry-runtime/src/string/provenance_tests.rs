@@ -1,7 +1,7 @@
 use super::*;
 
 fn proven(s: *const StringHeader) -> bool {
-    unsafe { (*s).flags & STRING_FLAG_VALID_WTF8 != 0 }
+    unsafe { (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0 }
 }
 
 fn heap(text: &str) -> *mut StringHeader {
@@ -96,7 +96,7 @@ fn index_conversion_matches_saturation_and_numeric_coercion() {
         (-2147483648.9, i32::MIN),
     ] {
         assert_eq!(js_string_index_to_i32(n), expected);
-        assert_eq!(js_string_position_to_index(n), expected);
+        assert_eq!(slice_ops::js_string_position_to_index(n), expected);
     }
     // Negative control for the numeric path: ToNumber still runs on strings.
     assert_eq!(

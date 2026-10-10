@@ -35,7 +35,7 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
             start as usize,
             end - start,
             end - start,
-            STRING_FLAG_VALID_WTF8,
+            STRING_FLAG_WTF8_VALIDATED,
         );
     }
     let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
@@ -60,7 +60,7 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
     };
     if !first.low && !last.low {
         let part = &bytes[first.byte..last.byte];
-        let flags = (unsafe { (*s).flags } & STRING_FLAG_VALID_WTF8)
+        let flags = (unsafe { (*s).flags } & STRING_FLAG_WTF8_VALIDATED)
             | if unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0
                 && bytes_have_lone_surrogate(part)
             {
@@ -89,6 +89,6 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
         out.as_ptr(),
         out.len() as u32,
         end - start,
-        STRING_FLAG_HAS_LONE_SURROGATES | (unsafe { (*s).flags } & STRING_FLAG_VALID_WTF8),
+        STRING_FLAG_HAS_LONE_SURROGATES | (unsafe { (*s).flags } & STRING_FLAG_WTF8_VALIDATED),
     )
 }
