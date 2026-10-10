@@ -1,0 +1,1 @@
+Proven call-free numeric array for-of loops now read their source through the existing poll-refreshed receiver descriptor. This removes the per-element volatile stack-record payload reload while preserving the record's rooted custody at safepoints and protocol edges.
