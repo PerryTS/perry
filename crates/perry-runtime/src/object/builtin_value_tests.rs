@@ -97,7 +97,7 @@ fn shared_constructor_identity_is_birth_data_not_public_name() {
     ));
     let index = GLOBAL_THIS_BUILTIN_CONSTRUCTORS
         .iter()
-        .position(|name| *name == "Uint8Array")
+        .position(|decl| decl.name == "Uint8Array")
         .unwrap();
     ctor.with_mut_ptr(|ptr| {
         crate::closure::js_closure_set_capture_bits(

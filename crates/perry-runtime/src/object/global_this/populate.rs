@@ -1,5 +1,44 @@
 use super::*;
 
+/// Apply the builtin's declared identity and its members' declared permanent
+/// images to the finished holder. No public name participates in either fact.
+fn finish_builtin_prototype(
+    declaration: &BuiltinConstructorDeclaration,
+    proto_obj: *mut ObjectHeader,
+) {
+    // These ordinary native receivers carry CLASS identities, just
+    // like declared-class instances. Publish the intrinsic holder in
+    // the identity's GC-traced word when it becomes available.
+    if let Some(class) = declaration.prototype_class {
+        crate::object::shapes::write_identity_word(
+            crate::object::shapes::PROTO_ID_CLASS | u64::from(class),
+            crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
+        );
+    }
+    // Every builtin prototype, after the fit (its live-bound
+    // transition keeps no ConstFn lane): the shape names the body of
+    // each member whose function info declares a permanent image
+    // (`FN_PERMANENT_IMAGE`), as an ordinary key-add of that function
+    // object would. The declaration on the member decides, never the
+    // prototype's name; a store or delete of the member revokes its
+    // lane (a new ShapeId).
+    // SAFETY: the live, just-populated prototype.
+    unsafe {
+        crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
+        // Some native prototypes own symbol slots through an ordinary
+        // descriptor holder. Its members carry the same declarations.
+        if let Some(holder) = crate::object::shaped_symbols::owner(proto_obj as usize) {
+            if holder != proto_obj {
+                crate::object::shapes::learn_object_constfn_lanes(holder, |_, _| true);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "declaration_tests.rs"]
+mod declaration_tests;
+
 /// Populate the freshly-allocated globalThis singleton with built-in
 /// constructor / namespace properties. Called exactly once from the CAS
 /// winner in `js_get_global_this`. Constructors get a ClosureHeader-
@@ -131,7 +170,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // so these are populated before the subclass iterations consume them.
     let mut error_ctor_bits: Option<u64> = None;
     let mut error_proto_bits: Option<u64> = None;
-    for (identity_index, name) in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied().enumerate() {
+    for (identity_index, declaration) in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().enumerate() {
+        let name = declaration.name;
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
             let name_key =
@@ -197,75 +237,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             }
             continue;
         }
-        let info = match name {
-            "Array" => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)),
-            // #10423: `F(p, body)` through a `Function` value creates a
-            // function, exactly like `new F(p, body)`.
-            "Function" => {
-                crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0))
-            }
-            "String" => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)),
-            // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
-            // global value coerce like the bare-call lowering does.
-            "Number" => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)),
-            "Boolean" => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)),
-            "BigInt" => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)),
-            "Symbol" => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)),
-            "Error" => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)),
-            "TypeError" => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)),
-            "RangeError" => {
-                crate::fn_info!(range_error_constructor_call_thunk, 1; with_declared(1))
-            }
-            "ReferenceError" => {
-                crate::fn_info!(reference_error_constructor_call_thunk, 1; with_declared(1))
-            }
-            "SyntaxError" => {
-                crate::fn_info!(syntax_error_constructor_call_thunk, 1; with_declared(1))
-            }
-            "EvalError" => crate::fn_info!(eval_error_constructor_call_thunk, 1; with_declared(1)),
-            "URIError" => crate::fn_info!(uri_error_constructor_call_thunk, 1; with_declared(1)),
-            "MessageChannel" => {
-                crate::fn_info!(crate::messaging::js_message_channel_constructor_call_error, 0; with_declared(0))
-            }
-            "MessagePort" => {
-                crate::fn_info!(crate::messaging::js_message_port_constructor_call_error, 0; with_declared(0))
-            }
-            "BroadcastChannel" => {
-                crate::fn_info!(crate::messaging::js_broadcast_channel_constructor_call_error, 1; with_declared(1))
-            }
-            "Date" => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)),
-            "Blob" => crate::fn_info!(global_this_blob_thunk, 2; with_declared(2)),
-            "File" => crate::fn_info!(global_this_file_thunk, 3; with_declared(3)),
-            "Headers" => crate::fn_info!(global_this_headers_thunk, 1; with_declared(1)),
-            "Request" => crate::fn_info!(global_this_request_thunk, 2; with_declared(2)),
-            "Response" => crate::fn_info!(global_this_response_thunk, 2; with_declared(2)),
-            "URLPattern" => {
-                crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2))
-            }
-            "Storage" => {
-                crate::fn_info!(crate::web_storage::storage_constructor_illegal, 0; with_declared(0))
-            }
-            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
-                crate::fn_info!(webcrypto_illegal_constructor_thunk, 0)
-            }
-            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-            | "BigInt64Array" | "BigUint64Array" => {
-                crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0))
-            }
-            // #4569: collection constructors throw when called without `new`.
-            "RegExp" => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)),
-            "Map" => crate::fn_info!(map_constructor_call_thunk, 1),
-            "Set" => crate::fn_info!(set_constructor_call_thunk, 1),
-            "WeakMap" => crate::fn_info!(weak_map_constructor_call_thunk, 1),
-            "WeakSet" => crate::fn_info!(weak_set_constructor_call_thunk, 1),
-            "WeakRef" => crate::fn_info!(weak_ref_constructor_call_thunk, 1),
-            "Promise" => crate::fn_info!(promise_constructor_call_thunk, 1),
-            "ArrayBuffer" | "SharedArrayBuffer" | "DataView" => {
-                crate::fn_info!(construct_only_builtin_call_thunk, 0)
-            }
-            _ => crate::fn_info!(global_this_builtin_noop_thunk, 1),
-        };
+        let info = declaration.info as *const crate::closure::JsFunctionInfo;
         // A shared body needs its intrinsic declaration as immutable input.
         // The existing capture storage owns the scalar; no table or public
         // property lookup participates in constructor identity.
@@ -388,14 +360,16 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 );
             }
             crate::event_target::prototype::install_constructor_constants(name, closure_ptr.cast());
-            if name == "Function" {
+            if let Some(serial) = declaration.prototype_serial {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.
                 unsafe {
                     crate::object::proto_validity::assign_intrinsic_prototype_serial(
                         proto_obj as usize,
-                        crate::closure::shape::INTRINSIC_SERIAL_FUNCTION,
+                        serial,
                     );
                 }
+            }
+            if name == "Function" {
                 crate::closure::shape::FUNCTION_PROTOTYPE_PTR
                     .store(proto_obj as i64, std::sync::atomic::Ordering::Release);
             }
@@ -544,33 +518,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
                 unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
             }
-            // These ordinary native receivers carry CLASS identities, just
-            // like declared-class instances. Publish the intrinsic holder in
-            // the identity's GC-traced word when it becomes available.
-            let weak_class = match name {
-                "WeakMap" => Some(crate::weakref::CLASS_ID_WEAKMAP),
-                "WeakSet" => Some(crate::weakref::CLASS_ID_WEAKSET),
-                "WeakRef" => Some(crate::weakref::CLASS_ID_WEAKREF),
-                "FinalizationRegistry" => Some(crate::weakref::CLASS_ID_FINALIZATION_REGISTRY),
-                _ => None,
-            };
-            if let Some(class) = weak_class {
-                crate::object::shapes::write_identity_word(
-                    crate::object::shapes::PROTO_ID_CLASS | u64::from(class),
-                    crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
-                );
-            }
-            // Every builtin prototype, after the fit (its live-bound
-            // transition keeps no ConstFn lane): the shape names the body of
-            // each member whose function info declares a permanent image
-            // (`FN_PERMANENT_IMAGE`), as an ordinary key-add of that function
-            // object would. The declaration on the member decides, never the
-            // prototype's name; a store or delete of the member revokes its
-            // lane (a new ShapeId).
-            // SAFETY: the live, just-populated prototype.
-            unsafe {
-                crate::object::shapes::learn_object_constfn_lanes(proto_obj, |_, _| true);
-            }
+            finish_builtin_prototype(declaration, proto_obj);
         }
         let name_bytes = name.as_bytes();
         let name_key =

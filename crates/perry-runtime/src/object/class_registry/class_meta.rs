@@ -438,7 +438,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         }
         GLOBAL_THIS_BUILTIN_CONSTRUCTORS
             .get(index as usize - 1)
-            .copied()
+            .map(|decl| decl.name)
     }
 }
 

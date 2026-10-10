@@ -633,14 +633,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-            // Descriptor edits during intrinsic construction now share this
-            // holder. Learn the finished shape, after its last slot/attribute edit.
-            unsafe {
-                super::super::shapes::learn_object_constfn_lanes(
-                    super::super::shaped_symbols::owner(proto_obj as usize).unwrap(),
-                    |_, bits| bits == values.get_nanbox_f64().to_bits(),
-                );
-            }
         }
         "ArrayBuffer" => {
             install_proto_method(
