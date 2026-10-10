@@ -359,6 +359,11 @@ pub const FN_REST_USER_AND_ARGUMENTS: u32 = 1 << 2;
 /// [`JsNativeArgsBody`] `(callee, this, args, len)`: no array is built for
 /// them. `rest_fixed` is its JS-visible declared count.
 pub const FN_REST_NATIVE_ARGS: u32 = 1 << 16;
+/// The builtin body resolves an Array `this` to its live forwarding head
+/// before using it. A receiver-validated site may supply the head it already
+/// proved, avoiding a second walk. This does not waive its descriptor,
+/// prototype, frozen or extensibility checks, or change generic callers.
+pub const FN_RESOLVES_ARRAY_THIS: u32 = 1 << 17;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
     FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;

@@ -477,7 +477,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "pop",
-                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
                 0,
             );
             install_proto_method(
@@ -495,19 +495,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "push",
-                crate::fn_info!(array_prototype_push_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_push_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "unshift",
-                crate::fn_info!(array_prototype_unshift_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_unshift_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "splice",
-                crate::fn_info!(array_prototype_splice_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_splice_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             // #6908: `fill` / `copyWithin` get real thunks too — a Proxy
@@ -517,13 +517,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "fill",
-                crate::fn_info!(array_prototype_fill_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_fill_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "copyWithin",
-                crate::fn_info!(array_prototype_copy_within_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_copy_within_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             // `sort` / `concat` get real thunks too: a borrowed
@@ -542,72 +542,72 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 14] = [
                 (
                     "forEach",
-                    crate::fn_info!(array_proto_forEach_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "map",
-                    crate::fn_info!(array_proto_map_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "filter",
-                    crate::fn_info!(array_proto_filter_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "some",
-                    crate::fn_info!(array_proto_some_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_some_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "every",
-                    crate::fn_info!(array_proto_every_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_every_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "find",
-                    crate::fn_info!(array_proto_find_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_find_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findIndex",
-                    crate::fn_info!(array_proto_findIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_findIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLast",
-                    crate::fn_info!(array_proto_findLast_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_findLast_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLastIndex",
-                    crate::fn_info!(array_proto_findLastIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_findLastIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduce",
-                    crate::fn_info!(array_proto_reduce_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_reduce_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduceRight",
-                    crate::fn_info!(array_proto_reduceRight_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_reduceRight_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(array_proto_indexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "lastIndexOf",
-                    crate::fn_info!(array_proto_lastIndexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_lastIndexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "includes",
-                    crate::fn_info!(array_proto_includes_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(native_args array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];
@@ -629,7 +629,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "concat",
-                crate::fn_info!(array_prototype_concat_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args array_prototype_concat_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

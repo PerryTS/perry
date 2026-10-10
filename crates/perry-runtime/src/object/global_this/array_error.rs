@@ -806,6 +806,21 @@ pub(crate) extern "C" fn array_prototype_pop_thunk(
     _a: f64,
 ) -> f64 {
     let this = this.as_f64();
+    // A method site can already have resolved this head. Enter the public
+    // pop body directly on that layout; it retains all descriptor, hole,
+    // prototype-index and integrity guards. Other receivers keep normalization.
+    let bits = this.to_bits();
+    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            {
+                let array = addr as *mut crate::array::ArrayHeader;
+                return crate::array::js_array_pop_f64(array);
+            }
+        }
+    }
     crate::array::array_proto_mutator(this, "pop", std::ptr::null(), 0)
 }
 pub(crate) extern "C" fn array_prototype_shift_thunk(
@@ -827,28 +842,60 @@ pub(crate) extern "C" fn array_prototype_reverse_thunk(
 pub(crate) extern "C" fn array_prototype_push_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
-    let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
-    crate::array::array_proto_mutator(this, "push", args.as_ptr(), args.len())
+    // Preserve indexed Set before length Set, including their error order.
+    // Reuse the ordinary dispatcher's spec body for the common one-item call
+    // and the existing strict length Set for an empty argument list.
+    let bits = this.bits();
+    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+            if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+                let array = addr as *mut crate::array::ArrayHeader;
+                // The ordinary dispatcher renders the rejected NEW index
+                // before its spec helper's non-writable length check.
+                let frozen = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+                    header._reserved & crate::gc::OBJ_FLAG_FROZEN != 0
+                } else {
+                    crate::array::array_is_frozen(array)
+                };
+                if argc != 0 && frozen {
+                    crate::array::throw_non_extensible_array_push(array);
+                }
+                if argc == 1 && !args.is_null() {
+                    let array = crate::array::js_array_push_f64_spec(array, unsafe { *args });
+                    return crate::array::js_array_length(array) as f64;
+                }
+                if argc == 0 {
+                    let length = crate::array::js_array_length(array) as f64;
+                    crate::array::js_array_set_length_strict(array, length);
+                    return length;
+                }
+            }
+        }
+    }
+    crate::array::array_proto_mutator(this.as_f64(), "push", args, argc)
 }
 pub(crate) extern "C" fn array_prototype_unshift_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
+    let args = unsafe { native_args(args, argc) };
     crate::array::array_proto_mutator(this, "unshift", args.as_ptr(), args.len())
 }
 pub(crate) extern "C" fn array_prototype_splice_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
+    let args = unsafe { native_args(args, argc) };
     crate::array::array_proto_mutator(this, "splice", args.as_ptr(), args.len())
 }
 pub(crate) extern "C" fn array_prototype_sort_thunk(
@@ -871,10 +918,11 @@ pub(crate) extern "C" fn array_prototype_sort_thunk(
 pub(crate) extern "C" fn array_prototype_fill_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
+    let args = unsafe { native_args(args, argc) };
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let value = args.first().copied().unwrap_or(undefined);
     let (has_start, start) = match args.get(1) {
@@ -890,10 +938,11 @@ pub(crate) extern "C" fn array_prototype_fill_thunk(
 pub(crate) extern "C" fn array_prototype_copy_within_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
+    let args = unsafe { native_args(args, argc) };
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let target = args.first().copied().unwrap_or(undefined);
     let start = args.get(1).copied().unwrap_or(undefined);
@@ -911,18 +960,19 @@ pub(crate) extern "C" fn array_prototype_copy_within_thunk(
 /// reference, or a method reached through an object whose [[Prototype]] chain
 /// contains a real array (`foo.prototype = new Array(…)`; test262
 /// filter/15.4.4.20-6-*, some/15.4.4.17-8-*) — runs the real algorithm
-/// instead of returning garbage. Rest-arg shape (like `push`/`splice` above)
-/// keeps the closure call convention independent of the spec `.length`.
+/// instead of returning garbage. The native argument-buffer ABI (like
+/// `push`/`splice` above) keeps the call independent of the spec `.length`.
 macro_rules! array_proto_arraylike_cb_thunk {
     ($name:ident, $engine:path) => {
         #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
-            rest: f64,
+            args: *const f64,
+            argc: usize,
         ) -> f64 {
             let this = this.as_f64();
-            let args = global_this_rest_array_values(rest);
+            let args = unsafe { native_args(args, argc) };
             let a = |i: usize| {
                 args.get(i)
                     .copied()
@@ -960,10 +1010,11 @@ macro_rules! array_proto_arraylike_optarg_thunk {
         pub(crate) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
-            rest: f64,
+            args: *const f64,
+            argc: usize,
         ) -> f64 {
             let this = this.as_f64();
-            let args = global_this_rest_array_values(rest);
+            let args = unsafe { native_args(args, argc) };
             let a = |i: usize| {
                 args.get(i)
                     .copied()
@@ -990,10 +1041,11 @@ macro_rules! array_proto_arraylike_search_thunk {
         pub(crate) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
-            rest: f64,
+            args: *const f64,
+            argc: usize,
         ) -> f64 {
             let this = this.as_f64();
-            let args = global_this_rest_array_values(rest);
+            let args = unsafe { native_args(args, argc) };
             let a = |i: usize| {
                 args.get(i)
                     .copied()
@@ -1049,10 +1101,11 @@ pub(crate) extern "C" fn array_prototype_to_string_thunk(
 pub(crate) extern "C" fn array_prototype_concat_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     let this = this.as_f64();
-    let args = global_this_rest_array_values(rest);
+    let args = unsafe { native_args(args, argc) };
     crate::array::js_arraylike_concat(this, args.as_ptr(), args.len() as i32)
 }
 
