@@ -135,3 +135,57 @@ fn a_non_regexp_receiver_never_takes_the_direct_entry() {
         );
     });
 }
+
+/// The direct entry is the builtin `test` itself, not a second search: for
+/// every flag combination, `lastIndex` value and heap subject (one past
+/// 64 KiB), it answers and leaves `lastIndex` exactly as the generic thunk
+/// does on an identical receiver.
+#[test]
+fn the_direct_entry_answers_as_the_generic_test() {
+    in_fresh_realm(|| {
+        let long = format!(
+            "{}needle{}needle",
+            "a".repeat(64 * 1024 + 7),
+            "b".repeat(100)
+        );
+        let subjects = [
+            "a heap subject with a needle in it".to_string(),
+            long,
+            "a heap subject with no match at all".to_string(),
+        ];
+        for flags in ["", "g", "y", "gy"] {
+            for subject in &subjects {
+                for start in [0.0, 3.0, 65_543.0, 65_549.0, 1e12, -1.0] {
+                    let mut seen = Vec::new();
+                    for direct_entry in [false, true] {
+                        let re = crate::regex::test_construct_regexp_and_exec_once("needle", flags);
+                        crate::regex::set_last_index(re, start);
+                        let s = crate::value::js_nanbox_string(crate::string::js_string_from_str(
+                            subject,
+                        ) as i64);
+                        let this = crate::closure::JsThis::from_f64(js_nanbox_pointer(re as i64));
+                        let matched = if direct_entry {
+                            regex_proto_test_direct(std::ptr::null(), this, s)
+                        } else {
+                            super::regex_proto_thunks::regex_proto_test_thunk(
+                                std::ptr::null(),
+                                this,
+                                s,
+                            )
+                        };
+                        seen.push((
+                            matched.to_bits(),
+                            crate::regex::get_last_index(re).to_bits(),
+                        ));
+                    }
+                    assert_eq!(
+                        seen[0],
+                        seen[1],
+                        "/needle/{flags} lastIndex {start} over {} units: direct vs generic",
+                        subject.len()
+                    );
+                }
+            }
+        }
+    });
+}

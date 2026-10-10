@@ -547,6 +547,7 @@ pub(crate) fn execute_rooted(
         regexp(receiver),
         input.with_const_ptr::<StringHeader, _>(|s| s),
         stateful,
+        super::get_last_index(regexp(receiver)),
     )?
     .map(Start::at) else {
         return Ok(None);
@@ -666,8 +667,9 @@ pub(crate) fn execute_rooted(
 /// string's own bytes, and the `lastIndex` update of a g/y RegExp. Returns the
 /// full match and where the search stood, or `None` for no match.
 ///
-/// `re` is a branded RegExp whose immutable data is `data`, and `input` a heap
-/// string, all at their current addresses: the caller runs nothing that can
+/// `re` is a branded RegExp whose immutable data is `data`, `input` a heap
+/// string, and `last_index` the value of `re`'s own `lastIndex` read with
+/// nothing run since, all at their current addresses: the caller runs nothing that can
 /// collect between reading them and this call. Nothing here roots, copies or
 /// marks anything unless a non-Number `lastIndex` runs user code or the
 /// search polls (`perex_owner::InPlace`), so a short `test` holds no handle at
@@ -681,6 +683,7 @@ pub(crate) fn search_builtin<'mem>(
     re: *mut RegExpHeader,
     data: *const super::RegExpData,
     input: *const StringHeader,
+    last_index: f64,
     mode: CaptureMode,
     budget: &mut Budget,
     memory: &'mem MemoryBudget,
@@ -688,7 +691,7 @@ pub(crate) fn search_builtin<'mem>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<Option<(Span, Position)>, EngineError> {
     let stateful = unsafe { (*data).global || (*data).sticky };
-    let Some(start) = exec_start(re, input, stateful)? else {
+    let Some(start) = exec_start(re, input, stateful, last_index)? else {
         return Ok(None);
     };
     let (re, data, input) = match start {
@@ -709,47 +712,6 @@ pub(crate) fn search_builtin<'mem>(
         captures,
         poll,
     )
-}
-
-/// [`search_builtin`] for a receiver whose caller proved, from its shape,
-/// that `lastIndex` is an own data property in inline slot 1, an `Any` lane
-/// (`regex_proto_thunks::method_site_test_code`). For a RegExp that is
-/// neither global nor sticky a Number there is all RegExpBuiltinExec needs
-/// of it: ToLength of a Number runs nothing and the search starts at 0, so no
-/// read site is consulted. Anything else is the general start.
-#[allow(clippy::too_many_arguments)]
-#[inline(always)]
-pub(crate) fn search_builtin_proven<'mem>(
-    re: *mut RegExpHeader,
-    data: *const super::RegExpData,
-    input: *const StringHeader,
-    mode: CaptureMode,
-    budget: &mut Budget,
-    memory: &'mem MemoryBudget,
-    captures: &mut Option<host::Captures<'mem>>,
-    poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<Option<(Span, Position)>, EngineError> {
-    // SAFETY: the caller's shape proof; `data` is that receiver's live data.
-    unsafe {
-        if !(*data).global && !(*data).sticky {
-            let slots = (re as *const u8).add(std::mem::size_of::<RegExpHeader>()) as *const u64;
-            if crate::value::JSValue::from_bits(slots.add(1).read()).is_number() {
-                return search_from(
-                    re,
-                    (*data).perex_program,
-                    input,
-                    0,
-                    false,
-                    mode,
-                    budget,
-                    memory,
-                    captures,
-                    poll,
-                );
-            }
-        }
-    }
-    search_builtin(re, data, input, mode, budget, memory, captures, poll)
 }
 
 /// [`search_builtin`] from a start [`exec_start`] established, over the
@@ -799,15 +761,17 @@ impl Start {
     }
 }
 
-/// RegExpBuiltinExec steps 4-12: the search's start. `None` when the start is
-/// past the end, after a g/y RegExp's `lastIndex` was reset to 0.
+/// RegExpBuiltinExec steps 4-12: the search's start from `stored`, the value
+/// `Get(R, "lastIndex")` returned. `None` when the start is past the end,
+/// after a g/y RegExp's `lastIndex` was reset to 0.
 #[inline(always)]
 fn exec_start(
     re: *mut RegExpHeader,
     input: *const StringHeader,
     stateful: bool,
+    stored: f64,
 ) -> Result<Option<Start>, EngineError> {
-    let stored = crate::value::JSValue::from_bits(super::get_last_index(re).to_bits());
+    let stored = crate::value::JSValue::from_bits(stored.to_bits());
     // ToLength(Get(R, "lastIndex")) is observable only when it is not a
     // Number (it may call `valueOf`); a Number matters only to g/y.
     let start = if stored.is_number() {
