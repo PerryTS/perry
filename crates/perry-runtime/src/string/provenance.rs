@@ -70,5 +70,6 @@ fn valid_wtf8_metadata(bytes: &[u8]) -> Option<(u32, bool)> {
 /// certify an unknown operand. Empty strings use the proven identity flag.
 #[inline]
 pub(super) fn combine_string_flags(a: u32, b: u32) -> u32 {
-    ((a | b) & !STRING_FLAG_WTF8_VALIDATED) | (a & b & STRING_FLAG_WTF8_VALIDATED)
+    let proofs = STRING_FLAG_WTF8_VALIDATED | STRING_FLAG_JSON_ESCAPE_FREE;
+    ((a | b) & !proofs) | (a & b & proofs)
 }

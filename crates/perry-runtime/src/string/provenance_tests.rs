@@ -28,6 +28,29 @@ fn construction_proves_utf8_and_generalized_wtf8() {
     assert_eq!(js_string_char_code_at(s, 2), 0xdfff as f64);
 }
 
+#[test]
+fn concat_intersects_json_escape_proof_independently_of_encoding_proof() {
+    let safe = heap("safe");
+    unsafe {
+        (*safe).flags |= STRING_FLAG_JSON_ESCAPE_FREE;
+    }
+    for text in ["\"", "\n", "\\"] {
+        let unsafe_to_quote = heap(text);
+        let joined = js_string_concat(safe, unsafe_to_quote);
+        assert!(proven(joined));
+        assert_eq!(unsafe { (*joined).flags } & STRING_FLAG_JSON_ESCAPE_FREE, 0);
+        let boxed = js_string_concat_box(
+            crate::value::js_nanbox_string(safe as i64),
+            crate::value::js_nanbox_string(unsafe_to_quote as i64),
+        );
+        let joined = crate::value::JSValue::from_bits(boxed.to_bits()).as_string_ptr();
+        assert!(proven(joined));
+        assert_eq!(unsafe { (*joined).flags } & STRING_FLAG_JSON_ESCAPE_FREE, 0);
+    }
+    let joined = js_string_concat(safe, safe);
+    assert_ne!(unsafe { (*joined).flags } & STRING_FLAG_JSON_ESCAPE_FREE, 0);
+}
+
 #[cfg(feature = "regex-engine")]
 #[test]
 fn raw_byte_mutations_agree_with_the_regex_encoding_contract() {
