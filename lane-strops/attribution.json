@@ -1,0 +1,50 @@
+{
+  "tscwork": {
+    "concat": 0.08,
+    "index coercion": 0.6900000000000001,
+    "search + char access": 0.3,
+    "number formatting": 0,
+    "intern": 1.1400000000000001,
+    "UTF8 validation": 0.77
+  },
+  "qs_parse": {
+    "concat": 0.41,
+    "index coercion": 1.0899999999999999,
+    "search + char access": 0.67,
+    "number formatting": 0,
+    "intern": 1.29,
+    "UTF8 validation": 1.24
+  },
+  "qs_stringify": {
+    "concat": 3.3,
+    "index coercion": 0.72,
+    "search + char access": 0.34,
+    "number formatting": 0,
+    "intern": 0.55,
+    "UTF8 validation": 0.5
+  },
+  "commander": {
+    "concat": 0.79,
+    "index coercion": 0.16,
+    "search + char access": 0.16,
+    "number formatting": 0.16,
+    "intern": 2.1500000000000004,
+    "UTF8 validation": 0.94
+  },
+  "effect": {
+    "concat": 0.09,
+    "index coercion": 0.53,
+    "search + char access": 0,
+    "number formatting": 0,
+    "intern": 0.48,
+    "UTF8 validation": 1.25
+  },
+  "fastify_inject": {
+    "concat": 0.39,
+    "index coercion": 0.27,
+    "search + char access": 0.06,
+    "number formatting": 0.02,
+    "intern": 1.1400000000000001,
+    "UTF8 validation": 1.24
+  }
+}
