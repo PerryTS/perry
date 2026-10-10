@@ -131,7 +131,7 @@ fn every_registered_global_store_omits_redundant_root_shading() {
 
 fn capture_store_ir() -> String {
     let mut module = Module::new("capture_cost");
-    module.init = vec![
+    let body = vec![
         Stmt::Let {
             id: 1,
             name: "captured".into(),
@@ -164,6 +164,22 @@ fn capture_store_ir() -> String {
             }),
         },
     ];
+    module.functions.push(Function {
+        id: 1,
+        name: "capture_probe".into(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Any,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
     String::from_utf8(
         compile_module(
             &module,
@@ -187,7 +203,7 @@ fn runtime_capture_setter_is_the_only_barrier_owner() {
     let ir = capture_store_ir();
     assert!(
         one_capture_barrier_owner(&ir),
-        "capture setter must own the precise barrier"
+        "capture setter must own the precise barrier:\n{ir}"
     );
     // A duplicate opaque barrier must turn the same verdict red. The setter
     // call's liveness assertion prevents an empty probe from passing.
