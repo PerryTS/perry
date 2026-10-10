@@ -25,7 +25,8 @@ out = root / 'gaps' / a.arm
 out.mkdir(parents=True, exist_ok=True)
 env = env_for(root, a.arm)
 compiler = Path(env['CARGO_TARGET_DIR']) / 'release/perry'
-rows = {}
+checkpoint = out / 'results.json'
+rows = json.loads(checkpoint.read_text()) if checkpoint.exists() else {}
 for name in a.tests:
     fixture = source / 'test-files' / (name + '.ts')
     binary = out / name
@@ -53,6 +54,6 @@ for name in a.tests:
         moving = re.search(rb'copying_minors=(\d+) moved_objects=(\d+)', actual.stderr)
         if moving:
             rows[name].update(copying_minors=int(moving[1]), moved_objects=int(moving[2]))
-    (out / 'results.json').write_text(json.dumps(rows, indent=2))
+    checkpoint.write_text(json.dumps(rows, indent=2))
     print(a.arm, name, rows[name], flush=True)
 raise SystemExit(not all(row['parity'] for row in rows.values()))
