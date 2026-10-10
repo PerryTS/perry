@@ -509,8 +509,7 @@ fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
 /// The function's own `prototype` value, read through its ShapeId (#10507):
 /// `Some(Some(v))` the value, `Some(None)` no own `prototype` yet (a base
 /// shape: nothing materialized it), `None` the shape does not say (a
-/// FunctionDictionary or class function object, or a key outside the inline
-/// slots) and the caller asks the bag.
+/// class function object, or a property requiring ordinary Get).
 ///
 /// A keyed Function shape is minted from the bag's ordinary descriptor
 /// (`refresh_closure_shape`), so its key list and live inline bound are the
@@ -525,6 +524,14 @@ pub(crate) unsafe fn closure_own_prototype_by_shape(
     closure: *const ClosureHeader,
 ) -> Option<Option<f64>> {
     let id = (*closure).shape_id;
+    // FunctionDictionary describes the function's extra behavior, not an
+    // opaque property layout. Its bag still owns the live shape and can
+    // answer an own data read, including after an unrelated symbol, accessor
+    // or prototype change. Do not cache that answer under the shared function
+    // id: bag_get reads the bag's current keys, attributes and value.
+    if id == function_dictionary_shape() {
+        return super::props::bag_get(closure as usize, b"prototype").map(Some);
+    }
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
     // SAFETY: this agent's own cell; no reference to it outlives the read.
     let cached = PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot]);
@@ -769,6 +776,38 @@ mod tests {
             1.0f64.to_bits(),
         );
         assert_eq!(kind_of(c), Some(ShapeObjectKind::FunctionDictionary));
+    }
+
+    #[test]
+    fn dictionary_function_prototype_reads_the_live_bag_and_refuses_accessors() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let c = fresh(&PLAIN_BODY);
+        let proto = crate::object::js_object_alloc(0, 0);
+        let value = crate::value::js_nanbox_pointer(proto as i64);
+        closure_set_dynamic_prop(c as usize, "prototype", value);
+        crate::object::descriptor_state::set_accessor_descriptor(
+            c as usize,
+            "unrelated".to_string(),
+            crate::object::descriptor_state::AccessorDescriptor { get: 0, set: 0 },
+        );
+        assert_eq!(kind_of(c), Some(ShapeObjectKind::FunctionDictionary));
+        assert_eq!(
+            unsafe { closure_own_prototype_by_shape(c) }.map(|own| own.map(f64::to_bits)),
+            Some(Some(value.to_bits()))
+        );
+        // The function id stays dictionary while its own data slot changes.
+        closure_set_dynamic_prop(c as usize, "prototype", 17.0);
+        assert_eq!(
+            unsafe { closure_own_prototype_by_shape(c) },
+            Some(Some(17.0))
+        );
+        crate::object::descriptor_state::set_accessor_descriptor(
+            c as usize,
+            "prototype".to_string(),
+            crate::object::descriptor_state::AccessorDescriptor { get: 0, set: 0 },
+        );
+        assert_eq!(unsafe { closure_own_prototype_by_shape(c) }, None);
     }
 
     #[test]

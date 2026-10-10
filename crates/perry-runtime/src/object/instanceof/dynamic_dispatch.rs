@@ -64,6 +64,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         }
         return f64::from_bits(TAG_FALSE);
     }
+    let admit_closure = |rhs: f64| {
+        let value = crate::JSValue::from_bits(rhs.to_bits());
+        if !value.is_pointer() {
+            return None;
+        }
+        let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+        crate::closure::closure_info(closure).map(|info| (closure, info))
+    };
+    let mut rhs_closure = admit_closure(type_ref);
     // Spec step (InstanceofOperator): an OWN user-defined `@@hasInstance`
     // overrides even native constructor brand checks. The native generic hook
     // lives on Function.prototype, so the own-property gate distinguishes an
@@ -72,7 +81,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
-            if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
+            // A validated function already identifies its own-property holder.
+            // Symbols and symbol accessors both occupy that bag's key list;
+            // querying the generic owner/accessor/data towers repeats this
+            // admission. Class immediates and other representations retain
+            // their ordinary symbol query.
+            let owns_hook = if let Some((closure, _)) = rhs_closure {
+                let bag = unsafe { (*closure).props };
+                !bag.is_null()
+                    && unsafe { super::shaped_symbols::position(bag, hi_sym as usize).is_some() }
+            } else {
+                unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) }
+            };
+            if owns_hook {
                 // An own @@hasInstance getter can collect even when it returns
                 // undefined and ordinary dispatch continues. Refresh both
                 // operands before the callback or any later prototype check.
@@ -84,9 +105,54 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 };
                 value = lhs_h.get_nanbox_f64();
                 type_ref = rhs_h.get_nanbox_f64();
+                rhs_closure = admit_closure(type_ref);
                 if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value) {
                     return result;
                 }
+            }
+        }
+    }
+    // A primitive is an ordinary miss; a terminal ordinary receiver has a
+    // complete prototype chain. Test those facts before classifying the
+    // constructor: its actual prototype decides the terminal receiver's
+    // OrdinaryHasInstance without any native-body or native-brand dispatch.
+    // Bound functions still delegate to their target, and non-callable RHS
+    // values retain the general path's TypeError. Own hooks ran above.
+    let primitive = instanceof_lhs_is_primitive(value);
+    let terminal = terminal_prototype_id(value);
+    if primitive || terminal.is_some() {
+        if let Some((closure, info)) = rhs_closure {
+            // Classes retain their lifted @@hasInstance and evaluation-identity
+            // dispatch below. A non-class function needs no class admission.
+            if !crate::closure::shape::is_class_info(info) {
+                if info.code == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+                    let target = crate::closure::js_closure_get_capture_f64(closure, 0);
+                    return js_instanceof_dynamic(value, target);
+                }
+                if primitive {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                // The existing function shape can also prove an own data
+                // prototype. Reading its live slot is Leaf, so both shape
+                // proofs can complete without opening any handle scopes.
+                if let Some(Some(prototype)) =
+                    unsafe { crate::closure::shape::closure_own_prototype_by_shape(closure) }
+                {
+                    if let Some(matches) =
+                        terminal.and_then(|id| terminal_prototype_matches_id(id, prototype))
+                    {
+                        return f64::from_bits(if matches {
+                            crate::value::TAG_TRUE
+                        } else {
+                            TAG_FALSE
+                        });
+                    }
+                }
+                return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+                    crate::value::TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
             }
         }
     }
@@ -135,49 +201,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         } else {
             TAG_FALSE
         });
-    }
-    // A primitive is an ordinary miss; a terminal ordinary receiver has a
-    // complete prototype chain. Test those facts before classifying the
-    // constructor: its actual prototype decides the terminal receiver's
-    // OrdinaryHasInstance without any native-body or native-brand dispatch.
-    // Bound functions still delegate to their target, and non-callable RHS
-    // values retain the general path's TypeError. Own hooks ran above.
-    let primitive = instanceof_lhs_is_primitive(value);
-    if primitive || terminal_prototype_id(value).is_some() {
-        let rhs = crate::JSValue::from_bits(type_ref.to_bits());
-        if rhs.is_pointer() {
-            let closure = rhs.as_pointer::<crate::closure::ClosureHeader>();
-            // One validated info proves callability and exposes the existing
-            // bound-body sentinel; do not validate the same callee twice.
-            if let Some(info) = crate::closure::closure_info(closure) {
-                if info.code == crate::closure::BOUND_FUNCTION_FUNC_PTR {
-                    let target = crate::closure::js_closure_get_capture_f64(closure, 0);
-                    return js_instanceof_dynamic(value, target);
-                }
-                if primitive {
-                    return f64::from_bits(TAG_FALSE);
-                }
-                // The existing function shape can also prove an own data
-                // prototype. Reading its live slot is Leaf, so both shape
-                // proofs can complete without opening any handle scopes.
-                if let Some(Some(prototype)) =
-                    unsafe { crate::closure::shape::closure_own_prototype_by_shape(closure) }
-                {
-                    if let Some(matches) = terminal_prototype_matches(value, prototype) {
-                        return f64::from_bits(if matches {
-                            crate::value::TAG_TRUE
-                        } else {
-                            TAG_FALSE
-                        });
-                    }
-                }
-                return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
-                    crate::value::TAG_TRUE
-                } else {
-                    TAG_FALSE
-                });
-            }
-        }
     }
     // Class values take their existing exits above. An intrinsic's body
     // identity also proves it is callable and not a bind wrapper, so dispatch

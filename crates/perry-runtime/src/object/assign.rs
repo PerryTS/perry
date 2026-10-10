@@ -139,23 +139,25 @@ unsafe fn copy_positional_source(
         }) else {
             continue;
         };
-        let iter_scope = crate::gc::RuntimeHandleScope::new();
-        let val_h = iter_scope.root_nanbox_f64(value);
         let key_f64 = f64::from_bits(key_val.bits());
-        // The definition roots its own operands before it can allocate.
+        // The definition roots its own operands before it can allocate and
+        // a refusal is Leaf. Avoid a second handle scope around that store;
+        // only the fallback's key materialization needs the value rooted here.
         if define
             && !target_is_array
             && tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
                 super::define_own_data::define_own_data_from_shape(
                     crate::value::js_nanbox_pointer(target as i64),
                     key_f64,
-                    val_h.get_nanbox_f64(),
+                    value,
                 )
                 .is_some()
             })
         {
             continue;
         }
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let val_h = iter_scope.root_nanbox_f64(value);
         // The general store wants a heap key; an SSO key is materialized
         // (an allocation, so the value is read back through its root).
         let key_ptr =
@@ -388,15 +390,16 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     let Some(header) = crate::value::addr_class::try_read_gc_header(src_raw) else {
         return PositionalPlan::Refused;
     };
-    if header._reserved
-        & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
-        != 0
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            != 0
     {
         return PositionalPlan::Refused;
     }
     let class_id = (*src).class_id;
     if (class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id))
-        || !super::object_is_regular(src)
         || super::dictionary::is_dictionary(src)
         || super::string_wrapper::length(src_raw).is_some()
         || (class_id == 0 && crate::url::is_url_object_shape(src as *mut ObjectHeader))
@@ -448,7 +451,11 @@ unsafe fn positional_entry(
     i: usize,
     hide_private: bool,
 ) -> Option<(crate::JSValue, f64)> {
-    let key_val = crate::object::ObjectKeys::new(keys as *mut _, key_count as u32).get(i as u32);
+    // The plan capped this snapshot to the keys array's length and capacity.
+    // This is an internal key list, not a JavaScript array read: stores can
+    // replace the source's list, but cannot edit this rooted snapshot.
+    debug_assert!(i < key_count);
+    let key_val = crate::JSValue::from_bits(*crate::array::array_elements_ptr(keys).add(i));
     if !key_val.is_any_string()
         || (hide_private && crate::object::field_get_set::own_slot_hidden(src, i as u32, key_val))
     {

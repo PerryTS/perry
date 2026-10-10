@@ -441,7 +441,14 @@ fn ordinary_has_instance_prototype_walk_rooted(
 /// the evaluated RHS prototype, never recovered from a writable global name.
 #[inline]
 fn terminal_prototype_matches(value: f64, target: f64) -> Option<bool> {
-    match terminal_prototype_id(value)? {
+    terminal_prototype_matches_id(terminal_prototype_id(value)?, target)
+}
+
+/// The same comparison when the caller already proved the terminal identity
+/// and nothing since that proof can allocate or run JavaScript.
+#[inline]
+fn terminal_prototype_matches_id(identity: u64, target: f64) -> Option<bool> {
+    match identity {
         crate::object::shapes::PROTO_ID_NULL => Some(false),
         crate::object::shapes::PROTO_ID_DEFAULT => {
             let object_prototype = crate::array::object_prototype_addr_if_resolved();
