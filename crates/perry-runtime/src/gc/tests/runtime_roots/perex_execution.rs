@@ -397,7 +397,9 @@ fn perex_host_failures_release_scratch_and_preserve_consumed_work() {
     assert!(matches!(cancelled, Err(EngineError::Cancelled)));
     assert!(compile_work.remaining() < 100_000);
     assert_eq!(memory.live_bytes(), 0);
-    let program = compile(&scope, "(a+)", "");
+    // The lookahead keeps the lazy automaton out (it reads no lookaround): the
+    // failures below are the evaluator's scratch and work accounting.
+    let program = compile(&scope, "(a+)(?!b)", "");
     let input = subject(&scope, b"aaaa");
     let mut work = Budget::new(0);
     assert!(matches!(

@@ -570,6 +570,7 @@ pub(crate) fn execute_rooted(
                 subject,
                 start,
                 reuse.near(),
+                true,
                 mode,
                 budget,
                 memory,
@@ -577,7 +578,9 @@ pub(crate) fn execute_rooted(
                 &mut captures,
                 poll,
             )?;
-            reuse.near.set(Some(found.1));
+            if found.1.is_some() {
+                reuse.near.set(found.1);
+            }
             if stateful {
                 store_last_index(regexp(receiver), found.0.map_or(0, |full| full.end()))?;
             }
@@ -628,7 +631,7 @@ pub(crate) fn execute_rooted(
                     bound_subject,
                     bound_program,
                     &found,
-                    Some(position),
+                    position,
                     has_indices,
                     budget,
                     poll,
@@ -689,7 +692,7 @@ pub(crate) fn search_builtin<'mem>(
     memory: &'mem MemoryBudget,
     captures: &mut Option<host::Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<Option<(Span, Position)>, EngineError> {
+) -> Result<Option<(Span, Option<Position>)>, EngineError> {
     let stateful = unsafe { (*data).global || (*data).sticky };
     let Some(start) = exec_start(re, input, stateful, last_index)? else {
         return Ok(None);
@@ -730,7 +733,7 @@ fn search_from<'mem>(
     memory: &'mem MemoryBudget,
     captures: &mut Option<host::Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<Option<(Span, Position)>, EngineError> {
+) -> Result<Option<(Span, Option<Position>)>, EngineError> {
     let (found, position, re) = host::find_in_place(
         re, program, input, start,
         // Only g/y searches can start away from zero. A non-stateful call

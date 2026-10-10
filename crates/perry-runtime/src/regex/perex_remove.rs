@@ -91,7 +91,8 @@ pub(super) fn try_remove(
                 api::QUANTUM,
                 &mut host::poll,
             )?;
-            near = Some(position);
+            // The automaton answers without a position; keep the last one.
+            near = position.or(near);
             found
         };
         if global || sticky {

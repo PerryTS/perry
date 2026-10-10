@@ -318,7 +318,9 @@ fn perex_window_reads_original_allocation_after_collection_during_search() {
         })
         .unwrap();
     let subject = BoundSubject::new(owner).unwrap();
-    let program = bound_program(compile(&scope, "^😀$", "u"));
+    // The lookahead keeps the lazy automaton out (it reads no lookaround): this
+    // is the evaluator's search, whose polls between quanta this test is about.
+    let program = bound_program(compile(&scope, "^(?=😀)😀$", "u"));
     let memory = crate::regex::perex_memory::MemoryBudget::new(1 << 20);
     let mut budget = Budget::new(100_000);
     let mut polls = 0;
