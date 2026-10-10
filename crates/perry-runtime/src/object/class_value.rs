@@ -425,6 +425,9 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     for key in INTRINSIC_OWN_DATA_KEYS {
         install_intrinsic_own_data(class_id, key);
     }
+    // A worker realm that inherited this class's definition evaluation names
+    // its computed members now, before the prototype is born from them.
+    super::class_registry::inherited_evaluation::replay_inherited_evaluation(class_id);
     // MakeConstructor: `prototype` { !w, !e, !c } is created with the class,
     // after `length` and `name` and before every ClassBody static, so the own
     // key order is the bag's creation order.

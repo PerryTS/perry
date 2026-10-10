@@ -1,1 +1,3 @@
 Class method values and class declarations no longer live in side registries: method values are traced internal slots of the class holder (its function object), and declarations are static per-class descriptors in the image (#12300).
+
+A `perry/thread` worker (which never runs module init) now inherits the class definition evaluations its spawner sees: the keys of every computed instance member (strings, well-known, registered and unique symbols) are handed to the worker at spawn and re-registered when the worker mints the class, so workers see every member in ClassBody order, including symbol-keyed ones such as `Symbol.for(...)` methods that workers previously lost.
