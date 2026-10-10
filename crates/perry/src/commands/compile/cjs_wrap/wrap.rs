@@ -906,6 +906,59 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     let default_export_identifier = extract_single_module_exports_assignment(source)
         .filter(|name| hoisted_class_names.contains(name));
 
+    // Issue #4933 — flat-emit a `module.exports = <Class>` module that we
+    // could NOT hoist. The hoist refuses any class whose body references a
+    // top-level `const`/`let`/`var` (#2310 — moving the class out of the
+    // IIFE would sever its closure over that binding). For a default-export
+    // class this is fatal: with the class trapped inside the IIFE, the
+    // module's default becomes the opaque `_cjs` result, so compile.rs never
+    // registers class identity. The consumer's `import StackUtils` then gets
+    // a value whose static methods, `.prototype`, AND closure are all gone
+    // (`StackUtils.nodeInternals` / `.prototype.clean` read `undefined`).
+    //
+    // The IIFE exists only to give the body a function scope (so a CJS
+    // top-level `return` is legal). When the body has no top-level `return`
+    // we can drop the IIFE entirely and run the body at ESM module scope:
+    // the class becomes a real top-level declaration (`export default
+    // StackUtils` resolves to it with full identity), every sibling binding
+    // it closes over stays in scope, and statement order is preserved
+    // verbatim. We only take this path for the case that is *currently
+    // broken* (a top-level class that is the single `module.exports = X`
+    // target but did not hoist), so working packages are unaffected.
+    let flat_default_class = extract_single_module_exports_assignment(source).filter(|name| {
+        !hoisted_class_names.contains(name)
+            && top_level_class_names(source).iter().any(|c| c == name)
+            && !source_has_top_level_return(source)
+    });
+
+    // A named export whose name is a JS global-builtin VALUE (`Error`,
+    // `TypeError`, `Object`, `Promise`, …) and is NOT declared as a module
+    // binding in the body is the `module.exports = { Error: Error }` shape: the
+    // KEY collides with a global the IIFE body references freely. Emitting
+    // `export const Error = _cjs.Error;` puts a module-scope `Error` binding
+    // ahead of the global, so the body's `Error` (e.g. bluebird errors.js
+    // `inherits(SubError, Error)`) resolves to the `export const`, whose value
+    // `_cjs.Error` is `undefined` until the IIFE returns — `Parent.prototype`
+    // then threw `Cannot read properties of undefined (reading 'prototype')`.
+    // For these, surface the export through a MANGLED module-scope binding and
+    // re-export it under the original name (`const __cjsexp_Error = _cjs.Error;
+    // export { __cjsexp_Error as Error };`). The value still surfaces for named
+    // imports, but no `Error` binding shadows the global in the body.
+    let builtin_value_global_collision = |n: &str| -> bool {
+        is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
+    };
+    let export_snapshot = |n: &str| {
+        if flat_default_class.is_some() || builtin_value_global_collision(n) {
+            // Flat emission keeps the original bindings at module scope.
+            // Alias all snapshots, including destructuring and multi-declarator
+            // bindings the lexical scanner misses. Read the CJS property, which
+            // can differ from the same-named original binding.
+            format!("const __cjsexp_{n} = _cjs.{n};\nexport {{ __cjsexp_{n} as {n} }};")
+        } else {
+            format!("export const {n} = _cjs.{n};")
+        }
+    };
+
     let direct_class_exports = if hoisted_class_names.is_empty() {
         String::new()
     } else {
@@ -970,7 +1023,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                     // requires also need the actual CJS property: forwarding
                     // their import binding would bypass the branch and expose
                     // a dependency that the module never required.
-                    Some(format!("export const {name} = _cjs.{name};"))
+                    Some(export_snapshot(name))
                 } else {
                     Some(format!(
                         "export {{ {} as {} }};",
@@ -986,42 +1039,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|(n, _)| n.clone())
         .collect();
 
-    // A named export whose name is a JS global-builtin VALUE (`Error`,
-    // `TypeError`, `Object`, `Promise`, …) and is NOT declared as a module
-    // binding in the body is the `module.exports = { Error: Error }` shape: the
-    // KEY collides with a global the IIFE body references freely. Emitting
-    // `export const Error = _cjs.Error;` puts a module-scope `Error` binding
-    // ahead of the global, so the body's `Error` (e.g. bluebird errors.js
-    // `inherits(SubError, Error)`) resolves to the `export const`, whose value
-    // `_cjs.Error` is `undefined` until the IIFE returns — `Parent.prototype`
-    // then threw `Cannot read properties of undefined (reading 'prototype')`.
-    // For these, surface the export through a MANGLED module-scope binding and
-    // re-export it under the original name (`const __cjsexp_Error = _cjs.Error;
-    // export { __cjsexp_Error as Error };`). The value still surfaces for named
-    // imports, but no `Error` binding shadows the global in the body.
-    let builtin_value_global_collision = |n: &str| -> bool {
-        is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
-    };
-    let named_export_decls = if named_exports.is_empty() {
-        String::new()
-    } else {
-        named_exports
-            .iter()
-            .filter(|n| !hoisted_class_names.contains(n))
-            .filter(|n| !named_reexport_names.contains(n))
-            .map(|n| {
-                if builtin_value_global_collision(n) {
-                    format!(
-                        "const __cjsexp_{n} = _cjs.{n};\nexport {{ __cjsexp_{n} as {n} }};",
-                        n = n
-                    )
-                } else {
-                    format!("export const {} = _cjs.{};", n, n)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let named_export_decls = named_exports
+        .iter()
+        .filter(|n| !hoisted_class_names.contains(n))
+        .filter(|n| !named_reexport_names.contains(n))
+        .map(|n| export_snapshot(n))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // Refs #488 drizzle-sqlite: cross-file class inheritance bug.
     // The hoisted class block runs at module scope (so consumers can
@@ -1126,31 +1150,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         Some(name) => format!("export default {};", name),
         None => "export default _cjs;".to_string(),
     };
-
-    // Issue #4933 — flat-emit a `module.exports = <Class>` module that we
-    // could NOT hoist. The hoist refuses any class whose body references a
-    // top-level `const`/`let`/`var` (#2310 — moving the class out of the
-    // IIFE would sever its closure over that binding). For a default-export
-    // class this is fatal: with the class trapped inside the IIFE, the
-    // module's default becomes the opaque `_cjs` result, so compile.rs never
-    // registers class identity. The consumer's `import StackUtils` then gets
-    // a value whose static methods, `.prototype`, AND closure are all gone
-    // (`StackUtils.nodeInternals` / `.prototype.clean` read `undefined`).
-    //
-    // The IIFE exists only to give the body a function scope (so a CJS
-    // top-level `return` is legal). When the body has no top-level `return`
-    // we can drop the IIFE entirely and run the body at ESM module scope:
-    // the class becomes a real top-level declaration (`export default
-    // StackUtils` resolves to it with full identity), every sibling binding
-    // it closes over stays in scope, and statement order is preserved
-    // verbatim. We only take this path for the case that is *currently
-    // broken* (a top-level class that is the single `module.exports = X`
-    // target but did not hoist), so working packages are unaffected.
-    let flat_default_class = extract_single_module_exports_assignment(source).filter(|name| {
-        !hoisted_class_names.contains(name)
-            && top_level_class_names(source).iter().any(|c| c == name)
-            && !source_has_top_level_return(source)
-    });
 
     // #4872: ESM `export * from` declarations for every `__exportStar`
     // call detected above.
@@ -1447,6 +1446,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         // still carries any sibling classes we DID hoist; `{flat_class}` itself
         // was refused a hoist (it closes over an IIFE-local), so it stays in
         // `{body_for_iife}` and lands at module scope here unchanged.
+        // An explicit CJS property with the class's name already has its
+        // snapshot/re-export below. Do not export that name a second time.
+        let flat_class_named_export =
+            if named_exports.contains(flat_class) || named_reexport_names.contains(flat_class) {
+                String::new()
+            } else {
+                format!("export {{ {flat_class} }};")
+            };
         format!(
             r#"{imports}
 {import_aliases}
@@ -1458,7 +1465,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
 const _cjs = __cjs_module.exports;
 {path_register}
 export default {flat_class};
-export {{ {flat_class} }};
+{flat_class_named_export}
 {direct_class_exports}
 {direct_named_reexports}
 {named_export_decls}
