@@ -28,6 +28,31 @@ fn construction_proves_utf8_and_generalized_wtf8() {
     assert_eq!(js_string_char_code_at(s, 2), 0xdfff as f64);
 }
 
+#[cfg(feature = "regex-engine")]
+#[test]
+fn raw_byte_mutations_agree_with_the_regex_encoding_contract() {
+    let mut bytes = b"a\xc3\xa9\xed\xa0\x80\xf0\x9f\x99\x82".to_vec();
+    for at in 0..bytes.len() {
+        let original = bytes[at];
+        for byte in 0..=255 {
+            bytes[at] = byte;
+            let (units, flags) = raw_string_metadata(bytes.as_ptr(), bytes.len() as u32);
+            match perex::input::Input::wtf8(&bytes) {
+                Ok(input) => {
+                    assert_ne!(flags & STRING_FLAG_WTF8_VALIDATED, 0);
+                    assert_eq!(units as usize, input.len_utf16());
+                    assert_eq!(
+                        flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+                        std::str::from_utf8(&bytes).is_err()
+                    );
+                }
+                Err(_) => assert_eq!(flags & STRING_FLAG_WTF8_VALIDATED, 0),
+            }
+        }
+        bytes[at] = original;
+    }
+}
+
 #[test]
 fn invalid_raw_bytes_cannot_gain_proof_from_matching_lengths_or_concat() {
     // Negative control: truncated leads used to pass the length-equality
