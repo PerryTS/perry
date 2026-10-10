@@ -17,7 +17,7 @@ PERRY_RUNTIME_DIR="$CARGO_TARGET_DIR/release" \
 ```
 
 Compile both source revisions with the default auto-optimization. Rebuild
-`perry`, `perry-runtime-static` and `perry-stdlib-static` before compiling a
+`perry`, `perry-runtime-static`, `perry-stdlib-static` and `perry-ext-zlib` before compiling a
 program after changing crate sources. Preserve symbols with
 `PERRY_KEEP_SYMBOLS=1`. Do not set `PERRY_NO_AUTO_OPTIMIZE`.
 
@@ -55,6 +55,12 @@ The unchanged-main binary must fail the budget and the accelerated binary
 must pass it. Masking AVX2/BMI1/BMI2 must preserve digests and fail the budget.
 This performance test needs Linux perf access and permission to disable
 ASLR. It is a CPU-qualified fixture witness, not a general wall-time test.
+
+The shared-inflate witness uses `--stage inflate`: five passes over all 22
+tarballs must use at most 4 billion user instructions. The SHA-only binary
+with the old inflater must fail this budget, and the combined binary must
+pass it. This witness checks the reported output sizes; the worker tree
+comparison and zlib parity tests independently check the decompressed bytes.
 
 Use five interleaved runs on CPUs 0-55 for `instructions:u`, with
 `setarch -R`. Measure cycles and wall time only on CPUs 56-63 while holding
