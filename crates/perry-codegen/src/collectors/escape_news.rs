@@ -921,11 +921,17 @@ fn collect_used_new_fields_in_expr(
         | Expr::ArrayShift(_)
         | Expr::Update { .. }
         | Expr::BigInt(_) => {}
-        // Any new Expr variant that contains a `new T(...)` allocation
-        // must be listed explicitly above so scalar replacement can see
-        // its used fields. Unhandled variants fall through here safely
-        // (the pass remains correct, just conservative).
-        _ => {}
+        // Every other variant: walk its operands. A field read this
+        // collector does not see gets no slot, and the scalar read of a
+        // missing slot folds to `undefined`, so skipping a variant is not
+        // conservative. A `ClassExprFresh` heritage operand
+        // (`class M extends mod.Base` with `mod` scalar-replaced) read
+        // `undefined` and threw "Class extends value is not a constructor"
+        // (#9502). Reserving a slot for a field that turns out unread costs
+        // one alloca.
+        _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            collect_used_new_fields_in_expr(child, non_escaping_news, used)
+        }),
     }
 }
 
