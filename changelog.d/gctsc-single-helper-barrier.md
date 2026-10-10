@@ -1,1 +1,3 @@
 Remove duplicate generated GC barriers after self-barriering closure and box setters. The runtime setter remains the precise slot barrier owner; direct scope stores and trusted setters that omit a runtime barrier retain their generated barriers. No GC pacing, root policy, caches, side tables, or version metadata change.
+
+Direct scope-slot writes now reuse the existing inline value/generation filter and precise validated-parent slot barrier. This removes the opaque whole-parent remembering operation at these stores; incremental child shading remains active during full marking. The emitted-IR barrier census covers the new scope stem, including all its existing mutation controls.

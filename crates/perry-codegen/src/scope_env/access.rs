@@ -119,7 +119,18 @@ pub(crate) fn write_bits(ctx: &mut FnCtx<'_>, slot: ScopeSlot, base: &str, bits:
     let addr = cell_addr(ctx, slot, base);
     let ptr = ctx.block().inttoptr(I64, &addr);
     ctx.block().store(I64, bits, &ptr);
-    crate::expr::emit_write_barrier(ctx, base, bits);
+    // The store just dereferenced this live scope object, so its header is
+    // validated too. Reuse the value/generation filter and precise slot entry
+    // used by field and element stores; never shade a scalar or remember a
+    // young parent unless an incremental mark is active.
+    crate::expr::emit_write_barrier_slot_value_and_generation_tested(
+        ctx,
+        base,
+        base,
+        &addr,
+        bits,
+        "scope_set",
+    );
 }
 
 /// Load `id`'s base and read it. `None` when `id` is not scoped here.

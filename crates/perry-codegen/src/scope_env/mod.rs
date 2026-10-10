@@ -286,3 +286,8 @@ fn push_param_defaults<'a>(params: &'a [perry_hir::Param], out: &mut Vec<&'a Exp
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn pointer_scope_store_ir() -> String {
+    tests::pointer_scope_store_ir()
+}
