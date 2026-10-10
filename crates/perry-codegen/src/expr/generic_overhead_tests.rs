@@ -128,3 +128,45 @@ fn every_registered_global_store_omits_redundant_root_shading() {
         );
     }
 }
+
+
+fn capture_store_ir() -> String {
+    let mut module = Module::new("capture_cost");
+    module.init = vec![
+        Stmt::Let {
+            id: 1, name: "captured".into(), ty: Type::Any, mutable: true,
+            init: Some(Expr::String("before".into())),
+        },
+        Stmt::Let {
+            id: 2, name: "write".into(), ty: Type::Any, mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 3, params: vec![], return_type: Type::Any,
+                body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::String("after".into()))))],
+                captures: vec![1], mutable_captures: vec![],
+                captures_this: false, captures_new_target: false,
+                enclosing_class: None, is_arrow: true, is_async: false,
+                is_generator: false, is_strict: true,
+            }),
+        },
+    ];
+    String::from_utf8(compile_module(&module, CompileOptions {
+        emit_ir_only: true, ..CompileOptions::default()
+    }).expect("compile capture store")).unwrap()
+}
+
+fn one_capture_barrier_owner(ir: &str) -> bool {
+    ir.contains("call void @js_closure_set_capture_bits(")
+        && !ir.contains("call void @js_write_barrier(")
+}
+
+#[test]
+fn runtime_capture_setter_is_the_only_barrier_owner() {
+    let ir = capture_store_ir();
+    assert!(one_capture_barrier_owner(&ir), "capture setter must own the precise barrier");
+    // A duplicate opaque barrier must turn the same verdict red. The setter
+    // call's liveness assertion prevents an empty probe from passing.
+    let duplicate = format!("{ir}\ncall void @js_write_barrier(i64 1, i64 2)");
+    assert!(!one_capture_barrier_owner(&duplicate));
+    let missing = ir.replace("call void @js_closure_set_capture_bits(", "call void @removed_setter(");
+    assert!(!one_capture_barrier_owner(&missing));
+}

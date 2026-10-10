@@ -232,7 +232,7 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
                 (I64, &value_bits),
             ],
         );
-        emit_write_barrier(ctx, &closure_ptr, &value_bits);
+        // The runtime capture setter owns the precise slot barrier.
     } else if crate::expr::store_canonical_local_from_double(ctx, id, value, None) {
         // Repsel Phase 1: canonical-i32 local — the prelowered value entered
         // the (only) i32 slot through the NaN-safe ToInt32 conversion. This

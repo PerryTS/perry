@@ -16,7 +16,7 @@ use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    current_closure_ptr_value, emit_root_nanbox_store_on_block, emit_write_barrier, lower_expr,
+    current_closure_ptr_value, emit_root_nanbox_store_on_block, lower_expr,
     nanbox_string_inline, unbox_str_handle, FnCtx,
 };
 use crate::type_analysis::is_string_expr;
@@ -117,7 +117,7 @@ impl StringAppendTarget {
                 let box_ptr = blk.load(I64, box_slot);
                 let value_bits = blk.bitcast_double_to_i64(value);
                 blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
-                emit_write_barrier(ctx, &box_ptr, &value_bits);
+                // js_box_set_bits owns the precise cell barrier.
             }
             Self::Captured { id, index, boxed } => {
                 // Reload through the same cell-owner accessor used by ordinary
@@ -128,7 +128,7 @@ impl StringAppendTarget {
                     let value_bits = ctx.block().bitcast_double_to_i64(value);
                     ctx.block()
                         .call_void("js_box_set_bits", &[(I64, &cell), (I64, &value_bits)]);
-                    emit_write_barrier(ctx, &cell, &value_bits);
+                    // js_box_set_bits owns the precise cell barrier.
                 } else {
                     let closure_ptr =
                         current_closure_ptr_value(ctx, "captured string self-append store")?;
@@ -138,7 +138,7 @@ impl StringAppendTarget {
                         "js_closure_set_capture_bits",
                         &[(I64, &closure_ptr), (I32, &index), (I64, &value_bits)],
                     );
-                    emit_write_barrier(ctx, &closure_ptr, &value_bits);
+                    // The runtime capture setter owns the precise slot barrier.
                 }
             }
         }
