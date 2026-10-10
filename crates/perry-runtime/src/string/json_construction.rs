@@ -7,11 +7,7 @@ pub(crate) unsafe fn string_from_json_bytes(
     bytes: &[u8],
 ) -> *mut StringHeader {
     let len = bytes.len() as u32;
-    let utf16_len = if bytes.is_ascii() {
-        len
-    } else {
-        compute_utf16_len(bytes.as_ptr(), len)
-    };
+    let (utf16_len, encoding_flags) = raw_string_metadata(bytes.as_ptr(), len);
     let size = std::mem::size_of::<StringHeader>() + bytes.len();
     let large_json_leaf = len >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let raw = if large_json_leaf {
@@ -37,7 +33,14 @@ pub(crate) unsafe fn string_from_json_bytes(
     // contained no backslash. JSON syntax itself excludes unescaped quote and
     // control bytes, so the decoded payload can be quoted again without an
     // escape scan.
-    init_string_header(header, utf16_len, len, len, 0, STRING_FLAG_JSON_ESCAPE_FREE);
+    init_string_header(
+        header,
+        utf16_len,
+        len,
+        len,
+        0,
+        STRING_FLAG_JSON_ESCAPE_FREE | encoding_flags,
+    );
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
     if large_json_leaf {
         crate::json::note_completed_malloc_json_output(len);
