@@ -49,7 +49,7 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    emit_root_nanbox_store_on_block, emit_write_barrier, lower_js_args_array,
+    emit_root_nanbox_store_on_block, lower_js_args_array,
     nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
@@ -81,7 +81,7 @@ pub(crate) fn emit_grow_mutator_writeback(
             "js_closure_set_capture_bits",
             &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
         );
-        emit_write_barrier(ctx, &closure_ptr, &new_bits);
+        // The runtime capture setter owns the precise slot barrier.
     } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
         ctx.block().store(DOUBLE, new_box, &slot);
     } else if let Some(global_name) = ctx.module_globals.get(&array_id).cloned() {

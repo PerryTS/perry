@@ -155,7 +155,7 @@ pub(crate) fn write_back_boxed_local(ctx: &mut FnCtx<'_>, id: u32, new_box: &str
     if let Some(cell) = crate::expr::load_boxed_local_pointer(ctx, id)? {
         ctx.block()
             .call_void("js_box_set_bits", &[(I64, &cell), (I64, &bits)]);
-        crate::expr::emit_write_barrier(ctx, &cell, &bits);
+        // js_box_set_bits owns the precise cell barrier.
     }
     Ok(true)
 }
