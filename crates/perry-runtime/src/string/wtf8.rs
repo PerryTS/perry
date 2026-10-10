@@ -92,11 +92,8 @@ impl<'a> Wtf8Str<'a> {
 
     /// The payload as a `&str`, or `None` when it carries lone surrogates.
     ///
-    /// This is the guard the whole module exists for: the flag is set at
-    /// construction by the same WTF-8 walk that computes `utf16_len`, so a
-    /// clear flag means the payload decoded without a surrogate code point
-    /// and `from_utf8_unchecked` is justified. `js_string_is_well_formed` and
-    /// `js_string_to_well_formed` already rely on exactly this bit.
+    /// Construction proof and a clear lone-surrogate flag justify an
+    /// unchecked borrow. Unknown raw payloads still need checked decoding.
     #[inline]
     pub(crate) fn as_str(&self) -> Option<&'a str> {
         if self.lone {

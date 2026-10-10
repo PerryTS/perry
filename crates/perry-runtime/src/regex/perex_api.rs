@@ -171,16 +171,15 @@ where
     Ok(bound)
 }
 
-/// Bind a whole heap string, in constant work when this header was validated
-/// before (#10166). The first binding decodes it; if that succeeds and its
-/// UTF-16 length matches the header, the header is marked
-/// `STRING_FLAG_WTF8_VALIDATED` and later bindings use `new_counted`.
+/// Bind a whole heap string in constant work when construction or a previous
+/// binding proved its encoding/count (#10166). Otherwise, checked binding
+/// establishes that same proof when its UTF-16 length matches the header.
 ///
 /// Perry strings are not all valid WTF-8 (raw Buffer and FFI payloads reach
 /// here too), so validity is never assumed: a string that fails to validate is
 /// never marked and keeps failing exactly as before. `HeapSubject::new` has
-/// already marked the header shared, so a marked payload is never mutated in
-/// place, and the mark is never copied to another string (see the flag).
+/// already marked the header shared, so this subject is never mutated in
+/// place. String producers preserve/intersect proof for their own payloads.
 pub(crate) fn bind_heap_subject(
     input: RuntimeHandle<'_>,
 ) -> Result<BoundSubject<HeapSubject<'_>>, EngineError> {
