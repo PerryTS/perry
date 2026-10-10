@@ -186,7 +186,12 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
         std::mem::align_of::<Probe>()
     );
     assert_eq!(
-        np::attach(value.get_nanbox_f64(), &FAMILY, OtherProbe([1; PROBE_WORDS]), 0),
+        np::attach(
+            value.get_nanbox_f64(),
+            &FAMILY,
+            OtherProbe([1; PROBE_WORDS]),
+            0
+        ),
         Err(AttachMiss::Foreign)
     );
     assert_eq!(

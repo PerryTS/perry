@@ -17,7 +17,7 @@ pub struct ArrayStackRecord {
 /// Release before a reentrant call, after its arguments have been placed in
 /// RuntimeHandleScope. Perry's JS unwinder skips Rust cleanups, so neither Drop
 /// nor a post-call clear can own the escaping path.
-unsafe fn clear_record(record: *mut ArrayStackRecord) {
+pub(super) unsafe fn clear_record(record: *mut ArrayStackRecord) {
     let absent = f64::from_bits(TAG_UNDEFINED);
     // GC_STORE_AUDIT(STACK): transfer from the caller range to rooted call arguments.
     std::ptr::write_volatile(std::ptr::addr_of_mut!((*record).payload), absent);
@@ -52,13 +52,6 @@ pub unsafe extern "C-unwind" fn js_array_record_stack_dispatch(
     let protocol = read!(protocol);
     clear_record(record);
     match op {
-        0 => {
-            let iter =
-                scope.root_nanbox_f64(crate::symbol::js_get_iterator(payload.get_nanbox_f64()));
-            let next = super::iterator_step::js_iterator_next_method(iter.get_nanbox_f64());
-            write!(payload, iter.get_nanbox_f64());
-            write!(next, next);
-        }
         1 | 6 if op == 1 || protocol != 0.0 => {
             let done = super::iterator_step::js_iterator_step(
                 payload.get_nanbox_f64(),

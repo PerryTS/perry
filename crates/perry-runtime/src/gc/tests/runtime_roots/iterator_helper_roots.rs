@@ -699,3 +699,137 @@ fn get_iterator_fallback_follows_both_moving_symbol_lookups() {
         );
     }
 }
+
+extern "C" fn moving_array_record_next_getter(c: *const ClosureHeader, this: JsThis) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let c = scope.root_raw_const_ptr(c);
+    let this = scope.root_nanbox_f64(this.as_f64());
+    record(9);
+    move_nursery();
+    unsafe {
+        assert_eq!(
+            crate::object::js_object_get_field(
+                crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as *const ObjectHeader,
+                3,
+            )
+            .to_number(),
+            73.0
+        );
+    }
+    c.with_const_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 0))
+}
+
+extern "C" fn moving_array_record_factory(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this.as_f64());
+    record(8);
+    move_nursery();
+    assert_eq!(this.get_nanbox_f64().to_bits(), js_shadow_slot_get(0));
+    unsafe {
+        let arr = crate::value::js_nanbox_get_pointer(this.get_nanbox_f64())
+            as *const crate::array::ArrayHeader;
+        let payload = crate::array::js_array_get_f64(arr, 0);
+        let iter = scope.root_nanbox_f64(source(1.0, payload));
+        let key = crate::string::intern_ascii_literal(b"next");
+        let next = crate::object::js_object_get_field_by_name_f64(
+            crate::value::js_nanbox_get_pointer(iter.get_nanbox_f64()) as *const ObjectHeader,
+            key,
+        );
+        let get = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(moving_array_record_next_getter, 0),
+            1,
+        ));
+        get.with_const_ptr::<ClosureHeader, _>(|get| {
+            crate::closure::js_closure_set_capture_f64(get.cast_mut(), 0, next);
+        });
+        get.with_const_ptr::<ClosureHeader, _>(|get| {
+            crate::object::js_object_define_accessor(
+                iter.get_nanbox_f64(),
+                f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits()),
+                crate::value::js_nanbox_pointer(get as i64),
+                f64::from_bits(TAG_UNDEFINED),
+            );
+        });
+        iter.get_nanbox_f64()
+    }
+}
+
+#[test]
+fn array_stack_entry_refreshes_getter_factory_and_next_after_moving_collection() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _age =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    prepare();
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(1));
+        let grown = array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, 73.0));
+        array.set_raw_mut_ptr(grown);
+        let factory = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(moving_array_record_factory, 0),
+            0,
+        ));
+        let getter = scope.root_raw_const_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(moving_iterator_getter, 0),
+            1,
+        ));
+        getter.with_const_ptr::<ClosureHeader, _>(|getter| {
+            factory.with_const_ptr::<ClosureHeader, _>(|factory| {
+                crate::closure::js_closure_set_capture_f64(
+                    getter.cast_mut(),
+                    0,
+                    crate::value::js_nanbox_pointer(factory as i64),
+                );
+            });
+        });
+        let symbol = crate::symbol::well_known_symbol("iterator");
+        array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| {
+            getter.with_const_ptr::<ClosureHeader, _>(|getter| {
+                crate::symbol::set_symbol_accessor_property(
+                    crate::value::js_nanbox_pointer(array as i64),
+                    crate::value::js_nanbox_pointer(symbol as i64),
+                    crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+                    TAG_UNDEFINED,
+                );
+            });
+        });
+        let before = array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+            crate::value::js_nanbox_pointer(array as i64)
+        });
+        js_shadow_slot_set(0, before.to_bits());
+        let mut stack = crate::array::ArrayStackRecord {
+            payload: before,
+            next: f64::from_bits(TAG_UNDEFINED),
+            index: 0.0,
+            state: 0.0,
+            protocol: 1.0,
+            value: f64::from_bits(TAG_UNDEFINED),
+        };
+        // The production caller publishes this range. Each managed word has
+        // an independent mutable witness in the test's shadow frame.
+        js_shadow_slot_bind(1, std::ptr::addr_of_mut!(stack.payload).cast());
+        js_shadow_slot_bind(2, std::ptr::addr_of_mut!(stack.next).cast());
+        js_shadow_slot_bind(3, std::ptr::addr_of_mut!(stack.value).cast());
+        assert_eq!(
+            crate::array::js_array_record_stack_enter(&mut stack, std::ptr::null(), 0),
+            1
+        );
+        assert_relocated(crate::value::js_nanbox_get_pointer(before) as usize);
+        assert_eq!(
+            ORDER.with(Cell::get),
+            689,
+            "GetMethod, Call, Get(next), each once"
+        );
+        assert!(
+            COPIED.with(Cell::get) > 0,
+            "the test must move its live values"
+        );
+        assert_ne!(stack.next.to_bits(), TAG_UNDEFINED);
+        let iterator = crate::value::js_nanbox_get_pointer(stack.payload) as *const ObjectHeader;
+        assert_eq!(
+            crate::object::js_object_get_field(iterator, 3).to_number(),
+            73.0
+        );
+    }
+}

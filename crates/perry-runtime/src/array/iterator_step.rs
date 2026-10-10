@@ -88,16 +88,48 @@ static KEEP_ITERATOR_STEP: unsafe extern "C-unwind" fn(f64, f64, *mut f64) -> i3
 pub unsafe extern "C-unwind" fn js_iterator_next_method(iter: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(iter);
+    iterator_next_method_rooted(&iter)
+}
+
+/// Admission's captured iterator is already rooted. Read next from its real
+/// family slot, including a replacement or accessor, without a second proof
+/// or handle scope. Own properties and foreign edges keep ordinary [[Get]].
+pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle<'_>) -> f64 {
     let raw = js_nanbox_get_pointer(iter.get_nanbox_f64()) as usize;
     if crate::value::addr_class::try_read_gc_header(raw)
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
     {
         let obj = raw as *const ObjectHeader;
-        if crate::object::iterator_step_is_builtin(obj) {
-            let proto = js_nanbox_get_pointer(f64::from_bits(
-                crate::object::shapes::object_prototype_word(obj),
-            )) as *const ObjectHeader;
-            return f64::from_bits(crate::object::js_object_get_field(proto, 0).bits());
+        // An actual own next slot needs only its descriptor. In particular,
+        // ordinary custom iterators must not bind a method during [[Get]];
+        // the following Call supplies the iterator as its receiver.
+        if crate::object::shapes::object_shape_record(obj).is_some() {
+            let keys = crate::object::object_keys(obj);
+            let (slots, count) = keys.dense_slots();
+            if let Some(slot) = (0..count).find(|&i| {
+                crate::string::js_string_key_matches_bytes(
+                    JSValue::from_bits((*slots.add(i)).to_bits()),
+                    b"next",
+                )
+            }) {
+                return super::iterator_method::read_method(
+                    iter,
+                    super::iterator_method::property_at(obj, slot as u32),
+                );
+            }
+        }
+        if let Some(owner) = crate::object::iterator_next_property_owner(obj) {
+            let keys = crate::object::object_keys(owner);
+            let (slots, count) = keys.dense_slots();
+            if let Some(slot) = (0..count).find(|&i| {
+                crate::string::js_string_key_matches_bytes(
+                    JSValue::from_bits((*slots.add(i)).to_bits()),
+                    b"next",
+                )
+            }) {
+                let method = super::iterator_method::property_at(owner, slot as u32);
+                return super::iterator_method::read_method(iter, method);
+            }
         }
     }
     let key = crate::string::intern_ascii_literal(b"next");
@@ -166,7 +198,13 @@ pub unsafe extern "C-unwind" fn js_array_record_literal(values: *const f64, coun
 /// The prototype shape describes the iteration member and its ConstFn body.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i32 {
-    array_record_enter(value, std::ptr::null_mut(), std::ptr::null(), false)
+    array_record_enter(
+        value,
+        std::ptr::null_mut(),
+        std::ptr::null(),
+        false,
+        std::ptr::null_mut(),
+    )
 }
 
 /// One entry site's memo of the intrinsic owners' shapes its last full proof
@@ -192,7 +230,7 @@ pub unsafe extern "C-unwind" fn js_array_record_enter(
     out: *mut f64,
     site: *const ArrayRecordSite,
 ) -> i32 {
-    array_record_enter(value, out, site, false)
+    array_record_enter(value, out, site, false, std::ptr::null_mut())
 }
 
 /// The counted consumer's entry: the same proof (bit 0), then the packed-f64
@@ -204,7 +242,54 @@ pub unsafe extern "C-unwind" fn js_array_record_enter_counted(
     out: *mut f64,
     site: *const ArrayRecordSite,
 ) -> i32 {
-    array_record_enter(value, out, site, true)
+    array_record_enter(value, out, site, true, std::ptr::null_mut())
+}
+
+/// Admission and protocol acquisition share the receiver/owner facts. The
+/// caller publishes all six words before entry; only a refused proof reenters.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_stack_enter(
+    record: *mut super::iterator_stack_record::ArrayStackRecord,
+    site: *const ArrayRecordSite,
+    counted: u32,
+) -> i32 {
+    let value = std::ptr::read_volatile(std::ptr::addr_of!((*record).payload));
+    array_record_enter(
+        value,
+        std::ptr::addr_of_mut!((*record).payload),
+        site,
+        counted != 0,
+        record,
+    )
+}
+
+#[cold]
+unsafe fn array_record_refused(
+    value: f64,
+    record: *mut super::iterator_stack_record::ArrayStackRecord,
+    method: Option<super::iterator_method::IteratorMethod>,
+) -> i32 {
+    if record.is_null() {
+        return 1;
+    }
+    // Transfer custody before any user call: its acquisition roots the receiver,
+    // and unwinding skips Rust cleanup. No allocation precedes that transfer.
+    super::iterator_stack_record::clear_record(record);
+    let iter = match method {
+        Some(method) => super::iterator_method::iterator_from_method(value, method),
+        None => crate::symbol::js_get_iterator(value),
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter = scope.root_nanbox_f64(iter);
+    let next = iterator_next_method_rooted(&iter);
+    // GC_STORE_AUDIT(STACK): publish the sole captured IteratorRecord after reentry.
+    std::ptr::write_volatile(
+        std::ptr::addr_of_mut!((*record).payload),
+        iter.get_nanbox_f64(),
+    );
+    // GC_STORE_AUDIT(STACK): publish captured next into the caller's root range.
+    std::ptr::write_volatile(std::ptr::addr_of_mut!((*record).next), next);
+    1
 }
 
 #[inline(always)]
@@ -213,19 +298,26 @@ unsafe fn array_record_enter(
     out: *mut f64,
     site: *const ArrayRecordSite,
     counted: bool,
+    record: *mut super::iterator_stack_record::ArrayStackRecord,
 ) -> i32 {
     let proto = crate::array::array_prototype_addr_if_resolved();
     // Published only once the whole iterator-prototype tower is built.
     let next_owner = crate::object::array_iterator_prototype_addr();
     if proto != 0 && next_owner != 0 {
-        return array_record_needs_iterator_resolved(value, proto, next_owner, out, site, counted);
+        return array_record_needs_iterator_resolved(
+            value, proto, next_owner, out, site, counted, record,
+        );
     }
-    array_record_needs_iterator_cold(value, out)
+    array_record_needs_iterator_cold(value, out, record)
 }
 
 #[cold]
 #[inline(never)]
-unsafe fn array_record_needs_iterator_cold(value: f64, out: *mut f64) -> i32 {
+unsafe fn array_record_needs_iterator_cold(
+    value: f64,
+    out: *mut f64,
+    record: *mut super::iterator_stack_record::ArrayStackRecord,
+) -> i32 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let _ = crate::object::builtin_prototype_value("Array");
@@ -237,6 +329,7 @@ unsafe fn array_record_needs_iterator_cold(value: f64, out: *mut f64) -> i32 {
         out,
         std::ptr::null(),
         false,
+        record,
     )
 }
 
@@ -248,20 +341,21 @@ unsafe fn array_record_needs_iterator_resolved(
     out: *mut f64,
     site: *const ArrayRecordSite,
     counted: bool,
+    record: *mut super::iterator_stack_record::ArrayStackRecord,
 ) -> i32 {
     if !out.is_null() {
         // GC_STORE_AUDIT(STACK): publish after the cold entry has completed reentry.
         *out = value;
     }
     if !JSValue::from_bits(value.to_bits()).is_pointer() {
-        return 1;
+        return array_record_refused(value, record, None);
     }
     let raw = js_nanbox_get_pointer(value) as usize;
     let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
-        return 1;
+        return array_record_refused(value, record, None);
     };
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
-        return 1;
+        return array_record_refused(value, record, None);
     }
     let mut array = raw as *const crate::array::ArrayHeader;
     let mut flags = header._reserved;
@@ -270,7 +364,7 @@ unsafe fn array_record_needs_iterator_resolved(
         // describe members subsequently installed on the live array.
         array = crate::array::clean_arr_ptr(array);
         if array.is_null() {
-            return 1;
+            return array_record_refused(value, record, None);
         }
         flags = crate::array::array_object_flags_resolved(array);
         if !out.is_null() {
@@ -278,18 +372,35 @@ unsafe fn array_record_needs_iterator_resolved(
             *out = crate::value::js_nanbox_pointer(array as i64);
         }
     }
+    let value = crate::value::js_nanbox_pointer(array as i64);
     if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
-        return 1;
+        return array_record_refused(
+            value,
+            record,
+            Some(super::iterator_method::IteratorMethod::Generic),
+        );
     }
     if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let own = crate::array::array_property_bag(array);
         let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-        if !own.is_null() && crate::object::shaped_symbols::position(own, symbol).is_some() {
-            return 1;
+        if !own.is_null() {
+            if let Some(slot) = crate::object::shaped_symbols::position(own, symbol) {
+                let method = if record.is_null() {
+                    None
+                } else {
+                    Some(super::iterator_method::iterator_method_at(own, slot))
+                };
+                return array_record_refused(value, record, method);
+            }
         }
     }
     if !array_record_prototypes_proven_at(site, proto, next_owner) {
-        return 1;
+        let method = if record.is_null() {
+            None
+        } else {
+            Some(super::iterator_method::prototype_iterator_method(proto))
+        };
+        return array_record_refused(value, record, method);
     }
     if counted && crate::typed_feedback::packed_f64_loop_admits_live_array(array, flags) {
         return 2;
@@ -420,46 +531,6 @@ unsafe fn array_prototype_iterates_intrinsically(proto_addr: usize, symbol: usiz
     let key_bits = crate::value::POINTER_TAG | symbol as u64;
     let values = crate::object::array_prototype_values_thunk as *const u8;
     crate::object::shape_member_body_is(shape, |bits| bits == key_bits, values)
-}
-
-/// GetIterator(array) when the shapes prove its iteration member is the
-/// intrinsic `values`: no own `@@iterator`, the ordinary Array prototype, and
-/// that prototype's ConstFn lane. Calling that member with the array as
-/// receiver is exactly `array_values_iter`; anything else answers `None` and
-/// the caller performs the ordinary GetMethod and Call.
-pub(crate) unsafe fn array_intrinsic_values_iterator(value: f64) -> Option<f64> {
-    let proto = crate::array::array_prototype_addr_if_resolved();
-    if proto == 0 || !JSValue::from_bits(value.to_bits()).is_pointer() {
-        return None;
-    }
-    let raw = js_nanbox_get_pointer(value) as usize;
-    let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
-        return None;
-    }
-    let mut array = raw as *const crate::array::ArrayHeader;
-    let mut flags = header._reserved;
-    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        array = crate::array::clean_arr_ptr(array);
-        if array.is_null() {
-            return None;
-        }
-        flags = crate::array::array_object_flags_resolved(array);
-    }
-    if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
-        return None;
-    }
-    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
-    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-        let own = crate::array::array_property_bag(array);
-        if !own.is_null() && crate::object::shaped_symbols::position(own, symbol).is_some() {
-            return None;
-        }
-    }
-    if !array_prototype_iterates_intrinsically(proto, symbol) {
-        return None;
-    }
-    Some(crate::array::array_values_iter(value))
 }
 
 #[no_mangle]

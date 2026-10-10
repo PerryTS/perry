@@ -340,18 +340,21 @@ pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_ro
 
 pub(crate) use iter_object::dispatch_array_iterator_step;
 
+mod iterator_method;
 mod iterator_record_cleanup;
 mod iterator_stack_record;
+#[cfg(test)]
+pub(crate) use iterator_stack_record::ArrayStackRecord;
 mod iterator_step;
 pub use iterator_record_cleanup::{js_array_record_abrupt, js_array_record_finish};
 pub use iterator_step::{
     js_array_record_close, js_array_record_close_absent, js_array_record_enter,
     js_array_record_enter_counted, js_array_record_literal, js_array_record_literal_needs_iterator,
-    js_array_record_needs_iterator, js_iterator_next_method, js_iterator_step,
-    js_iterator_step_rest_to_array,
+    js_array_record_needs_iterator, js_array_record_stack_enter, js_iterator_next_method,
+    js_iterator_step, js_iterator_step_rest_to_array,
 };
 
-pub(crate) use iterator_step::array_intrinsic_values_iterator;
+pub(crate) use iterator_method::array_shape_iterator;
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;
 #[cfg(test)]

@@ -989,7 +989,9 @@ pub(crate) unsafe fn array_record_next_is_builtin() -> bool {
 /// Prove a built-in advance using the receiver and prototype shapes.
 /// Any own property conservatively leaves the protocol intact. ConstFn is
 /// revoked by ordinary stores; accessors and reparenting also change the shape.
-pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
+unsafe fn iterator_family_owner(
+    obj: *const ObjectHeader,
+) -> Option<(*const ObjectHeader, *const u8)> {
     // The existing realm intrinsic roots identify the family; all mutation
     // facts come from the current shapes, never an exposure/pristine latch.
     let (canonical, family_root) = match (*obj).class_id {
@@ -1009,28 +1011,43 @@ pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool 
             string_iterator_next_thunk as *const u8,
             &STRING_ITERATOR_PROTOTYPE_PTR,
         ),
-        _ => return false,
+        _ => return None,
     };
     let Some(own) = super::shapes::object_shape_record(obj) else {
-        return false;
+        return None;
     };
     if own.logical_key_count() != 0 || own.summary() != 0 {
-        return false;
+        return None;
     }
     let proto_bits = super::shapes::object_prototype_word(obj);
     if !JSValue::from_bits(proto_bits).is_pointer() {
-        return false;
+        return None;
     }
     let proto =
         crate::value::js_nanbox_get_pointer(f64::from_bits(proto_bits)) as *const ObjectHeader;
     if proto as i64 != family_root.load(Ordering::Acquire) {
-        return false;
+        return None;
     }
     if !crate::value::addr_class::try_read_gc_header(proto as usize)
         .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
     {
-        return false;
+        return None;
     }
+    Some((proto, canonical))
+}
+
+/// Both Get(next) and intrinsic Step consume this one receiver/edge proof.
+/// Get reads the actual descriptor, independent of which function it contains.
+pub(crate) unsafe fn iterator_next_property_owner(
+    obj: *const ObjectHeader,
+) -> Option<*const ObjectHeader> {
+    iterator_family_owner(obj).map(|(owner, _)| owner)
+}
+
+pub(crate) unsafe fn iterator_step_is_builtin(obj: *const ObjectHeader) -> bool {
+    let Some((proto, canonical)) = iterator_family_owner(obj) else {
+        return false;
+    };
     let Some(family) = super::shapes::object_shape_record(proto) else {
         return false;
     };

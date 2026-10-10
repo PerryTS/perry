@@ -880,8 +880,8 @@ fn no_longlived_object_names_a_young_key_after_a_class_keys_build() {
             parent_packed.len() as u32,
             0,
         ));
-        let first_key = parent
-            .with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits());
+        let first_key =
+            parent.with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits());
         let first_key_addr = (first_key & POINTER_MASK) as usize;
         assert!(
             crate::JSValue::from_bits(first_key).is_string()
@@ -912,7 +912,10 @@ fn no_longlived_object_names_a_young_key_after_a_class_keys_build() {
             .with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits())
             & POINTER_MASK;
         let moved = moved as usize;
-        assert_ne!(moved, first_key_addr, "premise: the minor moved the parent's key");
+        assert_ne!(
+            moved, first_key_addr,
+            "premise: the minor moved the parent's key"
+        );
         let after = longlived_words_naming_minor_collectible();
         assert!(
             before.is_empty() && after.is_empty(),

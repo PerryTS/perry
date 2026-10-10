@@ -241,12 +241,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let site = crate::expr::array_record_site(ctx);
             let verdict = ctx.block().call(
                 I32,
-                if counted {
-                    "js_array_record_enter_counted"
-                } else {
-                    "js_array_record_enter"
-                },
-                &[(DOUBLE, &value), (PTR, &r.fields[0]), (PTR, &site)],
+                "js_array_record_stack_enter",
+                &[
+                    (PTR, &r.base),
+                    (PTR, &site),
+                    (I32, if counted { "1" } else { "0" }),
+                ],
             );
             let needs = if counted {
                 let admission = ctx
@@ -289,15 +289,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let needs = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
             let flag = ctx.block().uitofp(crate::types::I1, &needs, DOUBLE);
             ctx.block().store(DOUBLE, &flag, &r.fields[4]);
-            let cold = ctx.new_block("record.capture");
-            let done = ctx.new_block("record.captured");
-            let cl = ctx.block_label(cold);
-            let dl = ctx.block_label(done);
-            ctx.block().cond_br(&needs, &cl, &dl);
-            ctx.current_block = cold;
-            dispatch(ctx, &r, "0");
-            ctx.block().br(&dl);
-            ctx.current_block = done;
             let payload = ctx.block().load_volatile(DOUBLE, &r.fields[0]);
             if let Some(admission) = ctx.record_packed_admissions.remove(source) {
                 ctx.record_packed_admissions.insert(r.payload, admission);

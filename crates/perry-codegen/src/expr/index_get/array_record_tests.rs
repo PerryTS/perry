@@ -642,8 +642,8 @@ fn array_stack_record_fuses_only_the_generated_next_value() {
         .count();
     assert_eq!(
         calls,
-        consumers * 3,
-        "capture, next and finish share the record ABI"
+        consumers * 2,
+        "next and finish share the record ABI; entry already captured the method"
     );
     crate::testing::verify_ir(&ll, "fused_array_stack_record").unwrap();
 }
@@ -676,8 +676,8 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         .count();
     assert_eq!(
         calls,
-        consumers * 4,
-        "capture, step, residual read and finish use the same ABI in each specialization"
+        consumers * 3,
+        "step, residual read and finish use the same ABI in each specialization; entry owns capture"
     );
     assert!(
         ll.contains("record.read.cold") && ll.contains("i32 5"),
@@ -728,16 +728,24 @@ fn array_stack_record_entry_publishes_its_sole_source_home() {
         f.starts_with("internal double @perry_fn") && f.lines().next().unwrap().contains("__read$")
     }) {
         consumers += 1;
-        let field_zero: Vec<_> = function
+        let record = function
             .lines()
-            .filter(|l| l.contains("getelementptr double, ptr ") && l.ends_with("i64 0"))
-            .map(|l| l.trim().split(" = ").next().unwrap())
-            .collect();
+            .find(|l| l.contains("alloca [6 x ptr addrspace(1)]"))
+            .expect("entry must own a six-word native root range")
+            .trim()
+            .split(" = ")
+            .next()
+            .unwrap();
+        let zero = format!("getelementptr double, ptr {record}, i64 0");
+        assert!(
+            function.lines().any(|l| l.contains(&zero)),
+            "payload must be field zero of the same published range"
+        );
         let entry = function
             .lines()
-            .find(|l| l.contains("call i32 @js_array_record_enter("))
+            .find(|l| l.contains("call i32 @js_array_record_stack_enter("))
             .unwrap();
-        assert!(field_zero.iter().any(|field| entry.contains(&format!(", ptr {field}, ptr @"))),
+        assert!(entry.contains(&format!("(ptr {record}, ptr @")) && entry.ends_with("i32 0)"),
             "entry must publish into the whole record range, without a scratch source or output home");
     }
     assert!(consumers > 0);
@@ -775,4 +783,23 @@ fn array_stack_record_exit_releases_its_payload_home() {
         }
         assert!(consumers > 0);
     }
+}
+
+#[test]
+fn array_stack_entry_owns_acquisition_without_a_second_dispatch() {
+    let ll = stack_record_ir(true);
+    assert!(
+        ll.contains("call i32 @js_array_record_stack_enter("),
+        "{ll}"
+    );
+    assert!(
+        !ll.contains("record.capture:"),
+        "payload must consume entry acquisition"
+    );
+    assert!(
+        !ll.lines().any(
+            |l| l.contains("call double @js_array_record_stack_dispatch(") && l.ends_with("i32 0)")
+        ),
+        "GetIterator must not run a second time"
+    );
 }

@@ -409,7 +409,8 @@ mod tests {
     fn numeric_stack_record_reads_poll_refreshed_receiver() {
         for ty in [Type::Array(Box::new(Type::Number)), Type::Any] {
             let ir = emit_record_payload_stack(ty, None, true, true);
-            assert!(ir.contains("record.capture"), "{ir}");
+            assert!(ir.contains("@js_array_record_stack_enter("), "{ir}");
+            assert!(!ir.contains("record.capture:"), "entry owns capture: {ir}");
             let body = ir.find("\nfor.packed_f64_fast.body.").expect(&ir);
             let exit = ir[body..].find("\nfor.packed_f64_fast.exit.").expect(&ir);
             let fast = &ir[body..body + exit];
