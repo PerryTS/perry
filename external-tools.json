@@ -146,11 +146,6 @@
           "asset": "sfw-free-windows-x86_64.exe",
           "integrity": "sha512-JDpo1DAN+YUYSQ8VlVNPWxbOLoxPjnKSFfyAX+BsnHh3UdURWhCj+vy/aPuA3qg46CZQMpWIlzxBw+l86y/zRw=="
         }
-      },
-      "soakBypass": {
-        "version": "1.14.0",
-        "published": "2026-07-23",
-        "removable": "2026-07-30"
       }
     },
     "sfw-enterprise": {
@@ -185,11 +180,6 @@
           "asset": "sfw-windows-x86_64.exe",
           "integrity": "sha512-1SnvHJ04sQrRgMAVtGYri5rBysXFXc8PFPXT1kWBF79X6Xa+4uaJb3epJ6HW9HdRvnquDDgP/ZVj7wb6rglADQ=="
         }
-      },
-      "soakBypass": {
-        "version": "1.14.0",
-        "published": "2026-07-23",
-        "removable": "2026-07-30"
       }
     },
     "zizmor": {
