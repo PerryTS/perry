@@ -706,16 +706,14 @@ extern "C" fn moving_array_record_next_getter(c: *const ClosureHeader, this: JsT
     let this = scope.root_nanbox_f64(this.as_f64());
     record(9);
     move_nursery();
-    unsafe {
-        assert_eq!(
-            crate::object::js_object_get_field(
-                crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as *const ObjectHeader,
-                3,
-            )
-            .to_number(),
-            73.0
-        );
-    }
+    assert_eq!(
+        crate::object::js_object_get_field(
+            crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as *const ObjectHeader,
+            3,
+        )
+        .to_number(),
+        73.0
+    );
     c.with_const_ptr(|c| crate::closure::js_closure_get_capture_f64(c, 0))
 }
 

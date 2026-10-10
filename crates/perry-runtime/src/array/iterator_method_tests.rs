@@ -1,6 +1,38 @@
 use super::*;
 use crate::closure::{ClosureHeader, JsThis};
 use crate::value::JSValue;
+use std::sync::atomic::Ordering;
+
+// These fixtures expose an intrinsic iterator prototype and assign a custom
+// array prototype. Restore test-only process globals once their arrays die,
+// following dyn_eval::tests::ArrayPrototypeLatchGuard.
+struct ArrayGlobalsGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    static_proto: bool,
+    index: u8,
+    iteration: u8,
+}
+
+impl ArrayGlobalsGuard {
+    fn new() -> Self {
+        Self {
+            _lock: crate::typed_feedback::typed_feedback_test_lock(),
+            static_proto: crate::object::prototype_chain::array_static_proto_recorded(),
+            index: crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed),
+            iteration: super::super::indexing_support::PERRY_ARRAY_ITERATION_NOT_PRISTINE
+                .load(Ordering::Acquire),
+        }
+    }
+}
+
+impl Drop for ArrayGlobalsGuard {
+    fn drop(&mut self) {
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.static_proto);
+        crate::array::test_swap_array_index_fast_path_invalidated(self.index);
+        super::super::indexing_support::PERRY_ARRAY_ITERATION_NOT_PRISTINE
+            .store(self.iteration, Ordering::Release);
+    }
+}
 
 thread_local! {
     static FACTORY_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -8,19 +40,15 @@ thread_local! {
 
 extern "C" fn factory(_c: *const ClosureHeader, this: JsThis) -> f64 {
     FACTORY_CALLS.with(|calls| calls.set(calls.get() + 1));
-    unsafe {
-        let arr = js_nanbox_get_pointer(this.as_f64()) as *const super::super::ArrayHeader;
-        assert_eq!(super::super::js_array_length(arr), 1);
-        super::super::array_values_iter(this.as_f64())
-    }
+    let arr = js_nanbox_get_pointer(this.as_f64()) as *const super::super::ArrayHeader;
+    assert_eq!(super::super::js_array_length(arr), 1);
+    super::super::array_values_iter(this.as_f64())
 }
 
 extern "C" fn getter(c: *const ClosureHeader, this: JsThis) -> f64 {
-    unsafe {
-        let arr = js_nanbox_get_pointer(this.as_f64()) as *const super::super::ArrayHeader;
-        assert_eq!(super::super::js_array_length(arr), 1);
-        crate::closure::js_closure_get_capture_f64(c, 0)
-    }
+    let arr = js_nanbox_get_pointer(this.as_f64()) as *const super::super::ArrayHeader;
+    assert_eq!(super::super::js_array_length(arr), 1);
+    crate::closure::js_closure_get_capture_f64(c, 0)
 }
 
 #[test]
@@ -158,6 +186,7 @@ fn array_stack_entry_acquires_once_and_publishes_next() {
 }
 #[test]
 fn array_custom_prototype_supplies_the_method_to_both_consumers() {
+    let _globals = ArrayGlobalsGuard::new();
     FACTORY_CALLS.with(|calls| calls.set(0));
     let _stable = crate::gc::GcSuppressScope::new();
     unsafe {
@@ -215,6 +244,7 @@ extern "C" fn next_getter(c: *const ClosureHeader, this: JsThis) -> f64 {
 
 #[test]
 fn array_next_shape_read_honours_replacement_accessor_own_and_foreign_edge() {
+    let _globals = ArrayGlobalsGuard::new();
     NEXT_GETS.with(|count| count.set(0));
     let _stable = crate::gc::GcSuppressScope::new();
     unsafe {
