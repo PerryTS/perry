@@ -1195,7 +1195,7 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
             }
             (*dest).byte_len = total_blen;
             (*dest).utf16_len = total_u16;
-            // The destination's payload just changed; no piece's validation carries over.
+            // The new payload is proven only when every piece was proven.
             (*dest).flags = piece_flags;
             return if piece_flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 canonicalize_surrogate_pairs(dest)
