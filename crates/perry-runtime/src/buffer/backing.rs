@@ -280,7 +280,7 @@ mod tests {
     fn backing_outlives_its_allocating_worker() {
         let _guard = setup();
         let before = count();
-        let (message, original) = std::thread::spawn(|| {
+        let (message, original, owner_counter) = std::thread::spawn(|| {
             let source = js_array_buffer_new(1024 * 1024);
             let original = byte_address(source);
             unsafe {
@@ -294,16 +294,26 @@ mod tests {
                 )
                 .unwrap()
             };
-            (message, original)
+            (message, original, std::sync::Arc::clone(&LIVE_BACKINGS))
         })
         .join()
         .unwrap();
+        assert_eq!(
+            owner_counter.load(Ordering::SeqCst),
+            1,
+            "message must retain the exited worker's backing"
+        );
         let scope = RuntimeHandleScope::new();
         let root = scope.root_nanbox_u64(unsafe { deserialize_nanbox_on_current_thread(&message) });
         let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
         assert_eq!(byte_address(received), original);
         assert_eq!(crate::buffer::js_buffer_get(received, 0), 81);
         crate::buffer::detach_array_buffer(received as usize);
+        assert_eq!(
+            owner_counter.load(Ordering::SeqCst),
+            0,
+            "receiver detach must release the allocating worker's backing"
+        );
         assert_eq!(count(), before);
     }
 

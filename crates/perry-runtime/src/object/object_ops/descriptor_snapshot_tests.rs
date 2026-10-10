@@ -675,7 +675,8 @@ fn descriptor_snapshot_operand_normalization_requires_owned_object_admission() {
             b"primitive".as_ptr(),
             9,
         ));
-        let raw_string = f64::from_bits(string.get_raw_const_ptr::<crate::StringHeader>() as u64);
+        let raw_string =
+            string.with_const_ptr::<crate::StringHeader, _>(|string| f64::from_bits(string as u64));
         assert_eq!(
             normalize_descriptor_operand(raw_string).to_bits(),
             raw_string.to_bits()

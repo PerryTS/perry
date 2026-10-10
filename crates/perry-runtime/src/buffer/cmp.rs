@@ -365,6 +365,16 @@ pub extern "C" fn js_buffer_includes_enc(
 
 #[no_mangle]
 pub extern "C" fn js_buffer_to_json(buf_ptr: f64) -> f64 {
+    buffer_to_json_with_type_allocation(buf_ptr, |_| {
+        crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6)
+    })
+}
+
+/// The allocator seam keeps the key/value collection window reproducible in tests.
+pub(crate) fn buffer_to_json_with_type_allocation(
+    buf_ptr: f64,
+    allocate_type_value: impl FnOnce(usize) -> *mut crate::StringHeader,
+) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let source = (!buf.is_null()).then(|| {
         super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf as i64)).unwrap()
@@ -373,7 +383,11 @@ pub extern "C" fn js_buffer_to_json(buf_ptr: f64) -> f64 {
     let obj = handles.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
     let type_key =
         handles.root_string_ptr(crate::string::js_string_from_bytes(b"type".as_ptr(), 4));
-    let type_val = crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6);
+    #[cfg(test)]
+    let key_before = type_key.with_const_ptr::<crate::StringHeader, _>(|key| key as usize);
+    #[cfg(not(test))]
+    let key_before = 0;
+    let type_val = allocate_type_value(key_before);
     obj.with_mut_ptr(|obj| {
         type_key.with_const_ptr(|key| {
             crate::object::js_object_set_field_by_name(

@@ -124,7 +124,6 @@
 19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
 24 crates/perry-runtime/src/object/native_module/callable_exports.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
-2 crates/perry-runtime/src/object/object_ops/define_property.rs
 2 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs

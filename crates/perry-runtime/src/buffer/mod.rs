@@ -156,6 +156,9 @@ pub use dataview::{js_data_view_get, js_data_view_set, DataViewKind};
 pub use copy_bytes::js_buffer_copy_bytes_from;
 pub use copy_write::{js_buffer_copy, js_buffer_write, js_buffer_write_len};
 
+#[cfg(test)]
+pub(crate) use cmp::buffer_to_json_with_type_allocation;
+
 // ---- Re-exports: compare / search ----
 pub use cmp::{
     js_buffer_compare, js_buffer_compare_range, js_buffer_equals, js_buffer_includes,

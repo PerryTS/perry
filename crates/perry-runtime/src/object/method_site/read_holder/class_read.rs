@@ -558,8 +558,8 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     // The walk proved the direct link through this identity's word, so the
     // slot exists; an identity without one has nothing a hit could compare.
-    let Some(word) = prototype_identity(token as u32)
-        .and_then(crate::object::shapes::identity_word_slot)
+    let Some(word) =
+        prototype_identity(token as u32).and_then(crate::object::shapes::identity_word_slot)
     else {
         return;
     };

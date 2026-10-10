@@ -126,14 +126,24 @@ unsafe fn bigint_lane_compare(
     b_bits: u64,
     signed: bool,
 ) -> std::cmp::Ordering {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let box_lane = |bits: u64| -> f64 {
+    let mut box_lane = |bits: u64| -> f64 {
         if signed {
             crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(bits as i64) as i64)
         } else {
             crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(bits) as i64)
         }
     };
+    bigint_lane_compare_with_boxer(site, comparator, a_bits, b_bits, &mut box_lane)
+}
+
+pub(crate) unsafe fn bigint_lane_compare_with_boxer(
+    site: crate::closure::DirectCall2,
+    comparator: *const ClosureHeader,
+    a_bits: u64,
+    b_bits: u64,
+    mut box_lane: impl FnMut(u64) -> f64,
+) -> std::cmp::Ordering {
+    let scope = crate::gc::RuntimeHandleScope::new();
     // Root before either operand box can collect; the caller's address is a snapshot.
     let comparator = scope.root_raw_const_ptr(comparator);
     let a_handle = scope.root_nanbox_f64(box_lane(a_bits));

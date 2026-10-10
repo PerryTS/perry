@@ -704,7 +704,8 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     // without this the `.name` read returned `""`.
     let getter_ptr = (getter_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     if crate::value::addr_class::is_above_handle_band(getter_ptr)
-        && crate::closure::is_closure_ptr(getter_ptr) {
+        && crate::closure::is_closure_ptr(getter_ptr)
+    {
         let func_ptr = (*(getter_ptr as *const crate::closure::ClosureHeader)).code() as usize;
         crate::builtins::register_function_name_if_absent(func_ptr, &format!("get {key}"));
     }

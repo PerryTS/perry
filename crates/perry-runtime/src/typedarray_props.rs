@@ -399,21 +399,24 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 } else {
                     crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
                 };
-                let owner = owner_root.get_raw_mut_ptr::<TypedArrayHeader>() as usize;
-                crate::object::set_accessor_descriptor(
-                    owner,
-                    key_name.to_string(),
-                    crate::object::AccessorDescriptor {
-                        get: get_bits.get_nanbox_u64(),
-                        set: set_bits,
-                    },
-                );
-                upsert_typed_array_own_prop(
-                    owner,
-                    key_name.to_string(),
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                    false,
-                );
+                owner_root.with_mut_ptr::<TypedArrayHeader, _>(|owner| {
+                    crate::object::set_accessor_descriptor(
+                        owner as usize,
+                        key_name.to_string(),
+                        crate::object::AccessorDescriptor {
+                            get: get_bits.get_nanbox_u64(),
+                            set: set_bits,
+                        },
+                    )
+                });
+                owner_root.with_mut_ptr::<TypedArrayHeader, _>(|owner| {
+                    upsert_typed_array_own_prop(
+                        owner as usize,
+                        key_name.to_string(),
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                        false,
+                    )
+                });
             } else if descriptor.has_named(b"value")
                 || descriptor.has_named(b"writable")
                 || !existing
@@ -445,11 +448,13 @@ pub(crate) unsafe fn typed_array_define_own_property(
             let configurable = descriptor
                 .flag(b"configurable")
                 .unwrap_or(current_attrs.configurable());
-            crate::object::set_property_attrs(
-                owner_root.get_raw_mut_ptr::<TypedArrayHeader>() as usize,
-                key_name.to_string(),
-                crate::object::PropertyAttrs::new(writable, enumerable, configurable),
-            );
+            owner_root.with_mut_ptr::<TypedArrayHeader, _>(|owner| {
+                crate::object::set_property_attrs(
+                    owner as usize,
+                    key_name.to_string(),
+                    crate::object::PropertyAttrs::new(writable, enumerable, configurable),
+                )
+            });
             let _ = key;
             f64::from_bits(receiver.get_nanbox_u64())
         }

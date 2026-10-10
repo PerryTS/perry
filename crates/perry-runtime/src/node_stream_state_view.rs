@@ -196,10 +196,7 @@ fn common_field(stream: f64, field: &str) -> f64 {
     match field {
         "destroyed" => bool_bits(stream_destroyed(stream)),
         "closed" => bool_bits(has_truthy_hidden(stream, hidden_key(b"closed"))),
-        "closeEmitted" => bool_bits(has_truthy_hidden(
-            stream,
-            STREAM_CLOSE_EMITTED_KEY,
-        )),
+        "closeEmitted" => bool_bits(has_truthy_hidden(stream, STREAM_CLOSE_EMITTED_KEY)),
         "errored" => readable_hidden_error(stream).unwrap_or(f64::from_bits(TAG_NULL)),
         "errorEmitted" => bool_bits(readable_hidden_error(stream).is_some()),
         "emitClose" => bool_bits(stream_emit_close_enabled(stream)),
@@ -371,9 +368,5 @@ pub(super) fn install_writable_state_view(stream: f64) {
 /// Node sets `closeEmitted` right before `'close'` would be emitted, whether
 /// or not `emitClose` lets the event itself out.
 pub(super) fn note_close_emitted(stream: f64) {
-    set_hidden_value(
-        stream,
-        STREAM_CLOSE_EMITTED_KEY,
-        bool_bits(true),
-    );
+    set_hidden_value(stream, STREAM_CLOSE_EMITTED_KEY, bool_bits(true));
 }

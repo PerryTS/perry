@@ -3865,6 +3865,14 @@
    "verdict": "thread_exit_invalidated",
    "hook": "unmap",
    "why": "Non-Linux mapped-region extent registry. Every physical block destruction goes through region::unmap, which removes its start address before dealloc; Arena::drop destroys blocks through that same funnel. Pooled blocks remain mapped and registered until their actual destruction."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/backing.rs",
+   "names": [
+    "LIVE_BACKINGS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "cfg(test) per_test_global Arc<AtomicUsize> owns a Rust allocator allocation containing only a live-backing count, never a GC or arena pointer. Each test Backing retains a clone of its creating test counter and decrements that same Arc on drop even after transfer or source-thread exit; receiver-thread teardown cannot leave an arena address in the counter. Arc ownership retains the numeric counter until its last backing/test witness drops."
   }
  ]
 }

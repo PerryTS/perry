@@ -681,10 +681,10 @@ pub(crate) unsafe fn apply_property_descriptor(
             // coercion and read them back through their handles.
             let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let closure_handle = scope.root_raw_mut_ptr(closure_ptr as *mut u8);
-            let key_str = crate::builtins::js_string_coerce(key_value);
+            let (key_str, closure_ptr) =
+                closure_handle.across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
             let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
-
-            let closure_ptr = closure_handle.get_raw_mut_ptr::<u8>() as usize;
+            let closure_ptr = closure_ptr as usize;
             if key_str.is_null() {
                 return true;
             }
@@ -786,14 +786,16 @@ pub(crate) unsafe fn apply_property_descriptor(
                 } else {
                     crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
                 };
-                set_accessor_descriptor(
-                    closure_handle.get_raw_mut_ptr::<u8>() as usize,
-                    key_rust.clone(),
-                    AccessorDescriptor {
-                        get: get_bits.get_nanbox_u64(),
-                        set: set_bits,
-                    },
-                );
+                closure_handle.with_mut_ptr::<u8, _>(|closure| {
+                    set_accessor_descriptor(
+                        closure as usize,
+                        key_rust.clone(),
+                        AccessorDescriptor {
+                            get: get_bits.get_nanbox_u64(),
+                            set: set_bits,
+                        },
+                    )
+                });
             } else {
                 let value_field = descriptor.read_named(b"value");
                 clear_accessor_descriptor(closure_ptr, &key_rust);
@@ -820,11 +822,13 @@ pub(crate) unsafe fn apply_property_descriptor(
                 .unwrap_or_else(|| existing_attrs.map(|a| a.enumerable()).unwrap_or(false));
             let configurable = read_bool(b"configurable")
                 .unwrap_or_else(|| existing_attrs.map(|a| a.configurable()).unwrap_or(false));
-            set_property_attrs(
-                closure_handle.get_raw_mut_ptr::<u8>() as usize,
-                key_rust,
-                PropertyAttrs::new(writable, enumerable, configurable),
-            );
+            closure_handle.with_mut_ptr::<u8, _>(|closure| {
+                set_property_attrs(
+                    closure as usize,
+                    key_rust,
+                    PropertyAttrs::new(writable, enumerable, configurable),
+                )
+            });
             return true;
         }
 
@@ -850,10 +854,10 @@ pub(crate) unsafe fn apply_property_descriptor(
             // as a `TypedArrayHeader` after it.
             let obj_handle = scope.root_nanbox_u64(obj_value.to_bits());
             let addr_handle = scope.root_raw_mut_ptr(addr as *mut u8);
-            let key_str = crate::builtins::js_string_coerce(key_value);
+            let (key_str, addr) =
+                addr_handle.across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
             let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
-
-            let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
+            let addr = addr as usize;
             if key_str.is_null() {
                 return true;
             }

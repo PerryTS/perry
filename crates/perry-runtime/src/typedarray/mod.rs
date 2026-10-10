@@ -51,6 +51,9 @@ pub use slice_ops::{
     js_typed_array_fill, js_typed_array_join, js_typed_array_join_value, js_typed_array_reverse,
     js_typed_array_slice, js_typed_array_subarray,
 };
+#[cfg(test)]
+pub(crate) use transform::bigint_lane_compare_with_boxer;
+
 pub use transform::{
     js_typed_array_find_last, js_typed_array_find_last_index, js_typed_array_sort_default,
     js_typed_array_sort_with_comparator, js_typed_array_to_reversed,

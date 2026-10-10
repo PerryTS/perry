@@ -120,8 +120,11 @@ unsafe fn push_writable_state_json(stream: *const ObjectHeader, buf: &mut String
     let hwm = own_field_by_key_bytes(stream, b"writableHighWaterMark")
         .unwrap_or_else(|| default_hwm(false));
     let length = 0.0;
-    let corked = read_slot(crate::value::js_nanbox_pointer(stream as i64), WRITABLE_CORKED_KEY)
-        .unwrap_or(0.0);
+    let corked = read_slot(
+        crate::value::js_nanbox_pointer(stream as i64),
+        WRITABLE_CORKED_KEY,
+    )
+    .unwrap_or(0.0);
     buf.push_str(r#"{"highWaterMark":"#);
     push_json_number(buf, hwm);
     buf.push_str(r#","length":"#);

@@ -694,7 +694,7 @@ pub(crate) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut Buffe
         (*ptr).header.link = 0;
         (*ptr).data = data;
         // GC_STORE_AUDIT(INIT): Initializes the fresh foreign byte cell's Rust backing owner before publication; no managed edge.
-std::ptr::write(&mut (*ptr).owned, None);
+        std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
             (*ptr).finalizer = None;

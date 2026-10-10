@@ -92,7 +92,8 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// a callback before the first global-table read must dirty that proof on
 /// every iteration, including iterations after its initial admission.
 pub(crate) fn prepare_loop_accesses(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt]) {
-    if ctx.is_async_fn || ctx.disable_buffer_fast_path
+    if ctx.is_async_fn
+        || ctx.disable_buffer_fast_path
         || !super::ta_param_f64_read::ta_param_f64_read_enabled()
     {
         return;
@@ -119,7 +120,7 @@ pub(crate) fn prepare_loop_accesses(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt
                 && !ctx.receiver_descriptors.contains_buffer_view(&id)
                 && super::u8_buffer_read::u8_inline_read_enabled()
                 && declared.get(&id).is_some_and(byte_type))
-                .then_some(1)
+            .then_some(1)
         }) else {
             continue;
         };
