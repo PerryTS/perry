@@ -114,6 +114,26 @@ pub(super) unsafe fn dispatch_explicit_this_call(
         throw_not_callable();
     }
 
+    // The body's own record excludes Proxy, native-export, no-op prototype
+    // and constructor forwarding before any of those classifications.
+    let value_info = if jsval.is_pointer() {
+        crate::closure::closure_info(jsval.as_pointer::<ClosureHeader>())
+    } else {
+        None
+    };
+    if let Some(info) = value_info {
+        if crate::closure::has_direct_call_body(info) {
+            return call_closure_body(
+                jsval.as_pointer(),
+                Some(info),
+                info.code,
+                this,
+                args_ptr,
+                args_len,
+            );
+        }
+    }
+
     // #3656: a Proxy value invoked as a function dispatches through its `apply`
     // trap (or, absent a trap, forwards to the target). The compiler emits a
     // `ProxyApply` node when it can statically prove the callee is a proxy, but
@@ -200,7 +220,11 @@ pub(super) unsafe fn dispatch_explicit_this_call(
     // slow-path `#newResponse` chain that ended in `(number).set is not a
     // function`. Closures with rest params (`(a, ...rest) => …`) have their
     // own path (`dispatch_rest_bundled`) which already pads.
-    let info = crate::closure::closure_info(closure);
+    let info = if jsval.is_pointer() {
+        value_info
+    } else {
+        crate::closure::closure_info(closure)
+    };
     let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
     // %Function.prototype% is itself callable: it accepts any arguments and
     // returns `undefined` (ECMA-262 20.2.3). It is stored as a plain object,
@@ -254,7 +278,8 @@ pub(crate) unsafe fn call_compiled_closure_this(
 /// validation of the closure cell.
 ///
 /// # Safety
-/// `closure` is a live closure of `info`, a compiled body (`FN_COMPILED_BODY`);
+/// `closure` is a live closure of `info`, with a compiled body or a real
+/// non-constructor builtin body (see [`crate::closure::has_direct_call_body`]);
 /// `args_ptr` holds `args_len` values.
 #[inline]
 pub(crate) unsafe fn call_compiled_body_this(
@@ -278,17 +303,10 @@ unsafe fn call_closure_body(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    let dispatch_args_len = match info {
-        Some(info) if crate::closure::info_rest(info).is_none() => {
-            args_len.max(usize::from(info.params))
-        }
-        _ => args_len,
-    };
-
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let arg_at = |i: usize| -> f64 {
         if i < args_len && !args_ptr.is_null() {
-            unsafe { *args_ptr.add(i) }
+            *args_ptr.add(i)
         } else {
             undef
         }
@@ -307,35 +325,31 @@ unsafe fn call_closure_body(
         return crate::value::js_nanbox_pointer(arr as i64);
     }
 
-    // A closure with a registered rest param must bundle EVERY argument into
-    // its rest array. The per-arity `match` below caps at `js_closure_call8`
-    // (passing only `arg_at(0..7)`), so a rest closure invoked with >8 args
-    // (e.g. `new Temporal.Duration(y,mo,w,d,h,mi,s,ms,us,ns)` — 10 positional
-    // args) would silently drop the overflow. Route through the rest-bundler
-    // with the full slice up front. (The arity-specific `js_closure_callN`
-    // helpers do their own rest check, but only see the truncated arg list.)
-    if let Some((fixed_arity, synth)) = info.and_then(crate::closure::info_rest) {
-        if synth == crate::closure::RestDispatchKind::NativeArgs && !args_ptr.is_null() {
-            let args = std::slice::from_raw_parts(args_ptr, args_len);
-            return dispatch_rest_bundled(closure, func_ptr, this, args, fixed_arity, synth);
-        }
-        let all: Vec<f64> = (0..args_len).map(arg_at).collect();
-        return dispatch_rest_bundled(closure, func_ptr, this, &all, fixed_arity, synth);
+    // Retain the legacy null-buffer padding contract. Ordinary callers hand
+    // us a valid slice; that slice goes directly to the body's one dispatcher.
+    if args_ptr.is_null() && args_len != 0 {
+        let args = vec![undef; args_len];
+        return dispatch_body_args(closure, info, this, &args);
     }
+    let args = if args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    dispatch_body_args(closure, info, this, args)
+}
 
-    // Call with the appropriate arity (padded with `undefined` up to the
-    // body's declared arity).
-    if dispatch_args_len <= 16 {
-        let mut buf = [undef; 16];
-        for (i, slot) in buf.iter_mut().enumerate().take(dispatch_args_len) {
-            *slot = arg_at(i);
-        }
-        return super::calln::dispatch_call_slice(closure, this, &buf[..dispatch_args_len]);
+#[inline]
+unsafe fn dispatch_body_args(
+    closure: *const ClosureHeader,
+    info: Option<&crate::closure::JsFunctionInfo>,
+    this: crate::closure::JsThis,
+    args: &[f64],
+) -> f64 {
+    match info {
+        Some(info) => super::calln::dispatch_body_slice(closure, info, this, args),
+        None => dispatch_proxy_callee_or_throw(closure, this, args),
     }
-    // >16 args: marshal into a buffer and dispatch via the variadic array
-    // path.
-    let buf: Vec<f64> = (0..dispatch_args_len).map(arg_at).collect();
-    call_array_this(closure, this, buf.as_ptr(), buf.len() as i64)
 }
 
 /// Call a closure with receiver `this` (`JsThis::UNDEFINED` for a plain
@@ -390,127 +404,41 @@ unsafe fn call_array_this(
     }
     let n = if args_len < 0 { 0 } else { args_len as usize };
 
-    // Issue #653 followup: route through `dispatch_rest_bundled` directly
-    // when the closure body has a registered rest param, before falling
-    // through to the per-arity `js_closure_callN` dispatchers. Pre-fix,
-    // `js_closure_call7` through `js_closure_call16` skipped the
-    // rest-bundling path entirely and trampolined the args list straight
-    // through `mem::transmute`. With a wrapper registered for the rest
-    // param at `fixed_arity = 2` (e.g. `function h(a, b, ...rest)`),
-    // calling with 8 total args matched the call8 arm and called the
-    // wrapper with 9 doubles when the wrapper signature is 4 doubles —
-    // the receiver's `rest` parameter then read whatever happened to be
-    // in the call's overflow registers, which the wrapper passed
-    // through to the underlying user function as the rest array. Result:
-    // `rest.length` came back as 0 because the actual rest array was
-    // never built. Centralizing the dispatch here keeps the `callN`
-    // arity-specific paths sound for direct-callee dispatch (which is
-    // the dominant case for closure literals stored as locals) while
-    // making the spread path correct for arities ≥ 7. The bound-method
-    // routing has its own path inside `js_closure_callN` and isn't
-    // affected here — we never see BOUND_METHOD_FUNC_PTR through this
-    // entry because `js_closure_call_apply_with_spread`'s caller always
-    // resolves a real closure pointer first.
-    let info_for_rest = crate::closure::closure_info(closure);
-    let fp_for_rest = info_for_rest.map_or(std::ptr::null(), |info| info.code);
-    if let Some((fixed_arity, synth)) = info_for_rest.and_then(crate::closure::info_rest) {
-        let mut tmp: Vec<f64> = Vec::with_capacity(n);
-        if !args_ptr.is_null() && n > 0 {
-            for i in 0..n {
-                let raw = *args_ptr.add(i);
-                let bits = raw.to_bits();
-                // Same INT32_TAG unboxing the per-arity dispatchers do
-                // below — keep the body's `fadd` arithmetic working when
-                // the args came from `v8_to_native`. EXCEPT class refs: a
-                // class/class-prototype ref is ALSO 0x7FFE-tagged (the cid in
-                // the low 32 bits), so unboxing it would turn an imported
-                // class passed through `f(...args)` into the plain number
-                // `cid` — breaking `typeof Filter === 'function'` in
-                // `@nestjs` `@UseFilters`/`@UseGuards` metadata. Skip the
-                // unbox for a registered class-ref (never a v8 int32).
-                let unboxed = if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000
-                    && crate::object::class_ref_id(raw).is_none()
-                {
-                    ((bits & 0xFFFF_FFFF) as i32) as f64
-                } else {
-                    raw
-                };
-                tmp.push(unboxed);
-            }
+    let info = crate::closure::closure_info(closure);
+    if args_ptr.is_null() {
+        if n == 0 || info.and_then(crate::closure::info_rest).is_some() {
+            return dispatch_body_args(closure, info, this, &[]);
         }
-        return dispatch_rest_bundled(closure, fp_for_rest, this, &tmp, fixed_arity, synth);
+        // Preserve the legacy array bridge's null-buffer zero slots.
+        return dispatch_body_args(closure, info, this, &vec![0.0; n]);
     }
-    // Perry's closure-body arithmetic uses plain `fadd`/`fmul`/etc on
-    // f64 inputs and assumes its arguments arrive as plain doubles, not
-    // NaN-boxed values. perry-jsruntime's `v8_to_native` (bridge.rs:215)
-    // NaN-boxes JS integers with INT32_TAG=0x7FFE. If we passed those
-    // bits straight through, the closure body's `fadd` would produce a
-    // NaN (whose payload happens to look like one of the operands when
-    // re-decoded by `console.log`'s tag-aware unbox — which is why
-    // `(a, b) => a + b` with `cb(10, 20)` returned 10 instead of 30
-    // pre-fix). Unbox at the dispatch boundary so the body sees a
-    // plain `20.0` not the NaN-boxed `0x7FFE_0000_0000_0014`. JS
-    // doubles (non-int32) already arrive as plain f64 from
-    // `v8_to_native`; only the INT32_TAG case needs unboxing here.
-    let a = |i: usize| {
-        if args_ptr.is_null() {
-            return 0.0;
-        }
-        let raw = *args_ptr.add(i);
-        let bits = raw.to_bits();
-        // Skip the unbox for a registered class-ref: it is 0x7FFE-tagged like
-        // a v8 int32 but must stay a class ref (see the rest-bundled loop
-        // above) so an imported class spread through `f(...args)` keeps
-        // `typeof === 'function'`.
-        if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000
+    let args = std::slice::from_raw_parts(args_ptr, n);
+    // V8 supplies INT32-tagged numbers; compiled code supplies doubles. Keep
+    // conversion at this bridge, and leave class references (the same tag)
+    // intact. Only a slice containing a numeric INT32 needs scratch storage.
+    let is_int = |raw: f64| {
+        raw.to_bits() & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG
             && crate::object::class_ref_id(raw).is_none()
-        {
-            let int_val = (bits & 0xFFFF_FFFF) as i32;
-            return int_val as f64;
+    };
+    if !args.iter().copied().any(is_int) {
+        return dispatch_body_args(closure, info, this, args);
+    }
+    let unbox = |raw: f64| {
+        if is_int(raw) {
+            (raw.to_bits() as u32 as i32) as f64
+        } else {
+            raw
         }
-        raw
     };
     if n <= 16 {
-        let mut buf = [0.0f64; 16];
-        for (i, slot) in buf.iter_mut().enumerate().take(n) {
-            *slot = a(i);
+        let mut converted = [0.0; 16];
+        for (slot, raw) in converted.iter_mut().zip(args) {
+            *slot = unbox(*raw);
         }
-        return super::calln::dispatch_call_slice(closure, this, &buf[..n]);
+        return dispatch_body_args(closure, info, this, &converted[..n]);
     }
-    match n {
-        // #3527: arities above 16 can't go through a fixed per-arity
-        // `js_closure_callN` (none exist past 16). Build the full unboxed
-        // arg slice and dispatch through the strategy resolver so the
-        // closure body is called with ALL its args (the old `_ =>
-        // js_closure_call16(...)` silently dropped args 16.. — breaking
-        // qs's recursive `stringify`, which self-calls with 18 args).
-        //
-        // #10420: the body's info decides the route, as in
-        // `js_closure_callN`. A body is called at exactly its declared
-        // width: padded when it declares more than `n`, and never handed
-        // slots it does not declare (so a `fn.apply(null, arr)` with
-        // thousands of elements costs the body's own width).
-        _ => {
-            let mut full: Vec<f64> = Vec::with_capacity(n);
-            for i in 0..n {
-                full.push(a(i));
-            }
-            let Some(info) = crate::closure::closure_info(closure) else {
-                throw_not_callable();
-            };
-            let func_ptr = info.code;
-            match resolve_strategy(info).kind() {
-                DispatchKind::BoundMethod => dispatch_bound_method(closure, this, &full),
-                DispatchKind::BoundFunction => dispatch_bound_function(closure, &full),
-                DispatchKind::Rest(fixed_arity, synth) => {
-                    dispatch_rest_bundled(closure, func_ptr, this, &full, fixed_arity, synth)
-                }
-                DispatchKind::Arity(declared) => {
-                    dispatch_with_arity(closure, func_ptr, this, &full, declared)
-                }
-            }
-        }
-    }
+    let converted: Vec<f64> = args.iter().copied().map(unbox).collect();
+    dispatch_body_args(closure, info, this, &converted)
 }
 
 /// Closure call with regular + spread args: `cb(reg0, reg1, ..., ...spread_arr)`.
@@ -597,4 +525,74 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
     };
 
     js_closure_call_array(closure_ptr as i64, this, buf_ptr, total as i64)
+}
+
+#[cfg(test)]
+mod slice_body_tests {
+    use super::*;
+
+    extern "C" fn probe(_: *const ClosureHeader, this: JsThis, a: f64, b: f64) -> f64 {
+        assert_eq!(this.as_f64(), 42.0);
+        assert_eq!(a, 3.0);
+        b
+    }
+
+    #[test]
+    fn slice_body_padding_and_surplus_use_the_declared_signature() {
+        let info = crate::fn_info!(probe, 2; plain());
+        let closure = js_closure_alloc(info, 0);
+        let this = JsThis::from_f64(42.0);
+        unsafe {
+            assert_eq!(
+                call_compiled_body_this(closure, &*info, this, [3.0].as_ptr(), 1).to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+            let args = [3.0, 5.0, 9.0];
+            for n in [2, 3] {
+                assert_eq!(
+                    call_compiled_body_this(closure, &*info, this, args.as_ptr(), n),
+                    5.0
+                );
+            }
+            let args = [3.0; 2048];
+            assert_eq!(
+                call_compiled_body_this(closure, &*info, this, args.as_ptr(), args.len()),
+                3.0
+            );
+        }
+    }
+
+    #[test]
+    fn array_bridge_keeps_legacy_int32_conversion() {
+        let info = crate::fn_info!(probe, 2; plain());
+        let closure = js_closure_alloc(info, 0);
+        let args = [
+            f64::from_bits(crate::value::JSValue::int32(3).bits()),
+            f64::from_bits(crate::value::JSValue::int32(5).bits()),
+        ];
+        assert_eq!(
+            unsafe {
+                js_closure_call_array(closure as i64, JsThis::from_f64(42.0), args.as_ptr(), 2)
+            },
+            5.0
+        );
+    }
+
+    #[test]
+    fn native_non_constructor_body_keeps_this_padding_and_surplus() {
+        let info = crate::fn_info!(probe, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR));
+        let closure = js_closure_alloc(info, 0);
+        let value = crate::value::js_nanbox_pointer(closure as i64);
+        let args = [3.0, 5.0, 9.0];
+        unsafe {
+            assert_eq!(
+                native_call_value_this(value, JsThis::from_f64(42.0), args.as_ptr(), 1).to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+            assert_eq!(
+                native_call_value_this(value, JsThis::from_f64(42.0), args.as_ptr(), 3),
+                5.0
+            );
+        }
+    }
 }

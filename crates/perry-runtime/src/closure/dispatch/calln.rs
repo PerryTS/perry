@@ -226,190 +226,29 @@ closure_call_entry!(
     js_closure_call16, slow_call16, dispatch_call16, 16; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15
 );
 
-/// Dispatch `args` (any count) to `closure` with receiver `this`: the
-/// per-arity dispatchers up to 16 arguments, the padded wide ladder past
-/// them. The one Rust-side way to call a closure pointer.
-pub(crate) fn dispatch_call_slice(
+/// The caller already validated the function object and holds its immutable
+/// body record. Dispatch from that record once, directly over the supplied
+/// values: the declared-signature ladder pads only the slots the body reads.
+/// No fixed-width scratch array or second closure validation is needed.
+///
+/// # Safety
+/// `closure` is a live closure of `info`; `args` holds live JS values.
+#[inline]
+pub(super) unsafe fn dispatch_body_slice(
     closure: *const ClosureHeader,
+    info: &crate::closure::JsFunctionInfo,
     this: JsThis,
     args: &[f64],
 ) -> f64 {
-    let a = |i: usize| args[i];
-    match args.len() {
-        0 => dispatch_call0(closure, this),
-        1 => dispatch_call1(closure, this, a(0)),
-        2 => dispatch_call2(closure, this, a(0), a(1)),
-        3 => dispatch_call3(closure, this, a(0), a(1), a(2)),
-        4 => dispatch_call4(closure, this, a(0), a(1), a(2), a(3)),
-        5 => dispatch_call5(closure, this, a(0), a(1), a(2), a(3), a(4)),
-        6 => dispatch_call6(closure, this, a(0), a(1), a(2), a(3), a(4), a(5)),
-        7 => dispatch_call7(closure, this, a(0), a(1), a(2), a(3), a(4), a(5), a(6)),
-        8 => dispatch_call8(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-        ),
-        9 => dispatch_call9(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-        ),
-        10 => dispatch_call10(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-        ),
-        11 => dispatch_call11(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-        ),
-        12 => dispatch_call12(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-        ),
-        13 => dispatch_call13(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-        ),
-        14 => dispatch_call14(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-        ),
-        15 => dispatch_call15(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-            a(14),
-        ),
-        16 => dispatch_call16(
-            closure,
-            this,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-            a(14),
-            a(15),
-        ),
-        _ => dispatch_call_wide(closure, this, args),
-    }
-}
-
-/// More than 16 arguments: route as the per-arity entries do, then call the
-/// body through the padded ladder (`wide_call`).
-fn dispatch_call_wide(closure: *const ClosureHeader, this: JsThis, args: &[f64]) -> f64 {
-    let Some(info) = crate::closure::closure_info(closure) else {
-        return dispatch_proxy_callee_or_throw(closure, this, args);
-    };
-    let func_ptr = info.code;
     match resolve_strategy(info).kind() {
-        DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, this, args) },
-        DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, args) },
-        DispatchKind::Rest(fixed_arity, synth) => unsafe {
-            dispatch_rest_bundled(closure, func_ptr, this, args, fixed_arity, synth)
-        },
-        // The body declares its ABI width. Surplus arguments are ignored;
-        // they must not widen a short body past the dynamic-call width cap.
-        DispatchKind::Arity(declared) => unsafe {
-            dispatch_with_arity(closure, func_ptr, this, args, declared)
-        },
+        DispatchKind::BoundMethod => dispatch_bound_method(closure, this, args),
+        DispatchKind::BoundFunction => dispatch_bound_function(closure, args),
+        DispatchKind::Rest(fixed, kind) => {
+            dispatch_rest_bundled(closure, info.code, this, args, fixed, kind)
+        }
+        DispatchKind::Arity(declared) => {
+            dispatch_with_arity(closure, info.code, this, args, declared)
+        }
     }
 }
 
@@ -485,9 +324,15 @@ mod plain_call_tests {
             js_closure_call1(closure, undefined, 1.0).to_bits(),
             crate::value::TAG_UNDEFINED
         );
-        assert_eq!(dispatch_call_slice(closure, undefined, &[3.0; 20]), 3.0);
+        assert_eq!(
+            unsafe { dispatch_body_slice(closure, info, undefined, &[3.0; 20]) },
+            3.0
+        );
         // Surplus arguments never widen the body's ABI or trip its width cap.
-        assert_eq!(dispatch_call_slice(closure, undefined, &[3.0; 2048]), 3.0);
+        assert_eq!(
+            unsafe { dispatch_body_slice(closure, info, undefined, &[3.0; 2048]) },
+            3.0
+        );
     }
 
     /// Only a compiled body is plain: a bound value, a body with a rest kind

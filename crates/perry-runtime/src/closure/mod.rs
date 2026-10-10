@@ -57,8 +57,8 @@ pub use registry::{
     FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NO_THIS_REBIND_FLAG,
 };
 pub(crate) use registry::{
-    closure_body_is_non_constructor, info_receives_primitive_this, info_trusted_direct,
-    info_versioned_loop_direct, plain_admits,
+    closure_body_is_non_constructor, has_direct_call_body, info_receives_primitive_this,
+    info_trusted_direct, info_versioned_loop_direct, plain_admits,
 };
 
 pub(crate) use dispatch::{

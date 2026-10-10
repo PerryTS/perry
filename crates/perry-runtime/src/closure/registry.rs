@@ -33,6 +33,18 @@ pub fn closure_info(closure: *const ClosureHeader) -> Option<&'static JsFunction
     (!info.is_null()).then(|| unsafe { &*info })
 }
 
+/// A body the call dispatcher can enter without constructor/export/proxy
+/// classification. Compiled bodies and real non-constructor builtin bodies
+/// carry that proof in their immutable record. No-op prototype placeholders
+/// still need the prototype-method forwarder; native export/bound sentinels
+/// do not carry these builtin/non-constructor flags.
+#[inline(always)]
+pub(crate) fn has_direct_call_body(info: &JsFunctionInfo) -> bool {
+    info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0
+        || (info.flags & (FN_BUILTIN | FN_NON_CONSTRUCTOR) == (FN_BUILTIN | FN_NON_CONSTRUCTOR)
+            && info.code != crate::object::global_this_builtin_noop_thunk as *const u8)
+}
+
 /// The dispatch strategy `info` implies: pure bit tests on the body's own
 /// record.
 #[inline(always)]
