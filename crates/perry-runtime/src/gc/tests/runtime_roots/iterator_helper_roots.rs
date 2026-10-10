@@ -718,6 +718,13 @@ extern "C" fn moving_array_record_next_getter(c: *const ClosureHeader, this: JsT
 }
 
 extern "C" fn moving_array_record_factory(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    // Root construction itself follows forwarding pointers. Check Call's
+    // incoming receiver first so that rooting cannot conceal a stale value.
+    assert_eq!(
+        this.as_f64().to_bits(),
+        js_shadow_slot_get(0),
+        "Call must receive the current receiver before rooting it"
+    );
     let scope = RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this.as_f64());
     record(8);
