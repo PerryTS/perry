@@ -125,7 +125,13 @@ unsafe fn try_data_lookup_key(
     }
     // Descriptor summaries use the same byte hash. Invalid UTF-8 stays on
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
-    std::str::from_utf8(key).ok()?;
+    let key_value = JSValue::from_bits(key_bits);
+    if key_value.is_string() {
+        crate::string::header_str_checked(key_value.as_string_ptr())?;
+    } else {
+        // Inline keys and the borrowed-byte ABI have no header proof.
+        std::str::from_utf8(key).ok()?;
+    }
     let key_hash = super::key_bytes_hash(key.as_ptr(), key.len());
     let mut object = receiver.as_pointer::<ObjectHeader>();
     let mut inherited = false;
