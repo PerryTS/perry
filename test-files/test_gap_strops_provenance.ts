@@ -18,3 +18,7 @@ for (const n of [-0, -1.9, 0.125, 999999999, 1e21, NaN, Infinity]) {
   console.log("id-" + n, `${n}-suffix`, n.toString());
 }
 console.log("abc".slice(NaN, Infinity), "abc".charCodeAt(1.9), "abc".charCodeAt("1" as any));
+const parsed = JSON.parse('"safe"');
+for (const suffix of ['"', '\n', '\\', 'plain']) {
+  console.log(JSON.stringify(parsed + suffix), JSON.stringify(suffix + parsed));
+}
