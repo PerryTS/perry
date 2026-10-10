@@ -338,10 +338,16 @@ fn lower_new_impl_inner<'a>(
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 let func_double = group.reread_emitted(ctx, func_root);
+                let site = crate::expr::new_dynamic::construct_site(ctx);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_new_function_construct",
-                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                    "js_new_function_construct_site",
+                    &[
+                        (DOUBLE, &func_double),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                        (PTR, &site),
+                    ],
                 ));
             }
             // `new Function(p1, …, body)` with a RUNTIME-constructed body (the
@@ -1673,14 +1679,16 @@ fn lower_new_impl_inner<'a>(
                 // `obj_box` — the freshly-allocated object — directly.
                 let this_box = obj_box.clone();
                 let nt_save = crate::rooting::new_target_save_for_super(ctx);
+                let construct_site = crate::expr::new_dynamic::construct_site(ctx);
                 let parent_result = ctx.block().call(
                     DOUBLE,
-                    "js_fetch_or_value_super",
+                    "js_class_value_super_construct_site",
                     &[
                         (DOUBLE, &parent_val),
                         (DOUBLE, &this_box),
                         (PTR, &args_ptr),
                         (I64, &args_len),
+                        (crate::types::PTR, &construct_site),
                     ],
                 );
                 if let Some(save) = nt_save.as_ref() {

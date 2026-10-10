@@ -782,10 +782,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
                     // Below `lower_js_args_array`, which allocates.
                     let func_double = g.reread(ctx, callee_root)?;
+                    let site = construct_site(ctx);
                     Ok(ctx.block().call(
                         DOUBLE,
-                        "js_new_function_construct",
-                        &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                        "js_new_function_construct_site",
+                        &[
+                            (DOUBLE, &func_double),
+                            (PTR, &args_ptr),
+                            (I64, &args_len),
+                            (PTR, &site),
+                        ],
                     ))
                 })?;
                 return Ok(result);
@@ -830,10 +836,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `new <non-constructor-value>` rejected inside the runtime helper.
                 crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
                 let func_double = g.reread(ctx, callee_root)?;
+                let site = construct_site(ctx);
                 Ok(ctx.block().call(
                     DOUBLE,
-                    "js_new_function_construct",
-                    &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+                    "js_new_function_construct_site",
+                    &[
+                        (DOUBLE, &func_double),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                        (PTR, &site),
+                    ],
                 ))
             })
         }
@@ -851,5 +863,128 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // observable behavior as the previous 0.0 sentinel for the
         // strict-mode top-level case.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+pub(crate) fn construct_site(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!(
+        "{}_construct",
+        super::inline_cache_global_name(ctx, site_id)
+    );
+    let tls = if ctx.program_has_worker || ctx.program_has_thread_agents {
+        "thread_local "
+    } else {
+        ""
+    };
+    ctx.typed_parse_rodata.push(format!(
+        "@{name} = private {tls}global [4 x i64] zeroinitializer, align 8"
+    ));
+    format!("@{name}")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn thread_agent_construct_record_is_thread_local() {
+        use perry_hir::{Expr, Module, Stmt};
+        let mut module = Module::new("thread_construct_site.ts");
+        module.init.push(Stmt::Expr(Expr::NewDynamic {
+            callee: Box::new(Expr::GlobalGet(100)),
+            args: vec![],
+            byte_offset: 0,
+        }));
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    program_has_thread_agents: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("call double @js_new_function_construct_site("),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("_construct = private thread_local global [4 x i64] zeroinitializer"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn imported_construct_emits_a_native_site_record() {
+        use perry_hir::{Expr, Module, Stmt};
+        let mut module = Module::new("imported_construct_site.ts");
+        module.init.push(Stmt::Expr(Expr::New {
+            class_name: "Ctor".into(),
+            args: vec![],
+            type_args: vec![],
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }));
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    import_function_prefixes: [("Ctor".into(), "external".into())].into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("call double @js_new_function_construct_site("),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("_construct = private global [4 x i64] zeroinitializer"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_new_function_construct("),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn dynamic_construct_emits_a_native_site_record() {
+        use perry_hir::{Expr, Module, Stmt};
+        let mut module = Module::new("construct_site.ts");
+        module.init.push(Stmt::Expr(Expr::NewDynamic {
+            callee: Box::new(Expr::GlobalGet(100)),
+            args: vec![],
+            byte_offset: 0,
+        }));
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ir.contains("call double @js_new_function_construct_site("),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("_construct = private global [4 x i64] zeroinitializer"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_new_function_construct("),
+            "{ir}"
+        );
     }
 }

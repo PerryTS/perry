@@ -160,7 +160,7 @@ pub(crate) use construct::{
 };
 pub use construct::{
     js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,
-    js_new_function_construct_with_new_target, js_new_target_value,
+    js_class_value_super_construct_site, js_new_function_construct_site, js_new_function_construct_with_new_target, js_new_target_value,
 };
 pub use function_prototype::js_function_prototype_value_for_read;
 pub(crate) use function_prototype::{

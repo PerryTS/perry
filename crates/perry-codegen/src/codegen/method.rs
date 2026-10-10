@@ -1288,14 +1288,16 @@ pub(super) fn compile_method(
                         None => undef_lit.clone(),
                     };
                     let nt_save = crate::rooting::new_target_save_for_super(&mut ctx);
+                    let construct_site = crate::expr::new_dynamic::construct_site(&mut ctx);
                     let parent_result = ctx.block().call(
                         DOUBLE,
-                        "js_fetch_or_value_super",
+                        "js_class_value_super_construct_site",
                         &[
                             (DOUBLE, &parent_val),
                             (DOUBLE, &this_box),
                             (crate::types::PTR, &args_ptr),
                             (I64, &args_len),
+                            (crate::types::PTR, &construct_site),
                         ],
                     );
                     if let Some(save) = nt_save.as_ref() {

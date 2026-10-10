@@ -222,7 +222,7 @@ fn a_dynamic_construction_with_an_inert_argument_roots_neither_callee_nor_argume
     under_both_lowerings(|lowering| {
         let ir = dynamic_new_ir("new_dynamic_inert_arg.ts", Expr::LocalGet(1));
         assert!(
-            ir.contains("@js_new_function_construct("),
+            ir.contains("call double @js_new_function_construct_site("),
             "{lowering}: the fixture must reach the dynamic-construct arm, or \
              this proves nothing:\n{ir}"
         );
@@ -239,12 +239,12 @@ fn a_dynamic_construction_roots_the_callee_across_an_allocating_argument() {
     under_both_lowerings(|lowering| {
         let ir = dynamic_new_ir("new_dynamic_allocating_arg.ts", allocating());
         assert!(
-            ir.contains("@js_new_function_construct("),
+            ir.contains("call double @js_new_function_construct_site("),
             "{lowering}: the fixture must reach the dynamic-construct arm, or \
              this proves nothing:\n{ir}"
         );
         assert!(
-            operand_comes_from_a_temp_root(&ir, "js_new_function_construct", 0),
+            operand_comes_from_a_temp_root(&ir, "js_new_function_construct_site", 0),
             "{lowering}: the constructor outlives an allocating argument and \
              must be re-read from a rooted slot (#7803):\n{ir}"
         );
