@@ -165,7 +165,6 @@ handle-floor | crates/perry-runtime/src/symbol/iterator.rs | 1
 handle-floor | crates/perry-runtime/src/text.rs | 2
 handle-floor | crates/perry-runtime/src/thread.rs | 5
 handle-floor | crates/perry-runtime/src/timer.rs | 1
-handle-floor | crates/perry-runtime/src/tls.rs | 1
 handle-floor | crates/perry-runtime/src/tty.rs | 1
 handle-floor | crates/perry-runtime/src/typed_feedback.rs | 3
 handle-floor | crates/perry-runtime/src/typed_feedback/guards.rs | 1

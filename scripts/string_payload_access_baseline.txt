@@ -12,4 +12,4 @@ inline-offset | perry-runtime | 328
 inline-offset | perry-stdlib | 23
 inline-offset | perry-updater | 5
 reader-helper | perry-ext-ethers | 1
-reader-helper | perry-runtime | 13
+reader-helper | perry-runtime | 11

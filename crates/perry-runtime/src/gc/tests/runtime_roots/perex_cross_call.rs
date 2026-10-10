@@ -66,6 +66,15 @@ fn validated(s: &RuntimeHandle<'_>) -> bool {
     s.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0 })
 }
 
+/// Strip the construction proof. Construction from bytes validates and counts
+/// the payload, so a subject that reaches perex WITHOUT the flag is one whose
+/// producer carried no proof; this makes `s` such a subject.
+fn without_construction_proof(s: &RuntimeHandle<'_>) {
+    s.with_const_ptr::<StringHeader, _>(|s| unsafe {
+        (*(s as *mut StringHeader)).flags &= !STRING_FLAG_WTF8_VALIDATED;
+    });
+}
+
 #[test]
 fn perex_program_witness_lives_with_its_cell_and_a_recompile_starts_without_one() {
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -139,6 +148,11 @@ fn perex_subject_is_marked_only_after_it_validates_with_its_exact_length() {
     let digits = regex(&scope, r"\d+");
 
     let good = text(&scope, "ä1 b22 c333 longer than inline".as_bytes());
+    assert!(
+        validated(&good),
+        "construction from valid bytes carries the proof"
+    );
+    without_construction_proof(&good);
     assert!(!validated(&good));
     assert_eq!(search(&digits, &good).unwrap(), Some((1, 2)));
     assert!(
@@ -152,6 +166,7 @@ fn perex_subject_is_marked_only_after_it_validates_with_its_exact_length() {
     );
 
     let wrong_length = text(&scope, b"abcdef1 and longer than inline");
+    without_construction_proof(&wrong_length);
     wrong_length.with_const_ptr::<StringHeader, _>(|s| unsafe {
         (*(s as *mut StringHeader)).utf16_len = 3;
     });
