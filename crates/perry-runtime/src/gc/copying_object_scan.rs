@@ -36,7 +36,7 @@ use super::*;
 /// not stored.
 #[derive(Clone)]
 struct PlainObjectPlan {
-    prefix: [*mut u64; 3],
+    prefix: [Option<GcMutableSlot>; 3],
     next_prefix: usize,
     payload: HeapSlotRange,
     walk: PayloadWalk,
@@ -53,11 +53,11 @@ enum PayloadWalk {
 
 impl PlainObjectPlan {
     #[inline(always)]
-    unsafe fn next_slot(&mut self) -> Option<*mut u64> {
+    unsafe fn next_slot(&mut self) -> Option<GcMutableSlot> {
         while self.next_prefix < 3 {
             let slot = self.prefix[self.next_prefix];
             self.next_prefix += 1;
-            if !slot.is_null() {
+            if let Some(slot) = slot {
                 return Some(slot);
             }
         }
@@ -78,7 +78,7 @@ impl PlainObjectPlan {
                 *next - 1
             }
         };
-        Some(self.payload.slot(index))
+        Some(GcMutableSlot::new(self.payload.slot(index), None))
     }
 }
 
@@ -117,7 +117,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
-            prefix: [std::ptr::null_mut(); 3],
+            prefix: [None; 3],
             next_prefix: 3,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
@@ -168,9 +168,9 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
     // prototype edge, meta, meta2 (none), payload.
     PlainObjectPlan {
         prefix: [
-            keys_edge.unwrap_or(std::ptr::null_mut()),
-            prototype_edge.unwrap_or(std::ptr::null_mut()),
-            meta.unwrap_or(std::ptr::null_mut()),
+            keys_edge.map(GcMutableSlot::runtime_root),
+            prototype_edge.map(GcMutableSlot::runtime_root),
+            meta.map(|slot| GcMutableSlot::pointer(slot.cast())),
         ],
         next_prefix: 0,
         payload: range,
@@ -223,16 +223,6 @@ impl CopyingNurseryCollector {
         }
         let _ = residual_slots;
         while let Some(slot) = plan.next_slot() {
-            let slot = {
-                #[cfg(target_pointer_width = "32")]
-                if slot == plan.prefix[2] {
-                    GcMutableSlot::pointer(slot.cast())
-                } else {
-                    GcMutableSlot::new(slot, None)
-                }
-                #[cfg(target_pointer_width = "64")]
-                GcMutableSlot::new(slot, None)
-            };
             let before = slot.read();
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
             changed |= slot.read() != before;
@@ -280,14 +270,18 @@ unsafe fn assert_matches_generic_walk(
     residual_slots: usize,
 ) {
     let mut generic = Vec::new();
-    visit_gc_rewrite_slots(header, |slot| generic.push(slot.slot as usize));
+    visit_gc_rewrite_slots(header, |slot| {
+        generic.push((slot.slot as usize, slot.is_parent_owned()));
+    });
     let mut replay = plan.clone();
     let mut expected = Vec::new();
     while let Some(slot) = replay.next_slot() {
-        expected.push(slot as usize);
+        expected.push((slot.slot as usize, slot.is_parent_owned()));
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-    crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| expected.push(slot as usize));
+    crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| {
+        expected.push((slot as usize, true))
+    });
     assert!(
         generic.len() == residual_slots + expected.len()
             && generic[residual_slots..] == expected[..],

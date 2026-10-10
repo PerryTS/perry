@@ -967,6 +967,7 @@ impl GcCycleTrace {
             "sweep",
             "reclaim",
             "remembered_set_clear",
+            "remembered_set_restore",
             "conservative_pin_clear",
             "malloc_trim",
         ] {

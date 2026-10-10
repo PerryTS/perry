@@ -76,7 +76,6 @@ pub(crate) use shapes_birth_width::{
 };
 #[cfg(test)]
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
-pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
     object_shape_hole_count, publish_object_shape_delete_transition, publish_object_shape_holes,
     rekey_stable_tombstone_shape_after_squeeze, retire_owned_shape_history,

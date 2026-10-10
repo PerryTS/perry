@@ -429,12 +429,22 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
     }
 }
 
+/// The authority that remembers a slot between nursery collections.
+/// Runtime-root slots still participate in receiver tracing and rewriting;
+/// their registered root scanner covers carriers a minor never enumerates.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GcSlotOwner {
+    Parent,
+    RuntimeRoot,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::gc) struct GcMutableSlot {
     #[cfg(target_pointer_width = "32")]
     pointer_width: bool,
     pub(in crate::gc) slot: *mut u64,
     pub(in crate::gc) layout_kind: Option<HeapChildSlotReadKind>,
+    owner: GcSlotOwner,
 }
 
 impl GcMutableSlot {
@@ -443,9 +453,25 @@ impl GcMutableSlot {
         Self {
             slot,
             layout_kind,
+            owner: GcSlotOwner::Parent,
             #[cfg(target_pointer_width = "32")]
             pointer_width: false,
         }
+    }
+
+    /// A shared word whose existing runtime root scanner owns remembering.
+    /// This changes custody only, never marking, rewriting or liveness.
+    #[inline]
+    pub(in crate::gc) fn runtime_root(slot: *mut u64) -> Self {
+        Self {
+            owner: GcSlotOwner::RuntimeRoot,
+            ..Self::new(slot, None)
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::gc) fn is_parent_owned(self) -> bool {
+        self.owner == GcSlotOwner::Parent
     }
 
     /// Retain the native pointer width with the slot address across budgeted scans.
@@ -455,6 +481,7 @@ impl GcMutableSlot {
         Self {
             slot: slot.cast(),
             layout_kind: None,
+            owner: GcSlotOwner::Parent,
             #[cfg(target_pointer_width = "32")]
             pointer_width: true,
         }

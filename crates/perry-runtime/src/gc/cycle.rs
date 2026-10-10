@@ -1655,8 +1655,8 @@ impl GcCycleState {
                     };
                     remaining = remaining.saturating_sub(clear.work_units);
                     trace_phase_record(&mut self.trace, "remembered_set_clear", phase_start);
-                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
                     if clear.done {
+                        let restore_start = trace_phase_start(&self.trace);
                         if let Some(minor) = self.minor.as_ref() {
                             minor.evacuation_sticky.restore();
                         }
@@ -1678,7 +1678,14 @@ impl GcCycleState {
                             self.reclaim_state.as_mut().expect("reclaim state exists");
                         reclaim_state.remembered_set_clear = None;
                         reclaim_state.subphase = ReclaimSubphase::ConservativePins;
-                    } else {
+                        trace_phase_record(
+                            &mut self.trace,
+                            "remembered_set_restore",
+                            restore_start,
+                        );
+                    }
+                    trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
+                    if !clear.done {
                         break;
                     }
                 }

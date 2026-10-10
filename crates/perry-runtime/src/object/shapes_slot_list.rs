@@ -1273,35 +1273,6 @@ pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
         .map(|record| record as *mut u64)
 }
 
-/// Is `slot` the shared `keys` word of `shape_id`'s descriptor record?
-///
-/// #8112: that word is a TABLE root, not a slot any receiver owns. Every
-/// sibling of the shape enumerates it, so a rewrite performed while tracing
-/// one receiver silently changes the edge of every other — including old
-/// receivers a minor never visits, for which no per-parent remembered-set page
-/// could ever be armed. The remembered-set and old→young verification paths
-/// therefore skip it and let the shape table's own root scanner cover it.
-#[inline]
-pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
-    if !super::is_shape_id(shape_id) {
-        return false;
-    }
-    // No table borrow at all: this runs inside collector walks, and a
-    // `RefCell` borrow here would make the predicate itself a re-entrancy
-    // hazard. The slab is read through a raw pointer.
-    crate::state::state()
-        .shapes
-        .slab()
-        .record_ptr(shape_id)
-        .is_some_and(|record| {
-            // The keys word is the record's first field; the identity's
-            // [[Prototype]] word (`shapes_prototype`) is the same kind of
-            // shared edge.
-            record as *mut u64 == slot
-                || super::identity_word_slot(unsafe { (*record).proto_id }) == Some(slot)
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::*;

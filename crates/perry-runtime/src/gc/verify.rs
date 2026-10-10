@@ -275,7 +275,7 @@ pub(super) unsafe fn remember_mutable_old_to_young_slot(
     mutable_slot: GcMutableSlot,
 ) -> bool {
     let slot = mutable_slot.slot;
-    if slot.is_null() {
+    if slot.is_null() || !mutable_slot.is_parent_owned() {
         return false;
     }
     let bits = mutable_slot.read();
@@ -309,7 +309,7 @@ pub(super) unsafe fn remember_decoded_full_mark_slot(
     word: trace::FieldWord,
 ) -> bool {
     let slot = mutable_slot.slot;
-    if slot.is_null() || !word.needs_tracking() {
+    if slot.is_null() || !mutable_slot.is_parent_owned() || !word.needs_tracking() {
         return false;
     }
     #[cfg(test)]
@@ -957,11 +957,10 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
         {
             return;
         }
-        // #8112: the shape table's shared keys word is not a slot this parent
-        // owns, so per-parent coverage is the wrong question to ask of it.
-        // `gc/shape_keys_edge.rs` says why; the table's `old_carrier` root is
-        // what covers it instead.
-        if slot_is_shared_shape_keys_word(header, slot.slot) {
+        // Shared runtime-root words are traced through receivers, but their
+        // root scanner covers them between minors, independently of any one
+        // carrier's lifetime. Use the same custody as remembering.
+        if !slot.is_parent_owned() {
             return;
         }
         slot.record_layout_read();

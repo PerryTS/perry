@@ -1186,10 +1186,6 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
             "the field reader must not read a retired record"
         );
         assert_eq!(shape_descriptor_keys_slot(id), None);
-        assert!(
-            !shape_id_owns_keys_slot(id, record as *mut u64),
-            "a retired id must not claim its old record address"
-        );
     }
 }
 
