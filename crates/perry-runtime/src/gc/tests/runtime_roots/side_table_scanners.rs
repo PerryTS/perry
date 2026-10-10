@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let _guard = GcTestIsolationGuard::new();
-    // `prototype_value`/`cached_value`/`prototype_object` are
+    // `prototype_value`/`prototype_object` are
     // all live across the two `arena_alloc_gc` calls below (`parent_closure`,
     // `function_key`), and `parent_closure` is live across `function_key`'s —
     // any of those allocations can reach the block-full slow path's
@@ -13,7 +13,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     clear_mark_seeds();
     crate::object::test_clear_class_side_table_roots();
 
-    let cached_value = young_leaf();
     let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
     let parent_closure = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::closure::ClosureHeader>(),
@@ -30,11 +29,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
         init_test_closure(function_key as *mut u8);
     }
 
-    crate::object::test_seed_class_prototype_method_value_root(
-        0x5201,
-        "bound",
-        string_bits(cached_value),
-    );
     crate::object::test_seed_class_prototype_object_root(0x5201, prototype_object);
     crate::object::test_seed_class_parent_closure_root(0x5201, parent_closure);
     crate::object::test_seed_function_class_id_key(ptr_bits(function_key), 0x8200_5201);
@@ -42,7 +36,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let valid_ptrs = build_valid_pointer_set();
     crate::object::scan_class_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
 
-    assert_marked_user_ptr(cached_value, "cached bound prototype method value");
     assert_marked_user_ptr(prototype_object, "prototype-object side-table value");
     assert_marked_user_ptr(parent_closure, "parent-closure side-table value");
     assert_unmarked_user_ptr(function_key, "function-to-class metadata key");
@@ -84,22 +77,15 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
         set_forwarding_address(header_from_user_ptr(key_user) as *mut GcHeader, key_old);
     }
 
-    let value_bits = ptr_bits(value_user as usize);
-    let value_old_bits = ptr_bits(value_old as usize);
     let key_bits = ptr_bits(key_user as usize);
     let key_old_bits = ptr_bits(key_old as usize);
 
-    crate::object::test_seed_class_prototype_method_value_root(0x5202, "bound", value_bits);
     crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
     crate::object::test_seed_class_parent_closure_root(0x5202, key_user as usize);
     crate::object::test_seed_function_class_id_key(key_bits, 0x8200_5202);
 
     rewrite_mutable_registered_roots(&valid_ptrs);
 
-    assert_eq!(
-        crate::object::test_class_prototype_method_value_root_bits(0x5202, "bound"),
-        value_old_bits
-    );
     assert_eq!(
         crate::object::test_class_prototype_object_root_addr(0x5202),
         value_old as usize

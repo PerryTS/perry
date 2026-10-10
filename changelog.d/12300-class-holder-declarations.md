@@ -1,0 +1,1 @@
+Class method values and class declarations no longer live in side registries: method values are traced internal slots of the class holder (its function object), and declarations are static per-class descriptors in the image (#12300).

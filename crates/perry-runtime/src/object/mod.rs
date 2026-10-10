@@ -9,7 +9,6 @@ use crate::arena::arena_alloc_gc;
 use crate::ArrayHeader;
 use crate::JSValue;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
@@ -580,10 +579,6 @@ pub fn global_this_root_slot_for_test() -> i64 {
 //
 // This handles cases like Object.assign() adding many fields to an object
 // that was allocated with only 8 slots (e.g., @noble/curves Fp field with 21 properties).
-crate::perry_thread_local! {
-    static CLASS_PROTOTYPE_METHOD_VALUES: RefCell<HashMap<(u32, String, ClassDeclarationValueKind), u64>> =
-        RefCell::new(HashMap::new());
-}
 
 /// #6759 Phase A: object field-storage side tables and the shape/transition
 /// caches, grouped as the `object_hot` field of

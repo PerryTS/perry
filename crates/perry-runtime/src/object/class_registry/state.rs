@@ -5,11 +5,46 @@ use crate::object::class_image::{
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// Distinct declaration namespaces in the existing rooted value store.
+/// The function objects a class keeps for its declared methods, one per
+/// (kind, name), so every path that reads a declared method sees the same
+/// object. Each is a traced internal slot of the class's holder, its
+/// function object (`class_value_ptr`): never a JS property, never a side
+/// table, and it lives exactly as long as the holder.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum ClassDeclarationValueKind {
+    /// A public string-keyed method of `C.prototype`.
     Method,
+    /// A private `#m` or symbol-aliased method: never a prototype property.
     NonPropertyMethod,
+    /// A private static method's value of a declared class.
+    PrivateStaticMethod,
+}
+
+impl ClassDeclarationValueKind {
+    const fn tag(self) -> char {
+        match self {
+            Self::Method => 'm',
+            Self::NonPropertyMethod => 'n',
+            Self::PrivateStaticMethod => 's',
+        }
+    }
+}
+
+/// The holder-internal key of declaration value (`kind`, `name`):
+/// `"\x01" + tag + ":" + name`.
+///
+/// The holder's internal namespace has other families: private accessor
+/// pairs and private statics (`#x`) and runtime-internal keys (`__perry_*`,
+/// `#<perry:...>`). None of them starts with `\x01`, and the fixed three-byte
+/// prefix makes (kind, name) -> key injective, so no member name (a computed
+/// `["#x"]()`, or one spelled like this key) can reach another entry.
+pub(crate) fn class_declaration_value_key(kind: ClassDeclarationValueKind, name: &str) -> String {
+    let mut key = String::with_capacity(3 + name.len());
+    key.push('\u{1}');
+    key.push(kind.tag());
+    key.push(':');
+    key.push_str(name);
+    key
 }
 
 crate::perry_thread_local! {
@@ -303,31 +338,41 @@ pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     class_static_alias_sync(class_id, name);
 }
 
-pub(crate) fn class_prototype_method_value_cache_root_store(
+/// Class `class_id`'s declaration value (`kind`, `name`), if its holder
+/// keeps one. Reads only: a class whose holder was never minted has none.
+pub(crate) fn class_declaration_value(
     class_id: u32,
-    method_name: String,
-    value_bits: u64,
-) {
-    class_declaration_value_root_store(
-        class_id,
-        method_name,
-        ClassDeclarationValueKind::Method,
-        value_bits,
-    );
+    kind: ClassDeclarationValueKind,
+    name: &str,
+) -> Option<u64> {
+    let holder = crate::object::class_value::class_value_if_minted(class_id)? as usize;
+    let key = class_declaration_value_key(kind, name);
+    // SAFETY: this agent's live class function object.
+    unsafe { crate::closure::props::state_internal_get(holder, &key) }.map(f64::to_bits)
 }
 
-pub(crate) fn class_declaration_value_root_store(
+/// Keep `value_bits` as class `class_id`'s declaration value (`kind`,
+/// `name`) on its holder. A class whose holder was never minted keeps none:
+/// minting builds the class's prototype (its heritage included), which a
+/// value read must not cause (a per-evaluation template's evaluation reads
+/// its methods without ever building the template's own prototype). Minting
+/// itself materializes and keeps every method its prototype holds.
+pub(crate) fn class_declaration_value_store(
     class_id: u32,
-    name: String,
     kind: ClassDeclarationValueKind,
+    name: &str,
     value_bits: u64,
 ) {
-    CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
-        cache
-            .borrow_mut()
-            .insert((class_id, name, kind), value_bits);
-    });
-    crate::gc::runtime_write_barrier_root_nanbox(value_bits);
+    let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
+        return;
+    };
+    let key = class_declaration_value_key(kind, name);
+    // SAFETY: this agent's live, pinned class function object; the internal
+    // write allocates under its own GcSuppressScope and stores through the
+    // state record's barriered slot.
+    unsafe {
+        crate::closure::props::state_internal_set(holder as usize, &key, f64::from_bits(value_bits))
+    };
 }
 
 // ============================================================================
