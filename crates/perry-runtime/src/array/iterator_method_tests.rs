@@ -207,6 +207,22 @@ fn array_custom_prototype_supplies_the_method_to_both_consumers() {
         crate::object::js_object_set_prototype_of(value, proto_value);
         let iter = array_shape_iterator(value);
         assert_eq!(FACTORY_CALLS.with(std::cell::Cell::get), 1);
+        // Exercise the warm resolver too: a cold standalone runtime has no
+        // default prototype, so its absent-owner fallback could hide a broken
+        // custom-prototype guard by taking ordinary [[Get]] anyway.
+        let default_proto = super::super::js_array_alloc(0);
+        let default_method = crate::closure::js_closure_alloc(
+            crate::fn_info!(crate::object::array_prototype_values_thunk, 1;
+                with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(default_proto as i64),
+            crate::value::js_nanbox_pointer(crate::symbol::well_known_symbol("iterator") as i64),
+            crate::value::js_nanbox_pointer(default_method as i64),
+        );
+        let _warm_iter = array_shape_iterator_resolved(value, default_proto as usize);
+        assert_eq!(FACTORY_CALLS.with(std::cell::Cell::get), 2);
         let mut stack = super::super::iterator_stack_record::ArrayStackRecord {
             payload: value,
             next: f64::from_bits(TAG_UNDEFINED),
@@ -223,7 +239,7 @@ fn array_custom_prototype_supplies_the_method_to_both_consumers() {
             ),
             1
         );
-        assert_eq!(FACTORY_CALLS.with(std::cell::Cell::get), 2);
+        assert_eq!(FACTORY_CALLS.with(std::cell::Cell::get), 3);
         let mut item = 0.0;
         let next = super::super::js_iterator_next_method(iter);
         assert_eq!(super::super::js_iterator_step(iter, next, &mut item), 0);
