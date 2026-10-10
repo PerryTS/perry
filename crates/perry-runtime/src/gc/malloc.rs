@@ -588,10 +588,11 @@ pub(crate) fn gc_malloc_header_is_tracked(header: *const GcHeader) -> bool {
     })
 }
 
-/// Precise-root verification only: is `header` one of this agent's live
-/// malloc allocations? Never on a release marking path. It leaves the lazy
-/// exact registry as it is: an active set answers directly, otherwise the
-/// live object vector is searched.
+/// Is `header` one of this agent's live malloc allocations? For cold
+/// paths only: precise-root verification, and the dirty-coverage repair that
+/// must prove a possibly stale external entry dereference-safe before touching
+/// it. Never on root admission. It leaves the lazy exact registry as it is: an
+/// active set answers directly, otherwise the live object vector is searched.
 #[cold]
 pub(crate) fn gc_malloc_header_is_local(header: *const GcHeader) -> bool {
     if header.is_null() {

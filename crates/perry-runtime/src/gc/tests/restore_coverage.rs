@@ -21,7 +21,7 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
         let slot = crate::closure::closure_capture_slots_mut(closure).add(1);
         let page = crate::arena::generation_page_for_addr(slot as usize);
         activate_malloc_registry_for_tests();
-        assert!(super::super::malloc::gc_malloc_header_is_owned(
+        assert!(super::super::malloc::gc_malloc_header_is_local(
             header as *const GcHeader
         ));
         assert_eq!((*(header as *const GcHeader)).gc_flags & GC_FLAG_MARKED, 0);
