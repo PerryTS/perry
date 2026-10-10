@@ -456,6 +456,45 @@ fn closure_alloc_storage_no_collect(actual_count: usize) -> Option<*mut u8> {
     (!raw.is_null()).then_some(raw)
 }
 
+/// Fixed bound birth after the caller proved a closure target. The target
+/// guarantees a pointer-bearing payload, and the nursery allocator already
+/// initializes its header to UNKNOWN: no capture classification, layout
+/// transition or address-mask entry is needed. Keep the allocating fallback
+/// on the same rooted installer as every other closure birth.
+#[inline(never)]
+pub(crate) fn closure_alloc_bound_function(target: u64, receiver: u64) -> *mut ClosureHeader {
+    let shape_id = super::shape::birth_shape_for_body(&super::BOUND_FUNCTION_INFO);
+    let Some(raw) = closure_alloc_storage_no_collect(3) else {
+        let slots = [target, receiver, 0];
+        return closure_alloc_init_collecting(&super::BOUND_FUNCTION_INFO, 3, slots.as_ptr(), true);
+    };
+    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    let closure = raw as *mut ClosureHeader;
+    unsafe {
+        debug_assert_eq!(
+            (*(raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))._reserved
+                & crate::gc::GC_LAYOUT_STATE_MASK,
+            0,
+            "the nursery birth is already UNKNOWN"
+        );
+        (*closure).capture_count = 3;
+        (*closure).shape_id = shape_id;
+        (*closure).info = &super::BOUND_FUNCTION_INFO;
+        // GC_STORE_AUDIT(INIT): fresh closure, null own-property edge.
+        (*closure).props = std::ptr::null_mut();
+        let slots = closure_capture_slots_mut(closure);
+        // GC_STORE_AUDIT(BARRIERED): fixed target/receiver/args slots, followed
+        // by the same newborn barrier as the general capture installer.
+        slots.write(target);
+        slots.add(1).write(receiver);
+        slots.add(2).write(0);
+        if crate::gc::newborn_parent_needs_barrier(closure as usize) {
+            crate::gc::runtime_write_barrier_newborn_slots(closure as usize, slots, 3);
+        }
+    }
+    closure
+}
+
 /// One-call birth of a fresh (non-singleton) capturing closure: allocation,
 /// header, capture slots and layout in a single runtime entry.
 ///

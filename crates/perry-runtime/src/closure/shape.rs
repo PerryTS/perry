@@ -116,7 +116,7 @@ pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::Runtime
 crate::perry_thread_local! {
     /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
     /// then the FunctionDictionary id (0 = not minted yet).
-    static BASE_SHAPES: std::cell::Cell<[u32; 7]> = const { std::cell::Cell::new([0; 7]) };
+    static BASE_SHAPES: std::cell::Cell<[u32; 8]> = const { std::cell::Cell::new([0; 8]) };
     /// This agent's class-constructor ShapeId (0 = not minted yet). Its own
     /// cell: the base-shape array is copied on every closure birth.
     static CLASS_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -163,7 +163,7 @@ fn base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
     // One element read in place: every closure birth and every function
     // receiver test asks for one of these ids, and copying the whole array
     // out of the cell per call showed up at ~3% of Zod.
-    // SAFETY: a plain `[u32; 7]` read through the agent's own cell; nothing
+    // SAFETY: a plain `[u32; 8]` read through the agent's own cell; nothing
     // else holds a reference into it.
     let id = BASE_SHAPES.with(|c| unsafe { (*c.as_ptr())[index] });
     if id != 0 {
@@ -253,6 +253,7 @@ pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
                 INTRINSIC_SERIAL_FUNCTION,
             );
         }
+        return base_slot(7, ShapeObjectKind::FunctionBound, INTRINSIC_SERIAL_FUNCTION);
     }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
@@ -418,7 +419,7 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
 /// object carries.
 #[inline]
 pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
-    // SAFETY: a plain `[u32; 7]` read through the agent's own cell; nothing
+    // SAFETY: a plain `[u32; 8]` read through the agent's own cell; nothing
     // else holds a reference into it.
     BASE_SHAPES.with(|c| unsafe {
         let ids = &*c.as_ptr();

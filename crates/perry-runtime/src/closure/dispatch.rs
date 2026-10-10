@@ -15,6 +15,8 @@
 
 use super::*;
 
+#[cfg(test)]
+mod bind_creation_tests;
 mod bound;
 pub(super) mod bound_intrinsic;
 mod calln;

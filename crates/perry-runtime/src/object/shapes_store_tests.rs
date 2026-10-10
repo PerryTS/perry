@@ -48,6 +48,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::NativeNamespace,
         ShapeObjectKind::FunctionBoundCall,
         ShapeObjectKind::FunctionBoundApply,
+        ShapeObjectKind::FunctionBound,
     ] {
         assert_eq!(kind as u8, kind.code() as u8, "kind cache decoding ordinal");
         assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);

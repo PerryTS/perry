@@ -982,6 +982,8 @@ pub(crate) enum ShapeObjectKind {
     /// ordinal and the direct decoding of ordinary kind-cache entries.
     FunctionBoundCall,
     FunctionBoundApply,
+    /// Ordinary bound function: target, receiver and partial-argument slots.
+    FunctionBound,
 }
 
 impl ShapeObjectKind {
@@ -989,7 +991,7 @@ impl ShapeObjectKind {
     pub(crate) fn is_function_layout(self) -> bool {
         matches!(
             self,
-            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply
+            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply | Self::FunctionBound
         )
     }
 
@@ -1002,6 +1004,7 @@ impl ShapeObjectKind {
                 | ShapeObjectKind::FunctionDictionary
                 | ShapeObjectKind::FunctionBoundCall
                 | ShapeObjectKind::FunctionBoundApply
+                | ShapeObjectKind::FunctionBound
         )
     }
 
@@ -1034,6 +1037,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::NativeNamespace => 7,
             ShapeObjectKind::FunctionBoundCall => 8,
             ShapeObjectKind::FunctionBoundApply => 9,
+            ShapeObjectKind::FunctionBound => 10,
         }
     }
 }
@@ -1054,6 +1058,7 @@ const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
 const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
 const SHAPE_KIND_FUNCTION_BOUND_CALL: u64 = 9;
 const SHAPE_KIND_FUNCTION_BOUND_APPLY: u64 = 10;
+const SHAPE_KIND_FUNCTION_BOUND: u64 = 11;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -1079,6 +1084,7 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
         SHAPE_KIND_FUNCTION_BOUND_CALL => Some(ShapeObjectKind::FunctionBoundCall),
         SHAPE_KIND_FUNCTION_BOUND_APPLY => Some(ShapeObjectKind::FunctionBoundApply),
+        SHAPE_KIND_FUNCTION_BOUND => Some(ShapeObjectKind::FunctionBound),
         _ => None,
     }
 }
@@ -1097,6 +1103,7 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
         ShapeObjectKind::FunctionBoundCall => SHAPE_KIND_FUNCTION_BOUND_CALL,
         ShapeObjectKind::FunctionBoundApply => SHAPE_KIND_FUNCTION_BOUND_APPLY,
+        ShapeObjectKind::FunctionBound => SHAPE_KIND_FUNCTION_BOUND,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }

@@ -169,7 +169,7 @@ const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0xF << RECORD_KIND_SHIFT;
 /// The frequently decoded kind is one contiguous field.
 /// The record stays 64 bytes; `kind_codes_round_trip` pins the encoding.
-const RECORD_KIND_MAX_CODE: u32 = 9;
+const RECORD_KIND_MAX_CODE: u32 = 10;
 const _: () = assert!(RECORD_KIND_MAX_CODE <= 15);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
@@ -362,6 +362,7 @@ impl ShapeRecord {
             7 => ShapeObjectKind::NativeNamespace,
             8 => ShapeObjectKind::FunctionBoundCall,
             9 => ShapeObjectKind::FunctionBoundApply,
+            10 => ShapeObjectKind::FunctionBound,
             _ => ShapeObjectKind::Ordinary,
         }
     }
