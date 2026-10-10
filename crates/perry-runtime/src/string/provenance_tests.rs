@@ -30,7 +30,7 @@ fn construction_proves_utf8_and_generalized_wtf8() {
 
 #[test]
 fn concat_intersects_json_escape_proof_independently_of_encoding_proof() {
-    let safe = heap("safe-prefix");
+    let safe = heap(&"safe-prefix-".repeat(8));
     unsafe {
         (*safe).flags |= STRING_FLAG_JSON_ESCAPE_FREE;
     }
