@@ -1121,6 +1121,32 @@ pub(crate) fn string_copy_range(
     utf16_len: u32,
     flags: u32,
 ) -> *mut StringHeader {
+    if let Some((ptr, data_ptr)) = string_storage_alloc_no_collect(byte_len) {
+        unsafe {
+            init_string_header(ptr, utf16_len, byte_len, byte_len, 0, flags);
+            if byte_len > 0 {
+                ptr::copy_nonoverlapping(
+                    string_data(s).add(byte_start),
+                    data_ptr,
+                    byte_len as usize,
+                );
+            }
+        }
+        return ptr;
+    }
+    string_copy_range_collecting(s, byte_start, byte_len, utf16_len, flags)
+}
+
+/// Only block exhaustion needs the source handle and post-allocation reload.
+#[cold]
+#[inline(never)]
+fn string_copy_range_collecting(
+    s: *const StringHeader,
+    byte_start: usize,
+    byte_len: u32,
+    utf16_len: u32,
+    flags: u32,
+) -> *mut StringHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_string_ptr(s);
     let (ptr, data_ptr) = string_storage_alloc(byte_len);

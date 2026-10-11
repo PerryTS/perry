@@ -9,6 +9,20 @@ fn units(s: *const StringHeader) -> Vec<u16> {
 }
 
 #[test]
+fn copy_range_in_an_open_block_reaches_no_collection_point() {
+    std::thread::spawn(|| {
+        let source = js_string_from_str("abcdefghijklmnop");
+        crate::arena::reset_gc_trigger_arena_probe();
+        let before = crate::arena::gc_trigger_arena_calls();
+        let result = string_copy_range(source, 3, 8, 8, 0);
+        assert_eq!(string_as_str(result), "defghijk");
+        assert_eq!(crate::arena::gc_trigger_arena_calls(), before);
+    })
+    .join()
+    .expect("range-copy collection-point test panicked");
+}
+
+#[test]
 fn slice_utf16_bounds_and_lone_surrogates() {
     for bytes in [
         b"".as_slice(),

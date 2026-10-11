@@ -75,6 +75,28 @@ fn test_incremental_barrier_marks_array_element_store() {
     remembered_set_clear();
 }
 
+#[test]
+fn resolved_array_store_shades_a_child_of_a_young_parent() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let arr = crate::array::js_array_alloc(1);
+    let child = unsafe { alloc_nursery_test_object(0).0 as usize };
+    clear_marks();
+    mark_user_ptr(arr as usize);
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+    assert!(!crate::gc::incremental_mark_barrier_globally_idle());
+    unsafe {
+        crate::array::store_array_slot_resolved(arr, 0, f64::from_bits(ptr_bits(child)), 0);
+        (*arr).length = 1;
+    }
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+    assert_marked_user_ptr(child, "resolved young array's child");
+    clear_mark_user_ptr(arr as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
 /// Regression: a uniquely-owned (refcount==1) string stored into an object
 /// field or array element must be demoted to shared (refcount==0) by the
 /// write-barrier choke point, so a later `js_string_append` on the original

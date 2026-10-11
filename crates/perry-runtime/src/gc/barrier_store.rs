@@ -54,6 +54,35 @@ pub(crate) fn runtime_write_barrier_slot(parent_addr: usize, slot_addr: usize, c
     write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, false);
 }
 
+/// Slot barrier when the caller already owns a live, forwarding-resolved GC
+/// parent. The allocator's generation proof excludes raw old-arena births,
+/// whose headers need not yet carry TENURED. The global mark gate still
+/// requires shading during a full cycle.
+/// Keep this continuation shared rather than repeating its gate at each store.
+///
+/// # Safety
+/// `parent_addr` must be a live, non-forwarded GC user pointer. No safepoint
+/// may intervene between the caller's admission and this call.
+#[inline(never)]
+pub(crate) unsafe fn runtime_write_barrier_resolved_slot(
+    parent_addr: usize,
+    slot_addr: usize,
+    child_bits: u64,
+) {
+    if barrier_scalar_child_skips(child_bits) {
+        return;
+    }
+    if super::barrier::incremental_mark_barrier_globally_idle()
+        && matches!(
+            crate::arena::classify_heap_generation(parent_addr),
+            crate::arena::HeapGeneration::Nursery
+        )
+    {
+        return;
+    }
+    runtime_write_barrier_slot(parent_addr, slot_addr, child_bits);
+}
+
 /// Canonicalize an **INT32-boxed** numeric store into a raw-f64-masked slot of
 /// an intact typed-shape descriptor (`0x7FFE…` → the plain IEEE bits of the same
 /// number). The object twin of `canonicalize_array_numeric_store_bits`

@@ -37,7 +37,11 @@ pub unsafe extern "C" fn js_array_append_set(
                 let slot = array_elements_ptr(arr).add(length as usize);
                 // GC_STORE_AUDIT(BARRIERED): a shared exact slot barrier below.
                 std::ptr::write(slot, value.to_bits());
-                crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, value.to_bits());
+                crate::gc::runtime_write_barrier_resolved_slot(
+                    arr as usize,
+                    slot as usize,
+                    value.to_bits(),
+                );
             } else {
                 // Kind conversion, homogeneous element proof and layout changes
                 // all stay here, shared across sites, before length is published.

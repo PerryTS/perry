@@ -64,6 +64,25 @@ fn runtime_write_barrier_slot_remembers_old_to_young_edge() {
     reset_remembered_set();
 }
 
+#[test]
+fn resolved_array_store_remembers_an_old_to_young_edge() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let child = unsafe { alloc_nursery_test_object(0).0 as usize };
+    let (arr, elements) = unsafe { alloc_old_test_array(1) };
+    let page = crate::arena::generation_page_for_addr(elements as usize);
+    assert!(!old_page_dirty_for(page));
+    unsafe {
+        crate::array::store_array_slot_resolved(arr, 0, f64::from_bits(ptr_bits(child)), 0);
+    }
+    assert_eq!(unsafe { *elements }, ptr_bits(child));
+    assert!(
+        old_page_dirty_for(page),
+        "resolved stores must retain old edges"
+    );
+    reset_remembered_set();
+}
+
 /// A second inline-slot store onto a page the dirty-page cache already names
 /// is answered by the cache alone: still exactly one remembered page, and
 /// the parent/child classifications are not consulted (the cache invariant
