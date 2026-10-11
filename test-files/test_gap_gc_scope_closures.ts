@@ -24,7 +24,7 @@ console.log(s1.incA(), s1.incB(), s1.rename("x"), s1.snapshot());
 console.log(s2.incA(), s2.incA(), s2.incB(), s2.snapshot(), s1.snapshot());
 
 // Different closure sets: `x` is shared by f and g, `y` only by g, `z` only by
-// f. The bindings land in different scope objects; all stay consistent.
+// f. All bindings share the scope activation and stay consistent.
 function splitGroups() {
   let x = 0;
   let y = 100;

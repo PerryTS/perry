@@ -1,5 +1,5 @@
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
-use super::let_object_facts::{is_object_literal_init, record_imported_object_alias};
+use super::let_object_facts::record_imported_object_alias;
 use super::let_stmt_facts::{
     buffer_local_alias_source, is_global_this_value, native_i32_alias_source,
     pod_view_count_source, record_array_length_snapshot, record_pod_rejection,
@@ -83,12 +83,10 @@ pub(crate) fn lower_let(
             if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
                 ctx.option_object_locals.insert(id, props);
             }
-            // #5271: remember object-literal locals so a builtin-named member
-            // call (`o.trim()`, joi's `internals.trim(v, s)`) resolves to the
-            // object's OWN method instead of being claimed by the static
-            // String-method fast path. Covers both plain literals and the
-            // method-bearing literals that lower to an object-building IIFE.
-            if is_object_literal_init(init_expr) {
+            // Structural allocation provenance, independent of annotations.
+            // Do not recognize factories by a parameter name or first argument:
+            // an arbitrary factory can return an array or other forwarded value.
+            if crate::expr::ordinary_object_allocation(ctx, init_expr) {
                 ctx.object_literal_locals.insert(id);
             }
         }

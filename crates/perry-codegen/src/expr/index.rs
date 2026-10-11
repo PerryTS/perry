@@ -388,8 +388,9 @@ pub(crate) fn lower_index_set_fast(
     {
         // An ADD (a hole, or `index >= length`): an inherited index setter
         // could intercept it, so the prototype facts are required here (#10593:
-        // the process-wide byte and the array's own custom-proto bit). A hole
-        // below `length`, or a negative index, is not an extend: full `[[Set]]`.
+        // the process-wide byte and the array's own custom-proto bit).
+        // Filling a hole below length reuses the in-bounds store, provided
+        // the slot is allocated. Huge holey lengths can exceed capacity.
         let blk = ctx.block();
         let reserved_addr = blk.sub(I64, &arr_handle, "6");
         let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
@@ -398,7 +399,20 @@ pub(crate) fn lower_index_set_fast(
             crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
         let at_or_past_length = blk.icmp_sge(I32, &idx_i32, &length);
         let extend_ok = blk.and(I1, &default_prototype_chain, &at_or_past_length);
-        blk.cond_br(&extend_ok, &check_cap_label, &guard_fallback_label);
+        let hole_idx = ctx.new_block("idxset.hole");
+        let hole_label = ctx.block_label(hole_idx);
+        ctx.block()
+            .cond_br(&extend_ok, &check_cap_label, &hole_label);
+        ctx.current_block = hole_idx;
+        let blk = ctx.block();
+        let cap_addr = blk.add(I64, &arr_handle, "4");
+        let cap_ptr = blk.inttoptr(I64, &cap_addr);
+        let capacity = blk.load(I32, &cap_ptr);
+        let allocated = blk.icmp_ult(I32, &idx_i32, &capacity);
+        let below_length = blk.icmp_ult(I32, &idx_i32, &length);
+        let in_bounds = blk.and(I1, &allocated, &below_length);
+        let can_fill = blk.and(I1, &in_bounds, &default_prototype_chain);
+        blk.cond_br(&can_fill, &inbounds_label, &guard_fallback_label);
     }
 
     // Helper: compute element_ptr = arr_ptr + 8 + idx*8.

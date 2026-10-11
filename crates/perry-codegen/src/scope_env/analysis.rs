@@ -12,7 +12,7 @@
 //! inclusive test grouped a binding that case reads before its `let` ever ran
 //! (#11771).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
@@ -369,77 +369,4 @@ pub(super) fn prealloc_counts(hir: &HirModule) -> HashMap<u32, u32> {
         });
     });
     counts
-}
-
-/// The retention class every hoisted function declaration of one body shares.
-pub(super) const HOISTED_DECL_CLASS: u32 = u32::MAX;
-
-/// `func_id`s of this body's hoisted function declarations: a non-arrow
-/// closure bound by a `Stmt::Let` whose binding the body preallocates (HIR
-/// hoists a declaration's binding to the body's `PreallocateBoxes`). They are
-/// all created at scope entry and form the scope's long-lived API (the module
-/// factory shape), so they share one retention class. Arrows and function
-/// expressions are values with lifetimes of their own and each keep a class.
-pub(super) fn hoisted_decl_closures(stmts: &[Stmt]) -> HashSet<u32> {
-    let mut hoisted_ids = HashSet::new();
-    collect_shallow_prealloc_ids(stmts, &mut hoisted_ids);
-    let mut out = HashSet::new();
-    for_each_stmt_shallow(stmts, &mut |s| {
-        if let Stmt::Let {
-            id,
-            init:
-                Some(Expr::Closure {
-                    func_id,
-                    is_arrow: false,
-                    ..
-                }),
-            ..
-        } = s
-        {
-            if hoisted_ids.contains(id) {
-                out.insert(*func_id);
-            }
-        }
-    });
-    out
-}
-
-/// For every id of `interest`, the set of closures (by `func_id`, at any
-/// depth below this body) whose body or explicit capture list names it.
-pub(super) fn closure_capture_sets(
-    stmts: &[Stmt],
-    interest: &HashSet<u32>,
-) -> HashMap<u32, BTreeSet<u32>> {
-    let mut out: HashMap<u32, BTreeSet<u32>> = HashMap::new();
-    fn visit_closures(
-        stmts: &[Stmt],
-        interest: &HashSet<u32>,
-        out: &mut HashMap<u32, BTreeSet<u32>>,
-    ) {
-        for_each_stmt_shallow(stmts, &mut |s| {
-            stmt_exprs(s, &mut |e| visit_expr(e, interest, out));
-        });
-    }
-    fn visit_expr(e: &Expr, interest: &HashSet<u32>, out: &mut HashMap<u32, BTreeSet<u32>>) {
-        if let Expr::Closure {
-            func_id,
-            body,
-            captures,
-            ..
-        } = e
-        {
-            let mut refs = HashSet::new();
-            crate::collectors::collect_ref_ids_in_expr(e, &mut refs);
-            refs.extend(captures.iter().copied());
-            for id in refs {
-                if interest.contains(&id) {
-                    out.entry(id).or_default().insert(*func_id);
-                }
-            }
-            visit_closures(body, interest, out);
-        }
-        perry_hir::walker::walk_expr_children(e, &mut |child| visit_expr(child, interest, out));
-    }
-    visit_closures(stmts, interest, &mut out);
-    out
 }

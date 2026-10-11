@@ -1290,8 +1290,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // keys on an array claim are handled below by an SSO-tag guard;
             // heap strings remain pointers and are classified inside the
             // established array-key fallback before object lookup.
-            let declared_array_claim =
-                crate::type_analysis::declared_array_property_claim(ctx, object);
+            // A scoped mutable binding keeps its erased array claim even
+            // after reassignment. It selects only the guarded element tier:
+            // the current receiver, canonical key and layout prove the load.
+            let scoped_array_claim = match object.as_ref() {
+                Expr::LocalGet(id) if ctx.scope_map.slot(*id).is_some() => match recv_ty.as_ref() {
+                    Some(HirType::Array(_) | HirType::Tuple(_)) => true,
+                    Some(HirType::Generic { base, .. }) => {
+                        matches!(base.as_str(), "Array" | "ReadonlyArray")
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            let readonly_array_claim = matches!(recv_ty.as_ref(), Some(HirType::Generic { base, .. }) if base == "ReadonlyArray");
+            let declared_array_claim = scoped_array_claim
+                || readonly_array_claim
+                || crate::type_analysis::declared_array_property_claim(ctx, object);
             let claimed_array =
                 recv_unknown && !index_is_static_string_or_symbol && declared_array_claim;
             let recv_unknown = recv_unknown && !claimed_array;

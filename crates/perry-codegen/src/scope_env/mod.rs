@@ -30,21 +30,12 @@
 //!    activation of that list. A loop body list is activated once per
 //!    iteration, so a loop-body group is fresh per iteration (per-iteration
 //!    `let`/`const` semantics);
-//! 2. they are captured by exactly the SAME set of closures (every closure,
-//!    at any nesting depth, whose body or capture list names the binding).
-//!    A closure that outlives its siblings therefore retains only bindings it
-//!    can itself name, never an unrelated binding a short-lived sibling
-//!    captured (the V8 shared-context leak);
-//! 3. they agree on TDZ seeding.
+//! 2. they agree on TDZ seeding.
 //!
-//! Two refinements keep the root count down where splitting buys nothing:
-//! a body's hoisted function declarations count as ONE capturing closure (they
-//! are all created at scope entry and are the scope's long-lived API — the
-//! module-factory shape), and a statement list whose bindings would still
-//! split into more than 16 objects gets one object per TDZ kind (a bundler's
-//! module-scale wrapper, whose closures live as long as the module anyway).
-//! Arrows and function expressions each remain their own closure class, so a
-//! surviving callback never retains a binding only a dead sibling captured.
+//! Every captured binding in an activation shares that activation's lifetime.
+//! This removes capture-set partitions and their separate heap allocations,
+//! roots and closure slots. A surviving closure can retain sibling slots in
+//! the same lexical scope; nested scopes still have separate records.
 //!
 //! A binding is eligible only when its home dominates every reference and
 //! every other declaration of it (they all sit in the home statement itself or

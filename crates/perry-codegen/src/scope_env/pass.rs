@@ -1,8 +1,7 @@
 //! The HIR rewrite that forms scope groups (see the module docs for the rule).
 //!
 //! For every function-like body it finds the eligible captured-and-mutated
-//! bindings, groups them by (home statement list, TDZ seeding, capturing
-//! closure set), strips each grouped id from whatever preallocation statement
+//! bindings, groups them by (home statement list, TDZ seeding), strips each grouped id from whatever preallocation statement
 //! named it, and inserts one `PreallocateBoxes`/`PreallocateTdzBoxes` per group
 //! immediately before the group's earliest home. Codegen then allocates one
 //! scope object per such statement.
@@ -12,9 +11,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
 use super::analysis::{self, DeclKind};
-
-/// See the merge in `plan_body`.
-const MAX_GROUPS_PER_LIST: usize = 16;
 
 #[derive(Default)]
 struct ListEdits {
@@ -75,11 +71,8 @@ fn plan_body(
         return;
     }
     let facts = analysis::analyze_body(stmts, &declared);
-    let capture_sets = analysis::closure_capture_sets(stmts, &declared);
-    let hoisted = analysis::hoisted_decl_closures(stmts);
-    // key: (home list token, tdz, capturing closures) → members (home num, id)
-    let mut groups: BTreeMap<(u32, bool, Vec<u32>), Vec<(u32, u32, usize, usize)>> =
-        BTreeMap::new();
+    // One activation record per statement list and initialization kind.
+    let mut groups: BTreeMap<(u32, bool), Vec<(u32, u32, usize, usize)>> = BTreeMap::new();
     let mut ids: Vec<u32> = declared.iter().copied().collect();
     ids.sort_unstable();
     for id in ids {
@@ -90,54 +83,12 @@ fn plan_body(
             continue;
         };
         let tdz = home.kind == DeclKind::PreallocTdz;
-        // The body's hoisted function declarations are one retention class;
-        // every other closure literal (an arrow, a callback, a returned or
-        // stored function expression) is its own class.
-        let closures: Vec<u32> = capture_sets
-            .get(&id)
-            .map(|set| {
-                set.iter()
-                    .map(|f| {
-                        if hoisted.contains(f) {
-                            analysis::HOISTED_DECL_CLASS
-                        } else {
-                            *f
-                        }
-                    })
-                    .collect::<std::collections::BTreeSet<u32>>()
-                    .into_iter()
-                    .collect()
-            })
-            .unwrap_or_default();
         groups
-            .entry((pos.token, tdz, closures))
+            .entry((pos.token, tdz))
             .or_default()
             .push((home.num, id, pos.ptr, pos.index));
     }
-    // A statement list whose bindings would split into more than
-    // `MAX_GROUPS_PER_LIST` objects is a module-scale wrapper (a bundler's
-    // top-level scope, an esbuild `__esm` factory): its closures live as long
-    // as the module, so capture-set splitting buys no reclamation there, and
-    // every extra object is another root live across the whole body. Such a
-    // list gets one object per TDZ kind, V8's shape.
-    let mut per_list: HashMap<u32, usize> = HashMap::new();
-    for (token, _, _) in groups.keys() {
-        *per_list.entry(*token).or_default() += 1;
-    }
-    if per_list.values().any(|n| *n > MAX_GROUPS_PER_LIST) {
-        let mut merged: BTreeMap<(u32, bool, Vec<u32>), Vec<(u32, u32, usize, usize)>> =
-            BTreeMap::new();
-        for ((token, tdz, closures), members) in std::mem::take(&mut groups) {
-            let key = if per_list[&token] > MAX_GROUPS_PER_LIST {
-                (token, tdz, Vec::new())
-            } else {
-                (token, tdz, closures)
-            };
-            merged.entry(key).or_default().extend(members);
-        }
-        groups = merged;
-    }
-    for ((_, tdz, _), mut members) in groups {
+    for ((_, tdz), mut members) in groups {
         members.sort_unstable();
         for chunk in members.chunks(super::SCOPE_MAX_SLOTS) {
             let (_, _, ptr, index) = chunk[0];

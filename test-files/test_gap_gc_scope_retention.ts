@@ -1,22 +1,23 @@
-// Scope context objects must not over-retain: bindings are grouped by the SET
-// of closures that capture them, so a surviving closure keeps only what it can
-// name. `grow` alone captures `big`; `tick` alone captures `count`. Once `grow`
-// is dropped, `tick` living on must not keep `big` reachable (the shared-
-// context leak a single object per scope would have). Node cannot force a
-// collection without --expose-gc, so there the released check is vacuous.
+// Scope records follow lexical activations. A surviving callback can retain
+// sibling slots in its own scope, but must not retain a separate inner scope
+// that it never captures. Node cannot force collection without --expose-gc,
+// so there the released check is vacuous.
 declare function gc(): void;
 const canCollect = typeof gc === "function";
 
 function makePair() {
-  let big: number[] = new Array(200000).fill(7);
   let count = 0;
-  const grow = () => {
-    big = big.concat([count]);
-    return big.length;
-  };
   const tick = () => ++count;
-  grow();
-  const probe = new WeakRef(big);
+  let probe: WeakRef<number[]>;
+  {
+    let big: number[] = new Array(200000).fill(7);
+    const grow = () => {
+      big = big.concat([count]);
+      return big.length;
+    };
+    grow();
+    probe = new WeakRef(big);
+  }
   return { tick, probe };
 }
 

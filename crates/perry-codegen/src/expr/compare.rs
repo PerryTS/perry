@@ -565,7 +565,34 @@ fn lower_dynamic_compare_bits(
     ctx.block().phi(I64, &incoming)
 }
 
-fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
+/// A structural allocation proof, never an erased object annotation. Ordinary
+/// objects do not change their user address when their property storage grows.
+pub(crate) fn ordinary_object_allocation(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Object(_) | Expr::ObjectSpread { .. } => true,
+        Expr::New { class_name, .. } => ctx
+            .classes
+            .get(class_name)
+            .is_some_and(|class| class.is_literal_shape()),
+        _ => false,
+    }
+}
+
+fn ordinary_object_identity(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(id) => {
+            ctx.object_literal_locals.contains(id) && !ctx.reassigned_locals.contains(id)
+        }
+        _ => ordinary_object_allocation(ctx, expr),
+    }
+}
+
+fn lower_strict_eq_inline_any(
+    ctx: &mut FnCtx<'_>,
+    l: &str,
+    r: &str,
+    ordinary_identity: bool,
+) -> String {
     let l_bits = ctx.block().bitcast_double_to_i64(l);
     let r_bits = ctx.block().bitcast_double_to_i64(r);
 
@@ -622,6 +649,20 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     ctx.current_block = tag_idx;
     let l_tag = ctx.block().lshr(I64, &l_bits, "48");
     let r_tag = ctx.block().lshr(I64, &r_bits, "48");
+    // At least one operand is a compiler-proven ordinary object allocation.
+    // It cannot be an array-growth forwarding stub. A distinct pointer cannot
+    // alias it, including an array alias, Symbol or native registry handle.
+    // Both operands were rooted across evaluation, so moving GC has already
+    // rewritten them. Do not read an unproven operand's GC header.
+    if ordinary_identity {
+        let l_pointer = ctx.block().icmp_eq(I64, &l_tag, "32765");
+        let r_pointer = ctx.block().icmp_eq(I64, &r_tag, "32765");
+        let pointers = ctx.block().and(I1, &l_pointer, &r_pointer);
+        let rest_idx = ctx.new_block("anyeq.nonobject");
+        let rest_label = ctx.block_label(rest_idx);
+        ctx.block().cond_br(&pointers, &false_l, &rest_label);
+        ctx.current_block = rest_idx;
+    }
     let l_sso = ctx
         .block()
         .icmp_eq(I64, &l_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
@@ -1616,7 +1657,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let result_bits = if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
                         lower_dynamic_compare_bits(ctx, &l, &r, "oeq", "js_loose_eq", true)
                     } else {
-                        lower_strict_eq_inline_any(ctx, &l, &r)
+                        let ordinary_identity = ordinary_object_identity(ctx, left)
+                            || ordinary_object_identity(ctx, right);
+                        lower_strict_eq_inline_any(ctx, &l, &r, ordinary_identity)
                     };
                     let blk = ctx.block();
                     let result = blk.bitcast_i64_to_double(&result_bits);
@@ -1930,3 +1973,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "scopebox_identity_tests.rs"]
+mod scopebox_identity_tests;
