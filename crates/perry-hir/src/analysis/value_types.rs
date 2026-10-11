@@ -1288,6 +1288,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::ObjectPreventExtensions(target)
         | Expr::ObjectDefineProperties(target, _)
         | Expr::ObjectSetPrototypeOf(target, _) => infer_expr_type(target, env),
+        Expr::LinkGeneratorPrototype {
+            fixed_state: true, ..
+        } => Type::Object(ObjectType::default()),
         Expr::LinkGeneratorPrototype { obj, .. } => infer_expr_type(obj, env),
         Expr::ObjectGetPrototypeOf(_) | Expr::ReflectGetPrototypeOf(_) => {
             Type::Union(vec![Type::Object(ObjectType::default()), Type::Null])

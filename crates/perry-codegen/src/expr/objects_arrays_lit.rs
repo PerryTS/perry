@@ -39,7 +39,23 @@ use super::{lower_array_literal, lower_expr, lower_object_literal, nanbox_pointe
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Object(props) => lower_object_literal(ctx, props),
+        Expr::Object(props) => {
+            if ctx.fixed_generator_state
+                && props.len() == 2
+                && props[0].0 == "value"
+                && props[1].0 == "done"
+            {
+                if let Expr::Bool(done) = props[1].1 {
+                    let value = lower_expr(ctx, &props[0].1)?;
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_generator_result",
+                        &[(DOUBLE, &value), (I32, if done { "1" } else { "0" })],
+                    ));
+                }
+            }
+            lower_object_literal(ctx, props)
+        }
 
         // -------- Arrays (Phase B.3) --------
         // `[a, b, c]` literal: allocate via js_array_alloc(N), then

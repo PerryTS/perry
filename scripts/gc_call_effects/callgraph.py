@@ -111,7 +111,7 @@ class Rule:
         self.targets = None
         if kind == "idiom" and " => " not in pattern:
             raise SystemExit(f"seeds.txt:{line}: an idiom rule must name its targets (=> ...)")
-        if kind in ("indirect", "idiom") and " => " in pattern:
+        if kind in ("indirect", "indirect-all", "idiom") and " => " in pattern:
             # `indirect M P => M2 P2`: the exempted indirect call can only
             # reach functions matching (M2, P2); they become its callees, so
             # the graph -- not the reason -- decides whether they are clean.
@@ -149,6 +149,7 @@ RULE_KINDS = {
     "teardown",   # runs only at thread/process teardown: cut in every class
     # exemptions
     "indirect",   # an indirect call inside a matching function is NOT a seed
+    "indirect-all", # every real symbol alias must match this exemption
     "extern",     # an undefined symbol matching this is a system leaf
     "forbid",     # a symbol nothing in the archives may call (a checked premise)
     "trusted",    # a Rust crate whose indirect calls are not seeds (a trust boundary)
@@ -1008,10 +1009,27 @@ def _match_any(rules: list[Rule], spellings: list[str]) -> Rule | None:
     return None
 
 
+def _match_indirect(rules: list[Rule], g: Graph, i: int) -> Rule | None:
+    for rule in rules:
+        if rule.kind != "indirect-all":
+            if _match_any([rule], g.spellings(i)) is not None:
+                return rule
+            continue
+        # Monomorphized initializers can share one machine body. An audited
+        # ahash alias must never exempt an unrelated initializer folded into
+        # that body. Temporary assembler labels are not callable aliases.
+        aliases = [name for name in g.nodes[i].names if not temp_label(name)]
+        if aliases and all(rule(name) or rule(LLVM_SUFFIX.sub("", g.dem.get(name, name)))
+                           for name in aliases):
+            return rule
+    return None
+
+
 def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
     by_kind: dict[str, list[Rule]] = collections.defaultdict(list)
     for r in rules:
         by_kind[r.kind].append(r)
+    by_kind["indirect"].extend(by_kind["indirect-all"])
 
     spell = [g.spellings(i) for i in range(len(g.nodes))]
     named: dict[int, tuple[str, Rule]] = {}
@@ -1031,7 +1049,7 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
     crate_trust: dict[str, Rule | None] = {}
     for i, n in enumerate(g.nodes):
         if n.indirect_calls or n.indirect_jmps:
-            r = _match_any(by_kind["indirect"], spell[i])
+            r = _match_indirect(by_kind["indirect"], g, i)
             crate = crate_of(n.obj) if r is None else None
             if r is not None:
                 exempt_ind[i] = r
@@ -1111,7 +1129,7 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
     # their callers: an indirect branch in one is exempt exactly when every
     # function that calls it would be.
     def rule_exempt(i: int) -> bool:
-        if _match_any(by_kind["indirect"], spell[i]) is not None:
+        if _match_indirect(by_kind["indirect"], g, i) is not None:
             return True
         crate = crate_of(g.nodes[i].obj)
         return crate is not None and crate_trust.get(crate, _match_any(by_kind["trusted"], [crate])) is not None

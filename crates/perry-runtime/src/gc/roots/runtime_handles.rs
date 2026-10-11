@@ -161,6 +161,9 @@ impl RuntimeHandleScope {
         self.push(RuntimeHandleSlot::Nanbox(value.to_bits()))
     }
 
+    // Argument-vector save/restore is one shared operation. Its allocation
+    // and handle-publishing loop must not expand in each protocol caller.
+    #[inline(never)]
     pub fn root_nanbox_f64_slice<'scope>(
         &'scope self,
         values: &[f64],
@@ -220,6 +223,7 @@ impl RuntimeHandleScope {
         })
     }
 
+    #[inline(never)]
     pub fn refreshed_nanbox_f64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<f64> {
         handles.iter().map(RuntimeHandle::get_nanbox_f64).collect()
     }

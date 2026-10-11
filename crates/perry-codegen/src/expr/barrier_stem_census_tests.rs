@@ -1064,6 +1064,75 @@ fn ctor_prologue_ir() -> String {
     super::class_field_barrier_tests::ir()
 }
 
+/// A confined generator binding is a fixed JSValue slot in its private resume
+/// record. The incoming value can become a young pointer after suspension.
+fn generator_state_ir() -> String {
+    let mut m = Module::new("generator_state_census.ts");
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".into(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: 1,
+                name: "confined".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Return(Some(Expr::LinkGeneratorPrototype {
+                obj: Box::new(Expr::Closure {
+                    func_id: 2,
+                    params: vec![Param {
+                        id: 3,
+                        name: "sent".into(),
+                        ty: Type::Any,
+                        default: None,
+                        is_rest: false,
+                        decorators: Vec::new(),
+                        arguments_object: None,
+                    }],
+                    return_type: Type::Any,
+                    body: vec![
+                        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(3)))),
+                        Stmt::Expr(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(1)),
+                            property: "value".into(),
+                            byte_offset: 0,
+                        }),
+                        Stmt::Return(Some(Expr::LocalGet(1))),
+                    ],
+                    captures: vec![1],
+                    mutable_captures: vec![1],
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                }),
+                is_async: false,
+                fixed_state: true,
+                i32_controls: Vec::new(),
+                i1_controls: Vec::new(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    String::from_utf8(compile_module(&m, ir_opts()).expect("generator state compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 /// The pristine IR for a stem. Exhaustive on the registry: an entry added
 /// without a probe panics HERE, named, instead of passing silently.
 fn probe_ir(stem: &str) -> String {
@@ -1364,5 +1433,32 @@ fn the_untyped_store_carries_one_decline_for_both_tiers() {
             .count(),
         sites,
         "one complete [[Set]] per site:\n{ir}"
+    );
+}
+
+#[test]
+fn generator_fixed_slot_store_uses_the_shared_barrier_operation() {
+    let ir = generator_state_ir();
+    let call = "call void @js_generator_set_slot(";
+    assert!(
+        ir.contains(call),
+        "subject: fixed slot write calls shared operation"
+    );
+    assert!(
+        !ir.contains("generator.state.barrier"),
+        "no per-site barrier scaffold"
+    );
+    assert!(
+        ir.contains("call double @js_object_get_field_ic("),
+        "generic continuation reads call the complete collecting operation"
+    );
+    assert!(
+        !ir.contains("call double @js_object_get_field_ic_fast("),
+        "no per-site leaf/miss split in the continuation"
+    );
+    let mutated = ir.replace(call, "call void @removed_generator_slot(");
+    assert!(
+        !mutated.contains(call),
+        "removed operation fails the witness"
     );
 }

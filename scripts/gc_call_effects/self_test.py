@@ -132,6 +132,17 @@ def main() -> int:
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gc-call-effects-selftest-") as tmp:
         rules = load_rules_text(tmp, RULES)
+        alias_rule = load_rules_text(tmp, "indirect-all regex ^audited_ -- only the audited initializer aliases are native leaves\n")
+        node = cg.Node(0, "fixture.o", ".text", 0, "elf64-x86-64")
+        node.names = ["audited_initializer"]
+        graph = cg.Graph([node], set(), {"fixture.o": node.fmt})
+        if cg._match_indirect(alias_rule, graph, 0) is None:
+            failures.append("audited initializer was not admitted")
+        # An unrelated monomorphization folded at the same address must
+        # invalidate an exemption even though its first alias still matches.
+        node.names.append("unrelated_initializer")
+        if cg._match_indirect(alias_rule, graph, 0) is not None:
+            failures.append("a folded unrelated alias inherited an audited exemption")
         per_format = {}
         for tag, triple in TARGETS.items():
             lib = build_archive(tmp, triple, tag, plant=False)

@@ -1049,6 +1049,13 @@ pub(super) fn compile_closure(
     let entry_param_cells =
         super::arguments::box_rooted_parameter_slots(lf, params, &closure_boxed_vars, &locals);
 
+    let mut fixed_generator_state = false;
+    lf.block_mut(0)
+        .unwrap()
+        .note_fn_info(&public_llvm_name, |facts| {
+            fixed_generator_state = facts.fixed_generator_state;
+        });
+
     let mut ctx = FnCtx {
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
@@ -1152,6 +1159,7 @@ pub(super) fn compile_closure(
         resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
+        fixed_generator_state,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(

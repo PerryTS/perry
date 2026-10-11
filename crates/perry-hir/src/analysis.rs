@@ -975,6 +975,17 @@ pub fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<
             }
             return;
         }
+        Expr::LinkGeneratorPrototype {
+            i32_controls,
+            i1_controls,
+            ..
+        } => {
+            for id in i32_controls.iter_mut().chain(i1_controls.iter_mut()) {
+                if let Some(&new_id) = map.get(id) {
+                    *id = new_id;
+                }
+            }
+        }
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }
         | Expr::ArrayUnshift { array_id, .. }
@@ -1395,3 +1406,34 @@ mod scoped_temp_tests {
 
 #[cfg(test)]
 mod uses_this_tests;
+
+#[cfg(test)]
+mod generator_control_remap_test {
+    use super::*;
+    #[test]
+    fn cloned_generator_keeps_control_slot_ids_in_step_with_its_captures() {
+        let mut expr = Expr::LinkGeneratorPrototype {
+            obj: Box::new(Expr::LocalGet(1)),
+            is_async: false,
+            fixed_state: true,
+            i32_controls: vec![1, 2],
+            i1_controls: vec![3, 4],
+        };
+        remap_local_ids_in_expr(
+            &mut expr,
+            &std::collections::HashMap::from([(1, 11), (2, 12), (3, 13), (4, 14)]),
+        );
+        let Expr::LinkGeneratorPrototype {
+            obj,
+            i32_controls,
+            i1_controls,
+            ..
+        } = expr
+        else {
+            panic!()
+        };
+        assert!(matches!(*obj, Expr::LocalGet(11)));
+        assert_eq!(i32_controls, [11, 12]);
+        assert_eq!(i1_controls, [13, 14]);
+    }
+}

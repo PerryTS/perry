@@ -9,7 +9,7 @@ pub(crate) fn class_own_symbol_method(
             .ok()?
             .as_ref()?
             .get(&(class_id, sym_key, is_static))
-            .copied()
+            .map(|&(body, arity, rest, _entry)| (body, arity, rest))
     })
 }
 

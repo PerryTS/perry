@@ -1377,6 +1377,9 @@ js_gc_write_barriers_emitted	Leaf
 js_ge	Reenters
 js_generator_attach_closure_prototype	Reenters
 js_generator_attach_prototype	Reenters
+js_generator_create	Reenters
+js_generator_set_slot	Leaf
+js_generator_result	Reenters
 js_get_async_iterator	Reenters
 js_get_cjs_main_module	Reenters
 js_get_current_step_closure	Reenters

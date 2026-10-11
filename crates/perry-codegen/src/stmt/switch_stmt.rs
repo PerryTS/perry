@@ -32,7 +32,23 @@ pub(crate) fn lower_switch(
     discriminant: &perry_hir::Expr,
     cases: &[perry_hir::SwitchCase],
 ) -> Result<()> {
-    let dv = lower_expr(ctx, discriminant)?;
+    // Only transform-owned fixed generator controls have a native integer
+    // contract. JS discriminants retain their NaN and strict-equality rules.
+    let fixed_control = matches!(discriminant, perry_hir::Expr::LocalGet(id)
+        if ctx.fixed_generator_state
+        && crate::expr::is_compiler_private_async_i32_control_local(ctx, *id));
+    let integer_plan = fixed_control
+        .then(|| numeric_literal_dispatch_plan(cases))
+        .flatten()
+        .filter(|plan| {
+            plan.iter()
+                .all(|(n, _)| *n >= i32::MIN as f64 && *n <= i32::MAX as f64)
+        });
+    let dv = if integer_plan.is_some() {
+        crate::expr::lower_expr_as_i32(ctx, discriminant)?
+    } else {
+        lower_expr(ctx, discriminant)?
+    };
 
     let tree_plan = numeric_literal_dispatch_plan(cases);
     // Canonicalized numeric view of the discriminant, shared by every
@@ -81,27 +97,45 @@ pub(crate) fn lower_switch(
         None => exit_label.clone(),
     };
 
-    match &tree_plan {
-        Some(plan) => {
-            // Dense numeric switch: canonicalize the discriminant once and
-            // dispatch through a balanced comparison tree. Case tests are
-            // all literals, so skipping their (side-effect-free) in-order
-            // evaluation is unobservable.
-            emit_numeric_tree_dispatch(ctx, &dv, plan, &body_blocks, &no_match_target_label);
-        }
-        None => {
-            // Branch from the discriminant block into the first *case* test.
-            // A leading `default:` is skipped — its body only runs when no
-            // case test anywhere in the block matches.
-            let first_case_test = cases.iter().position(|c| c.test.is_some());
-            match first_case_test {
-                Some(i) => {
-                    let first_test_label = ctx.block_label(test_blocks[i]);
-                    ctx.block().br(&first_test_label);
-                }
-                None => {
-                    // Only a default clause: run it unconditionally.
-                    ctx.block().br(&no_match_target_label);
+    if let Some(plan) = &integer_plan {
+        let arms = plan
+            .iter()
+            .map(|(value, index)| {
+                format!(
+                    "i32 {}, label %{}",
+                    *value as i32,
+                    ctx.block_label(body_blocks[*index])
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        ctx.block().emit_raw(format!(
+            "switch i32 {dv}, label %{no_match_target_label} [ {arms} ]"
+        ));
+        ctx.block().mark_terminated();
+    } else {
+        match &tree_plan {
+            Some(plan) => {
+                // Dense numeric switch: canonicalize the discriminant once and
+                // dispatch through a balanced comparison tree. Case tests are
+                // all literals, so skipping their (side-effect-free) in-order
+                // evaluation is unobservable.
+                emit_numeric_tree_dispatch(ctx, &dv, plan, &body_blocks, &no_match_target_label);
+            }
+            None => {
+                // Branch from the discriminant block into the first *case* test.
+                // A leading `default:` is skipped — its body only runs when no
+                // case test anywhere in the block matches.
+                let first_case_test = cases.iter().position(|c| c.test.is_some());
+                match first_case_test {
+                    Some(i) => {
+                        let first_test_label = ctx.block_label(test_blocks[i]);
+                        ctx.block().br(&first_test_label);
+                    }
+                    None => {
+                        // Only a default clause: run it unconditionally.
+                        ctx.block().br(&no_match_target_label);
+                    }
                 }
             }
         }

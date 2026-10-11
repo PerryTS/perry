@@ -304,6 +304,12 @@ impl ShapeRecordRef {
         (*self.0.as_ptr()).derive_constfn_birth_admission();
     }
 
+    /// Test a brand in this already-proved live record, without another probe.
+    #[inline]
+    pub(crate) fn has_brand(self, brand: u64) -> bool {
+        unsafe { (*self.0.as_ptr()).brands().binary_search(&brand).is_ok() }
+    }
+
     #[inline(always)]
     pub(crate) fn prototype_word(self) -> u64 {
         // SAFETY: this handle borrows a live slab record of this agent.

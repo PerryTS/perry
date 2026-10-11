@@ -152,7 +152,16 @@ pub(super) fn class_declaration_globals(
                 name: "ptr null".to_string(),
                 name_len: 0,
                 code: format!("ptr @{}", method_symbol(&f.name)),
-                entry: "ptr null".to_string(),
+                entry: if kind == KIND_METHOD
+                    && super::helpers::body_has_fixed_generator_state(&f.body)
+                {
+                    format!(
+                        "ptr {}",
+                        info_ref(&format!("{}__eclo", method_symbol(&f.name)))
+                    )
+                } else {
+                    "ptr null".to_string()
+                },
                 param_count: f.params.len(),
                 kind,
                 flags: if kind == KIND_METHOD && f.params.last().is_some_and(|p| p.is_rest) {

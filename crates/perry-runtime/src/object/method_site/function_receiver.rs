@@ -52,6 +52,19 @@ pub(super) unsafe fn prime_function(
                 name,
                 argc,
             );
+        } else if shape.proto_id == crate::closure::shape::INTRINSIC_SERIAL_GENERATOR_FUNCTION {
+            // A described generator function has no recorded custom parent.
+            // Its ordinary intrinsic holder can shadow Function.prototype,
+            // so retain every actual hop in the existing method entry.
+            if let Some(start) = super::super::generator_function_proto_of(addr) {
+                holder_prime::prime_generator_function_chain(
+                    slot,
+                    crate::value::js_nanbox_get_pointer(start) as *const ObjectHeader,
+                    receiver_word(std::ptr::read(addr as *const u64)),
+                    name,
+                    argc,
+                );
+            }
         }
         return;
     };
@@ -90,6 +103,64 @@ mod tests {
         a: f64,
     ) -> f64 {
         a
+    }
+
+    #[test]
+    fn generator_function_chain_memo_guards_shadowing_and_relinking() {
+        if !run_with_fresh_worker_gate(
+            "generator_function_chain_memo_guards_shadowing_and_relinking",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _stable = crate::gc::GcSuppressScope::new();
+            let info = crate::fn_info!(target, 1; with_flags(crate::closure::FN_GENERATOR));
+            let f = crate::closure::js_closure_alloc(info, 0);
+            super::super::super::generator_function_prototype_of(f as usize).unwrap();
+            let recv = crate::value::js_nanbox_pointer(f as i64);
+            let mut slot = std::ptr::null_mut();
+            prime(&mut slot, recv, b"apply", 2);
+            assert!(
+                memo_hit(&mut slot, recv.to_bits()).is_some(),
+                "subject: generator function apply memo"
+            );
+            assert_ne!((*slot).entries[0].slot & METHOD_SITE_CHAIN, 0);
+            let other = crate::closure::js_closure_alloc(info, 8);
+            super::super::super::generator_function_prototype_of(other as usize).unwrap();
+            assert!(
+                memo_hit(
+                    &mut slot,
+                    crate::value::js_nanbox_pointer(other as i64).to_bits()
+                )
+                .is_some(),
+                "the same own-key shape proves another generator callable"
+            );
+            let start = super::super::super::generator_function_proto_of(f as usize).unwrap();
+            let start = crate::value::js_nanbox_get_pointer(start) as *mut ObjectHeader;
+            crate::object::js_object_set_field_by_name(
+                start,
+                crate::string::canonical_key(b"apply"),
+                901.0,
+            );
+            assert!(
+                memo_hit(&mut slot, recv.to_bits()).is_none(),
+                "first-holder shadow invalidates the inherited callable"
+            );
+            prime(&mut slot, recv, b"call", 1);
+            assert!(
+                memo_hit(&mut slot, recv.to_bits()).is_some(),
+                "subject: another inherited callable"
+            );
+            crate::object::prototype_chain::object_set_user_prototype(
+                start as usize,
+                crate::value::TAG_NULL,
+            );
+            assert!(
+                memo_hit(&mut slot, recv.to_bits()).is_none(),
+                "relinking the first holder invalidates its chain proof"
+            );
+        }
     }
 
     #[test]

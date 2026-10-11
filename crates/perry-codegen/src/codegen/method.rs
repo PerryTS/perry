@@ -159,6 +159,7 @@ pub(super) fn compile_method(
     ptr_array_cache_clone: bool,
     guarded_undefined_clone: bool,
     pshape_arg_clone: bool,
+    generator_owner: bool,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -262,7 +263,9 @@ pub(super) fn compile_method(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if arguments_length_clone {
+    let llvm_name = if generator_owner {
+        super::helpers::generator_method_owner_name(&public_llvm_name)
+    } else if arguments_length_clone {
         family_name.clone()
     } else if fast_array_handle_clone {
         crate::codegen::nonnegative_index_fast_array_method_name(
@@ -299,6 +302,9 @@ pub(super) fn compile_method(
     // Build the param list: (this, arg0, arg1, ...). All are doubles.
     let mut params: Vec<(LlvmType, String)> =
         Vec::with_capacity(method.params.len() + 1 + fast_array_param_ids.len());
+    if generator_owner {
+        params.push((I64, "%generator_owner".into()));
+    }
     params.push((DOUBLE, "%this_arg".to_string()));
     for p in &method.params {
         params.push((DOUBLE, format!("%arg{}", p.id)));
@@ -381,6 +387,21 @@ pub(super) fn compile_method(
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
 
     let _ = lf.create_block("entry");
+
+    let current_closure_slot = if generator_owner {
+        lf.reserve_shadow_slot().map(|idx| {
+            let blk = lf.block_mut(0).unwrap();
+            let slot = blk.alloca(I64);
+            blk.store(I64, "%generator_owner", &slot);
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &idx.to_string()), (PTR, &slot)],
+            );
+            slot
+        })
+    } else {
+        None
+    };
 
     let mut method_boxed_vars = module_boxed_vars.clone();
     super::arguments::add_arguments_mapped_boxes(
@@ -595,8 +616,8 @@ pub(super) fn compile_method(
         namespace_node_submodules: &cross_module.namespace_node_submodules,
         namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
-        current_closure_ptr: None,
-        current_closure_slot: None,
+        current_closure_ptr: generator_owner.then(|| "%generator_owner".into()),
+        current_closure_slot,
         enums,
         is_async_fn: method.is_async,
         is_strict_fn: true,
@@ -629,6 +650,7 @@ pub(super) fn compile_method(
         resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
+        fixed_generator_state: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(

@@ -165,12 +165,7 @@ pub(crate) fn try_lower_instance_method_call(
     // whose miss path preserves dynamic JavaScript dispatch.
     let receiver_class = receiver_class_name(ctx, object)
         .or_else(|| guarded_declared_receiver_class_candidate(ctx, object));
-    // Skip dynamic dispatch when the receiver is GlobalGet (e.g.
-    // `console.log`). GlobalGet is a module-level global object
-    // (console, Math, JSON, etc.), not a class instance. Without
-    // this guard, `console.log()` gets hijacked by the interface
-    // dispatch tower when a user class happens to have a method
-    // with the same name (like `SimpleLogger.log()`).
+    // Globals use their builtin dispatch even when a class shares the name.
     let is_global = matches!(object, Expr::GlobalGet(_));
     // If the receiver's static type is a well-known built-in with its own
     // runtime method family (Buffer byte readers, Array, Map, Set, …),
@@ -216,6 +211,22 @@ pub(crate) fn try_lower_instance_method_call(
             None => true,
             Some(name) => !ctx.classes.contains_key(name),
         };
+    if !is_global
+        && !is_builtin_receiver
+        && generator_receiver_candidate(ctx, receiver_class.as_deref(), property)
+    {
+        return crate::lower_call::lower_split_method_call(
+            ctx,
+            object,
+            property,
+            args,
+            call_byte_offset,
+            &[],
+            None,
+            None,
+        )
+        .map(Some);
+    }
     // #11910: arguments that can observe when the method is read. The
     // tower's implementor arms read nothing (a proven class id under intact
     // prototype guards names its body); every other receiver must have its

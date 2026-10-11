@@ -394,8 +394,8 @@ pub(crate) enum MemberName {
 
 /// The internal own key of a per-evaluation class object holding the names
 /// its definition gave the class's computed members: an array with one
-/// element per computed member, in declaration order (a string, `null` for a
-/// non-string key, `undefined` before the definition reached it).
+/// element per computed member, in declaration order (its property key,
+/// `undefined` before the definition reached it).
 pub(crate) const CLASS_COMPUTED_NAMES_KEY: &[u8] = b"#<perry:class-computed-names>";
 
 crate::perry_thread_local! {
@@ -441,7 +441,7 @@ pub(crate) unsafe fn enter_evaluation_names(
     let len = crate::array::js_array_length(arr);
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        // The evaluation keeps names, never keys: the kind is moot.
+        // Derive the dispatch alias from the evaluation's actual key.
         out.push(member_name_of_value(
             crate::array::js_array_get_f64(arr, i),
             true,
@@ -858,6 +858,7 @@ pub(crate) unsafe fn name_evaluation_computed_member(
     class_id: u32,
     definition_order: u32,
     name: MemberName,
+    property_key: f64,
 ) {
     let Some(decl) = class_declaration(class_id) else {
         return;
@@ -875,6 +876,7 @@ pub(crate) unsafe fn name_evaluation_computed_member(
     let count = decl.members().iter().filter(|m| m.name.is_null()).count();
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
+    let property_key = scope.root_nanbox_f64(property_key);
     let obj = || {
         crate::JSValue::from_bits(owner.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>()
             as *mut ObjectHeader
@@ -900,10 +902,30 @@ pub(crate) unsafe fn name_evaluation_computed_member(
             names
         }
     };
-    let value = scope.root_nanbox_f64(member_name_value(&name));
+    let value = scope.root_nanbox_f64(
+        if crate::symbol::js_is_symbol(property_key.get_nanbox_f64()) != 0 {
+            property_key.get_nanbox_f64()
+        } else {
+            member_name_value(&name)
+        },
+    );
     let arr = crate::JSValue::from_bits(names.get_nanbox_f64().to_bits())
         .as_pointer::<crate::ArrayHeader>() as *mut crate::ArrayHeader;
     crate::array::js_array_set_f64(arr, ordinal as u32, value.get_nanbox_f64());
+}
+
+/// The actual key retained by this evaluation for one computed declaration.
+pub(crate) unsafe fn evaluation_computed_member_key(
+    class: *const ObjectHeader,
+    class_id: u32,
+    member: &ClassMemberDecl,
+) -> Option<f64> {
+    let ordinal = computed_ordinal(class_declaration(class_id)?, member)?;
+    let names = super::class_object_own_field_bytes(class, CLASS_COMPUTED_NAMES_KEY)?;
+    let names = crate::JSValue::from_bits(names.to_bits());
+    names.is_pointer().then(|| {
+        crate::array::js_array_get_f64(names.as_pointer::<crate::ArrayHeader>(), ordinal as u32)
+    })
 }
 
 // ---------------------------------------------------------------------------

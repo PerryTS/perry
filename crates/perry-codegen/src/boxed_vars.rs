@@ -43,7 +43,50 @@ pub(crate) fn collect_boxed_vars(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     // through `js_box_get` / `js_box_set` rather than reading the raw slot
     // (which holds a box pointer, not a usable value).
     collect_prealloc_box_ids_in_stmts(stmts, &mut boxed);
+    let mut declared = HashSet::new();
+    collect_let_ids(stmts, &mut declared);
+    for id in fixed_generator_slots(stmts) {
+        if declared.contains(&id) {
+            boxed.remove(&id);
+        }
+    }
     boxed
+}
+
+/// A sync generator owns one resume record. Its confined captures are mutable
+/// slots in that record; only bindings shared with user closures need cells.
+/// The transform names those shared bindings in the wrapper's preallocation.
+fn fixed_generator_slots(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
+    use perry_hir::Expr;
+    fn visit(expr: &Expr, out: &mut HashSet<u32>, shared: &mut HashSet<u32>) {
+        if let Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            ..
+        } = expr
+        {
+            if let Expr::Closure { captures, body, .. } = obj.as_ref() {
+                out.extend(captures.iter().copied());
+                collect_prealloc_box_ids_in_stmts(body, shared);
+                // Parameters can be shared without a PreallocateBoxes stmt;
+                // their cells are allocated by the parameter-entry path.
+                collect_closure_refs_and_writes_in_stmts(body, shared, &mut HashSet::new());
+            }
+        }
+        // The caller handles each lexical scope independently.
+        perry_hir::walker::walk_expr_children(expr, &mut |child| visit(child, out, shared));
+    }
+    let mut slots = HashSet::new();
+    let mut shared = HashSet::new();
+    for stmt in stmts {
+        perry_hir::walker::stmt_any_expr(stmt, &mut |expr| {
+            visit(expr, &mut slots, &mut shared);
+            false
+        });
+    }
+    collect_prealloc_box_ids_in_stmts(stmts, &mut shared);
+    slots.retain(|id| !shared.contains(id));
+    slots
 }
 
 /// Determine which *parameter* ids need heap-boxed storage. Mirrors the
@@ -72,6 +115,7 @@ pub(crate) fn collect_boxed_param_ids(
         return out;
     }
     crate::codegen::arguments::add_arguments_mapped_boxes(params, Some(body), &mut out);
+    let mapped = out.clone();
     let mut closure_refs: HashSet<u32> = HashSet::new();
     let mut closure_writes: HashSet<u32> = HashSet::new();
     collect_closure_refs_and_writes_in_stmts(body, &mut closure_refs, &mut closure_writes);
@@ -85,6 +129,11 @@ pub(crate) fn collect_boxed_param_ids(
             && (closure_writes.contains(&p.id) || outer_writes.contains(&p.id))
         {
             out.insert(p.id);
+        }
+    }
+    for id in fixed_generator_slots(body) {
+        if !mapped.contains(&id) {
+            out.remove(&id);
         }
     }
     out
@@ -470,14 +519,12 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             // (the hoisted-FnDecl path) wouldn't propagate those ids
             // into the module-wide boxed set, and reads from the boxed
             // slot would skip `js_box_get`.
-            let inner = collect_boxed_vars_scope(body);
+            let inner = collect_boxed_vars(body);
             out.extend(inner);
             // #5521: a closure parameter captured+mutated by a deeper
             // nested closure needs the same param boxing as a top-level
             // function param.
             out.extend(collect_boxed_param_ids(params, body));
-            collect_prealloc_box_ids_in_stmts(body, out);
-            collect_nested_closure_boxed_vars_in_stmts(body, out);
         }
         Expr::Binary { left, right, .. }
         | Expr::Logical { left, right, .. }
@@ -1665,6 +1712,17 @@ fn collect_compiler_private_async_control_locals_in_expr(
 ) {
     use perry_hir::Expr;
     match expr {
+        Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            i32_controls,
+            i1_controls,
+            ..
+        } => {
+            i32_out.extend(i32_controls.iter().copied());
+            i1_out.extend(i1_controls.iter().copied());
+            collect_compiler_private_async_control_locals_in_expr(obj, i32_out, i1_out);
+        }
         Expr::Closure { body, .. } => {
             collect_compiler_private_async_control_locals_in_stmts(body, i32_out, i1_out);
         }
@@ -1790,6 +1848,58 @@ mod tests {
             is_generator: false,
             is_strict: false,
         }
+    }
+
+    #[test]
+    fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
+        let mut state = closure(10, 1);
+        if let Expr::Closure { body, .. } = &mut state {
+            body.insert(
+                0,
+                Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(2.0)))),
+            );
+        }
+        let mut stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "state".into(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Return(Some(Expr::LinkGeneratorPrototype {
+                obj: Box::new(state),
+                is_async: false,
+                fixed_state: true,
+                i32_controls: vec![1],
+                i1_controls: vec![],
+            })),
+        ];
+        assert!(!collect_boxed_vars(&stmts).contains(&1));
+        let mut numbers = HashSet::new();
+        let mut booleans = HashSet::new();
+        collect_compiler_private_async_control_locals_in_stmts(&stmts, &mut numbers, &mut booleans);
+        assert_eq!(numbers, HashSet::from([1]));
+        assert!(booleans.is_empty());
+        let user = Stmt::Let {
+            id: 20,
+            name: "__gen_state".into(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(1.0)),
+        };
+        collect_compiler_private_async_control_locals_in_stmts(
+            &[user],
+            &mut numbers,
+            &mut booleans,
+        );
+        assert_eq!(
+            numbers,
+            HashSet::from([1]),
+            "user spelling is not a scalar-slot proof"
+        );
+        stmts.insert(0, Stmt::PreallocateBoxes(vec![1]));
+        assert!(collect_boxed_vars(&stmts).contains(&1));
     }
 
     #[test]

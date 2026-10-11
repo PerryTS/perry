@@ -813,6 +813,7 @@ pub(super) fn compile_module_entry(
             resolved_plain_callback_targets: HashMap::new(),
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
+            fixed_generator_state: false,
             versioned_loop_deopt_context: None,
             trusted_box_capture_ptrs: HashMap::new(),
             ready_cell_roots: Default::default(),

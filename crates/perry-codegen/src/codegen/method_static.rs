@@ -30,29 +30,40 @@ pub(in crate::codegen) fn compile_static_method(
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
+    generator_owner: bool,
 ) -> Result<()> {
     let llvm_name = scoped_static_method_name(module_prefix, class.id, &class.name, &f.name);
+    let class_value_slot = format!("@{llvm_name}__classval");
 
-    let params: Vec<(LlvmType, String)> = f
+    let llvm_name = if generator_owner {
+        crate::codegen::helpers::generator_method_owner_name(&llvm_name)
+    } else {
+        llvm_name
+    };
+    let mut params: Vec<(LlvmType, String)> = f
         .params
         .iter()
         .map(|p| (DOUBLE, format!("%arg{}", p.id)))
         .collect();
 
+    if generator_owner {
+        params.insert(0, (I64, "%generator_owner".into()));
+    }
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     // The prologue's cache of this class's function object (see
     // `js_static_this_resolve_class`); thread-local when workers exist, so
     // each agent caches its own.
-    let class_value_slot = format!("@{llvm_name}__classval");
-    llmod.add_raw_global(format!(
-        "{class_value_slot} = private {}global double 0.0, align 8",
-        if llmod.program_has_worker {
-            "thread_local "
-        } else {
-            ""
-        }
-    ));
+    if !generator_owner {
+        llmod.add_raw_global(format!(
+            "{class_value_slot} = private {}global double 0.0, align 8",
+            if llmod.program_has_worker {
+                "thread_local "
+            } else {
+                ""
+            }
+        ));
+    }
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
 
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
@@ -79,6 +90,20 @@ pub(in crate::codegen) fn compile_static_method(
 
     let _ = lf.create_block("entry");
 
+    let current_closure_slot = if generator_owner {
+        lf.reserve_shadow_slot().map(|idx| {
+            let blk = lf.block_mut(0).unwrap();
+            let slot = blk.alloca(I64);
+            blk.store(I64, "%generator_owner", &slot);
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &idx.to_string()), (PTR, &slot)],
+            );
+            slot
+        })
+    } else {
+        None
+    };
     let mut static_boxed_vars = module_boxed_vars.clone();
     crate::codegen::arguments::add_arguments_mapped_boxes(
         &f.params,
@@ -264,8 +289,8 @@ pub(in crate::codegen) fn compile_static_method(
         namespace_node_submodules: &cross_module.namespace_node_submodules,
         namespace_v8_specifiers: &cross_module.namespace_v8_specifiers,
         closure_captures: HashMap::new(),
-        current_closure_ptr: None,
-        current_closure_slot: None,
+        current_closure_ptr: generator_owner.then(|| "%generator_owner".into()),
+        current_closure_slot,
         enums,
         is_async_fn: f.is_async,
         is_strict_fn: f.is_strict,
@@ -298,6 +323,7 @@ pub(in crate::codegen) fn compile_static_method(
         resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
+        fixed_generator_state: false,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(

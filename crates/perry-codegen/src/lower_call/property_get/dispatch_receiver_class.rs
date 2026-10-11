@@ -62,3 +62,51 @@ pub(super) fn guarded_declared_receiver_class_candidate(
     };
     ctx.classes.contains_key(name).then(|| name.clone())
 }
+
+/// Only the class-dispatch arm needs the exact callable for a generator birth.
+/// An unrelated class declaration must not change builtin lowering. Unknown
+/// receivers retain Get + Call when a tower arm could select a generator.
+pub(super) fn generator_receiver_candidate(
+    ctx: &FnCtx<'_>,
+    class: Option<&str>,
+    property: &str,
+) -> bool {
+    let defines = |c: &perry_hir::Class| {
+        c.methods
+            .iter()
+            .chain(
+                c.computed_members
+                    .iter()
+                    .filter(|m| !m.is_static)
+                    .map(|m| &m.function),
+            )
+            .any(|f| {
+                f.name == property
+                    && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
+            })
+    };
+    let Some(name) = class.filter(|name| ctx.classes.contains_key(*name)) else {
+        return ctx.classes.values().any(|c| defines(c));
+    };
+    // A declared receiver also admits its subclasses through the existing
+    // shape/body guards, so their generator overrides need this route too.
+    if ctx
+        .class_hierarchy
+        .descendants(name, None)
+        .iter()
+        .any(|name| ctx.classes.get(*name).is_some_and(|c| defines(c)))
+    {
+        return true;
+    }
+    let mut current = Some(name);
+    for _ in 0..ctx.classes.len() {
+        let Some(c) = current.and_then(|name| ctx.classes.get(name)) else {
+            break;
+        };
+        if defines(c) {
+            return true;
+        }
+        current = c.extends_name.as_deref();
+    }
+    false
+}

@@ -221,10 +221,23 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
     // A previously-created (or user-assigned) `prototype` wins — preserves
     // identity and lets `g.prototype = X` overrides stick.
     let existing = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-        crate::closure::closure_get_dynamic_prop(closure as usize, "prototype")
+        // Reuse the function shape's existing descriptor proof. An explicit
+        // undefined value differs from an unmaterialized own property.
+        match unsafe { crate::closure::shape::closure_own_prototype_by_shape(closure) } {
+            Some(value) => value,
+            None => {
+                if let Some(value) =
+                    crate::closure::closure_get_own_dynamic_prop(closure as usize, "prototype")
+                {
+                    return Some(value);
+                }
+                let value = crate::closure::closure_get_dynamic_prop(closure as usize, "prototype");
+                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
+            }
+        }
     });
-    if existing.to_bits() != crate::value::TAG_UNDEFINED {
-        return Some(f64::from_bits(existing.to_bits()));
+    if let Some(existing) = existing {
+        return Some(existing);
     }
     ensure_generator_intrinsics();
     // #7577: `js_object_alloc` below can run a copying minor, which moves both
@@ -322,23 +335,20 @@ fn generator_receiver_type_error_value(method: &[u8]) -> f64 {
 }
 
 /// Shared body for `%Generator.prototype%`/`%AsyncGenerator.prototype%`'s
-/// `next`/`return`/`throw`. These prototype methods exist so test262's
-/// brand-check cases (`GeneratorPrototype.next.call(nonGenerator)`) and method-
-/// identity reads resolve. The real state machine lives in each generator
-/// instance's OWN `next`/`return`/`throw` closures (Perry lowers a generator
-/// call to a `{next,return,throw}` object), so for a valid receiver we delegate
-/// to the instance's own same-named method. Normal `iter.next()` reads the own
-/// property directly and never reaches here, so generator execution is
-/// unaffected.
+/// `next`/`return`/`throw`. Sync receivers prove their private state through
+/// the object shape; all three operations enter that one resume record.
+/// Async generators retain their existing own-method queue implementation.
 ///
 /// `is_async` selects the spec's incompatible-receiver behaviour: sync
 /// generators throw a `TypeError` synchronously, async generators return a
 /// rejected promise (their methods always return promises). (#3664)
+#[inline(never)]
 fn generator_proto_method(
     this: crate::closure::JsThis,
     method: &[u8],
     arg: f64,
     is_async: bool,
+    op: f64,
 ) -> f64 {
     let bad_receiver = |method: &[u8]| -> f64 {
         let errv = generator_receiver_type_error_value(method);
@@ -350,6 +360,15 @@ fn generator_proto_method(
         }
     };
     let this = this.as_f64();
+    if let Some(state) = super::generator_state::fixed_generator_state(this) {
+        if is_async {
+            return bad_receiver(method);
+        }
+        return unsafe { super::generator_state::resume_fixed_state(state, op, arg) };
+    }
+    if !is_async {
+        return bad_receiver(method);
+    }
     let jv = JSValue::from_bits(this.to_bits());
     if !jv.is_pointer() {
         return bad_receiver(method);
@@ -402,47 +421,93 @@ fn generator_proto_method(
     }
 }
 
+/// Declared body identity is the authority for the shared protocol route.
+/// Replacing a slot with another builtin retains ordinary value invocation.
+pub(crate) fn is_sync_generator_protocol_body(code: *const u8) -> bool {
+    code == generator_proto_next_thunk as *const u8
+        || code == generator_proto_return_thunk as *const u8
+        || code == generator_proto_throw_thunk as *const u8
+        || code == generator_proto_iterator_thunk as *const u8
+}
+
+/// A code target justified by the existing memo's generator-family proof.
+/// The selected closure's real intrinsic identity is still checked per use.
+/// These private bodies have the same one-argument ABI as the public methods.
+pub(crate) fn proven_sync_generator_protocol_code(code: *const u8) -> *const u8 {
+    if code == generator_proto_next_thunk as *const u8 {
+        proven_generator_next as *const u8
+    } else if code == generator_proto_return_thunk as *const u8 {
+        proven_generator_return as *const u8
+    } else if code == generator_proto_throw_thunk as *const u8 {
+        proven_generator_throw as *const u8
+    } else {
+        code
+    }
+}
+
+extern "C" fn proven_generator_next(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    unsafe { super::generator_state::resume_proven_receiver(this, 0.0, arg) }
+}
+extern "C" fn proven_generator_return(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    unsafe { super::generator_state::resume_proven_receiver(this, 1.0, arg) }
+}
+extern "C" fn proven_generator_throw(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    unsafe { super::generator_state::resume_proven_receiver(this, 2.0, arg) }
+}
+
 extern "C" fn generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"next", arg, false)
+    generator_proto_method(this, b"next", arg, false, 0.0)
 }
 extern "C" fn generator_proto_return_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"return", arg, false)
+    generator_proto_method(this, b"return", arg, false, 1.0)
 }
 extern "C" fn generator_proto_throw_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"throw", arg, false)
+    generator_proto_method(this, b"throw", arg, false, 2.0)
 }
 extern "C" fn async_generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"next", arg, true)
+    generator_proto_method(this, b"next", arg, true, 0.0)
 }
 extern "C" fn async_generator_proto_return_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"return", arg, true)
+    generator_proto_method(this, b"return", arg, true, 1.0)
 }
 extern "C" fn async_generator_proto_throw_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    generator_proto_method(this, b"throw", arg, true)
+    generator_proto_method(this, b"throw", arg, true, 2.0)
 }
 
 /// `%AsyncGenerator.prototype%[Symbol.asyncIterator]()` returns `this` (spec
@@ -596,6 +661,9 @@ fn mark_generator_step_closures_no_rebind(obj: f64) {
 /// call is the re-read.
 #[no_mangle]
 pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 {
+    if super::generator_state::fixed_generator_state(obj).is_some() {
+        return obj;
+    }
     let jv = JSValue::from_bits(obj.to_bits());
     if !jv.is_pointer() {
         return obj;
@@ -672,6 +740,9 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     obj: f64,
     closure_ptr: *const crate::closure::ClosureHeader,
 ) -> f64 {
+    if super::generator_state::fixed_generator_state(obj).is_some() {
+        return obj;
+    }
     let jv = JSValue::from_bits(obj.to_bits());
     if !jv.is_pointer() {
         return obj;
@@ -766,6 +837,8 @@ fn build_generator_tower(
     // allocation (this tower is far smaller than a block, so it cannot arm
     // one on its own) and asserts this function does not service it.
     let _no_move = crate::gc::GcSuppressScope::new();
+    // The protocol holder owns its methods. The generator-family proof ends
+    // at that holder, so births do not need its lazy Object parent.
     let (ctor_name, ctor_tag, inst_tag) = if is_async {
         (
             "AsyncGeneratorFunction",

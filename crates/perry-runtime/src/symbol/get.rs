@@ -139,6 +139,7 @@ impl OwnSymbolSlot {
     }
 }
 
+mod generator;
 mod own;
 pub(crate) use own::own_symbol_slot;
 
@@ -819,7 +820,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         if sym_key != 0 && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
         {
             let is_proto_ref = is_proto_ref_receiver;
-            if let Some((func_ptr, param_count, has_rest)) =
+            if let Some((func_ptr, param_count, has_rest, _entry)) =
                 crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
             {
                 return crate::object::build_symbol_bound_method_closure(
@@ -1079,6 +1080,15 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                     // absent entry can then mean the configurable property was
                     // deleted, rather than being silently resurrected here.
                     if crate::object::class_has_symbol_member_in_chain(class_id, sym_key, false) {
+                        if let Some(value) = generator::explicit_generator_method(
+                            class_id,
+                            sym_key,
+                            obj_f64,
+                            sym_f64,
+                            receiver_f64,
+                        ) {
+                            return value;
+                        }
                         let _ = crate::object::class_decl_prototype_value(class_id);
                         if let Some(v) = declared_prototype_chain_symbol(
                             obj_f64,
@@ -1153,7 +1163,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                     if !crate::symbol::is_well_known_symbol(sym_key)
                         || !well_known_symbol_has_instance_method_slot(sym_key)
                     {
-                        if let Some((func_ptr, param_count, has_rest)) =
+                        if let Some((func_ptr, param_count, has_rest, _entry)) =
                             crate::object::lookup_class_symbol_method_in_chain(
                                 class_id, sym_key, false,
                             )

@@ -133,9 +133,38 @@ mod tests {
 }
 
 impl ShapeChain {
+    /// A function shape proves the receiver's own keys and intrinsic edge.
+    /// Its method entry must additionally guard that first ordinary holder.
+    pub(crate) unsafe fn capture_including(recv: *const ObjectHeader) -> Option<Self> {
+        if !Self::admitted(recv) {
+            return None;
+        }
+        let proof = Self::capture(recv)?;
+        let (hops, len) = proof.into_raw_parts();
+        let mut hops = Box::from_raw(std::ptr::slice_from_raw_parts_mut(hops, len)).into_vec();
+        hops.insert(
+            0,
+            ShapeHop {
+                addr: recv as usize,
+                word: std::ptr::read(recv as *const u64),
+                heap: true,
+            },
+        );
+        Some(Self::from_hops(hops))
+    }
+
     /// Capture a complete ordinary chain. The caller separately proves the
     /// property's answer; these words validate its continued applicability.
     pub(crate) unsafe fn capture(recv: *const ObjectHeader) -> Option<Self> {
+        Self::capture_to(recv, std::ptr::null())
+    }
+
+    /// A data-property answer only consumes links through its actual holder.
+    /// Stop there without materializing or proving unused realm parents.
+    pub(crate) unsafe fn capture_to(
+        recv: *const ObjectHeader,
+        holder: *const ObjectHeader,
+    ) -> Option<Self> {
         use crate::object::method_site::read_holder::{admitted_link, class_link, next_from_word};
         use crate::object::shapes::{PROTO_ID_DEFAULT, PROTO_ID_NULL};
         let mut current = recv;
@@ -205,7 +234,7 @@ impl ShapeChain {
                 heap: true,
             });
             current = next;
-            if current as usize == realm {
+            if current == holder || current as usize == realm {
                 return Some(Self::from_hops(hops));
             }
         }

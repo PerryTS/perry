@@ -8,6 +8,7 @@ use super::*;
 mod abrupt;
 mod async_step;
 mod call_this;
+mod fixed_state;
 mod private_brand;
 mod resume;
 mod yield_await;
@@ -70,11 +71,13 @@ fn async_step_resolve(iter_result: Expr) -> Expr {
 fn build_dispatch_while_body(
     states: &[State],
     async_step: bool,
+    fixed_state: bool,
     state_id: LocalId,
     done_id: LocalId,
     sent_id: LocalId,
 ) -> Vec<Stmt> {
     let mut while_body: Vec<Stmt> = Vec::new();
+    let mut cases = Vec::new();
     for state in states {
         let num = state.num;
         let mut case_body = state.body.clone();
@@ -155,6 +158,13 @@ fn build_dispatch_while_body(
             }
         }
 
+        if fixed_state {
+            cases.push(perry_hir::SwitchCase {
+                test: Some(Expr::Number(num as f64)),
+                body: case_body,
+            });
+            continue;
+        }
         while_body.push(Stmt::If {
             condition: Expr::Compare {
                 op: CompareOp::Eq,
@@ -172,6 +182,16 @@ fn build_dispatch_while_body(
         Box::new(Expr::Bool(true)),
     )));
     while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+    if fixed_state {
+        cases.push(perry_hir::SwitchCase {
+            test: None,
+            body: while_body,
+        });
+        return vec![Stmt::Switch {
+            discriminant: Expr::LocalGet(state_id),
+            cases,
+        }];
+    }
     while_body
 }
 
@@ -296,6 +316,9 @@ pub fn transform_generator_function_with_extra_captures(
     //
     // A non-async generator keeps the direct iter-result return path.
     let is_async_generator = func.is_async;
+    let fixed_state = !is_async_generator && !func.was_plain_async;
+    let mut shared_with_user = std::collections::HashSet::new();
+    fixed_state::collect_user_closure_refs(&func.body, &mut shared_with_user);
     func.is_async = false;
 
     // Spec: generator/async-generator parameter binding
@@ -430,7 +453,7 @@ pub fn transform_generator_function_with_extra_captures(
     // `gen.return(v)` while suspended inside a `yield *` forwards into the
     // delegated iterator's `return` method (spec `yield *` step 6.c).
     let delegations = super::linearize::take_delegation_routes();
-    let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
+    let mut extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
     // Push final state (code after last yield / end of function)
     states.push(State {
@@ -456,10 +479,21 @@ pub fn transform_generator_function_with_extra_captures(
     // re-boxes them every iteration, exactly as the non-async path does — plus
     // the per-state snapshot locals. `var` and anything else live across an
     // `await` is excluded there and keeps today's hoisting.
-    let hoisted_for_rewrite: Vec<(LocalId, String, Type)> = collect_hoisted_vars(&func.body)
+    let mut hoisted_for_rewrite: Vec<(LocalId, String, Type)> = collect_hoisted_vars(&func.body)
         .into_iter()
         .filter(|(id, _, _)| !no_hoist_ids.contains(id))
         .collect();
+    if fixed_state {
+        let locals = fixed_state::state_local_ids(
+            &states,
+            &shared_with_user,
+            &catches,
+            &finallys,
+            &delegations,
+        );
+        hoisted_for_rewrite.retain(|(id, _, _)| !locals.contains(id));
+        extra_local_ids.retain(|id| !locals.contains(id));
+    }
     let mut hoisted_ids: std::collections::HashSet<LocalId> =
         hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
     // Linearization allocates additional locals for state-spanning values
@@ -525,8 +559,14 @@ pub fn transform_generator_function_with_extra_captures(
     // async-step driver, so `await` states must suspend on the microtask queue
     // (`async_step = true`). Sync generators and the `was_plain_async` path use
     // the historical shape (`async_step = false`); they have no `await` states.
-    let while_body =
-        build_dispatch_while_body(&states, is_async_generator, state_id, done_id, sent_id);
+    let while_body = build_dispatch_while_body(
+        &states,
+        is_async_generator,
+        fixed_state,
+        state_id,
+        done_id,
+        sent_id,
+    );
 
     // The next() closure parameter — receives the value from next(val) calls
     let next_param_id = alloc_local(next_local_id);
@@ -727,6 +767,9 @@ pub fn transform_generator_function_with_extra_captures(
     }
     prealloc_ids.sort();
     prealloc_ids.dedup();
+    if fixed_state {
+        prealloc_ids.retain(|id| shared_with_user.contains(id));
+    }
     new_body.push(Stmt::PreallocateBoxes(prealloc_ids));
 
     // let __state = 0
@@ -860,45 +903,36 @@ pub fn transform_generator_function_with_extra_captures(
     }
     captures.sort();
     captures.dedup();
+    if fixed_state {
+        // The shared resume boundary owns these four controls. User captures
+        // follow them; codegen preserves explicit capture order.
+        let controls = [state_id, done_id, sent_id, executing_id];
+        captures.retain(|id| !controls.contains(id));
+        captures.splice(0..0, controls);
+    }
     mutable_captures.sort();
     mutable_captures.dedup();
 
-    // Cold abrupt resumes reuse the existing private .next dispatcher. Capturing
-    // that closure keeps user replacement of the public next property irrelevant.
-    // Simple generators retain their existing allocation and capture layout.
-    let sync_resume_id = if !is_async_generator
-        && (!delegations.is_empty() || has_yielding_finally || !catches.is_empty())
-    {
-        Some(alloc_local(next_local_id))
-    } else {
-        None
-    };
-    let abrupt_captures = {
-        let mut ids = captures.clone();
-        ids.extend(sync_resume_id);
-        ids.sort();
-        ids
-    };
+    let resume_op_id = fixed_state.then(|| alloc_local(next_local_id));
+    let abrupt_captures = captures.clone();
     let resume_sync = |body: Vec<Stmt>| -> Stmt {
-        if let Some(id) = sync_resume_id {
-            Stmt::If {
+        if let Some(op_id) = resume_op_id {
+            // Abrupt routing has selected a continuation state. Re-enter the
+            // shared dispatch in this activation, with next(undefined).
+            return Stmt::If {
                 condition: Expr::Bool(true),
                 then_branch: vec![
-                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    Stmt::Return(Some(Expr::Call {
-                        callee: Box::new(Expr::LocalGet(id)),
-                        args: vec![Expr::Undefined],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    })),
+                    Stmt::Expr(Expr::LocalSet(sent_id, Box::new(Expr::Undefined))),
+                    Stmt::Expr(Expr::LocalSet(next_param_id, Box::new(Expr::Undefined))),
+                    Stmt::Expr(Expr::LocalSet(op_id, Box::new(Expr::Number(0.0)))),
+                    Stmt::Continue,
                 ],
                 else_branch: None,
-            }
-        } else {
-            Stmt::While {
-                condition: Expr::Bool(true),
-                body,
-            }
+            };
+        }
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body,
         }
     };
 
@@ -1139,13 +1173,18 @@ pub fn transform_generator_function_with_extra_captures(
         // and marks `done` on any escaping throw (also wraps returns in a Promise
         // for async generators).
         let return_catch_id = alloc_local(next_local_id);
-        let return_body = wrap_generator_resume_body(
-            return_resume_body,
-            executing_id,
-            done_id,
-            return_catch_id,
-            is_async_generator,
-        );
+        let return_body = if fixed_state {
+            return_resume_body.drain(..2); // done/executing are shared boundary controls
+            return_resume_body
+        } else {
+            wrap_generator_resume_body(
+                return_resume_body,
+                executing_id,
+                done_id,
+                return_catch_id,
+                is_async_generator,
+            )
+        };
         let return_closure = Expr::Closure {
             func_id: return_func_id_val,
             params: vec![perry_hir::Param {
@@ -1371,13 +1410,18 @@ pub fn transform_generator_function_with_extra_captures(
             (outer_next_closure, outer_throw_closure)
         } else {
             let throw_catch_id = alloc_local(next_local_id);
-            let throw_body = wrap_generator_resume_body(
-                throw_resume_body,
-                executing_id,
-                done_id,
-                throw_catch_id,
-                is_async_generator,
-            );
+            let throw_body = if fixed_state {
+                throw_resume_body.remove(0); // executing is owned by the shared boundary
+                throw_resume_body
+            } else {
+                wrap_generator_resume_body(
+                    throw_resume_body,
+                    executing_id,
+                    done_id,
+                    throw_catch_id,
+                    is_async_generator,
+                )
+            };
             let throw_closure = Expr::Closure {
                 func_id: throw_func_id_val,
                 params: vec![perry_hir::Param {
@@ -1404,17 +1448,22 @@ pub fn transform_generator_function_with_extra_captures(
 
             // Plain generator: build the iterator object and return it directly.
             let next_catch_id = alloc_local(next_local_id);
-            next_resume_body.insert(
-                2,
-                Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
-            );
-            let next_body = wrap_generator_resume_body(
-                next_resume_body,
-                executing_id,
-                done_id,
-                next_catch_id,
-                is_async_generator,
-            );
+            let next_body = if fixed_state {
+                next_resume_body.drain(..2); // sent/done are shared boundary controls
+                next_resume_body
+            } else {
+                next_resume_body.insert(
+                    2,
+                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
+                );
+                wrap_generator_resume_body(
+                    next_resume_body,
+                    executing_id,
+                    done_id,
+                    next_catch_id,
+                    is_async_generator,
+                )
+            };
             let next_closure = Expr::Closure {
                 func_id: next_func_id_val,
                 params: vec![perry_hir::Param {
@@ -1440,23 +1489,117 @@ pub fn transform_generator_function_with_extra_captures(
             };
             (next_closure, throw_closure)
         };
-        let next_closure = if let Some(id) = sync_resume_id {
-            new_body.push(Stmt::Let {
-                id,
-                name: "__gen_resume".to_string(),
-                ty: Type::Any,
-                mutable: false,
-                init: Some(next_closure),
-            });
-            Expr::LocalGet(id)
+        let iter_obj = if let Some(op_id) = resume_op_id {
+            let Expr::Closure {
+                body: mut next_body,
+                ..
+            } = next_closure
+            else {
+                unreachable!()
+            };
+            let Expr::Closure {
+                body: mut return_body,
+                ..
+            } = return_closure
+            else {
+                unreachable!()
+            };
+            let Expr::Closure {
+                body: mut throw_body,
+                ..
+            } = throw_closure
+            else {
+                unreachable!()
+            };
+            let subst = std::collections::HashMap::from([
+                (return_param_id, next_param_id),
+                (throw_param_id, next_param_id),
+            ]);
+            perry_hir::analysis::remap_local_ids_in_stmts(&mut return_body, &subst);
+            perry_hir::analysis::remap_local_ids_in_stmts(&mut throw_body, &subst);
+            // With no source abrupt routes, return/throw are entirely the
+            // shared boundary's operation. The private one-argument ABI
+            // records this fact in the existing function arity, without a
+            // per-generator flag, table or emitted default operation arms.
+            let next_only = catches.is_empty() && finallys.is_empty() && delegations.is_empty();
+            let mut dispatch = if next_only {
+                Vec::new()
+            } else {
+                vec![
+                    Stmt::If {
+                        condition: Expr::Compare {
+                            op: CompareOp::Eq,
+                            left: Box::new(Expr::LocalGet(op_id)),
+                            right: Box::new(Expr::Number(1.0)),
+                        },
+                        then_branch: return_body,
+                        else_branch: None,
+                    },
+                    Stmt::If {
+                        condition: Expr::Compare {
+                            op: CompareOp::Eq,
+                            left: Box::new(Expr::LocalGet(op_id)),
+                            right: Box::new(Expr::Number(2.0)),
+                        },
+                        then_branch: throw_body,
+                        else_branch: None,
+                    },
+                ]
+            };
+            dispatch.append(&mut next_body);
+            let mut params = vec![
+                perry_hir::Param {
+                    id: op_id,
+                    name: "__gen_op".into(),
+                    ty: Type::Number,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                },
+                perry_hir::Param {
+                    id: next_param_id,
+                    name: "__gen_arg".into(),
+                    ty: Type::Any,
+                    is_rest: false,
+                    default: None,
+                    decorators: Vec::new(),
+                    arguments_object: None,
+                },
+            ];
+            if next_only {
+                params.remove(0);
+            }
+            let body = if next_only {
+                dispatch
+            } else {
+                vec![Stmt::While {
+                    condition: Expr::Bool(true),
+                    body: dispatch,
+                }]
+            };
+            Expr::Closure {
+                func_id: next_func_id_val,
+                params,
+                return_type: Type::Any,
+                body,
+                captures,
+                mutable_captures: Vec::new(),
+                captures_this,
+                captures_new_target: false,
+                enclosing_class: enclosing_class.clone(),
+                is_arrow: false,
+                is_strict: func.is_strict,
+                is_async: false,
+                is_generator: false,
+            }
         } else {
-            next_closure
+            Expr::Object(vec![
+                ("next".to_string(), next_closure),
+                ("return".to_string(), return_closure),
+                ("throw".to_string(), throw_closure),
+            ])
         };
-        let iter_obj = Expr::Object(vec![
-            ("next".to_string(), next_closure),
-            ("return".to_string(), return_closure),
-            ("throw".to_string(), throw_closure),
-        ]);
         // #4141: wire the instance's `[[Prototype]]` chain
         // (`gen() → g.prototype → %Generator.prototype%`) so reflective
         // access via the instance (`Object.getPrototypeOf(Object.getPrototypeOf(
@@ -1467,6 +1610,24 @@ pub fn transform_generator_function_with_extra_captures(
         let linked = Expr::LinkGeneratorPrototype {
             obj: Box::new(iter_obj),
             is_async: is_async_generator,
+            fixed_state,
+            i32_controls: if fixed_state {
+                // The private protocol ABI supplies only 0/1/2 here; an
+                // abrupt continuation writes 0. This parameter is compiler
+                // machinery, not a value justified by a source annotation.
+                let mut ids = vec![state_id, resume_op_id.unwrap()];
+                if has_yielding_finally {
+                    ids.push(pending_type_id);
+                }
+                ids
+            } else {
+                Vec::new()
+            },
+            i1_controls: if fixed_state {
+                vec![done_id, executing_id]
+            } else {
+                Vec::new()
+            },
         };
         // #6709: bind the shared async-generator step closure into its boxed
         // local before returning the iterator object, so the `.next`/`.throw`

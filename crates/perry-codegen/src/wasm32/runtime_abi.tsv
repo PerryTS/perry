@@ -1502,6 +1502,9 @@ js_gc_write_barriers_emitted	void	i32u
 js_ge	i64	i64,i64
 js_generator_attach_closure_prototype	f64	f64,ptr
 js_generator_attach_prototype	f64	f64,i32s
+js_generator_create	f64	f64,ptr
+js_generator_result	f64	f64,i32s
+js_generator_set_slot	void	ptr,i32u,i64,i32s
 js_get_async_iterator	f64	f64
 js_get_cjs_main_module	f64	
 js_get_current_step_closure	ptr	

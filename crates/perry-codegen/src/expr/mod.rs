@@ -769,6 +769,8 @@ pub(crate) struct FnCtx<'a> {
     /// raw helpers. Public and dynamically dispatched closure bodies keep the
     /// defensive runtime registry validation.
     pub trusted_box_captures: bool,
+    /// Only the transformed synchronous resume body owns direct mutable state captures.
+    pub fixed_generator_state: bool,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -3181,6 +3183,7 @@ pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
+mod generator_control_slots;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
@@ -3557,14 +3560,19 @@ pub(crate) fn try_lower_proven_boolean_to_number(
 }
 
 pub(crate) fn is_compiler_private_async_i32_control_local(ctx: &FnCtx<'_>, id: u32) -> bool {
-    ctx.boxed_vars.contains(&id) && ctx.compiler_private_async_i32_control_locals.contains(&id)
+    (ctx.boxed_vars.contains(&id) || generator_control_slots::is_fixed(ctx, id))
+        && ctx.compiler_private_async_i32_control_locals.contains(&id)
 }
 
 pub(crate) fn is_compiler_private_async_i1_control_local(ctx: &FnCtx<'_>, id: u32) -> bool {
-    ctx.boxed_vars.contains(&id) && ctx.compiler_private_async_i1_control_locals.contains(&id)
+    (ctx.boxed_vars.contains(&id) || generator_control_slots::is_fixed(ctx, id))
+        && ctx.compiler_private_async_i1_control_locals.contains(&id)
 }
 
 pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<Option<String>> {
+    if generator_control_slots::is_fixed(ctx, id) {
+        return generator_control_slots::address(ctx, id).map(Some);
+    }
     // A scoped binding's cell is its slot inside the scope object.
     if let Some((slot, base)) = crate::scope_env::access::load_base(ctx, id)? {
         return Ok(Some(crate::scope_env::access::cell_addr(ctx, slot, &base)));
@@ -3697,7 +3705,7 @@ fn lower_async_i32_control_const_compare(
     let Some(ptr) = load_boxed_local_pointer(ctx, id)? else {
         return Ok(None);
     };
-    let value = load_async_i32_control_cell(ctx, &ptr);
+    let value = generator_control_slots::load_i32(ctx, id, &ptr);
     let constant_s = constant.to_string();
     let (lhs, rhs) = if local_on_left {
         (value.as_str(), constant_s.as_str())
@@ -4323,7 +4331,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value = load_async_i32_control_cell(ctx, &ptr);
+            let value = generator_control_slots::load_i32(ctx, *id, &ptr);
             let lowered = LoweredValue::i32(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -4343,7 +4351,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
                 return Ok(None);
             };
-            let value = load_async_i1_control_cell(ctx, &ptr);
+            let value = generator_control_slots::load_i1(ctx, *id, &ptr);
             let lowered = LoweredValue::i1(value);
             ctx.record_lowered_value(
                 "LocalGet",
@@ -4430,7 +4438,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i32 = lower_i32_control_store_value(ctx, value)?;
-            store_async_i32_control_cell(ctx, &ptr, &value_i32);
+            generator_control_slots::store_i32(ctx, *id, &ptr, &value_i32)?;
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             record_int_facts_for_local_set(ctx, *id, value);
             let lowered = LoweredValue::i32(value_i32);
@@ -4455,7 +4463,7 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 return Ok(None);
             };
             let value_i1 = lower_i1_control_store_value(ctx, value)?;
-            store_async_i1_control_cell(ctx, &ptr, &value_i1);
+            generator_control_slots::store_i1(ctx, *id, &ptr, &value_i1)?;
             record_native_arena_owner_assignment(ctx, *id, value.as_ref());
             let lowered = LoweredValue::i1(value_i1);
             ctx.record_lowered_value(

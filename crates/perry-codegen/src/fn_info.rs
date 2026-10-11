@@ -76,6 +76,8 @@ pub(crate) struct FnInfoFacts {
     pub trusted: Option<CloneTarget>,
     pub versioned: Option<CloneTarget>,
     pub source: Option<RetainedSource>,
+    /// Compiler-private synchronous continuation: mutable captures are its state slots.
+    pub fixed_generator_state: bool,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.

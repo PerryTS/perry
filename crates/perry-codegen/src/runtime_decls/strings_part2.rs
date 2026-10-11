@@ -444,6 +444,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     // #4141: generator/async-generator instance `[[Prototype]]` linker.
     module.declare_function("js_generator_attach_prototype", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_generator_create", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_generator_set_slot", VOID, &[I64, I32, I64, I32]);
+    module.declare_function("js_generator_result", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
         "js_generator_attach_closure_prototype",
         DOUBLE,

@@ -142,6 +142,7 @@ indirect regex ^<?std::sys::(pal|sync::(mutex|rwlock|condvar|thread_parking)|fs|
 indirect regex ^<?std::sys::thread::unix::Thread>::new|^std::thread::spawnhook::|^<std::thread::spawnhook::|^<alloc::sync::Arc<std::thread::|^core::ptr::drop_glue::<alloc::boxed::Box<std::thread::|^std::thread::lifecycle:: -- thread creation: the closure runs on the NEW thread, whose GC heap and stack are its own; spawn hooks are never registered (see the forbid rule below)
 forbid regex add_spawn_hook -- the thread-spawn exemption assumes Perry registers no std spawn hook (they run on the spawning thread)
 indirect regex ^getrandom::|^<getrandom::|^rand_core::|^<rand::|^<chacha20:: -- getrandom/rand: libc getrandom resolved through weak symbols / dlsym; no callbacks
+indirect-all regex ^<once_cell::race::once_box::OnceBox<.*>>::init::.*get_or_init<ahash::random_state::get_(fixed_seeds|src)::\{closure#0\}>::\{closure#0\}>$ -- these ahash-only OnceBox initializers obtain native hash seeds or the native random source and allocate through the system allocator; no Perry callbacks. Every folded alias must name that same audited ahash initializer; an unrelated alias keeps the indirect call a seed
 indirect regex ^<?std::panic::get_backtrace_style|^std::panicking:: -- panic runtime (cut anyway under panic=abort): backtrace-style probe and hook dispatch run no JS
 #
 # mimalloc (C, vendored by libmimalloc-sys): its function pointers are its own

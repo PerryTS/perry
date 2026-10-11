@@ -245,6 +245,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 class_name.clone(),
                 crate::codegen::static_method_registry_key(method_name),
             );
+            let mut candidate = ctx.classes.get(class_name).copied();
+            let mut computed_generator = false;
+            for _ in 0..ctx.classes.len() {
+                let Some(class) = candidate else { break };
+                if class.computed_members.iter().any(|m| {
+                    m.is_static
+                        && crate::codegen::helpers::body_has_fixed_generator_state(&m.function.body)
+                }) || class.static_methods.iter().any(|f| {
+                    f.name == *method_name
+                        && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
+                }) {
+                    computed_generator = true;
+                    break;
+                }
+                candidate = class
+                    .extends_name
+                    .as_ref()
+                    .and_then(|name| ctx.classes.get(name).copied());
+            }
+            if computed_generator {
+                let receiver = Expr::ClassRef(class_name.clone());
+                let offset = ctx.strings.pending_call_offset();
+                return crate::lower_call::lower_split_method_call(
+                    ctx,
+                    &receiver,
+                    method_name,
+                    args,
+                    offset,
+                    &[],
+                    None,
+                    None,
+                );
+            }
             if let Some(fn_name) = ctx.methods.get(&key).cloned() {
                 // Inherited static (`D.f()` resolving to a parent's body): arm
                 // the one-shot static-`this` override with the DISPATCH base

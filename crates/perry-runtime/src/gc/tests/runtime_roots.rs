@@ -11,6 +11,7 @@ mod explicit_this_forwarding;
 mod fs_options_object;
 mod function_attrs_old_minor;
 mod generator_attach_prototype;
+mod generator_fixed_state;
 mod handle_stack;
 mod hidden_keys;
 mod hook_dispatch_handles;

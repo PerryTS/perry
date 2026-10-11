@@ -561,7 +561,7 @@ pub static CLASS_STATIC_METHOD_BIND_LENGTHS: ImageTable<
 > = ImageTable::new(|image| &image.static_method_bind_lengths);
 
 crate::perry_thread_local! {
-    pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
+    pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool, usize)>>> =
         RwLock::new(None);
 
     pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
@@ -1246,17 +1246,36 @@ pub(super) fn install_class_decl_prototype_symbol_member(
                 },
             );
         }
-    } else if let Some((func_ptr, param_count, has_rest)) =
-        super::class_own_symbol_method(class_id, sym_key, false)
+    } else if let Some((func_ptr, param_count, has_rest, entry)) =
+        super::lookup_class_symbol_method_in_chain(class_id, sym_key, false)
     {
-        let value = scope.root_nanbox_f64(crate::object::build_symbol_bound_method_closure(
-            crate::object::class_prototype_ref_value(class_id),
-            func_ptr,
-            param_count,
-            has_rest,
-            false,
-            &display_name,
-        ));
+        let generator = entry != 0
+            && unsafe {
+                crate::closure::info_has(
+                    &*(entry as *const crate::closure::JsFunctionInfo),
+                    crate::closure::FN_GENERATOR,
+                )
+            };
+        let value = scope.root_nanbox_f64(if generator {
+            crate::object::native_module::class_method_declaration_value(
+                crate::object::class_prototype_ref_value(class_id),
+                &display_name,
+                func_ptr,
+                param_count,
+                false,
+                has_rest,
+                entry,
+            )
+        } else {
+            crate::object::build_symbol_bound_method_closure(
+                crate::object::class_prototype_ref_value(class_id),
+                func_ptr,
+                param_count,
+                has_rest,
+                false,
+                &display_name,
+            )
+        });
         let proto_value =
             proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
         unsafe {

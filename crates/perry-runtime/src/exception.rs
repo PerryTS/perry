@@ -324,6 +324,72 @@ pub fn catch_js_throw<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
     }
 }
 
+/// The fixed generator boundary calls one known two-argument compiled body.
+/// Keep the same full exception savepoint and C-owned jump target, but pass
+/// the rooted invocation directly instead of transporting FnOnce/Option
+/// through another Rust callback frame on every yield.
+#[inline(never)]
+pub(crate) unsafe fn catch_generator_resume(
+    state: &crate::gc::RuntimeHandle<'_>,
+    op: f64,
+    arg: f64,
+) -> Result<f64, f64> {
+    struct Invocation<'a, 'scope> {
+        state: &'a crate::gc::RuntimeHandle<'scope>,
+        arg: f64,
+        op: f64,
+        result: f64,
+    }
+    unsafe extern "C" fn invoke(raw: *mut core::ffi::c_void) {
+        let ctx = &mut *raw.cast::<Invocation<'_, '_>>();
+        // next's argument is already published in the rooted fixed frame.
+        // Read it there after any barrier work, directly into the body ABI.
+        // Abrupt arguments cross only non-collecting exception-stack setup.
+        let result = ctx
+            .state
+            .with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+                let arg = if ctx.op == 0.0 {
+                    f64::from_bits(*p.add(1).cast::<u64>().add(2))
+                } else {
+                    ctx.arg
+                };
+                if (*(*p).info).params == 1 {
+                    return crate::closure::body_call::js_body_call!(
+                        (*(*p).info).code,
+                        p,
+                        crate::closure::plain_call_receiver(),
+                        arg
+                    );
+                }
+                crate::closure::body_call::js_body_call!(
+                    (*(*p).info).code,
+                    p,
+                    crate::closure::plain_call_receiver(),
+                    ctx.op,
+                    arg
+                )
+            });
+        // GC_STORE_AUDIT(STACK): trampoline result read before any further call.
+        ctx.result = result;
+    }
+    let mut ctx = Invocation {
+        state,
+        arg,
+        op,
+        result: 0.0,
+    };
+    let env = js_try_push();
+    let rc = perry_sjlj_try(env.cast(), invoke, (&raw mut ctx).cast());
+    js_try_end();
+    if rc == 0 {
+        Ok(ctx.result)
+    } else {
+        let err = js_get_exception();
+        js_clear_exception();
+        Err(err)
+    }
+}
+
 crate::perry_thread_local! {
     /// Try depth of this thread's worker base trap, while a worker body runs
     /// under [`run_worker_body`].

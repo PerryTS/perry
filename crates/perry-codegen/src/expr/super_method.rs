@@ -108,6 +108,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
+            if resolved_owner.as_ref().is_some_and(|owner| {
+                ctx.classes.get(owner).is_some_and(|class| {
+                    class.methods.iter().any(|f| {
+                        &f.name == method
+                            && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
+                    })
+                })
+            }) {
+                // A generator birth must receive the selected function object,
+                // including a fresh evaluation's super method and prototype.
+                let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+                return lower_super_lookup_first(ctx, cid, method, args);
+            }
             // Lower `this` (from this_stack) + args.
             let this_slot = ctx
                 .this_stack

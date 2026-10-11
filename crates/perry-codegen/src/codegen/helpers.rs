@@ -24,6 +24,10 @@ pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -
         return false;
     }
     body.iter().any(|stmt| match stmt {
+        perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
+            fixed_state: true,
+            ..
+        })) => true,
         // The generator transform may wrap the returned iterator in the
         // instance-prototype linker; unwrap it so the iterator shape remains
         // the stable signal that this is a lowered generator wrapper.
@@ -1810,4 +1814,20 @@ pub(super) fn emit_callee_binding_resolutions(
             .insert((id, arity), fn_ptr);
     }
     Ok(())
+}
+
+/// Class callable entries forward their exact owner to this private factory.
+pub(crate) fn generator_method_owner_name(body: &str) -> String {
+    format!("{body}$generator_owner")
+}
+pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype {
+                fixed_state: true,
+                ..
+            }))
+        )
+    })
 }

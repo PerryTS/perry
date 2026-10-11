@@ -1037,8 +1037,8 @@ fn computed_generator_receivers_match_named_methods() {
                 }
             }
             assert!(
-                count >= 3,
-                "must inspect next/return/throw generator closures"
+                count >= if is_async { 3 } else { 1 },
+                "must inspect each generator continuation"
             );
         }
     }

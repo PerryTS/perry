@@ -724,6 +724,7 @@ fn name_computed_instance_member(
                 class_id,
                 definition_order as u32,
                 name,
+                property_key,
             )
         };
     } else {
@@ -795,7 +796,12 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             }
             guard.as_mut().unwrap().insert(
                 (class_id, sym_key, is_static != 0),
-                (func_ptr as usize, param_count as u32, has_rest != 0),
+                (
+                    func_ptr as usize,
+                    param_count as u32,
+                    has_rest != 0,
+                    entry as usize,
+                ),
             );
         });
         // A computed key that evaluates to a WELL-KNOWN symbol names the
@@ -811,6 +817,20 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 definition_order,
                 super::declarations::member_name_of_symbol(sym_key),
                 property_key,
+            );
+        }
+        if is_static != 0
+            && entry != 0
+            && crate::closure::info_has(
+                &*(entry as *const crate::closure::JsFunctionInfo),
+                crate::closure::FN_GENERATOR,
+            )
+        {
+            crate::object::install_generator_symbol_method(
+                class_id,
+                owner,
+                property_key,
+                entry as usize,
             );
         }
         let proto = super::state::class_decl_prototype_object(class_id);
@@ -1361,7 +1381,35 @@ pub unsafe extern "C" fn js_class_static_method_call(
     if class_id == 0 {
         return receiver;
     }
-    if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
+    if let Some((owner_id, (func_ptr, param_count, has_rest))) =
+        lookup_static_method_owner(class_id, name)
+    {
+        if class_own_static_method_code(owner_id, name).is_some_and(|info| {
+            crate::closure::info_has(
+                &*(info as *const crate::closure::JsFunctionInfo),
+                crate::closure::FN_GENERATOR,
+            )
+        }) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let receiver = scope.root_nanbox_f64(receiver);
+            let args = scope.root_nanbox_f64_slice(if args_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            });
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let member = crate::object::js_object_get_property_key(
+                receiver.get_nanbox_f64(),
+                crate::value::js_nanbox_string(key as i64),
+            );
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+            return crate::closure::js_native_call_value(
+                member,
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            );
+        }
         crate::object::static_private_owner_push(receiver);
         // Receiver-sensitive static `this`: arm the one-shot override so the
         // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver

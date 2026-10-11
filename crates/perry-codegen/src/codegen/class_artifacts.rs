@@ -266,6 +266,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
                 false,
                 false,
+                false,
             )
             .with_context(|| {
                 format!(
@@ -305,6 +306,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     module_boxed_vars,
                     closure_rest_params,
                     cross_module,
+                    false,
                 )
                 .with_context(|| format!("lowering static getter '{}::{}'", class.name, prop))?;
                 continue;
@@ -336,6 +338,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
                 false,
                 false,
+                false,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -363,6 +366,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     module_boxed_vars,
                     closure_rest_params,
                     cross_module,
+                    false,
                 )
                 .with_context(|| format!("lowering static setter '{}::{}'", class.name, prop))?;
                 continue;
@@ -390,6 +394,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -495,6 +500,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 false,
                 false,
                 false,
+                false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }
@@ -521,6 +527,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                false,
             )
             .with_context(|| format!("lowering static method '{}::{}'", class.name, sm.name))?;
         }
@@ -549,6 +556,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                false,
             )
             .with_context(|| {
                 format!(
@@ -556,6 +564,76 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     class.name, member.function.name
                 )
             })?;
+        }
+        // Only a generator's small birth factory needs the actual callable.
+        // The existing private resume body is emitted once, shared by entries.
+        for (method, is_static) in class
+            .methods
+            .iter()
+            .map(|f| (f, false))
+            .chain(class.static_methods.iter().map(|f| (f, true)))
+            .chain(
+                class
+                    .computed_members
+                    .iter()
+                    .map(|m| (&m.function, m.is_static)),
+            )
+            .filter(|(f, _)| super::helpers::body_has_fixed_generator_state(&f.body))
+        {
+            if is_static {
+                compile_static_method(
+                    llmod,
+                    class,
+                    method,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_prefix,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    true,
+                )?;
+            } else {
+                compile_method(
+                    llmod,
+                    class,
+                    method,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    None,
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                )?;
+            }
         }
         let done = class_index + 1;
         if done == hir.classes.len() || done % class_progress_step == 0 {

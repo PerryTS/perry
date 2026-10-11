@@ -50,6 +50,7 @@ pub(crate) fn install_dyn_eval() {
     fetch_globals::install_global_eval();
 }
 mod generator;
+mod generator_state;
 mod install_static;
 mod math_temporal;
 mod object_intrinsic;
@@ -176,10 +177,16 @@ pub use fetch_globals::{
 pub(crate) use generator::append_async_function_root_snapshot;
 pub(crate) use generator::{
     ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
-    generator_function_prototype_of, set_intrinsic_data_prop, set_intrinsic_to_string_tag,
+    generator_function_prototype_of, is_sync_generator_protocol_body,
+    proven_sync_generator_protocol_code, set_intrinsic_data_prop, set_intrinsic_to_string_tag,
     wire_function_intrinsic_parents,
 };
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
+pub(crate) use generator_state::{
+    call_generator_symbol_method, fixed_generator_state, install_evaluation_generator_symbols,
+    install_generator_symbol_method, GENERATOR_STATE_BRAND,
+};
+pub use generator_state::{js_generator_create, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,

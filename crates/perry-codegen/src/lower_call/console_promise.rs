@@ -925,7 +925,7 @@ pub(super) fn lower_arguments_apply_site(
 /// run a getter) and every argument, so it is always rooted; the looked-up
 /// value across the arguments; each argument across the ones after it, as in
 /// the fused form (the value call roots its own arguments across its rebind).
-fn lower_split_method_call(
+pub(crate) fn lower_split_method_call(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,

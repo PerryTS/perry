@@ -108,8 +108,11 @@ fn sync_abrupt_resumes_share_the_private_next_dispatcher() {
     module.functions.push(function);
     transform_generators(&mut module);
     let body = format!("{:?}", module.functions[0].body);
-    assert!(body.contains("__gen_resume"));
-    // Only .next owns a state-dispatch loop. .return/.throw forward their
-    // successful continuation to the captured closure.
-    assert_eq!(body.matches("While {").count(), 1);
+    assert!(body.contains("fixed_state: true"));
+    assert!(!body.contains("__gen_resume"));
+    // One operation-routing loop around the one state dispatcher. Abrupt
+    // resumptions continue that routing loop rather than creating closures.
+    assert_eq!(body.matches("While {").count(), 2);
+    assert_eq!(body.matches("Closure {").count(), 1);
+    assert_eq!(body.matches("Switch { discriminant: LocalGet(").count(), 1);
 }

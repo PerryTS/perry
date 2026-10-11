@@ -1125,6 +1125,7 @@ pub(super) fn emit_string_pool(
                     .any(|p| p.is_rest && p.arguments_object.is_none()),
                 has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                 home: fresh_class_templates.contains(class_name),
+                generator_owner: super::helpers::body_has_fixed_generator_state(&f.body),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1293,6 +1294,11 @@ pub(super) fn emit_string_pool(
             has_user_rest: has_rest,
             has_synth_args,
             home,
+            generator_owner: method_entries::source_is_fixed_generator(
+                &local_classes,
+                cid,
+                definition_order,
+            ),
         });
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
         if home {
@@ -1394,6 +1400,11 @@ pub(super) fn emit_string_pool(
                 has_user_rest,
                 has_synth_args,
                 home: fresh_cids.contains(&cid),
+                generator_owner: method_entries::source_is_fixed_generator(
+                    &local_classes,
+                    cid,
+                    definition_order,
+                ),
             },
         );
         let blk = chunker.current_block();
@@ -1891,6 +1902,12 @@ pub(super) fn emit_string_pool(
     for e in &method_entries {
         emit_class_method_entry(&mut chunker, e);
     }
+    method_entries::emit_computed_generator_entries(
+        &mut chunker,
+        &local_classes,
+        &fresh_cids,
+        module_prefix,
+    );
     let [literal_chunks, class_chunks] = chunker.finish();
     record_fn_info_facts(
         llmod,

@@ -34,6 +34,36 @@ pub(crate) fn try_lower_static_dispatch(
         ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
+        // Generator factories need the selected callable's prototype. Limit
+        // this route to the actual class chain; other class declarations do
+        // not change the lowering of this receiver's static operations.
+        let mut current = Some(cls_name.as_str());
+        for _ in 0..ctx.classes.len() {
+            let Some(class) = current.and_then(|name| ctx.classes.get(name)) else {
+                break;
+            };
+            if class.static_methods.iter().any(|f| {
+                f.name == property
+                    && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
+            }) || class.computed_members.iter().any(|m| {
+                m.is_static
+                    && crate::codegen::helpers::body_has_fixed_generator_state(&m.function.body)
+            }) {
+                let offset = ctx.strings.pending_call_offset();
+                return crate::lower_call::lower_split_method_call(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    offset,
+                    &[],
+                    None,
+                    None,
+                )
+                .map(Some);
+            }
+            current = class.extends_name.as_deref();
+        }
         // `C.prop(args)` where `prop` is a static ACCESSOR reads the accessor and
         // calls its result — handle before the by-name tower (which would miss).
         if let Some(v) = crate::lower_call::console_promise::try_lower_class_static_accessor_call(

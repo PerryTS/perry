@@ -141,8 +141,8 @@ mod tests {
                 }
             });
             assert!(
-                continuations >= 3,
-                "next/return/throw must all restore the brand"
+                continuations >= if is_async { 3 } else { 1 },
+                "all protocol operations must restore the brand"
             );
         }
     }

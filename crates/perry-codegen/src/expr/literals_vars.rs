@@ -115,6 +115,40 @@ fn load_closure_capture_bits_inline(
     blk.load(I64, &slot_ptr)
 }
 
+/// The private continuation proves this capture layout and index. Birth
+/// selects the existing generic JSValue scan for its fixed slots, so writes
+/// need no dynamic mask updates. The exact generation-gated barrier remains.
+fn store_generator_state_slot(
+    ctx: &mut FnCtx<'_>,
+    closure_ptr: &str,
+    capture_idx: u32,
+    value: &str,
+    pointer_free: bool,
+    string_alias: bool,
+) -> Result<()> {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    if pointer_free {
+        let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
+            + 8 * u64::from(capture_idx);
+        let address = ctx.block().add(I64, closure_ptr, &offset.to_string());
+        let ptr = ctx.block().inttoptr(I64, &address);
+        // GC_STORE_AUDIT(POINTER_FREE): the emitted value's construction,
+        // never a source annotation, proves this write publishes no edge.
+        ctx.block().store(I64, &bits, &ptr);
+        return Ok(());
+    }
+    ctx.block().call_void(
+        "js_generator_set_slot",
+        &[
+            (I64, closure_ptr),
+            (I32, &capture_idx.to_string()),
+            (I64, &bits),
+            (I32, if string_alias { "1" } else { "0" }),
+        ],
+    );
+    Ok(())
+}
+
 fn demote_extracted_string_binding(ctx: &mut FnCtx<'_>, id: u32, value: &str) {
     let persistent_binding = ctx.closure_captures.contains_key(&id)
         || (ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id))
@@ -850,11 +884,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(if *prefix { new } else { old });
                 }
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local update")?;
-                let old_bits = ctx.block().call(
-                    I64,
-                    "js_closure_get_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str)],
-                );
+                let old_bits = if ctx.fixed_generator_state {
+                    load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx)
+                } else {
+                    ctx.block().call(
+                        I64,
+                        "js_closure_get_capture_bits",
+                        &[(I64, &closure_ptr), (I32, &idx_str)],
+                    )
+                };
                 let old = ctx.block().bitcast_i64_to_double(&old_bits);
                 let blk = ctx.block();
                 let old = coerce_old(blk, &old);
@@ -876,10 +914,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else {
                     closure_ptr
                 };
-                ctx.block().call_void(
-                    "js_closure_set_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
-                );
+                if ctx.fixed_generator_state {
+                    store_generator_state_slot(ctx, &closure_ptr, capture_idx, &new, false, false)?;
+                } else {
+                    ctx.block().call_void(
+                        "js_closure_set_capture_bits",
+                        &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
+                    );
+                }
                 // The runtime capture setter owns the precise slot barrier.
                 return Ok(if *prefix { new } else { old });
             }
@@ -1238,7 +1280,11 @@ pub(crate) fn bind_lowered_value_to_local(
     // previously missed. Async lowering expresses mid-body snapshot
     // variables as LocalSet, making that gap observable as the saved
     // string growing in place with its boxed accumulator (#8432).
-    if matches!(value, Expr::LocalGet(source_id) if *source_id != id) {
+    let string_alias = matches!(value, Expr::LocalGet(source_id) if *source_id != id);
+    let fixed_slot = ctx.fixed_generator_state
+        && ctx.closure_captures.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id);
+    if string_alias && !fixed_slot {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {
@@ -1286,10 +1332,23 @@ pub(crate) fn bind_lowered_value_to_local(
         } else {
             let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
             let v_bits = ctx.block().bitcast_double_to_i64(v);
-            ctx.block().call_void(
-                "js_closure_set_capture_bits",
-                &[(I64, &closure_ptr), (I32, &idx_str), (I64, &v_bits)],
-            );
+            if ctx.fixed_generator_state {
+                let pointer_free =
+                    super::helpers::expr_produces_non_pointer_bits_by_construction(ctx, value);
+                store_generator_state_slot(
+                    ctx,
+                    &closure_ptr,
+                    capture_idx,
+                    v,
+                    pointer_free,
+                    string_alias,
+                )?;
+            } else {
+                ctx.block().call_void(
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &v_bits)],
+                );
+            }
             // The runtime capture setter owns the precise slot barrier.
         }
     } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {

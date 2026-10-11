@@ -406,6 +406,25 @@ fn lower_property_site(
     // Every environment-reference read retains the shape diamond and spill
     // front, including optional typeof reads. A required binding uses positive
     // own-slot proofs; an optional read may also accept inherited/absent answers.
+    // A continuation can repeat this ladder at every split protocol read.
+    // Call the complete existing operation once, including its collecting
+    // accessor/miss routes, rather than emitting another split at each site.
+    if ctx.fixed_generator_state && global_reference.is_none() {
+        let cache_name = overridden_cache_name(ctx, object, property)
+            .unwrap_or_else(|| allocate_property_cache(ctx));
+        let cache_slot_ref = format!("@{}", cache_name);
+        let key_handle = emit_key_handle(ctx, &key_handle_global);
+        return Ok(ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_ic",
+            &[
+                (I64, &obj_bits),
+                (I64, &key_handle),
+                (I64, &feedback_site_id),
+                (PTR, &cache_slot_ref),
+            ],
+        ));
+    }
     if crate::codegen::full_outline_ic_enabled() && global_reference.is_none() {
         // Per-site monomorphic IC cache, allocated identically to the inline path
         // (below) so the helper's `js_object_get_field_ic_miss` cache-priming is

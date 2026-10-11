@@ -11,6 +11,8 @@
 //! entrance, before the generic tower constructs its frame.
 use super::*;
 
+mod generator;
+
 // Below the allocated ShapeId band: legacy named-property storage has no
 // immutable key list, so this shape needs a key-absence read on every hit.
 const LEGACY_ARRAY_SHAPE: u32 = 1;
@@ -64,6 +66,7 @@ unsafe fn receiver_facts(bits: u64) -> Option<(u64, u64)> {
                 }
             }
         }
+        crate::gc::GC_TYPE_OBJECT => generator::shared_protocol_family(addr)?,
         crate::gc::GC_TYPE_MAP if (*(addr as *const crate::map::MapHeader)).meta.is_null() => 0,
         crate::gc::GC_TYPE_SET if (*(addr as *const crate::set::SetHeader)).meta.is_null() => 0,
         _ => return None,
@@ -94,6 +97,10 @@ unsafe fn builtin_holder(kind: u8) -> *const ObjectHeader {
         return crate::array::array_property_bag(proto as *const crate::array::ArrayHeader);
     }
     let prototype = match kind {
+        crate::gc::GC_TYPE_OBJECT => {
+            return crate::object::GENERATOR_PROTOTYPE_PTR.load(Ordering::Acquire)
+                as *const ObjectHeader;
+        }
         crate::gc::GC_TYPE_MAP => super::super::global_this::builtin_prototype_value("Map"),
         crate::gc::GC_TYPE_SET => super::super::global_this::builtin_prototype_value("Set"),
         _ => return std::ptr::null(),
@@ -116,10 +123,13 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     let Some((word, live)) = receiver_facts(recv.to_bits()) else {
         return;
     };
-    if word as u32 == LEGACY_ARRAY_SHAPE + 1 && !legacy_lacks_name(live, name) {
+    if word_kind(word) == crate::gc::GC_TYPE_ARRAY
+        && word as u32 == LEGACY_ARRAY_SHAPE + 1
+        && !legacy_lacks_name(live, name)
+    {
         return;
     }
-    if word as u32 > LEGACY_ARRAY_SHAPE + 1 {
+    if word_kind(word) == crate::gc::GC_TYPE_ARRAY && word as u32 > LEGACY_ARRAY_SHAPE + 1 {
         // The receiver's immutable bag shape must lack this site's key.
         let array = (live & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
         let bag = crate::array::array_property_bag(array);
@@ -170,6 +180,11 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
     let Some(info) = direct_callable(value, 8) else {
         return;
     };
+    if word_kind(word) == crate::gc::GC_TYPE_OBJECT
+        && !crate::object::global_this::is_sync_generator_protocol_body(info.code)
+    {
+        return;
+    }
     // Identity and ABI are declared by the installed body, never its key.
     if info.flags & crate::closure::FN_BUILTIN == 0
         || (native_args_tag(info) == 0 && info.params > 8)
@@ -187,11 +202,31 @@ pub(super) unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8]) {
             info: info as *const _ as u64,
             closure: next as usize,
             gen: std::ptr::read(next as *const u64),
-            code: info.code as u64,
+            code: if word_kind(word) == crate::gc::GC_TYPE_OBJECT {
+                crate::object::global_this::proven_sync_generator_protocol_code(info.code) as u64
+            } else {
+                info.code as u64
+            },
         },
     ) {
         PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
         note_builtin_prime(info);
+        if word_kind(word) == crate::gc::GC_TYPE_OBJECT {
+            let receiver = (live & crate::value::POINTER_MASK) as *const ObjectHeader;
+            let receiver_word = std::ptr::read(receiver as *const u64);
+            let site = crate::object::pic_slot_peek(slot);
+            // Use free ways of the existing ordinary memo for recurring
+            // shapes. Keep the unified family entry for many-source sites.
+            // This avoids re-running the full family proof at every next().
+            if !site.is_null()
+                && (*site)
+                    .entries
+                    .iter()
+                    .any(|e| e.word == METHOD_SITE_EMPTY || e.word == receiver_word)
+            {
+                super::holder_prime::prime_chain(slot, receiver, receiver_word, name, 8);
+            }
+        }
     }
 }
 
@@ -230,7 +265,7 @@ pub(super) unsafe fn lookup_hit(
         if !holder_word_matches(e) {
             return None;
         }
-        if word as u32 == LEGACY_ARRAY_SHAPE + 1 {
+        if word_kind(word) == crate::gc::GC_TYPE_ARRAY && word as u32 == LEGACY_ARRAY_SHAPE + 1 {
             // The holder shape pins this site's key as well as its slot.
             // Legacy receiver keys can change without a ShapeId transition.
             let keys = super::super::object_keys(holder);
@@ -312,7 +347,7 @@ pub(super) unsafe fn lookup(
             // An overridden slot is called as read. The old by-name tower
             // ignores such runtime prototype patches. Unsupported declared
             // builtin bodies keep its intrinsic algorithms.
-            if accessor || !builtin {
+            if word_kind(word) == crate::gc::GC_TYPE_OBJECT || accessor || !builtin {
                 return Some(value);
             }
         }
@@ -327,7 +362,10 @@ pub(super) unsafe fn call_miss(
     args: *const f64,
     argc: usize,
 ) -> Option<f64> {
-    receiver_word(recv.to_bits())?;
+    let generator = super::super::fixed_generator_state(recv).is_some();
+    if !generator {
+        receiver_word(recv.to_bits())?;
+    }
     // A cold prototype bootstrap or an overridden getter can collect. Root
     // every operand before resolving the method, then refresh the arguments.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -339,7 +377,17 @@ pub(super) unsafe fn call_miss(
     };
     let handles = scope.root_nanbox_f64_slice(&original);
     let mut code = 0;
-    let value = lookup(slot, recv, method_id, argc, &mut code)?;
+    let value = lookup(slot, recv, method_id, argc, &mut code).or_else(|| {
+        if !generator {
+            return None;
+        }
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let name = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)?;
+        Some(spec_get(
+            recv_h.get_nanbox_f64(),
+            std::slice::from_raw_parts(name.ptr, name.len),
+        ))
+    })?;
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&handles);
     Some(js_method_site_call_value(
         value,

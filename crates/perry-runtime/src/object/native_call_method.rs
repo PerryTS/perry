@@ -641,9 +641,19 @@ pub(crate) unsafe fn native_call_method_value_memo(
             if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
                 let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
                 if is_prototype_ref {
-                    if let Some((func_ptr, param_count, has_rest)) =
+                    if let Some((func_ptr, param_count, has_rest, entry)) =
                         lookup_class_symbol_method_in_chain(class_id, sym_key, false)
                     {
+                        if entry != 0
+                            && crate::closure::info_has(
+                                &*(entry as *const crate::closure::JsFunctionInfo),
+                                crate::closure::FN_GENERATOR,
+                            )
+                        {
+                            return crate::object::call_generator_symbol_method(
+                                object, key, args_ptr, args_len,
+                            );
+                        }
                         return call_vtable_method(
                             func_ptr,
                             object.to_bits() as i64,
@@ -658,9 +668,19 @@ pub(crate) unsafe fn native_call_method_value_memo(
                         );
                     }
                 } else {
-                    if let Some((func_ptr, param_count, has_rest)) =
+                    if let Some((func_ptr, param_count, has_rest, entry)) =
                         lookup_class_symbol_method_in_chain(class_id, sym_key, true)
                     {
+                        if entry != 0
+                            && crate::closure::info_has(
+                                &*(entry as *const crate::closure::JsFunctionInfo),
+                                crate::closure::FN_GENERATOR,
+                            )
+                        {
+                            return crate::object::call_generator_symbol_method(
+                                object, key, args_ptr, args_len,
+                            );
+                        }
                         return call_registered_static_method(
                             func_ptr,
                             args_ptr,
@@ -673,9 +693,19 @@ pub(crate) unsafe fn native_call_method_value_memo(
             } else if is_class_object_value(object) {
                 let obj = JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
                 let class_id = js_object_get_class_id(obj);
-                if let Some((func_ptr, param_count, has_rest)) =
+                if let Some((func_ptr, param_count, has_rest, entry)) =
                     lookup_class_symbol_method_in_chain(class_id, sym_key, true)
                 {
+                    if entry != 0
+                        && crate::closure::info_has(
+                            &*(entry as *const crate::closure::JsFunctionInfo),
+                            crate::closure::FN_GENERATOR,
+                        )
+                    {
+                        return crate::object::call_generator_symbol_method(
+                            object, key, args_ptr, args_len,
+                        );
+                    }
                     return call_registered_static_method(
                         func_ptr,
                         args_ptr,
@@ -691,9 +721,19 @@ pub(crate) unsafe fn native_call_method_value_memo(
                     if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
                         let class_id = js_object_get_class_id(obj);
                         if class_id != 0 {
-                            if let Some((func_ptr, param_count, has_rest)) =
+                            if let Some((func_ptr, param_count, has_rest, entry)) =
                                 lookup_class_symbol_method_in_chain(class_id, sym_key, false)
                             {
+                                if entry != 0
+                                    && crate::closure::info_has(
+                                        &*(entry as *const crate::closure::JsFunctionInfo),
+                                        crate::closure::FN_GENERATOR,
+                                    )
+                                {
+                                    return crate::object::call_generator_symbol_method(
+                                        object, key, args_ptr, args_len,
+                                    );
+                                }
                                 let this_i64 = obj as i64;
                                 return call_vtable_method(
                                     func_ptr,

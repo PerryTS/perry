@@ -227,7 +227,13 @@ fn class_expression_evaluations_keep_their_own_computed_names() {
             61,
         );
         unsafe {
-            name_evaluation_computed_member(value, cid, 61, MemberName::Str(key.to_string()));
+            name_evaluation_computed_member(
+                value,
+                cid,
+                61,
+                MemberName::Str(key.to_string()),
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
         }
         classes.push((key, class));
     }

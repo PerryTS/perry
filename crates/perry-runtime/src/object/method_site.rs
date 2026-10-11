@@ -390,6 +390,13 @@ unsafe fn method_site_miss_object(
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    // Generators retain Get + Call when workers disable the primary heap's memo.
+    let receiver = miss_receiver(recv);
+    if matches!(receiver, MissReceiver::Ordinary) && super::fixed_generator_state(recv).is_some() {
+        if let Some(result) = builtin_receiver::call_miss(slot, recv, method_id, args_ptr, argc) {
+            return result;
+        }
+    }
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         refuse(11);
         return crate::typed_feedback::js_typed_feedback_native_call_method(
@@ -402,8 +409,6 @@ unsafe fn method_site_miss_object(
         );
     }
     let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
-    // One read of the receiver's header classifies it for both steps below.
-    let receiver = miss_receiver(recv);
     if let MissReceiver::Payload = receiver {
         if let Some(result) =
             crate::native_payload::try_payload_method_fast_dispatch(recv, name, args_ptr, argc)
@@ -1043,7 +1048,7 @@ pub unsafe extern "C-unwind" fn js_method_site_call_value(
     // The value a getter or a trap returned is called as is: a nullish one
     // is not callable (the generic value call would answer `undefined`).
     let fb = func.to_bits();
-    if fb == crate::value::TAG_UNDEFINED || fb == crate::value::TAG_NULL {
+    if fb == 0 || fb == crate::value::TAG_UNDEFINED || fb == crate::value::TAG_NULL {
         crate::closure::throw_not_callable();
     }
     let fptr = (fb & crate::value::POINTER_MASK) as usize;

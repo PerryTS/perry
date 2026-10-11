@@ -87,7 +87,6 @@ pub(super) unsafe fn prime_chain(
     name: &[u8],
     argc: usize,
 ) -> bool {
-    use crate::object::native_call_method::class_holder::{chain_method, ChainMethod, MethodKey};
     let start = read_holder::class_link(recv).or_else(|| {
         let (pid, link) = read_holder::admitted_link(recv)?;
         Some(if pid == crate::object::shapes::PROTO_ID_DEFAULT {
@@ -99,6 +98,36 @@ pub(super) unsafe fn prime_chain(
     let Some(start) = start.filter(|p| !p.is_null()) else {
         return false;
     };
+    prime_chain_start(slot, recv, start, word, name, argc, false)
+}
+
+/// Generator function shapes name their intrinsic parent rather than an
+/// ordinary ObjectHeader. Reuse the same entry-owned chain proof from there.
+pub(super) unsafe fn prime_generator_function_chain(
+    slot: *mut MethodSiteSlot,
+    start: *const ObjectHeader,
+    word: u64,
+    name: &[u8],
+    argc: usize,
+) -> bool {
+    if start.is_null() {
+        return false;
+    }
+    prime_chain_start(slot, start, start, word, name, argc, true)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn prime_chain_start(
+    slot: *mut MethodSiteSlot,
+    recv: *const ObjectHeader,
+    start: *const ObjectHeader,
+    word: u64,
+    name: &[u8],
+    argc: usize,
+    include_start: bool,
+) -> bool {
+    use crate::object::native_call_method::class_holder::{chain_method, ChainMethod, MethodKey};
     let ChainMethod::Data {
         value,
         holder,
@@ -122,17 +151,36 @@ pub(super) unsafe fn prime_chain(
         };
         index | (1 << 31)
     };
-    let Some((info, code, tag)) = callable_route(value, argc) else {
+    let Some((info, mut code, tag)) = callable_route(value, argc) else {
         return false;
     };
-    let Some(links) = crate::object::shape_chain::ShapeChain::capture(recv) else {
+    // The ordinary shape/chain entry proves this receiver's generator brand
+    // and the selected intrinsic's identity. Consume that proof directly;
+    // the private state edge cannot be changed by argument evaluation.
+    let generator_protocol = !include_start
+        && crate::object::shapes::object_has_brand(
+            recv,
+            crate::object::global_this::GENERATOR_STATE_BRAND,
+        )
+        && crate::object::global_this::is_sync_generator_protocol_body(info.code);
+    if generator_protocol {
+        code = crate::object::global_this::proven_sync_generator_protocol_code(info.code) as u64;
+    }
+    let links = if include_start {
+        crate::object::shape_chain::ShapeChain::capture_including(recv)
+    } else if generator_protocol {
+        crate::object::shape_chain::ShapeChain::capture_to(recv, holder)
+    } else {
+        crate::object::shape_chain::ShapeChain::capture(recv)
+    };
+    let Some(links) = links else {
         return false;
     };
     let chain = Box::into_raw(Box::new(MethodChain::method(links, holder as usize, index)));
     let entry = MethodEntry {
         word,
         slot: METHOD_SITE_INHERITED | METHOD_SITE_CHAIN | tag,
-        info: if code == info.code as u64 {
+        info: if generator_protocol || code == info.code as u64 {
             info as *const _ as u64
         } else {
             METHOD_SITE_VALUE_INFO

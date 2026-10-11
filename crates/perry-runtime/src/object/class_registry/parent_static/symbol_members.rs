@@ -4,7 +4,7 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
     class_id: u32,
     sym_key: usize,
     is_static: bool,
-) -> Option<(usize, u32, bool)> {
+) -> Option<(usize, u32, bool, usize)> {
     CLASS_SYMBOL_METHODS.with(|table| {
         let guard = table.read().ok()?;
         let map = guard.as_ref()?;

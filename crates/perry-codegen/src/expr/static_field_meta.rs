@@ -607,7 +607,61 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `Object.getPrototypeOf(g()) === g.prototype`; direct function bodies
         // fall back to the generic two-hop intrinsic linker and call sites may
         // relink with a concrete closure when they have one.
-        Expr::LinkGeneratorPrototype { obj, is_async } => {
+        Expr::LinkGeneratorPrototype {
+            obj,
+            is_async,
+            fixed_state,
+            ..
+        } => {
+            if *fixed_state {
+                if let Expr::Closure { func_id, .. } = obj.as_ref() {
+                    let name =
+                        crate::fn_info::closure_body_symbol(ctx.strings.module_prefix(), *func_id);
+                    ctx.block().note_fn_info(&name, |facts| {
+                        facts.set_generator();
+                        facts.fixed_generator_state = true;
+                    });
+                }
+                return with_rooted_group(ctx, 1, |ctx, group| {
+                    let resume = group.lower(ctx, obj, true)?;
+                    let owner = if let Some(ptr) = crate::expr::try_current_closure_ptr_value(ctx) {
+                        ptr
+                    } else if let Some(name) = ctx
+                        .func_names
+                        .values()
+                        .chain(ctx.methods.values())
+                        .find(|name| {
+                            *name == &ctx.func.name
+                                || crate::codegen::arena_threaded_function_body_name(name)
+                                    == ctx.func.name
+                        })
+                        .cloned()
+                    {
+                        let name = if !ctx.class_stack.is_empty() || ctx.in_static_member {
+                            format!(
+                                "{}__{}",
+                                name,
+                                if ctx.in_static_member { "clo" } else { "eclo" }
+                            )
+                        } else {
+                            format!("__perry_wrap_{}", name)
+                        };
+                        ctx.block()
+                            .note_fn_info(&name, |facts| facts.set_generator());
+                        let info = ctx.block().fn_info_ref(&name);
+                        ctx.block()
+                            .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)])
+                    } else {
+                        "0".to_string()
+                    };
+                    let resume = group.reread(ctx, resume)?;
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_generator_create",
+                        &[(DOUBLE, &resume), (I64, &owner)],
+                    ))
+                });
+            }
             let obj_val = lower_expr(ctx, obj)?;
             if let Some(closure_ptr) = crate::expr::try_current_closure_ptr_value(ctx) {
                 return Ok(ctx.block().call(
@@ -1202,7 +1256,18 @@ pub(crate) fn lower_computed_member_registration(
                         let definition_order_str = definition_order.to_string();
                         // A static one's own function object runs its
                         // closure-convention entry's `JsFunctionInfo` (string pool).
-                        let entry_i64 = if *is_static {
+                        let generator = ctx.classes.get(class_name).is_some_and(|c| {
+                            c.computed_members.iter().any(|m| {
+                                m.function.name == *method_name
+                                    && crate::codegen::helpers::body_has_fixed_generator_state(
+                                        &m.function.body,
+                                    )
+                            })
+                        });
+                        let entry_i64 = if !*is_static && generator {
+                            let info = ctx.block().fn_info_ref(&format!("{llvm_name}__eclo"));
+                            ctx.block().ptrtoint(&info, I64)
+                        } else if *is_static {
                             let info = ctx.block().fn_info_ref(&format!("{llvm_name}__clo"));
                             ctx.block().ptrtoint(&info, I64)
                         } else {
