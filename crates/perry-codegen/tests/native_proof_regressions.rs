@@ -30,7 +30,7 @@ use perry_hir::types::{ObjectType, PropertyInfo, Type, TypeParam};
 use perry_hir::{
     monomorphize_module, ArgumentsObjectMeta, BinaryOp, CallArg, Class, ClassComputedMember,
     ClassComputedMemberKind, ClassField, CompareOp, Expr, Function, LogicalOp, Module,
-    ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
+    ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp, TYPED_ARRAY_KIND_UINT8,
 };
 
 #[path = "native_proof_support/mod.rs"]
@@ -503,6 +503,63 @@ fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr
             arg: Some(Box::new(length)),
         }),
     }
+}
+
+#[test]
+fn uint8array_computed_string_key_uses_complete_set_dispatch() {
+    let body = vec![
+        typed_array_let(1, "u8", "Uint8Array", TYPED_ARRAY_KIND_UINT8, int(4)),
+        // The computed string key is not statically numeric. It must take the
+        // canonical receiver-aware setter, and its assigned value remains
+        // available to the enclosing expression.
+        Stmt::Let {
+            id: 3,
+            name: "assigned".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::Uint8ArraySet {
+                array: Box::new(local(1)),
+                index: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::String("p".to_string())),
+                    right: Box::new(local(2)),
+                }),
+                value: Box::new(int(10)),
+            }),
+        },
+        // A proven numeric index keeps its existing byte-store fast path.
+        Stmt::Expr(Expr::Uint8ArraySet {
+            array: Box::new(local(1)),
+            index: Box::new(int(1)),
+            value: Box::new(int(11)),
+        }),
+        Stmt::Expr(Expr::Uint8ArraySet {
+            array: Box::new(local(1)),
+            index: Box::new(Expr::String("0".to_string())),
+            value: Box::new(int(12)),
+        }),
+        Stmt::Return(Some(int(0))),
+    ];
+    let module = module_with_classes_and_params(
+        "uint8array_computed_string_key.ts",
+        Vec::new(),
+        vec![param(2, "k", Type::Number)],
+        Type::Number,
+        body,
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_put_value_set("),
+        "computed Uint8Array key must use the canonical property setter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_object_set_index_polymorphic("),
+        "computed string key must not be sent to the numeric-index setter:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @js_uint8array_set("),
+        "numeric Uint8Array assignment should retain the element fast path:\n{ir}"
+    );
 }
 
 fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool) -> Stmt {

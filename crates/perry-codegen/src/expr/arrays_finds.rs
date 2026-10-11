@@ -1068,13 +1068,11 @@ pub(crate) fn lower(
                 ));
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
-                // A non-numeric key stores an OWN property (Node's Buffer is an
-                // ordinary object, and an own key shadows the same-named
-                // prototype method — mysql2's `MockBuffer` overwrites the write
-                // methods of a zero-length Buffer to size a packet). The
-                // typed-array helper coerces the key to a number and dropped the
-                // store; the polymorphic setter dispatches numeric keys to the
-                // byte write and string keys to the own-prop table.
+                // A non-numeric key uses ordinary [[Set]] semantics (including
+                // typed-array named expandos and Symbol keys). The numeric-only
+                // polymorphic index helper can handle byte indices, but its
+                // typed-array arm treats a computed string as an invalid element
+                // index and silently drops it (`u8["p" + k] = v`).
                 let key_maybe_string = !is_numeric_expr(ctx, index);
                 // Receiver live across BOTH the key's and the value's lowering,
                 // key live across the value's — the `m.set(k, v)` shape
@@ -1084,14 +1082,26 @@ pub(crate) fn lower(
                         let a = vals[0].clone();
                         let key = vals[1].clone();
                         let val = vals[2].clone();
+                        let strict = if ctx.is_strict_fn { "1" } else { "0" };
                         let blk = ctx.block();
                         let handle = unbox_to_i64(blk, &a);
                         Ok(if key_maybe_string {
-                            blk.call_void(
-                                "js_object_set_index_polymorphic",
-                                &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                            );
-                            val.clone()
+                            // `Uint8ArraySet` is an assignment expression: use
+                            // the canonical receiver-aware setter so expando
+                            // keys, numeric-looking runtime strings, Symbols,
+                            // strictness, and the expression result all match
+                            // ordinary JavaScript property assignment.
+                            blk.call(
+                                DOUBLE,
+                                "js_put_value_set",
+                                &[
+                                    (DOUBLE, &a),
+                                    (DOUBLE, &key),
+                                    (DOUBLE, &val),
+                                    (DOUBLE, &a),
+                                    (I32, strict),
+                                ],
+                            )
                         } else {
                             blk.call(
                                 DOUBLE,
