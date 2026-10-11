@@ -892,7 +892,13 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     block_has_live[block_idx] = true;
                 }
                 if age_bump_this && flags & GC_FLAG_TENURED == 0 {
-                    if flags & GC_FLAG_HAS_SURVIVED != 0 {
+                    // I1: a never-move object tenures at its first survival here too.
+                    if flags & GC_FLAG_HAS_SURVIVED != 0
+                        || crate::gc::never_move::promotes_now(
+                            (*header).obj_type,
+                            (*header)._reserved,
+                        )
+                    {
                         (*header).gc_flags =
                             (flags | GC_FLAG_TENURED) & !GC_FLAG_HAS_SURVIVED & !GC_FLAG_MARKED;
                     } else {
@@ -1005,7 +1011,13 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     block_has_live[block_idx] = true;
                 }
                 if age_bump_this && flags & GC_FLAG_TENURED == 0 {
-                    if flags & GC_FLAG_HAS_SURVIVED != 0 {
+                    // I1: a never-move object tenures at its first survival here too.
+                    if flags & GC_FLAG_HAS_SURVIVED != 0
+                        || crate::gc::never_move::promotes_now(
+                            (*header).obj_type,
+                            (*header)._reserved,
+                        )
+                    {
                         (*header).gc_flags =
                             (flags | GC_FLAG_TENURED) & !GC_FLAG_HAS_SURVIVED & !GC_FLAG_MARKED;
                     } else {
@@ -1545,6 +1557,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
             && flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED | GC_FLAG_SHAPE_SHARED) == 0
             && gc_type_is_movable((*header).obj_type)
             && !is_conservatively_pinned(header)
+            && !super::never_move::blocks_evacuation(header)
     });
     if source_headers.is_empty() || !source_block_is_movable {
         // #9772: a declined pass must not also DESTROY the free list. Dropping

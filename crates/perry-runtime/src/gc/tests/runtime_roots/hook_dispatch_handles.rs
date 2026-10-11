@@ -523,6 +523,7 @@ fn test_set_materializers_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
+    crate::gc::register_realm_prototype_scanners_for_tests();
 
     let value = test_string_value(b"set-value");
     let value_original = (value.to_bits() & POINTER_MASK) as usize;

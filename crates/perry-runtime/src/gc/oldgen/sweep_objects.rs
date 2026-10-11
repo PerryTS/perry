@@ -411,6 +411,9 @@ impl ArenaSweepObjectsState {
         live: bool,
         pinned: bool,
     ) {
+        // I1: a live never-move object holds its page like a pinned one
+        // (the one-by-one path below applies the same rule).
+        let pinned = pinned || (live && unsafe { crate::gc::never_move::is_never_move(header) });
         match crate::arena::old_object_single_page(header as usize, total_size) {
             Some(page) => {
                 if page != self.old_page_tally_page {
@@ -581,7 +584,10 @@ impl ArenaSweepObjectsState {
             }
         }
         if age_bump_this && flags & GC_FLAG_TENURED == 0 {
-            if flags & GC_FLAG_HAS_SURVIVED != 0 {
+            // I1: a never-move object tenures at its first survival here too.
+            if flags & GC_FLAG_HAS_SURVIVED != 0
+                || crate::gc::never_move::promotes_now((*header).obj_type, (*header)._reserved)
+            {
                 (*header).gc_flags =
                     (flags | GC_FLAG_TENURED) & !GC_FLAG_HAS_SURVIVED & !GC_FLAG_MARKED;
             } else {

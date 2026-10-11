@@ -36,6 +36,7 @@ fn perex_program_survives_only_through_a_moving_regexp_edge() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
+    crate::gc::register_realm_prototype_scanners_for_tests();
     let scope = RuntimeHandleScope::new();
     let receiver =
         scope.root_raw_mut_ptr(crate::regex::test_alloc_nursery_regexp_for_move("a+", ""));
@@ -204,6 +205,7 @@ fn perex_unreferenced_program_is_reclaimed_without_a_native_owner_or_cache() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
+    crate::gc::register_realm_prototype_scanners_for_tests();
     let address;
     {
         let scope = RuntimeHandleScope::new();

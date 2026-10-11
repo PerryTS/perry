@@ -1743,8 +1743,22 @@ mod tests {
         let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
         let _age = crate::gc::pin_tenuring_survivals_for_test(4);
         crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::register_realm_prototype_scanners_for_tests();
         register(cid);
         let closure = class_value_ptr(cid);
+        // The witness below is page-granular. Prototypes born old (I1,
+        // `gc::never_move`) can share the class's old page and keep it dirty
+        // through their own young members; age those members out first so
+        // the page's remembered state is this slot's alone.
+        for _ in 0..5 {
+            let _ = crate::gc::gc_collect_minor();
+        }
+        assert!(
+            !crate::gc::old_slot_page_is_remembered_for_test(
+                unsafe { prototype_link_slot(closure) } as usize
+            ),
+            "premise: the class's page owes the remembered set nothing yet"
+        );
         let proto = crate::object::js_object_alloc(cid + 1, 1);
         crate::object::js_object_set_field(
             proto,

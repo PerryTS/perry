@@ -44,6 +44,9 @@ pub(crate) fn ensure_function_prototype_object(
         Some(ops) => unsafe { (ops.ee_prototype_inline_slots)(func_handle.get_nanbox_f64()) },
         None => 0,
     };
+    // Not born old: a program can mint function objects (and so default
+    // prototypes) without bound. It becomes never-move when it is linked as
+    // a prototype (`proto_validity::mark_object_as_prototype`).
     let proto = js_object_alloc(0, inline_slots);
     if proto.is_null() {
         return proto;

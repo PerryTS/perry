@@ -278,6 +278,7 @@ fn assert_record_children_move(cold: bool, escaped: bool) {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    crate::gc::register_realm_prototype_scanners_for_tests();
     crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let text: &[u8] = if escaped {
         br#"{"i\nd":42,"name":"user_\"42","email":"user_42\u0000@example.com","active":false,"score":63,"tags":["tag_\nalpha","tag_\\bravo"]}"#

@@ -1600,6 +1600,21 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+/// I1 (`gc::never_move`): this `GC_TYPE_OBJECT` never moves once it is in
+/// the old generation. The copying minor promotes it at its next survival,
+/// and old-page defragmentation and idle compaction never select it. A
+/// per-site memo may name only an object that carries this bit and is old
+/// (`never_move::stable_memo_referent`), which is what lets the memo hold a
+/// plain address with no root, registry or rewrite. Bit 7 is free for
+/// objects (`OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`); arrays and byte owners give
+/// it other meanings, so every reader checks `obj_type` first. Set-only.
+pub(crate) const OBJ_FLAG_NEVER_MOVE: u16 = 0x80;
+/// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
+/// this object's address. If a class relink displaces it from a class
+/// identity, the retirement pins it, so the memo keeps reading this object.
+/// Bit 13 has no object meaning (arrays and closures use it for
+/// `GC_LAYOUT_ALL_POINTERS`; readers check `obj_type`). Set-only.
+pub(crate) const OBJ_FLAG_MEMO_NAMED: u16 = 0x2000;
 /// The GC_TYPE_BUFFER payload contains a native data pointer after BufferHeader.
 /// Bit 7 is kind-disjoint from object/array numeric-layout proofs. Generic age
 /// and layout transitions preserve it; no Buffer reader interprets those proofs.
@@ -1733,13 +1748,13 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` | free (non-object) |
-/// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | closure: `GC_CLOSURE_NON_CONSTRUCTABLE`; byte owner: `GC_BUFFER_FOREIGN_DATA` (out-of-line); byte view: `BYTES_LENGTH_TRACKING` |
+/// | 7 | `OBJ_FLAG_NEVER_MOVE` | `GC_ARRAY_RAW_F64_LAYOUT` | closure: `GC_CLOSURE_NON_CONSTRUCTABLE`; byte owner: `GC_BUFFER_FOREIGN_DATA` (out-of-line); byte view: `BYTES_LENGTH_TRACKING` |
 /// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | byte owner: `BYTES_RESIZABLE` |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
 /// | 12 | `OBJ_FLAG_ARGUMENTS` | `GC_ARRAY_RAW_F64_HOLES` | |
-/// | 13 | available | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
+/// | 13 | `OBJ_FLAG_MEMO_NAMED` | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
 /// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
 ///
 /// Byte families, TypedArray and NativeArena owner only: byte access uses

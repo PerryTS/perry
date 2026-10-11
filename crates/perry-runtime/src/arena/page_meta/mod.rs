@@ -1560,6 +1560,9 @@ pub(crate) fn old_page_account_swept_object(
     if header_addr == 0 || total_size == 0 {
         return;
     }
+    // I1: a live never-move object holds its page like a pinned one.
+    let pinned = pinned
+        || (live && unsafe { crate::gc::never_move::is_never_move(header_addr as *const _) });
     let overlaps = old_object_page_overlaps(header_addr, total_size);
     if overlaps.is_empty() {
         return;
@@ -1580,6 +1583,31 @@ pub(crate) fn old_page_account_swept_object(
                 page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(page_count(bytes));
                 page_meta.dead_object_count = page_meta.dead_object_count.saturating_add(1);
             }
+            page_meta.refresh_policy_bits();
+        }
+    });
+}
+
+/// I1: a live old object that just became never-move holds its page(s) from
+/// now on, like a pinned object, until the next sweep recounts the page with
+/// the same rule (`old_page_account_swept_object`).
+pub(crate) fn old_page_account_became_never_move(header_addr: usize, total_size: usize) {
+    if header_addr == 0 || total_size == 0 {
+        return;
+    }
+    // #7624: a page whose registration is still deferred must exist before
+    // its pinned bytes are added, or the flush would overwrite them.
+    flush_deferred_old_page_registrations();
+    let overlaps = old_object_page_overlaps(header_addr, total_size);
+    if overlaps.is_empty() {
+        return;
+    }
+    OLD_GEN_PAGE_META.with(|meta| {
+        let mut meta = meta.borrow_mut();
+        for (page, bytes) in overlaps {
+            let page_meta = meta.get_or_insert(page);
+            page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(page_count(bytes));
+            page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
             page_meta.refresh_policy_bits();
         }
     });

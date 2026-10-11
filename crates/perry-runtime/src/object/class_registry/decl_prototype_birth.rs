@@ -156,7 +156,9 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     // fact of that shape (the identity names the parent); a fresh object has
     // no meta record to mirror it in. It is fresh and unobserved, so the link
     // is not prototype surgery and invalidates nothing.
-    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, count));
+    // Born old and never-move (O3): every site memo that answers from this
+    // holder is admitted from its first prime.
+    let proto = scope.root_raw_mut_ptr(crate::object::object_alloc_prototype_old(class_id, count));
     if proto.with_mut_ptr::<ObjectHeader, _>(|p| p.is_null()) {
         return None;
     }

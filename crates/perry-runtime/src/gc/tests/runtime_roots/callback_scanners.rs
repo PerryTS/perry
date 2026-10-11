@@ -713,6 +713,7 @@ fn test_promise_combinator_setup_handles_survive_copied_minor_gc() {
     activate_malloc_registry_for_tests();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
+    crate::gc::register_realm_prototype_scanners_for_tests();
 
     let scope = RuntimeHandleScope::new();
     let all_value = test_string_value(b"all");

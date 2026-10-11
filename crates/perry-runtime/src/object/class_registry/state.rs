@@ -1580,7 +1580,11 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
     // read of one is then served by the inherited-read cache (spilled slots
     // never prime there).
     let members = class_prototype_member_names(class_id).len() as u32;
-    let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(class_id, members + 1));
+    // Born old and never-move (O3, `gc::never_move`), like the born-final path.
+    let proto = scope.root_raw_mut_ptr(crate::object::object_alloc_prototype_old(
+        class_id,
+        members + 1,
+    ));
     if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

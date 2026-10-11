@@ -143,7 +143,12 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // The intrinsic's terminal edge is published by its birth shape, like
     // any other null-parent object. No address or name exception is needed
     // by a presence walk.
-    let proto_obj = js_object_alloc_null_proto(0, super::proto_room::BUILTIN_PROTOTYPE_ROOM);
+    // Born old and never-move (O3, `gc::never_move`): the terminal of most
+    // inherited and absent reads, admitted by every site memo at once.
+    let proto_obj = crate::object::object_alloc_prototype_old_null_proto(
+        0,
+        super::proto_room::BUILTIN_PROTOTYPE_ROOM,
+    );
     if proto_obj.is_null() {
         return None;
     }

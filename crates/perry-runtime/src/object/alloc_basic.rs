@@ -62,14 +62,14 @@ pub extern "C" fn js_object_alloc_with_parent(
     parent_class_id: u32,
     field_count: u32,
 ) -> *mut ObjectHeader {
-    object_alloc_with_parent_impl::<false, false>(class_id, parent_class_id, field_count)
+    object_alloc_with_parent_impl::<false, false, false>(class_id, parent_class_id, field_count)
 }
 
 /// A class-less ORDINARY object (`JSON.parse` records, `Object.create`),
 /// born marked plain-ordinary before its birth stamp so the birth shape is
 /// minted `Ordinary` directly (charter step 3; `mark_object_plain_ordinary`).
 pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
-    object_alloc_with_parent_impl::<true, false>(0, 0, field_count)
+    object_alloc_with_parent_impl::<true, false, false>(0, 0, field_count)
 }
 
 /// Literal builders have ordinary [[Set]] from birth, including before their
@@ -186,10 +186,32 @@ pub(crate) fn object_alloc_branded(
 /// any reader can observe the object. Setting only a post-birth header bit
 /// leaves the descriptor claiming the default prototype.
 pub(crate) fn object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader {
-    object_alloc_with_parent_impl::<false, true>(class_id, 0, field_count)
+    object_alloc_with_parent_impl::<false, true, false>(class_id, 0, field_count)
 }
 
-fn object_alloc_with_parent_impl<const PREMARK_PLAIN: bool, const BORN_NULL: bool>(
+/// A prototype the runtime builds itself (a declared class's `prototype`,
+/// born in its final shape): allocated old and never-move from birth
+/// (owner decision O3; `gc::never_move`), so the site memos that answer
+/// from it are admitted at once instead of after the next minor. Its stores
+/// go through the ordinary barriered slot stores.
+pub(crate) fn object_alloc_prototype_old(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<false, false, true>(class_id, 0, field_count)
+}
+
+/// [`object_alloc_prototype_old`] born with a null [[Prototype]]
+/// (`%Object.prototype%`).
+pub(crate) fn object_alloc_prototype_old_null_proto(
+    class_id: u32,
+    field_count: u32,
+) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<false, true, true>(class_id, 0, field_count)
+}
+
+fn object_alloc_with_parent_impl<
+    const PREMARK_PLAIN: bool,
+    const BORN_NULL: bool,
+    const BORN_OLD_NEVER_MOVE: bool,
+>(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
@@ -210,9 +232,17 @@ fn object_alloc_with_parent_impl<const PREMARK_PLAIN: bool, const BORN_NULL: boo
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let ptr = if BORN_OLD_NEVER_MOVE {
+        crate::arena::arena_alloc_gc_old_born_tenured(total_size, 8, crate::gc::GC_TYPE_OBJECT)
+            as *mut ObjectHeader
+    } else {
+        arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader
+    };
 
     unsafe {
+        if BORN_OLD_NEVER_MOVE {
+            crate::gc::never_move::request_never_move(ptr as usize);
+        }
         // Initialize header
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;

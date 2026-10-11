@@ -69,6 +69,7 @@ pub(crate) use alloc_basic::{
     object_alloc_born, object_alloc_branded, object_alloc_filled_birth, object_alloc_plain,
     object_alloc_unpublished,
 };
+pub(crate) use alloc_basic::{object_alloc_prototype_old, object_alloc_prototype_old_null_proto};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;

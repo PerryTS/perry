@@ -568,7 +568,11 @@ impl CopyingNurseryCollector {
         // re-derived from survivor influx after every cycle. The decision is
         // purely per-object (flags + age) so the copied/promoted split stays
         // deterministic regardless of root traversal order.
-        let promote = flags & GC_FLAG_TENURED != 0 || next_age >= self.tenuring_survivals;
+        // I1: a never-move object is promoted at its first survival, so the
+        // memos that ask for it are admitted after this minor.
+        let promote = flags & GC_FLAG_TENURED != 0
+            || next_age >= self.tenuring_survivals
+            || super::never_move::promotes_now((*header).obj_type, (*header)._reserved);
         let new_user = if promote {
             // The promotion's live page accounting rides on the allocation's
             // deferred page registration (one page lookup per run, applied
@@ -577,7 +581,11 @@ impl CopyingNurseryCollector {
                 payload,
                 8,
                 (*header).obj_type,
-                flags & GC_FLAG_PINNED != 0,
+                flags & GC_FLAG_PINNED != 0
+                    || super::never_move::header_is_never_move(
+                        (*header).obj_type,
+                        (*header)._reserved,
+                    ),
             )
         } else {
             crate::arena::arena_alloc_gc_survivor(payload, 8, (*header).obj_type)

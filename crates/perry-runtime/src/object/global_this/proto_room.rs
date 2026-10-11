@@ -27,8 +27,12 @@ pub(crate) const BUILTIN_PROTOTYPE_ROOM: u32 = 64;
 /// A fresh builtin prototype object with [`BUILTIN_PROTOTYPE_ROOM`] inline
 /// slots. Its caller installs its keys and then calls
 /// [`fit_builtin_prototype`].
+///
+/// Born old and never-move (owner decision O3, `gc::never_move`): every site
+/// memo that answers from a builtin prototype (`%Object.prototype%` above all,
+/// the terminal of most absent reads) is admitted from the first prime.
 pub(crate) fn alloc_builtin_prototype() -> *mut ObjectHeader {
-    js_object_alloc(0, BUILTIN_PROTOTYPE_ROOM)
+    crate::object::object_alloc_prototype_old(0, BUILTIN_PROTOTYPE_ROOM)
 }
 
 per_test_global! {

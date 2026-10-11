@@ -50,14 +50,24 @@ fn object_create_refreshes_its_prototype_when_birth_allocation_moves_it() {
         }),
         Some(crate::object::shapes::ShapeObjectKind::Ordinary)
     );
+    // A marked prototype is never-move (`gc::never_move`): the move inside the
+    // birth promoted it, so it is old now and stays where it is.
+    assert_eq!(
+        crate::arena::classify_heap_generation(moved),
+        crate::arena::HeapGeneration::Old
+    );
     // Retain only the newborn: the next copying minor must trace its shape's
-    // prototype edge and rewrite both addresses, without the caller's root.
+    // prototype edge, without the caller's root.
     js_shadow_slot_set(0, born.to_bits());
     let _ = gc_collect_minor();
     let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(owner, obj as usize, "the newborn must move");
     let linked = crate::object::prototype_chain::object_static_prototype(owner).unwrap();
-    assert_ne!(linked, ptr_bits(moved), "the prototype must move again");
+    assert_eq!(
+        linked,
+        ptr_bits(moved),
+        "the old prototype does not move again"
+    );
     assert!(crate::object::is_valid_obj_ptr(
         (linked & POINTER_MASK) as *const u8
     ));

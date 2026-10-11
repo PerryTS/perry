@@ -137,6 +137,7 @@ use barrier_arming::*;
 /// #7645: `GC_FLAG_PINNED` custody + the young-pin latch the copying minor's
 /// eligibility preflight is skipped on. Every write of the bit goes through
 /// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
+pub(crate) mod never_move;
 mod pin;
 #[cfg(test)]
 pub(crate) use copying_parent_facts::copy_decode_sabotage;
@@ -1008,6 +1009,17 @@ macro_rules! reg_budgeted_scanner {
 /// build can run inside that window.
 pub(crate) fn register_prototype_addr_cache_scanner() {
     reg_scanner!(crate::array::scan_prototype_addr_cache_roots_mut);
+}
+
+/// The realm's prototypes are born old (I1, `gc::never_move`), and a minor
+/// never traces an old object: the young parts of a realm prototype a test
+/// window builds (its identity words and key lists) are rooted only by the
+/// shape table's scanner. `gc_init` registers it for a program; a test window
+/// that starts from an empty scanner registry, builds the realm and runs a
+/// minor registers it with this.
+#[cfg(test)]
+pub(crate) fn register_realm_prototype_scanners_for_tests() {
+    reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
 pub fn gc_init() {

@@ -54,6 +54,7 @@ impl Fixture {
             _evacuate: crate::gc::knob_overrides::ForcedEvacuationTestGuard::on(),
         };
         register_runtime_handle_root_scanner_for_tests();
+        crate::gc::register_realm_prototype_scanners_for_tests();
         fixture
     }
 }
