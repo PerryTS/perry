@@ -83,7 +83,6 @@ fn setup_moving_gc() -> (
     let evacuation = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
     (guard, conservative, triggers, evacuation)
 }
