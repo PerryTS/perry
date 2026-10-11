@@ -64,7 +64,11 @@ impl JsEmitter {
             self.emit_parameter_defaults(&default_params);
 
             // Emit field initializers that aren't in constructor body
-            for field in &class.fields {
+            for field in class
+                .fields
+                .iter()
+                .filter(|f| f.origin == perry_hir::ClassFieldOrigin::Definition)
+            {
                 if let Some(init) = &field.init {
                     // Only emit if constructor body doesn't set this field
                     self.write_indent();
@@ -90,7 +94,11 @@ impl JsEmitter {
             if class.extends.is_some() || class.extends_name.is_some() {
                 self.writeln("super();");
             }
-            for field in &class.fields {
+            for field in class
+                .fields
+                .iter()
+                .filter(|f| f.origin == perry_hir::ClassFieldOrigin::Definition)
+            {
                 self.write_indent();
                 let _ = write!(self.output, "this.{} = ", field.name);
                 if let Some(init) = &field.init {

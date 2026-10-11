@@ -345,23 +345,33 @@ pub(crate) fn key_add_rep(pred_rep: u64, slot: u32, value_bits: Option<u64>, inl
 /// under Any before it stamps the body-specific shape.
 #[inline]
 pub(crate) fn cached_key_add_admits(target: u32, slot: u32, value_bits: Option<u64>) -> bool {
+    cached_key_add_slot_bits(
+        target,
+        slot,
+        value_bits.unwrap_or(crate::value::TAG_UNDEFINED),
+    )
+    .is_some()
+}
+
+/// The same T2 admission, retaining the canonical slot bits for an exact
+/// cached publication. No callback or collection may separate it from use.
+#[inline]
+pub(crate) fn cached_key_add_slot_bits(target: u32, slot: u32, value_bits: u64) -> Option<u64> {
     let rep = shape_rep(target);
     if rep == REP_ANY {
-        return true;
+        return Some(value_bits);
     }
     if field_rep::has_deprecated(rep) {
-        return false;
+        return None;
     }
     match slot_rep(rep, slot) {
-        REP_ANY => true,
-        field_rep::REP_F64 => {
-            value_bits.is_some_and(|bits| field_rep::f64_slot_bits(bits).is_some())
-        }
+        REP_ANY => Some(value_bits),
+        field_rep::REP_F64 => field_rep::f64_slot_bits(value_bits),
         // The cached transition stamps its target before widening and
         // writing the new slot. A SPECIAL target must take the ordered slow
         // path until the cache hit prewrites under an Any predecessor.
-        field_rep::REP_SPECIAL => false,
-        _ => false,
+        field_rep::REP_SPECIAL => None,
+        _ => None,
     }
 }
 

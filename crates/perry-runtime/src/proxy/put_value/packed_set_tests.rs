@@ -296,6 +296,7 @@ fn real_numeric_proof_shape_cannot_prime_packed_set_or_add() {
             receiver.get_nanbox_f64(),
             add_key,
             add_pre,
+            crate::object::chain_store::ChainSite::Packed(&mut add_ways_slot),
         );
     }
     assert_ne!(add_site.add_shapes.load(Ordering::Relaxed) as u32, add_pre);

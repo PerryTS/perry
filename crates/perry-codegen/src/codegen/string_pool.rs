@@ -12,6 +12,8 @@ use super::helpers::{sanitize_member, scoped_static_method_name};
 use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
+mod class_birth_image;
+
 /// Emits a long sequence of INDEPENDENT init operations (string allocation,
 /// closure/class/function registration) into a series of small chunk functions
 /// instead of one giant function, then exposes the chunk names so the entry
@@ -900,22 +902,20 @@ pub(super) fn emit_string_pool(
         // `target_layout::inline_alloc_gc_packed`, the same derivation the
         // site performs and cross-checks before it trusts this global.
         if let Some(&(image_class_id, gc_packed, _)) = class_header_image_inits.get(global_name) {
-            let image_global = format!(
-                "@{}",
-                crate::typed_shape::header_image_global_name_from_keys_global(global_name)
+            class_birth_image::emit(
+                blk,
+                global_name,
+                image_class_id,
+                gc_packed,
+                &shape_id,
+                birth.wide_live.max(*field_count),
+                !birth.literal
+                    && *field_count != 0
+                    && !classes.values().any(|class| {
+                        class_ids.get(&class.name) == Some(&class_id)
+                            && crate::lower_call::new_alloc::keys_defined_at_birth(class)
+                    }),
             );
-            let shape_i64 = blk.zext(I32, &shape_id, I64);
-            let shape_shifted = blk.shl(I64, &shape_i64, "32");
-            let header_word = blk.or(I64, &shape_shifted, &image_class_id.to_string());
-            let image = blk.fresh_reg();
-            blk.emit_raw(format!(
-                "{} = insertelement <2 x i64> <i64 {}, i64 0>, i64 {}, i32 1",
-                image, gc_packed, header_word
-            ));
-            blk.emit_raw(format!(
-                "store <2 x i64> {}, ptr {}, align 8",
-                image, image_global
-            ));
         }
     }
 

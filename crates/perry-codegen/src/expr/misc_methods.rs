@@ -1284,6 +1284,7 @@ mod define_get_accessor_tests {
             fields: fields
                 .iter()
                 .map(|field| ClassField {
+                    origin: perry_hir::ClassFieldOrigin::Definition,
                     name: (*field).to_string(),
                     key_expr: None,
                     ty: Type::Any,

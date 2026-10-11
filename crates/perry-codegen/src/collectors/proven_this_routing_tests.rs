@@ -103,6 +103,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
 
 fn field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty,
@@ -115,6 +116,7 @@ fn field(name: &str, ty: Type) -> ClassField {
 
 fn array_field(name: &str) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: Type::Array(Box::new(Type::Number)),

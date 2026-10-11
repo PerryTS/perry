@@ -129,6 +129,7 @@ const PARAM_ID: u32 = 7;
 
 fn field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty,
@@ -243,6 +244,32 @@ fn probe_module() -> Module {
 pub(super) fn ir() -> String {
     String::from_utf8(compile_module(&probe_module(), ir_opts()).expect("module compiles"))
         .expect("LLVM IR should be UTF-8")
+}
+
+#[test]
+fn constructor_reservations_use_current_shape_store_ic_in_both_modes() {
+    for strict in [false, true] {
+        let mut module = probe_module();
+        let class = &mut module.classes[0];
+        class.fields[0].origin = perry_hir::ClassFieldOrigin::ConstructorStore;
+        let ctor = class.constructor.as_mut().unwrap();
+        ctor.is_strict = strict;
+        ctor.body.push(ctor.body[0].clone());
+        let ir = String::from_utf8(compile_module(&module, ir_opts()).unwrap()).unwrap();
+        let calls: Vec<_> = ir.lines().filter(|line| line.contains("call ")).collect();
+        assert!(
+            calls
+                .iter()
+                .any(|line| line.contains("@js_put_value_set_packed_miss")),
+            "constructor stores must use the current-shape IC, strict={strict}: {ir}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|line| line.contains("@js_class_field_set")),
+            "reservation layout cannot guard stores, strict={strict}: {ir}"
+        );
+    }
 }
 
 /// A numeric-proof Array subclass carries a sibling ShapeId. The class-field

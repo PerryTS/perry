@@ -969,6 +969,7 @@ mod tests {
             fields: ["x", "y"]
                 .iter()
                 .map(|n| ClassField {
+                    origin: perry_hir::ClassFieldOrigin::Definition,
                     name: n.to_string(),
                     key_expr: None,
                     ty: Type::Number,

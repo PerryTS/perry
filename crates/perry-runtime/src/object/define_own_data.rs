@@ -44,23 +44,25 @@ pub(crate) unsafe fn define_own_data_from_shape(
     if !crate::value::addr_class::is_above_handle_band(addr) {
         return None;
     }
-    let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
-        | crate::gc::OBJ_FLAG_SEALED
-        | crate::gc::OBJ_FLAG_NO_EXTEND
-        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || header._reserved & BLOCKING != 0
-    {
-        return None;
-    }
     let obj = addr as *mut ObjectHeader;
     // The word the lattice is keyed on: the interned string, found without
     // allocating (a pooled literal or an SSO immediate resolves to its
     // interned twin). Private names and canonical indices are refused there:
     // they are not ordinary named properties.
     let Some(key) = super::chain_store::interned_key_for_store(key_value) else {
+        // The interned-key store funnels validate this same header themselves.
+        // Content lookup reads the shape directly, so validate only this lane.
+        let header = crate::value::addr_class::try_read_gc_header(addr)?;
+        const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || header._reserved & BLOCKING != 0
+        {
+            return None;
+        }
         return define_listed_key_by_content(obj, key_value, value);
     };
     // 1. Creation. The chain-proven form is exactly the definition's append:

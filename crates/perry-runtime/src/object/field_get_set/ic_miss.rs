@@ -2025,6 +2025,14 @@ pub extern "C" fn js_private_field_add(
 /// receivers observe `defineProperty`, not `set`.
 #[no_mangle]
 pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64 {
+    // Definitions share the shape-authoritative append/overwrite used by
+    // object literals. It returns the refreshed value after a collecting
+    // store; a decline leaves all operands untouched.
+    if let Some(stored) = unsafe {
+        crate::object::define_own_data::define_own_data_from_shape(receiver, key, value)
+    } {
+        return stored;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let key = scope.root_nanbox_f64(key);

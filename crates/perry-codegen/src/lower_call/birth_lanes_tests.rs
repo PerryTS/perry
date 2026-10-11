@@ -10,6 +10,7 @@ use super::birth_lanes::chain_birth_f64_fields;
 
 fn field(name: &str, ty: Type, init: Option<Expr>) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty,

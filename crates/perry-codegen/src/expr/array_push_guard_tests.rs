@@ -120,6 +120,7 @@ fn node_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
             ty: Type::Number,
@@ -538,6 +539,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
     class.id = 405;
     class.name = "Buffer".to_string();
     class.fields = vec![ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: "items".to_string(),
         key_expr: None,
         ty: Type::Array(Box::new(Type::Number)),

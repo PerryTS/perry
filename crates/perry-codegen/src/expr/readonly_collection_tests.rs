@@ -59,6 +59,7 @@ fn archetype_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "componentTypeSet".to_string(),
             key_expr: None,
             ty: Type::Generic {
@@ -257,6 +258,7 @@ fn compile_nested_map_get_ir() -> String {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "ctx".to_string(),
             key_expr: None,
             ty: Type::Named("CommandExecutorContext".to_string()),

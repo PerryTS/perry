@@ -21,6 +21,7 @@ const RECV: u32 = 50;
 fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
     let field_names = ["a", "m"];
     let field = |name: &str| ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: if name == "a" { Type::Number } else { Type::Any },

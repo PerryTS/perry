@@ -34,9 +34,11 @@ fn subclass_ctor_assignment_to_inherited_method_name_is_not_a_field() {
         sub.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
     );
     assert!(
-        sub.fields.iter().any(|f| f.name == "seen"),
-        "this.seen = … has no parent-declared counterpart and must still \
-         become an own field; fields: {:?}",
+        sub.fields
+            .iter()
+            .any(|f| f.name == "seen" && f.origin == crate::ClassFieldOrigin::ConstructorStore),
+        "this.seen = … creates an own property at its store, not a class \
+         field definition before the constructor runs (#12327); fields: {:?}",
         sub.fields.iter().map(|f| &f.name).collect::<Vec<_>>()
     );
 }

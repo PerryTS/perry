@@ -87,6 +87,7 @@ fn counter_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "value".to_string(),
             key_expr: None,
             ty: Type::Number,

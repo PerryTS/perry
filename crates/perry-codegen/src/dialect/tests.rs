@@ -176,6 +176,7 @@ fn cell_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
             ty: Type::Number,

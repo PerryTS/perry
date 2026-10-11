@@ -374,6 +374,7 @@ fn field_store_ir(field_ty: Type) -> String {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
             ty: field_ty,
@@ -964,12 +965,7 @@ fn imported_constructor_receiver_refreshes_after_initializers_and_call_preparati
                     "root publication follows allocation",
                 );
                 cfg.assert_before(publication, call, "root publication dominates constructor");
-                for helper in [
-                    "js_class_value",
-                    "js_typed_feedback_class_field_set_guard",
-                    "js_class_field_set_fallback",
-                    "js_array_alloc",
-                ] {
+                for helper in ["js_class_value", "js_class_field_add", "js_array_alloc"] {
                     let sites: Vec<_> = cfg
                         .sites()
                         .into_iter()

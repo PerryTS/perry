@@ -585,6 +585,7 @@ mod tests {
 
     fn arrow_field(name: &str, func_id: FuncId) -> ClassField {
         ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,
             ty: Type::Any,
@@ -677,6 +678,7 @@ mod tests {
     #[test]
     fn class_field_initializer_locals_visible_to_max_local_id() {
         let field = ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "request".to_string(),
             key_expr: None,
             ty: Type::Any,

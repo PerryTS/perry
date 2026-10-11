@@ -14,6 +14,7 @@ fn fixture(with_args: bool) -> Module {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".into(),
             key_expr: None,
             ty: Type::Any,
@@ -41,6 +42,7 @@ fn fixture(with_args: bool) -> Module {
     if with_args {
         for name in ["left", "right"] {
             module.classes[0].fields.push(ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: name.into(),
                 key_expr: None,
                 ty: Type::Any,

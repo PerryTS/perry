@@ -322,6 +322,7 @@ fn anonymous_record_admission_uses_the_full_constructor_proof() {
 fn closed_literal_constructor_emits_a_separate_final_shape() {
     let mut class = empty_class();
     class.fields.push(perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: "m".into(),
         key_expr: None,
         ty: Type::Any,
@@ -408,6 +409,7 @@ fn user_class(name: &str, id: u32, method_id: u32) -> Class {
     class.name = name.into();
     class.id = id;
     class.fields.push(perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: format!("m{id}"),
         key_expr: None,
         ty: Type::Any,
@@ -506,6 +508,7 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
 fn general_class_records_follow_registration_and_finalize_the_completed_result() {
     let mut class = user_class("User", 7, 1);
     class.fields.push(perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: "effect".into(),
         key_expr: None,
         ty: Type::Any,

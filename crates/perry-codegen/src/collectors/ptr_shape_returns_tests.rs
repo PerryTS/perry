@@ -13,6 +13,7 @@ use perry_hir::{ClassField, Decorator, Function, Param};
 
 fn field(name: &str) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: Type::Number,

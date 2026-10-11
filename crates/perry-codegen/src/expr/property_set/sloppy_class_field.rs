@@ -23,6 +23,12 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     if class_has_computed_runtime_members(ctx, &class_name) {
         return Ok(None);
     }
+    if crate::expr::class_field_inline_guard::class_instances_have_constructor_reservations(
+        ctx,
+        &class_name,
+    ) {
+        return Ok(None);
+    }
     // No finished instance of a class with private elements is on its birth
     // shape (#11791): the generic store IC serves the shapes it sees.
     if crate::expr::class_field_inline_guard::class_instances_carry_private_elements(

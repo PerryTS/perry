@@ -60,6 +60,7 @@ const VAL_ID: u32 = 13;
 
 fn any_field(name: &str) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: Type::Array(Box::new(Type::Any)),

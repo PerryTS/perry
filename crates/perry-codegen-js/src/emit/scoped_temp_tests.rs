@@ -255,6 +255,7 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "result".into(),
             key_expr: None,
             ty: Type::Any,

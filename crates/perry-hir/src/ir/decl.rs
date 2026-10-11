@@ -417,8 +417,16 @@ pub struct ClassComputedMember {
 }
 
 /// A class field
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassFieldOrigin {
+    Definition,
+    ConstructorStore,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassField {
+    /// Reservation facts never define a property before its constructor store.
+    pub origin: ClassFieldOrigin,
     pub name: String,
     /// When `Some`, this field's key is the lowered expression evaluated once
     /// during ClassDefinitionEvaluation (e.g. `[Symbol.for("k")]` or

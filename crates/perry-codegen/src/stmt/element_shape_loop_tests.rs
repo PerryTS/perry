@@ -98,6 +98,7 @@ fn node_class(extends_name: Option<&str>) -> Class {
         heritage_lexically_shadowed: false,
         fields: vec![
             ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "v".to_string(),
                 key_expr: None,
                 ty: Type::Number,
@@ -107,6 +108,7 @@ fn node_class(extends_name: Option<&str>) -> Class {
                 decorators: Vec::new(),
             },
             ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "w".to_string(),
                 key_expr: None,
                 ty: Type::Number,
@@ -201,6 +203,7 @@ fn anon_shape_class(id: u32, name: &str, fields: &[(&str, Type)]) -> Class {
     class.fields = fields
         .iter()
         .map(|(field, ty)| ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: (*field).to_string(),
             key_expr: None,
             ty: ty.clone(),

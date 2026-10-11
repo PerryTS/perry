@@ -37,6 +37,7 @@ fn publish_namespace_member(
     is_readonly: bool,
 ) {
     fields.push(crate::ir::ClassField {
+        origin: crate::ClassFieldOrigin::Definition,
         name: name.clone(),
         key_expr: None,
         ty: Type::Any,

@@ -49,7 +49,7 @@ fn imported_function_constructor_shadows_the_builtin_arm() {
     let ir = compile(opts);
 
     assert!(
-        ir.contains("call double @js_new_function_construct("),
+        ir.contains("call double @js_new_function_construct_site("),
         "an imported function constructor named `Headers` must construct \
          through the imported-function path:\n{ir}"
     );
@@ -76,7 +76,7 @@ fn unshadowed_builtin_name_still_builds_the_builtin() {
         "an unshadowed `Headers` must still build the builtin:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_new_function_construct("),
+        !ir.contains("call double @js_new_function_construct_site("),
         "nothing resolves this name to an imported function value:\n{ir}"
     );
 }

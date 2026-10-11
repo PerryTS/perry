@@ -1031,6 +1031,7 @@ impl LoweringContext {
         let fields: Vec<ClassField> = field_shapes
             .iter()
             .map(|(name, ty)| ClassField {
+                origin: crate::ClassFieldOrigin::Definition,
                 name: name.clone(),
                 key_expr: None,
                 ty: ty.clone(),

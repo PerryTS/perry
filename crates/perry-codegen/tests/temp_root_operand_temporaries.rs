@@ -1149,6 +1149,7 @@ fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
 fn module_with_new_running_ctor(name: &str) -> Module {
     let mut module = module_with_new(name, Vec::new());
     module.classes[0].fields = vec![perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: "v".to_string(),
         key_expr: None,
         ty: perry_hir::types::Type::Any,

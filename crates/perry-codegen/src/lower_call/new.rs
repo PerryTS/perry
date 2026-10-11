@@ -1019,8 +1019,13 @@ fn lower_new_impl_inner<'a>(
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AncestorsOnly)?;
         }
     }
-    if !has_extends && class.extends_expr.is_none() {
+    if !has_extends
+        && class.extends_expr.is_none()
+        && !(alloc.constructor_stores_ready && super::new_alloc::keys_defined_at_birth(class))
+    {
         // Base class — no super(), apply own fields now (before body).
+        // Proved birth fills have already defined its bare fields; repeating
+        // those definitions would add stores and retire numeric birth lanes.
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
     }
 

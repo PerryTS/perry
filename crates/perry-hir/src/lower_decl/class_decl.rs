@@ -1051,6 +1051,7 @@ pub fn lower_class_decl(
                         };
                         if !param_name.is_empty() && !declared_field_names.contains(&param_name) {
                             fields.push(ClassField {
+                                origin: crate::ClassFieldOrigin::Definition,
                                 name: param_name,
                                 key_expr: None,
                                 ty: param_type,
@@ -1066,7 +1067,8 @@ pub fn lower_class_decl(
         }
     }
 
-    // Detect fields from constructor body `this.xxx = ...` assignments.
+    // Reserve layout facts for constructor `this.xxx = ...` stores (#12327).
+    // These entries are not definitions; their keys appear at the actual store.
     // JavaScript classes (e.g., transpiled from TypeScript) often don't have ClassProp
     // declarations; instead they assign to `this` in the constructor body.
     //
@@ -1204,6 +1206,7 @@ pub fn lower_class_decl(
                                     && !method_names.contains(&fname)
                                 {
                                     fields.push(ClassField {
+                                        origin: crate::ClassFieldOrigin::ConstructorStore,
                                         name: fname,
                                         key_expr: None,
                                         ty: Type::Any,

@@ -176,6 +176,7 @@ fn shaped_reader_class() -> Class {
     class.name = "ShapedReader".to_string();
     class.fields = vec![
         ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "column".to_string(),
             key_expr: None,
             ty: Type::Array(Box::new(Type::Any)),
@@ -185,6 +186,7 @@ fn shaped_reader_class() -> Class {
             decorators: Vec::new(),
         },
         ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "defaultFlag".to_string(),
             key_expr: None,
             ty: Type::Boolean,
@@ -240,6 +242,7 @@ fn shaped_push_class() -> Class {
     class.id = 102;
     class.name = "PackedOwner".to_string();
     class.fields = vec![ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: "packed".to_string(),
         key_expr: None,
         ty: Type::Array(Box::new(Type::Any)),

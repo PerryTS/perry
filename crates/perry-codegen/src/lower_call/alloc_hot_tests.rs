@@ -29,8 +29,6 @@ const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
 const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys_stamped(";
 /// One mint per class at module init, never per allocation.
 const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
-/// The immutable id is hoisted to the function-entry setup like keys_array.
-const SHAPE_GLOBAL_LOAD: &str = "load i32, ptr @perry_class_shape_id_";
 /// #8122: the inline allocator's 16-byte header prefix — packed GcHeader word
 /// + `class_id | ShapeId << 32` — is composed ONCE at module init into a
 /// per-class `<2 x i64>` global, entry-hoisted like the keys global, and
@@ -121,6 +119,7 @@ fn cell_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
             ty: Type::Number,
@@ -626,7 +625,7 @@ fn a_small_straight_line_birth_uses_the_emitted_allocator() {
         !ir.contains(".__arena("),
         "a non-recursive function needs no wrapper: {ir}"
     );
-    assert!(ir.contains(SHAPE_MINT_CALL) && ir.contains(SHAPE_GLOBAL_LOAD));
+    assert!(ir.contains(SHAPE_MINT_CALL) && ir.contains(HEADER_IMAGE_GLOBAL_LOAD));
 }
 
 #[test]
@@ -688,6 +687,12 @@ fn cold_birth_of_an_unresolved_chain_retains_runtime_sizing() {
     assert!(
         !ir.contains(INLINE_FAST_BLOCK),
         "unknown constructor was inlined: {ir}"
+    );
+    assert!(
+        ir.contains(SHAPE_MINT_CALL)
+            && ir.contains(HEADER_IMAGE_GLOBAL_LOAD)
+            && ir.contains("@js_object_shape_id_for_class_keys_live(i64 0, i32 0,"),
+        "the outlined allocation must use its keyless module-init image: {ir}"
     );
 }
 

@@ -80,6 +80,7 @@ fn fixture(method: Function) -> Module {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "DEFAULT_DEFER".to_string(),
             key_expr: None,
             ty: Type::Any,

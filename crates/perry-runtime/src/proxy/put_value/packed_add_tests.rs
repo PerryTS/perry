@@ -200,6 +200,52 @@ fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
     );
 }
 
+/// A class store records the clear-chain proof before publishing the append.
+/// The publication must consume that proof and still serve a fresh receiver.
+#[test]
+fn a_class_key_add_uses_the_store_sites_clear_chain_verdict() {
+    const CID: u32 = 0x0004_2231;
+    let proto = crate::object::js_object_alloc(0, 2);
+    crate::object::class_prototype_object_root_store(CID, proto);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 4));
+    let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 4));
+    let boxed = |p| crate::value::js_nanbox_pointer(p as i64);
+    let key = interned(b"classProofAdd");
+    let site = leaked_site();
+    let mut slot: super::super::packed_set::PackedSetWaysSlot = std::ptr::null_mut();
+    let pre = stamp(boxed(first.get_raw_mut_ptr::<crate::ObjectHeader>()));
+    js_put_value_set_packed_miss(
+        boxed(first.get_raw_mut_ptr::<crate::ObjectHeader>()),
+        key,
+        5.0,
+        1,
+        &mut slot,
+        &site.set,
+    );
+    assert!(
+        unsafe {
+            crate::object::chain_store::chain_store_proven(
+                crate::object::chain_store::ChainSite::Packed(&mut slot),
+                first.get_raw_const_ptr::<crate::ObjectHeader>(),
+                key,
+            )
+        },
+        "the reused proof must be live"
+    );
+    assert_eq!(site.add_shapes.load(Ordering::Relaxed) as u32, pre);
+    assert_eq!(
+        unsafe {
+            packed_add_try(
+                site,
+                boxed(second.get_raw_mut_ptr::<crate::ObjectHeader>()),
+                6.0,
+            )
+        },
+        Some(6.0)
+    );
+}
+
 /// Any move of either verdict word refuses the memo: an inherited setter or
 /// non-writable property installed since the prime moves one of them.
 #[test]

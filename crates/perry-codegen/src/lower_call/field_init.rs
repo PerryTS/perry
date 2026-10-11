@@ -344,7 +344,11 @@ fn ctor_prologue_assigned_fields_inner(
     // runs during the init phase whether or not the class declares a ctor, and
     // it may legally read `this.<f>` of an earlier field.
     let all_fields_bare = class.fields.iter().all(|f| {
-        f.init.is_none() && f.key_expr.is_none() && f.decorators.is_empty() && !f.is_private
+        f.origin == perry_hir::ClassFieldOrigin::Definition
+            && f.init.is_none()
+            && f.key_expr.is_none()
+            && f.decorators.is_empty()
+            && !f.is_private
     });
     if !all_fields_bare {
         return None;
@@ -654,22 +658,6 @@ fn staged_before_ctor_body(ctx: &FnCtx<'_>, chain: &[String], leaf: &str) -> Vec
     }
 }
 
-/// Whether a named public field initializer can populate the allocation's
-/// predeclared own slot through the ordinary by-name store.
-///
-/// A fresh ordinary instance already owns every named field in its class-key
-/// layout, so overwriting that slot has the same DefineField semantics as
-/// CreateDataProperty: an inherited setter cannot intercept an existing own
-/// data property. The exception is a constructor chain that can replace
-/// `this` (the replacement may be a Proxy), or a name whose chain contains an
-/// accessor/redeclaration and therefore has no stable global field index.
-/// Those cases must keep `js_class_field_add` and its full
-/// `[[DefineOwnProperty]]` behavior.
-fn can_store_predeclared_public_field(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
-    !crate::lower_call::ctor_chain_can_replace_this(ctx.classes, class_name)
-        && crate::type_analysis::class_field_global_index(ctx, class_name, property).is_some()
-}
-
 pub(crate) fn apply_field_initializers_recursive(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -684,27 +672,6 @@ pub(crate) fn apply_field_initializers_recursive(
     // message` on a `PropertySignature`). The authoritative chain is root →
     // leaf and carries each ancestor's resolved fields, so we use both its
     // ORDER (for the mode filter) and its FIELDS (per class below).
-    // #7512-followup: computed once for the LEAF, then consulted per class in
-    // the chain below. `Some` only when the chain form is what authorizes the
-    // at-allocation declaration, so a chain that stays on the old path keeps
-    // exactly its old elision set.
-    let chain_prologue_assigned: Option<Vec<(String, std::collections::HashSet<String>)>> =
-        chain_prologue_assigned_fields(ctx.classes, class_name).filter(|chain| {
-            crate::typed_shape::class_chain_layout_declarable_at_allocation(ctx.classes, chain)
-        });
-    // Charter step 5 (a): the fields born on an `F64` lane (the birth rep's
-    // own decision, `birth_lanes`). Their `undefined` define is skipped: the
-    // lane holds a double from birth and the field's first write precedes
-    // every observation of `this`, so the define would only move every
-    // instance off its birth shape. Computed for `class_name`; when that is
-    // an ancestor of the object's class (the `SelfOnly` staging), its
-    // construction events are a prefix of the object's, so every field it
-    // admits is written before any observation there as well.
-    let birth_f64: Vec<(String, std::collections::HashSet<String>)> = ctx
-        .class_init_chains
-        .get(class_name)
-        .map(|chain| super::birth_lanes::chain_birth_f64_fields(ctx.classes, chain))
-        .unwrap_or_default();
     let mut chain_field_override: std::collections::HashMap<String, Vec<perry_hir::ClassField>> =
         std::collections::HashMap::new();
     // Collect the inheritance chain from root down.
@@ -866,40 +833,26 @@ pub(crate) fn apply_field_initializers_recursive(
         // in hono's Context. Lower the missing-init case to
         // `Expr::Undefined` so the constructor writes the spec-correct
         // value into the field slot. Refs #486.
-        // #7469: default-`undefined` writes that the class's own ctor prologue
-        // provably overwrites are dead — see the function doc for the proof
-        // obligations. Computed from the leaf-authoritative `ctx.classes` entry
-        // (an ancestor resolved only through `chain_field_override` has no
-        // visible ctor here and gets the conservative empty set).
-        // #7512-followup: when the LEAF's whole chain is declarable at
-        // allocation, the two consumers of this set must agree — the declared
-        // raw-f64 mask is live from birth, so a field-init `undefined` write
-        // into one of those slots would fail `layout_raw_f64_bits` and
-        // downgrade the descriptor on the spot, making the declaration
-        // worthless. So use the chain-aware per-class set exactly when the
-        // chain form is what authorized the declaration.
-        let prologue_assigned = chain_prologue_assigned
-            .as_ref()
-            .and_then(|chain| {
-                chain
-                    .iter()
-                    .find(|(name, _)| *name == class_name_in_chain)
-                    .map(|(_, set)| set.clone())
-            })
-            .unwrap_or_else(|| {
-                ctx.classes
-                    .get(&class_name_in_chain)
-                    .copied()
-                    .map(ctor_prologue_param_assigned_fields)
-                    .unwrap_or_default()
-            });
-        let born_f64 = birth_f64
-            .iter()
-            .find(|(name, _)| *name == class_name_in_chain)
-            .map(|(_, set)| set);
+        // A default-undefined definition still creates a key. Even when the
+        // constructor immediately overwrites its value, its creation cannot be
+        // elided: declaration order can differ from assignment order.
         let mut init_pairs: Vec<(String, Expr, bool)> = Vec::new();
         let mut init_pairs_computed: Vec<(String, Expr)> = Vec::new();
         for field in &class_fields {
+            if field.origin == perry_hir::ClassFieldOrigin::ConstructorStore {
+                continue;
+            }
+            // Closed literals publish their positional keys and undefined fills
+            // together at birth. Their synthetic constructor only replaces those
+            // values; defining the same keys again adds no observable operation.
+            // User classes still create each key through its actual definition.
+            if ctx
+                .classes
+                .get(&class_name_in_chain)
+                .is_some_and(|class| class.is_literal_shape())
+            {
+                continue;
+            }
             // Wall 46: synthesized capture fields (`__perry_cap_*`) are populated
             // EXCLUSIVELY by the constructor's capture-param assignments — for a
             // class constructed directly, by its own ctor; for a subclass of an
@@ -914,18 +867,6 @@ pub(crate) fn apply_field_initializers_recursive(
             // writer (verified: captures are correct at the parent ctor end and
             // only vanish during the derived ctor's post-super field-init).
             if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
-                continue;
-            }
-            // #7469: skip the dead default write for prologue-overwritten
-            // fields. `ctor_prologue_param_assigned_fields` returns non-empty
-            // only when EVERY field on the class is bare (`init: None`, named
-            // key, undecorated, public), so this arm can only ever drop
-            // `Expr::Undefined` writes — never a real initializer.
-            if field.init.is_none()
-                && field.key_expr.is_none()
-                && (prologue_assigned.contains(&field.name)
-                    || born_f64.is_some_and(|set| set.contains(&field.name)))
-            {
                 continue;
             }
             let init = match &field.init {
@@ -1102,68 +1043,22 @@ pub(crate) fn apply_field_initializers_recursive(
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
-                if can_store_predeclared_public_field(ctx, &class_name_in_chain, &prop) {
-                    // The field is already an own key in the freshly allocated
-                    // exact class shape. Store by name so the runtime fills the
-                    // existing slot without a structural ShapeId transition.
-                    // This matters for the exact-shape guards emitted inside a
-                    // hot captures-`this` arrow: full DefineOwnProperty used to
-                    // change the receiver's shape before the arrow was ever
-                    // called, making every guard miss (#8693 / perform-ecs).
-                    let blk = ctx.block();
-                    let this_bits = blk.bitcast_double_to_i64(&this_val);
-                    let this_raw = blk.and(I64, &this_bits, POINTER_MASK_I64);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &this_raw), (I64, &key_raw), (DOUBLE, &closure_val)],
-                    );
-                } else {
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_class_field_add",
-                        &[
-                            (DOUBLE, &this_val),
-                            (DOUBLE, &key_box),
-                            (DOUBLE, &closure_val),
-                        ],
-                    );
-                }
+                ctx.block().call(
+                    DOUBLE,
+                    "js_class_field_add",
+                    &[
+                        (DOUBLE, &this_val),
+                        (DOUBLE, &key_box),
+                        (DOUBLE, &closure_val),
+                    ],
+                );
                 continue;
             }
 
-            // DefineField uses CreateDataProperty semantics: an inherited
-            // setter must not run, while a Proxy receiver must observe its
-            // `defineProperty` trap. `js_class_field_add` provides both, but it
-            // is a full [[DefineOwnProperty]] behind a handle scope — per field,
-            // per construction. #8648: `shapes.ts` pays it ~2M times (7 classes
-            // x ~2-3 fields x 120k constructions) and measured 3.14x.
-            //
-            // The two semantics coincide when neither difference can arise:
-            //
-            //   * no accessor anywhere on the chain -- `class_field_global_index`
-            //     already answers exactly this, returning `None` the moment an
-            //     accessor (or a re-declaration) appears on the chain
-            //     (`class_field_inline_guard`, #5654); and
-            //   * the receiver is provably the freshly allocated ordinary
-            //     instance -- no constructor on the chain hands back a
-            //     replacement `this` via `js_ctor_return_override`, which is the
-            //     only way a Proxy can become the field-initializer receiver.
-            //
-            // Both hold for an ordinary class, so lower through the optimized
-            // `PropertySet` path (inline shape precheck -> direct slot store)
-            // exactly as this did before #8630. Anything else keeps the full
-            // DefineField call.
-            if can_store_predeclared_public_field(ctx, &class_name_in_chain, &prop) {
-                let set_expr = Expr::PropertySet {
-                    object: Box::new(Expr::This),
-                    property: prop,
-                    value: Box::new(init_expr),
-                };
-                let _ = lower_expr(ctx, &set_expr)?;
-                continue;
-            }
+            // A declared field is created here, at its actual initializer,
+            // including an undefined initializer. DefineField bypasses inherited
+            // setters and observes a replacement receiver's defineProperty trap.
+            // The runtime's ordinary field-definition path owns the key-add.
             let value = lower_expr(ctx, &init_expr)?;
             let this_val = ctx
                 .this_stack

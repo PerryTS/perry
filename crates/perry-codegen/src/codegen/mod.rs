@@ -762,6 +762,7 @@ fn compile_module_impl(
                     ic.field_names
                         .iter()
                         .map(|name| perry_hir::ClassField {
+                            origin: perry_hir::ClassFieldOrigin::Definition,
                             name: name.clone(),
                             key_expr: None,
                             ty: perry_hir::types::Type::Any,
@@ -864,6 +865,7 @@ fn compile_module_impl(
                 .iter()
                 .enumerate()
                 .map(|(i, name)| perry_hir::ClassField {
+                    origin: perry_hir::ClassFieldOrigin::Definition,
                     name: name.clone(),
                     key_expr: None,
                     // Use the real declared type when the source-side

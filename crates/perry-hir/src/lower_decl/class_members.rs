@@ -1111,6 +1111,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     let init = init?;
 
     Ok(ClassField {
+        origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr,
         ty,

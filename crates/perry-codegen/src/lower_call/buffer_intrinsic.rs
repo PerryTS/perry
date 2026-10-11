@@ -695,6 +695,7 @@ mod shadow_scan_tests {
 
     fn field_with_init(name: &str, init: Expr) -> ClassField {
         ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,
             ty: perry_hir::types::Type::Any,

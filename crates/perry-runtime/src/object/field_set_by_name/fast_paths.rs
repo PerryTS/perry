@@ -300,7 +300,7 @@ pub(crate) fn object_set_field_by_name_transition_only_fast_value(
     value: f64,
     refresh: &mut Option<(f64, f64, f64)>,
 ) -> Option<f64> {
-    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, false, refresh)
+    object_set_field_by_name_transition_fast_impl_value::<false>(obj, key, value, false, refresh)
 }
 
 /// [`object_set_field_by_name_transition_only_fast_value`] for a CLASS
@@ -316,7 +316,7 @@ pub(crate) fn object_set_field_by_name_transition_chain_proven_value(
     value: f64,
     refresh: &mut Option<(f64, f64, f64)>,
 ) -> Option<f64> {
-    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, true, refresh)
+    object_set_field_by_name_transition_fast_impl_value::<true>(obj, key, value, false, refresh)
 }
 
 /// Add `key` to a class-less ordinary object born with a null
@@ -642,12 +642,11 @@ fn object_set_field_by_name_transition_fast_impl(
     value: f64,
     try_overwrite: bool,
 ) -> i32 {
-    object_set_field_by_name_transition_fast_impl_value(
+    object_set_field_by_name_transition_fast_impl_value::<false>(
         obj,
         key,
         value,
         try_overwrite,
-        false,
         &mut None,
     )
     .is_some() as i32
@@ -659,12 +658,11 @@ fn object_set_field_by_name_transition_fast_impl(
 /// pre-scope shortcut in `js_put_value_set_dyn_ic_miss` relies on that,
 /// saving a RuntimeHandleScope + three roots on the hot
 /// fresh-object-construction lane.
-fn object_set_field_by_name_transition_fast_impl_value(
+fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
     value: f64,
     try_overwrite: bool,
-    chain_proven: bool,
     refresh: &mut Option<(f64, f64, f64)>,
 ) -> Option<f64> {
     if key.is_null() || (key as usize) < 0x10000 {
@@ -705,14 +703,8 @@ fn object_set_field_by_name_transition_fast_impl_value(
         return Some(value);
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let key_handle = scope.root_string_ptr(key);
-    let value_handle = scope.root_nanbox_f64(value);
-
     unsafe {
-        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        let mut obj = obj;
 
         // Validated header probe (rejects the handle band, implausible
         // addresses, and slab allocations without touching memory) instead
@@ -750,12 +742,38 @@ fn object_set_field_by_name_transition_fast_impl_value(
         {
             return None;
         }
-        if !crate::object::object_is_regular(obj) || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+        // The header probe above already established a live ordinary heap
+        // allocation; ask only its shape for the layout kind here.
+        let object_kind =
+            super::shapes::shape_object_kind_by_id(super::shapes::object_shape_stamp(obj))?;
+        if !object_kind.is_ordinary_layout() || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             return None;
         }
 
         let key_gc =
             (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
+            return None;
+        }
+        let already_interned = (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0;
+        // A chain verdict and a definition's lattice probe name interned
+        // words. Reject anything else without touching the receiver, so the
+        // semantic fallback retains interning and its roots. Specializing
+        // this existing helper removes all optional-root work from that lane.
+        if CHAIN_PROVEN && !already_interned {
+            return None;
+        }
+        // A proven-chain append with an interned key does no JS or GC-heap work
+        // until spill growth. Keep the same receiver/edge vet below, but create
+        // handles only for chain inspection, interning or a collecting store.
+        let scope = (!CHAIN_PROVEN).then(crate::gc::RuntimeHandleScope::new);
+        let roots = scope.as_ref().map(|scope| {
+            (
+                scope.root_raw_mut_ptr(obj),
+                scope.root_string_ptr(key),
+                scope.root_nanbox_f64(value),
+            )
+        });
 
         // Closed source-level object literals are represented as synthetic
         // `__AnonShape_*` classes so their static fields can use the same
@@ -766,7 +784,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // alongside genuinely class-id-zero objects; a real user class must
         // retain the full inherited-setter/prototype walk.
         let class_id = (*obj).class_id;
-        if !chain_proven && class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        if !CHAIN_PROVEN && class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
             return None;
         }
 
@@ -781,14 +799,14 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // question, answered for the receiver's real class chain rather than
         // the class-id-zero chain this call assumes.
         let key_f64 = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
-        if !chain_proven && super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
+        if !CHAIN_PROVEN && super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
             return None;
         }
 
-        if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
-            return None;
-        }
-        let interned_key = if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+        let key = roots
+            .as_ref()
+            .map_or(key, |(_, key, _)| key.get_raw_const_ptr());
+        let interned_key = if already_interned {
             key
         } else {
             let hash = key_content_hash(key);
@@ -798,23 +816,21 @@ fn object_set_field_by_name_transition_fast_impl_value(
             return None;
         }
 
-        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        // #9287: interning above is the one allocation point a MISS can
-        // still follow. A pre-scope caller's raw f64 operands may be stale
-        // after it, so hand back re-rooted copies for the caller's fallback
-        // ladder — set unconditionally, so the caller's use is uniform.
-        // The key pointer is only valid for the duration of this
-        // non-allocating tuple build, so scope it rather than binding it.
-        *refresh = Some(
-            key_handle.with_const_ptr::<crate::StringHeader, _>(|key_now| {
-                (
-                    crate::value::js_nanbox_pointer(obj as i64),
-                    crate::value::js_nanbox_string(key_now as i64),
-                    value_handle.get_nanbox_f64(),
-                )
-            }),
-        );
-        let value = value_handle.get_nanbox_f64();
+        // Chain inspection or interning may have moved the operands. A
+        // rootless miss collected nothing and leaves the caller's copies live.
+        let (key, value) = if let Some((obj_root, key_root, value_root)) = &roots {
+            obj = obj_root.get_raw_mut_ptr::<ObjectHeader>();
+            let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+            let value = value_root.get_nanbox_f64();
+            *refresh = Some((
+                crate::value::js_nanbox_pointer(obj as i64),
+                crate::value::js_nanbox_string(key as i64),
+                value,
+            ));
+            (key, value)
+        } else {
+            (key, value)
+        };
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let hit = transition_cache_lookup(prev_shape_id, interned_key)?;
@@ -836,16 +852,24 @@ fn object_set_field_by_name_transition_fast_impl_value(
 
         let edge =
             super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value.to_bits())?;
-        let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
-            return Some(value_handle.get_nanbox_f64());
+        let Some((next_keys, slot_idx, target_shape_id, admitted_bits)) =
+            edge.transition_slot_bits()
+        else {
+            return Some(value);
         };
 
-        if !super::shapes::install_cached_object_shape_transition(
+        let cached_install = super::shapes::install_cached_object_shape_transition(
             obj,
             prev_shape_id,
             target_shape_id,
             next_keys,
-        ) {
+        );
+        if !cached_install {
+            // A remint is not covered by the non-collecting cached stamp.
+            // Decline without changing the receiver; the rooted miss owns it.
+            if roots.is_none() {
+                return None;
+            }
             set_object_keys(obj, next_keys);
         }
 
@@ -865,9 +889,61 @@ fn object_set_field_by_name_transition_fast_impl_value(
             if slot_idx >= live_slots {
                 set_object_live_slot_count(obj, slot_idx + 1);
             }
-            store_object_field_slot(obj, slot_usize, vbits);
-        } else {
+            // A default definition still publishes its key above. If birth
+            // already filled this ordinary slot with undefined, its value
+            // needs no second store, representation change, alias demotion or
+            // barrier. Numeric-proof receivers retain the complete funnel.
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            if !(cached_install
+                && object_kind == super::shapes::ShapeObjectKind::Ordinary
+                && vbits == crate::value::TAG_UNDEFINED
+                && *fields.add(slot_usize) == crate::value::TAG_UNDEFINED)
+            {
+                if cached_install && object_kind == super::shapes::ShapeObjectKind::Ordinary {
+                    // An append preserves the ordinary kind. There is no
+                    // numeric-prefix proof to retire, including after a rep
+                    // generalization. T2 above already checked this exact
+                    // target's representation and canonicalized numeric bits.
+                    // Reuse its result with the same alias and mark barriers.
+                    debug_assert_eq!(
+                        super::shapes::shape_object_kind_by_id(super::shapes::object_shape_stamp(
+                            obj
+                        )),
+                        Some(super::shapes::ShapeObjectKind::Ordinary)
+                    );
+                    let slot_bits = admitted_bits;
+                    let slot_bits = if slot_bits == crate::value::POINTER_TAG {
+                        crate::value::TAG_UNDEFINED
+                    } else {
+                        slot_bits
+                    };
+                    let _ = crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+                        obj as usize,
+                        fields.add(slot_usize) as usize,
+                        slot_usize,
+                        slot_bits,
+                    );
+                } else {
+                    store_object_field_slot(obj, slot_usize, vbits);
+                }
+            }
+        } else if roots.is_some() {
             overflow_set(obj as usize, slot_usize, vbits);
+        } else {
+            // The successor is already authoritative. Protect its receiver
+            // and the return value across the spill allocation; the key is
+            // no longer read and is owned by that shape.
+            let spill_scope = crate::gc::RuntimeHandleScope::new();
+            let obj_root = spill_scope.root_raw_mut_ptr(obj);
+            let value_root = spill_scope.root_nanbox_f64(value);
+            overflow_set(
+                obj_root.get_raw_mut_ptr::<ObjectHeader>() as usize,
+                slot_usize,
+                vbits,
+            );
+            #[cfg(test)]
+            TEST_TRANSITION_FAST_HITS.with(|hits| hits.set(hits.get() + 1));
+            return Some(value_root.get_nanbox_f64());
         }
 
         #[cfg(test)]
@@ -875,7 +951,11 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // Success: value may be a heap pointer that moved during interning or
         // spill growth; re-read it through this function's own root so the
         // caller needs none.
-        return Some(value_handle.get_nanbox_f64());
+        return Some(
+            roots
+                .as_ref()
+                .map_or(value, |(_, _, value)| value.get_nanbox_f64()),
+        );
     }
 
     #[allow(unreachable_code)]
@@ -885,6 +965,204 @@ fn object_set_field_by_name_transition_fast_impl_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cached_numeric_append_stores_canonical_bits_and_returns_the_input() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _ = crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        unsafe {
+            let name = b"canonical_append_number";
+            let raw = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                name.as_ptr(),
+                name.len() as u32,
+            ));
+            let key = scope.root_string_ptr(crate::string::js_string_intern(
+                raw.get_raw_const_ptr(),
+                key_content_hash(raw.get_raw_const_ptr()),
+            ));
+            let warm = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
+            crate::object::js_object_set_field_by_name(
+                warm.get_raw_mut_ptr(),
+                key.get_raw_const_ptr(),
+                1.0,
+            );
+            assert_eq!(
+                super::super::field_rep_store::object_slot_rep(warm.get_raw_mut_ptr(), 0),
+                super::super::field_rep::REP_F64,
+                "the Set warmup must establish a numeric transition"
+            );
+            test_reset_transition_fast_hits();
+            for proven in [false, true] {
+                for bits in [
+                    crate::value::INT32_TAG | 17,
+                    (-0.0_f64).to_bits(),
+                    f64::NAN.to_bits(),
+                ] {
+                    let fresh = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
+                    let obj = fresh.get_raw_mut_ptr::<ObjectHeader>();
+                    let value = f64::from_bits(bits);
+                    let stored = if proven {
+                        object_set_field_by_name_transition_chain_proven_value(
+                            obj,
+                            key.get_raw_const_ptr(),
+                            value,
+                            &mut None,
+                        )
+                    } else {
+                        object_set_field_by_name_transition_fast_impl_value::<false>(
+                            obj,
+                            key.get_raw_const_ptr(),
+                            value,
+                            false,
+                            &mut None,
+                        )
+                    }
+                    .expect("the warmed numeric append must use its cached edge");
+                    assert_eq!(
+                        stored.to_bits(),
+                        bits,
+                        "the assignment returns the input value"
+                    );
+                    assert_eq!(
+                        super::super::field_rep_store::object_slot_rep(obj, 0),
+                        super::super::field_rep::REP_F64
+                    );
+                    let fields =
+                        (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+                    assert_eq!(
+                        *fields,
+                        super::super::field_rep::f64_slot_bits(bits).unwrap()
+                    );
+                    assert_eq!(crate::object::object_keys(obj).count(), 1);
+                }
+            }
+            assert_eq!(test_transition_fast_hits(), 6);
+        }
+    }
+
+    #[test]
+    fn cached_undefined_definition_publishes_the_key_and_clears_a_reserved_value() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        const CID: u32 = 0x0C12_3275;
+        unsafe {
+            crate::object::js_register_class_name(CID, b"UndefinedField".as_ptr(), 14);
+            let raw =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"field".as_ptr(), 5));
+            let key = scope.root_string_ptr(crate::string::js_string_intern(
+                raw.get_raw_const_ptr(),
+                key_content_hash(raw.get_raw_const_ptr()),
+            ));
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let warm = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 1));
+            crate::object::js_class_field_add(
+                crate::value::js_nanbox_pointer(warm.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                crate::value::js_nanbox_string(
+                    key.get_raw_const_ptr::<crate::StringHeader>() as i64
+                ),
+                undefined,
+            );
+            test_reset_transition_fast_hits();
+            for old in [crate::value::TAG_UNDEFINED, 43.0_f64.to_bits()] {
+                let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 1));
+                // A reserved slot is not an own key. A prior internal value
+                // must still be replaced when the definition first names it.
+                store_object_field_slot(obj.get_raw_mut_ptr(), 0, old);
+                assert_eq!(crate::object::object_keys(obj.get_raw_mut_ptr()).count(), 0);
+                object_set_field_by_name_transition_chain_proven_value(
+                    obj.get_raw_mut_ptr(),
+                    key.get_raw_const_ptr(),
+                    undefined,
+                    &mut None,
+                )
+                .expect("the warmed definition must append through its cached edge");
+                assert_eq!(crate::object::object_keys(obj.get_raw_mut_ptr()).count(), 1);
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(
+                        obj.get_raw_mut_ptr(),
+                        key.get_raw_const_ptr(),
+                    )
+                    .bits(),
+                    crate::value::TAG_UNDEFINED
+                );
+            }
+            assert_eq!(test_transition_fast_hits(), 2);
+        }
+    }
+
+    #[test]
+    fn a_cached_class_definition_keeps_pointer_values_inline_and_in_spill() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        const CID: u32 = 0x0C12_3274;
+        unsafe {
+            crate::object::js_register_class_name(CID, b"DeferredFields".as_ptr(), 14);
+            let keys: Vec<_> = (0..crate::object::INLINE_SLOT_FLOOR + 2)
+                .map(|i| {
+                    let name = format!("deferred_pointer_{i}");
+                    let raw = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let raw = scope.root_string_ptr(raw);
+                    let key = crate::string::js_string_intern(
+                        raw.get_raw_const_ptr(),
+                        key_content_hash(raw.get_raw_const_ptr()),
+                    );
+                    scope.root_string_ptr(key)
+                })
+                .collect();
+            let warm = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            for key_root in &keys {
+                let child = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+                crate::object::js_class_field_add(
+                    crate::value::js_nanbox_pointer(warm.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                    crate::value::js_nanbox_string(
+                        key_root.get_raw_const_ptr::<crate::StringHeader>() as i64,
+                    ),
+                    crate::value::js_nanbox_pointer(child.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                );
+            }
+            let fresh = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            test_reset_transition_fast_hits();
+            for key_root in &keys {
+                let child = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+                let obj = fresh.get_raw_mut_ptr::<ObjectHeader>();
+                let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+                assert!(
+                    transition_cache_lookup(super::super::shapes::object_shape_stamp(obj), key)
+                        .is_some(),
+                    "the warmed definition must have a live append edge"
+                );
+                let stored = object_set_field_by_name_transition_chain_proven_value(
+                    obj,
+                    key,
+                    crate::value::js_nanbox_pointer(child.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                    &mut None,
+                )
+                .expect("cached inline and spill definitions must both be handled");
+                let expected =
+                    crate::value::js_nanbox_pointer(child.get_raw_mut_ptr::<ObjectHeader>() as i64);
+                assert_eq!(stored.to_bits(), expected.to_bits());
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(
+                        fresh.get_raw_mut_ptr::<ObjectHeader>(),
+                        key_root.get_raw_const_ptr::<crate::StringHeader>()
+                    )
+                    .bits(),
+                    expected.to_bits()
+                );
+            }
+            assert_eq!(test_transition_fast_hits(), keys.len() as u64);
+            assert_eq!(
+                crate::object::object_live_slot_count(fresh.get_raw_mut_ptr::<ObjectHeader>()),
+                crate::object::INLINE_SLOT_FLOOR as u32,
+                "the last two definitions must use spill storage"
+            );
+            assert_eq!(
+                crate::object::object_keys(fresh.get_raw_mut_ptr::<ObjectHeader>()).count(),
+                keys.len() as u32
+            );
+        }
+    }
 
     #[test]
     fn transition_fast_rejects_object_prototype_even_with_a_cached_edge() {

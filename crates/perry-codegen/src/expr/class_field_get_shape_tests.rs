@@ -65,6 +65,7 @@ const RETIRED_CALLS: [&str; 3] = [
 
 fn field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty,

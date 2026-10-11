@@ -640,6 +640,7 @@ fn field_class(
         fields: fields
             .iter()
             .map(|f| ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: (*f).to_string(),
                 key_expr: None,
                 ty: Type::Any,

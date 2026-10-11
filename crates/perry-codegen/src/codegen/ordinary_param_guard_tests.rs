@@ -991,6 +991,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         heritage_lexically_shadowed: false,
         fields: vec![
             perry_hir::ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "label".to_string(),
                 key_expr: None,
                 ty: Type::String,
@@ -1000,6 +1001,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
                 decorators: Vec::new(),
             },
             perry_hir::ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "count".to_string(),
                 key_expr: None,
                 ty: Type::Number,

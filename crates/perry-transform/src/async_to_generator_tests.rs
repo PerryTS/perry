@@ -76,6 +76,7 @@ fn empty_class(name: &str) -> Class {
 
 fn field_with_init(name: &str, init: Expr) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: Type::Any,

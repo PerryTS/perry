@@ -1259,19 +1259,7 @@ unsafe fn construct_registered_class_ref_entry(
     args_len: usize,
     entry: Option<(usize, u32, u32)>,
 ) -> f64 {
-    let inst = if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
-        crate::object::alloc::alloc_class_instance_with_keys(
-            instance_cid,
-            0,
-            field_count,
-            keys_array,
-        )
-    } else {
-        js_object_alloc(
-            instance_cid,
-            crate::object::learned_inline_field_count(instance_cid),
-        )
-    };
+    let inst = allocate_class_instance(instance_cid).0;
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
     // with a distinct newTarget — must observe `new.target` inside its body.

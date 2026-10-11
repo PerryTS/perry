@@ -143,12 +143,9 @@ fn inline_shape_descriptor_facts_exact(
 /// Emit the instance allocation for `new <class_name>(...)` and return the raw
 /// object handle (an `i64` user pointer, NOT NaN-boxed).
 ///
-/// Three arms, in the order the original `if`/`else if`/`else` had them:
-/// a dynamic-parent subclass (`class X extends _mod.default`), a class with a
-/// per-class keys global (inline bump allocator or the outlined
-/// `js_object_alloc_class_inline_keys` call, chosen per site by
-/// [`new_site_is_in_loop`]), and the `js_object_alloc_class_with_keys`
-/// fallback.
+/// Classes with named fields or a dynamic parent reserve slots on a keyless
+/// birth. Other classes have empty canonical keys and retain their inline bump
+/// or outlined allocator; synthetic classes use the packed-keys fallback.
 ///
 /// **No rooting decision is made here and none is possible.** The returned
 /// handle is live in an SSA register only until the caller's very next
@@ -322,6 +319,25 @@ pub(crate) fn constructor_added_key_count_in<'c>(
     added.len().min(SLACK_CAP) as u32
 }
 
+/// A literal is materialized atomically from already evaluated values. A
+/// root's bare fields can likewise be defined by its birth fills when the
+/// complete constructor is an unobservable assignment prologue. No inferred
+/// constructor property is included in this set: HIR retains actual fields only.
+pub(crate) fn keys_defined_at_birth(class: &Class) -> bool {
+    !class
+        .fields
+        .iter()
+        .any(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+        && (class.is_literal_shape()
+            || (class
+                .constructor
+                .as_ref()
+                .is_some_and(|ctor| ctor.body.len() == class.fields.len())
+                && !class.fields.is_empty()
+                && super::field_init::ctor_prologue_param_assigned_fields(class).len()
+                    == class.fields.len()))
+}
+
 pub(super) fn emit_instance_alloc(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -351,6 +367,7 @@ fn emit_instance_alloc_inner(
             .count() as u32
     };
     let mut field_count = public_keyable_count(&class.fields);
+    let mut has_public_fields = field_count != 0;
     // Imported classes now carry their real field_names from the source
     // module. If the field count is still 0 (no fields info available),
     // use a generous default as a safety net.
@@ -360,6 +377,7 @@ fn emit_instance_alloc_inner(
     let mut parent = class.extends_name.as_deref();
     while let Some(parent_name) = parent {
         if let Some(p) = ctx.classes.get(parent_name).copied() {
+            has_public_fields |= public_keyable_count(&p.fields) != 0;
             field_count += public_keyable_count(&p.fields);
             parent = p.extends_name.as_deref();
         } else {
@@ -376,6 +394,7 @@ fn emit_instance_alloc_inner(
     // which `Object.keys()` walks. Falls back to the computed walk when this
     // class has no keys global (anonymous / no-keys path).
     if let Some(&authoritative) = ctx.class_field_counts.get(class_name) {
+        has_public_fields |= authoritative != 0;
         field_count = authoritative;
     }
     // #6812 (w16): a per-site empty-literal anon-shape class may carry a
@@ -418,15 +437,10 @@ fn emit_instance_alloc_inner(
     // parent class id, so the runtime registers the inheritance
     // chain for instanceof / virtual dispatch lookups.
     //
-    // Use `js_object_alloc_class_with_keys`, which pre-populates the
-    // `keys_array` with the class's field names in declaration order
-    // (parent fields first, walking from the deepest ancestor down,
-    // then own fields). This is REQUIRED so the LLVM PropertyGet/Set
-    // fast path's slot indices match the runtime's by-name dispatch
-    // (which walks `keys_array`). Mixing the two access patterns on
-    // the same object — e.g. constructor writes via the fast path,
-    // PropertyUpdate reads via the runtime helper — only produces
-    // consistent results when both agree on the slot mapping.
+    // Class keys describe the final layout used by guarded field access.
+    // The allocation image instead describes actual birth membership: empty
+    // for a class whose definitions still have to execute, or the final keys
+    // when an unobservable definition phase can be fused into birth fills.
     //
     // The packed-keys constant is interned via the StringPool. Two
     // classes with the same field-name set + order share one constant.
@@ -439,6 +453,22 @@ fn emit_instance_alloc_inner(
     let cid_str = cid.to_string();
     let parent_cid_str = parent_cid.to_string();
     let n_str = field_count.to_string();
+
+    // Field names describe a possible layout, not properties already owned by
+    // the newborn. DefineField and constructor stores establish membership in
+    // execution order (including ancestor stores before derived fields).
+    // Keep the allocation width, but publish an empty-key birth. Dynamic
+    // parents need the same rule; unknown ancestor stores can safely spill.
+    let deferred_keys = has_public_fields && !keys_defined_at_birth(class);
+    if class.extends_expr.is_some()
+        || (deferred_keys && !ctx.class_header_image_globals.contains_key(class_name))
+    {
+        return ctx.block().call(
+            I64,
+            "js_object_alloc_with_parent",
+            &[(I32, &cid_str), (I32, &parent_cid_str), (I32, &n_str)],
+        );
+    }
 
     // Fast path: if the class has a per-class keys global (built once
     // at module init via `js_build_class_keys_array`), emit INLINE
@@ -490,50 +520,12 @@ fn emit_instance_alloc_inner(
     // Layout constants are duplicated here from the runtime; if
     // `GcHeader` or `ObjectHeader` ever change in
     // `crates/perry-runtime/src/{gc,object}.rs`, update both sides.
-    if class.extends_expr.is_some() {
-        // Wall 45: dynamic-parent subclass (`class X extends _mod.default`).
-        // The parent's field layout is unknown at this compile time (the
-        // `extends` target is an unresolvable cross-module value, so the
-        // parent-chain walk above contributed 0 fields and `field_count` /
-        // `packed_keys` cover only X's OWN fields). Allocating with that
-        // own-only layout under-sizes and mis-lays-out the instance: the
-        // parent's constructor and inherited methods address the inherited
-        // fields at the PARENT's slot indices (parent fields first), which fall
-        // past X's own slots → OOB heap reads (captures read as garbage).
-        // Route to `js_object_alloc_class_dynamic_parent`, which resolves the
-        // runtime-registered parent edge + keys-array (both established at
-        // module init by `js_register_class_parent_dynamic` /
-        // `js_build_class_keys_array`, before any `new X()`) and allocates with
-        // the merged `[parent keys..] ++ [own keys..]` layout. Bypasses the
-        // inline bump-alloc fast path (which would bake the wrong layout).
-        let mut packed_keys = String::new();
-        for f in &class.fields {
-            if f.key_expr.is_some() || f.is_private {
-                continue;
-            }
-            packed_keys.push_str(&f.name);
-            packed_keys.push('\0');
-        }
-        let keys_idx = ctx.strings.intern(&packed_keys);
-        let keys_entry = ctx.strings.entry(keys_idx);
-        let keys_global = format!("@{}", keys_entry.bytes_global);
-        let keys_len_str = keys_entry.byte_len.to_string();
-        ctx.block().call(
-            I64,
-            "js_object_alloc_class_dynamic_parent",
-            &[
-                (I32, &cid_str),
-                (I32, &n_str),
-                (PTR, &keys_global),
-                (I32, &keys_len_str),
-            ],
-        )
-    } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        // Both arms below stamp the canonical class keys and ShapeId. The
+    if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
+        // Both arms below stamp the same birth ShapeId. The
         // outlined arm may allocate an old-generation object when a learned
         // width crosses the large-object threshold; constructor-free pointer
         // stores retain the ordinary generation-tested write barrier.
-        *constructor_stores_ready = true;
+        *constructor_stores_ready = !deferred_keys;
         // Exact small births use emitted allocation even in callbacks and
         // cross-module factories, where lexical loop membership says nothing
         // about execution frequency. Large sites retain the established
@@ -587,20 +579,31 @@ fn emit_instance_alloc_inner(
             || (!small_birth && !force_inline_new && !new_site_is_in_loop(ctx))
             || crate::codegen::helpers::ilp32_target()
         {
-            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-                s
+            let (keys_ptr, shape_id) = if deferred_keys {
+                let image_global = ctx.class_header_image_globals[class_name].0.clone();
+                let blk = ctx.block();
+                let image = blk.load("<2 x i64>", &format!("@{image_global}"));
+                let word = blk.next_reg();
+                blk.emit_raw(format!("{word} = extractelement <2 x i64> {image}, i32 1"));
+                let shifted = blk.lshr(I64, &word, "32");
+                ("0".to_string(), blk.trunc(I64, &shifted, I32))
             } else {
-                let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
-                ctx.class_keys_slots
-                    .insert(class_name.to_string(), s.clone());
-                s
+                let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
+                    s
+                } else {
+                    let s = crate::expr::entry_init_load_rooted_global(ctx, &keys_global_name, I64);
+                    ctx.class_keys_slots
+                        .insert(class_name.to_string(), s.clone());
+                    s
+                };
+                let keys_bits = ctx.block().load(I64, &keys_slot);
+                let keys_ptr =
+                    ctx.block()
+                        .and(I64, &keys_bits, &crate::nanbox::POINTER_MASK.to_string());
+                let shape_id =
+                    crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
+                (keys_ptr, shape_id)
             };
-            let keys_bits = ctx.block().load(I64, &keys_slot);
-            let keys_ptr =
-                ctx.block()
-                    .and(I64, &keys_bits, &crate::nanbox::POINTER_MASK.to_string());
-            let shape_id =
-                crate::typed_shape::load_class_shape_id(ctx, class_name, &keys_global_name);
             ctx.pending_declares.push((
                 "js_object_alloc_class_inline_keys_stamped".to_string(),
                 I64,
@@ -608,12 +611,15 @@ fn emit_instance_alloc_inner(
             ));
             // The birth rep module init minted that id with (T1): a birth
             // the runtime cannot stamp with it verbatim still carries it.
-            let rep = ctx
-                .class_birth_reps
-                .get(&keys_global_name)
-                .copied()
-                .unwrap_or(0)
-                .to_string();
+            let rep = if deferred_keys {
+                0
+            } else {
+                ctx.class_birth_reps
+                    .get(&keys_global_name)
+                    .copied()
+                    .unwrap_or(0)
+            }
+            .to_string();
             ctx.block().call(
                 I64,
                 "js_object_alloc_class_inline_keys_stamped",
@@ -725,11 +731,14 @@ fn emit_instance_alloc_inner(
                 ctx.class_header_images.insert(image_key, source.clone());
                 source
             };
-            let birth_rep = ctx
-                .class_birth_reps
-                .get(&keys_global_name)
-                .copied()
-                .unwrap_or(0);
+            let birth_rep = if deferred_keys {
+                0
+            } else {
+                ctx.class_birth_reps
+                    .get(&keys_global_name)
+                    .copied()
+                    .unwrap_or(0)
+            };
             let header_image = match image_source {
                 crate::expr::HeaderImageSource::EntrySlot(slot) => {
                     ctx.block().load("<2 x i64>", &slot)

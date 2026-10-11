@@ -687,6 +687,7 @@ pub(crate) unsafe fn packed_add_prime(
     target: f64,
     key: *const crate::StringHeader,
     pre: u32,
+    chain_site: crate::object::chain_store::ChainSite,
 ) {
     let bits = target.to_bits();
     if (bits & !POINTER_MASK) != POINTER_TAG || key.is_null() {
@@ -841,6 +842,7 @@ pub(crate) unsafe fn packed_add_prime(
             recv_h.get_nanbox_f64(),
             key_h.get_raw_const_ptr(),
             pre,
+            chain_site,
         );
         return;
     }
@@ -870,21 +872,28 @@ pub(crate) unsafe fn packed_add_prime(
     let key_h = scope.root_nanbox_f64(f64::from_bits(
         crate::value::JSValue::string_ptr(key as *mut _).bits(),
     ));
-    if !crate::object::chain_store::mark_chain_hops(&scope, recv_h.get_nanbox_f64()) {
-        census(C_PRIME_INTERCEPTED);
-        return;
-    }
-    let recv = (recv_h.get_nanbox_f64().to_bits() & POINTER_MASK) as usize;
-    let class_id = (*(recv as *const crate::ObjectHeader)).class_id;
-    let verdict_class = if crate::object::is_anon_shape_class_id(class_id) {
-        0
-    } else {
-        class_id
-    };
-    if crate::object::class_instance_set_may_intercept(recv, verdict_class, key_h.get_nanbox_f64())
-    {
-        census(C_PRIME_INTERCEPTED);
-        return;
+    // The miss just primed this site's chain verdict. Reuse its marked hops,
+    // key, prototype identity and validity instead of walking them twice.
+    if !crate::object::chain_store::chain_store_proven(chain_site, obj, key) {
+        if !crate::object::chain_store::mark_chain_hops(&scope, recv_h.get_nanbox_f64()) {
+            census(C_PRIME_INTERCEPTED);
+            return;
+        }
+        let recv = (recv_h.get_nanbox_f64().to_bits() & POINTER_MASK) as usize;
+        let class_id = (*(recv as *const crate::ObjectHeader)).class_id;
+        let verdict_class = if crate::object::is_anon_shape_class_id(class_id) {
+            0
+        } else {
+            class_id
+        };
+        if crate::object::class_instance_set_may_intercept(
+            recv,
+            verdict_class,
+            key_h.get_nanbox_f64(),
+        ) {
+            census(C_PRIME_INTERCEPTED);
+            return;
+        }
     }
     let recv = (recv_h.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     if crate::object::shapes::object_shape_stamp(recv) != post {

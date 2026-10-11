@@ -307,6 +307,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![perry_hir::ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "label".to_string(),
             key_expr: None,
             ty: HirType::String,
@@ -337,6 +338,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
         static_fields: vec![perry_hir::ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "count".to_string(),
             key_expr: None,
             ty: HirType::Number,

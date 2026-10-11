@@ -108,17 +108,23 @@ unsafe fn try_cached_constfn_key_add(
 /// Ordinary cache hits retain their existing publication. A completed ConstFn
 /// hit has already stored this receiver's value under Any and stamped SPECIAL.
 pub(super) enum CachedKeyAdd {
-    Transition(super::ObjectKeys, u32, u32),
+    Transition(super::ObjectKeys, u32, u32, u64),
     StoredConstFn,
 }
 
 impl CachedKeyAdd {
     #[inline(always)]
-    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, u32)> {
+    pub(super) fn transition_slot_bits(self) -> Option<(super::ObjectKeys, u32, u32, u64)> {
         match self {
-            Self::Transition(keys, slot, target) => Some((keys, slot, target)),
+            Self::Transition(keys, slot, target, bits) => Some((keys, slot, target, bits)),
             Self::StoredConstFn => None,
         }
+    }
+
+    #[inline(always)]
+    pub(super) fn transition(self) -> Option<(super::ObjectKeys, u32, u32)> {
+        self.transition_slot_bits()
+            .map(|(keys, slot, target, _)| (keys, slot, target))
     }
 }
 
@@ -131,8 +137,8 @@ pub(super) unsafe fn admit_or_store(
     hit: (super::ObjectKeys, u32, u32),
     bits: u64,
 ) -> Option<CachedKeyAdd> {
-    if field_rep_store::cached_key_add_admits(hit.2, hit.1, Some(bits)) {
-        return Some(CachedKeyAdd::Transition(hit.0, hit.1, hit.2));
+    if let Some(slot_bits) = field_rep_store::cached_key_add_slot_bits(hit.2, hit.1, bits) {
+        return Some(CachedKeyAdd::Transition(hit.0, hit.1, hit.2, slot_bits));
     }
     if try_cached_constfn_key_add(obj, predecessor, hit, bits) {
         return Some(CachedKeyAdd::StoredConstFn);

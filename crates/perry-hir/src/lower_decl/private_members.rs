@@ -416,6 +416,7 @@ pub fn lower_private_prop(
     let init = init?;
 
     Ok(ClassField {
+        origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr: None,
         ty,

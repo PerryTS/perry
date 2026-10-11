@@ -245,6 +245,36 @@ pub(crate) fn class_instances_grow_past_layout(ctx: &FnCtx<'_>, class_name: &str
             .any(grows)
 }
 
+/// Constructor-store hints reserve capacity, but their keys follow execution
+/// order. Such instances cannot use guards against the declared field layout.
+pub(crate) fn class_instances_have_constructor_reservations(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+) -> bool {
+    let reserves = |name: &str| {
+        let mut current = ctx.classes.get(name).copied();
+        for _ in 0..64 {
+            let Some(class) = current else { break };
+            if class
+                .fields
+                .iter()
+                .any(|field| field.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+            {
+                return true;
+            }
+            current = class
+                .extends_name
+                .as_deref()
+                .and_then(|parent| ctx.classes.get(parent).copied());
+        }
+        false
+    };
+    reserves(class_name)
+        || transitive_subclasses(ctx, class_name)
+            .into_iter()
+            .any(reserves)
+}
+
 /// Do finished instances of `class_name` (or of any subclass) carry a private
 /// brand or a private field (#11791)? Then no finished instance is on the
 /// birth ShapeId the class-field guards compare, even a receiver the compiler

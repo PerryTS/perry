@@ -35,6 +35,7 @@ fn function_decl(id: FuncId, name: &str, return_type: Type) -> Function {
 
 fn class_field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        origin: crate::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty,
@@ -595,6 +596,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
         static_fields: vec![ClassField {
+            origin: crate::ClassFieldOrigin::Definition,
             name: "count".to_string(),
             key_expr: None,
             ty: Type::Number,

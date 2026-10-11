@@ -16,6 +16,7 @@ use perry_hir::{ClassField, CompareOp, Function, Module, Param, UpdateOp};
 
 fn field(name: &str) -> ClassField {
     ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
         ty: Type::Number,

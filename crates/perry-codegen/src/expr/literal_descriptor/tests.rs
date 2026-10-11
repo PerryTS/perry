@@ -50,6 +50,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         heritage_lexically_shadowed: false,
         fields: (0..fields)
             .map(|i| ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: format!("k{i}"),
                 ty: Type::Number,
                 key_expr: None,

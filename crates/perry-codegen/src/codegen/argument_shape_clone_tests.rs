@@ -61,6 +61,7 @@ fn class(id: u32, name: &str, fields: Vec<&str>, methods: Vec<Function>) -> Clas
         fields: fields
             .into_iter()
             .map(|name| ClassField {
+                origin: perry_hir::ClassFieldOrigin::Definition,
                 name: name.to_string(),
                 key_expr: None,
                 ty: Type::Any,

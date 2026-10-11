@@ -1649,6 +1649,7 @@ mod tests {
             fields: fields
                 .into_iter()
                 .map(|(field, ty)| perry_hir::ClassField {
+                    origin: perry_hir::ClassFieldOrigin::Definition,
                     name: field.to_string(),
                     key_expr: None,
                     ty,

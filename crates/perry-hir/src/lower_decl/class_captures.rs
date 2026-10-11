@@ -479,6 +479,7 @@ pub fn synthesize_class_captures(
             continue;
         }
         fields.push(ClassField {
+            origin: crate::ClassFieldOrigin::Definition,
             name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
             ty: Type::Any,

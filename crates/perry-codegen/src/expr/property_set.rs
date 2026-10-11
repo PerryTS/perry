@@ -868,6 +868,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         );
                     }
                 }
+                // Reservation slots do not establish a key layout. Serve both
+                // first stores and overwrites from the same static-key IC,
+                // whose guard observes the receiver's actual current shape.
+                if crate::expr::class_field_inline_guard::class_instances_have_constructor_reservations(
+                    ctx, &class_name,
+                ) {
+                    return lower_put_value_property_set_by_name(
+                        ctx, object, property, value, assignment_strict,
+                    );
+                }
                 // #9459: SLOPPY code stops here. Every class-field arm below
                 // terminates in `js_class_field_set_ic` /
                 // `js_class_field_set_fallback`, whose miss path is

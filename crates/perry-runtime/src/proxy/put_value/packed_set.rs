@@ -256,7 +256,13 @@ pub extern "C" fn js_put_value_set_packed_miss(
             target_handle.get_nanbox_f64(),
             chain_key,
         );
-        super::packed_add::packed_add_prime(site, target_handle.get_nanbox_f64(), key, pre_shape);
+        super::packed_add::packed_add_prime(
+            site,
+            target_handle.get_nanbox_f64(),
+            key,
+            pre_shape,
+            chain_site,
+        );
     }
     result
 }

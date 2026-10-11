@@ -78,6 +78,7 @@ fn tagged_class() -> perry_hir::Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![perry_hir::ClassField {
+            origin: perry_hir::ClassFieldOrigin::Definition,
             name: "tag".to_string(),
             key_expr: None,
             ty: Type::String,
