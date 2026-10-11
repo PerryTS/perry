@@ -146,7 +146,10 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
         let _ = kind;
         #[cfg(target_vendor = "apple")]
         let data = match apple::extent(len) {
-            Some(extent) => apple::map(extent),
+            Some(extent) => {
+                crate::gc::purge_allocator_on_region_growth();
+                apple::map(extent)
+            }
             None => std::ptr::null_mut(),
         };
         #[cfg(not(target_vendor = "apple"))]
@@ -207,6 +210,11 @@ pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
 #[cfg(test)]
 pub(crate) unsafe fn new_test_block_backing(size: usize) -> *mut u8 {
     map(Kind::NurseryBlock, size)
+}
+
+#[cfg(all(test, target_vendor = "apple"))]
+pub(crate) unsafe fn release_test_block_backing(data: *mut u8, size: usize) {
+    unmap(data, size)
 }
 
 #[cfg(all(test, target_vendor = "apple"))]
