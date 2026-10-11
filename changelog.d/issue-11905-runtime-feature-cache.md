@@ -1,0 +1,1 @@
+The build-level no-op cache now fingerprints the derived runtime feature decisions for GC instruments, hot-path diagnostics, and GC trace output. Changing those features can no longer reuse a binary built without them, while changing a runtime knob value such as the GC schedule seed does not create a separate cache entry.

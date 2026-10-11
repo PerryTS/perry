@@ -6,7 +6,10 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use super::{BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats};
+use super::{
+    optimized_libs::{gc_instruments_requested, gc_trace_requested, hot_diag_requested},
+    BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats,
+};
 
 const BUILD_CACHE_MANIFEST_VERSION: u32 = 2;
 
@@ -300,6 +303,77 @@ mod tests {
         file_fingerprint_from_str, BuildCacheManifest, BuildCacheProbe, BUILD_CACHE_ENV_EXCLUSIONS,
         BUILD_CACHE_ENV_VARS, BUILD_CACHE_MANIFEST_VERSION,
     };
+
+    #[test]
+    fn current_env_fingerprints_runtime_features_in_isolated_processes() {
+        const CHILD_MARKER: &str = "PERRY_BUILD_CACHE_FEATURE_TEST_CHILD";
+        const EXPECTED: &str = "PERRY_BUILD_CACHE_FEATURE_TEST_EXPECTED";
+
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let expected = std::env::var(EXPECTED).expect("child expected-feature marker");
+            let actual = current_env()
+                .into_iter()
+                .filter_map(|entry| {
+                    let name = entry.name.strip_prefix("runtime-feature:")?;
+                    Some(format!("{name}={}", entry.value?))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            assert_eq!(actual, expected);
+            return;
+        }
+
+        // Isolate environment-mutating cases in child test processes so this
+        // remains safe alongside the other parallel build-cache tests.
+        let cases = [
+            (
+                &[][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false",
+            ),
+            (
+                &[("PERRY_GC_INSTRUMENTS", "1")][..],
+                "gc-instruments=true,hot-diag=true,gc-trace=false",
+            ),
+            (
+                &[("PERRY_GC_SCHEDULE_SEED", "1")][..],
+                "gc-instruments=true,hot-diag=false,gc-trace=false",
+            ),
+            (
+                &[("PERRY_GC_SCHEDULE_SEED", "7")][..],
+                "gc-instruments=true,hot-diag=false,gc-trace=false",
+            ),
+            (
+                &[("PERRY_IC_DIAG", "1")][..],
+                "gc-instruments=false,hot-diag=true,gc-trace=false",
+            ),
+            (
+                &[("PERRY_GC_TRACE", "1")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=true",
+            ),
+        ];
+
+        for (env, expected) in cases {
+            let mut child =
+                std::process::Command::new(std::env::current_exe().expect("test executable path"));
+            child
+                .arg("current_env_fingerprints_runtime_features_in_isolated_processes")
+                .arg("--nocapture")
+                .env_clear()
+                .env(CHILD_MARKER, "1")
+                .env(EXPECTED, expected);
+            for (name, value) in env {
+                child.env(name, value);
+            }
+            let output = child.output().expect("run isolated feature test");
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "isolated feature test did not pass exactly one test. stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+    }
 
     /// The build cache must compare against the compiler RUNNING NOW, not the
     /// one that wrote the manifest.
@@ -1128,13 +1202,35 @@ fn default_output_path(args: &CompileArgs) -> PathBuf {
 }
 
 fn current_env() -> Vec<EnvFingerprint> {
-    BUILD_CACHE_ENV_VARS
+    let mut env: Vec<EnvFingerprint> = BUILD_CACHE_ENV_VARS
         .iter()
         .map(|name| EnvFingerprint {
             name: (*name).to_string(),
             value: std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
         })
-        .collect()
+        .collect();
+    env.extend(runtime_feature_fingerprint(
+        gc_instruments_requested(),
+        hot_diag_requested(),
+        gc_trace_requested(),
+    ));
+    env
+}
+
+fn runtime_feature_fingerprint(
+    gc_instruments: bool,
+    hot_diag: bool,
+    gc_trace: bool,
+) -> [EnvFingerprint; 3] {
+    [
+        ("runtime-feature:gc-instruments", gc_instruments),
+        ("runtime-feature:hot-diag", hot_diag),
+        ("runtime-feature:gc-trace", gc_trace),
+    ]
+    .map(|(name, enabled)| EnvFingerprint {
+        name: name.to_string(),
+        value: Some(enabled.to_string()),
+    })
 }
 
 fn current_perry_fingerprint() -> std::io::Result<FileFingerprint> {

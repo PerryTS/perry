@@ -27,8 +27,9 @@ pub(crate) use driver::build_optimized_libs;
 pub(crate) use freshness::{
     auto_optimized_archives_are_fresh, auto_optimized_build_stamp, auto_optimized_cache_key,
     auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_cobuilds_with_stdlib,
-    effective_size_panic_immediate_abort, resolve_auto_well_known_libs,
-    retain_workspace_declared_features, size_lto_fat, size_opt_level,
+    effective_size_panic_immediate_abort, gc_instruments_requested, gc_trace_requested,
+    hot_diag_requested, resolve_auto_well_known_libs, retain_workspace_declared_features,
+    size_lto_fat, size_opt_level,
 };
 pub(crate) use no_auto::{resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs};
 pub(crate) use paths::{
