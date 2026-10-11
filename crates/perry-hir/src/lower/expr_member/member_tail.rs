@@ -517,33 +517,50 @@ pub(crate) fn lower_member_tail(
         }
     }
 
-    // #2144: spec `.name` own-property on built-in functions / constructors.
-    //
-    // Built-in constructors (`TypeError`, `Promise`, `Array`, …) and the
-    // static functions on built-in namespaces / constructors (`Math.min`,
-    // `Promise.race`, `Array.isArray`, …) are not represented as named
-    // closure values in Perry. Reading their `.name` therefore falls through
-    // to a globalThis lookup that returns 0/undefined instead of the spec
-    // name string. `assert.throws` reports `expectedErrorConstructor.name`
-    // and Test262 regularly inspects built-in `.name`, so fold these reads
-    // here at lowering time when the receiver shape is unambiguous.
-    //
-    // Detection is gated on the *lowered* receiver expression — bare
-    // `GlobalGet(0)` (after the reroute-undo above for `TypeError.name`) or
-    // `PropertyGet { GlobalGet(0), <method> }` (for `Math.min.name` /
-    // `Promise.race.name`). Local shadowing (`const Math = …`) lowers the
-    // receiver to a `LocalGet` instead, so the fold is correctly skipped.
-    // #3143: spec `.length` own-property on built-in constructors. Same
-    // gating as the `.name` fold below — bare `GlobalGet(0)` receiver (no
-    // local shadowing) and a recognized standard constructor name. Built-in
-    // constructors share a no-op closure thunk with no per-name arity, so a
-    // value-read would otherwise return 0 instead of the spec count
-    // (`Array.length === 1`, `Date.length === 7`).
+    // A bare builtin constructor is represented by the GlobalGet(0) sentinel
+    // until an ordinary property access makes the actual global value
+    // observable. Preserve that value for the mutable own properties below:
+    // after `delete Object.length`, a folded length would still be 1, while
+    // reading globalThis.length would inspect the wrong object.
+    if matches!(
+        &member.prop,
+        ast::MemberProp::Ident(prop) if matches!(prop.sym.as_ref(), "name" | "length")
+    ) {
+        let mut receiver = member.obj.as_ref();
+        loop {
+            receiver = match receiver {
+                ast::Expr::TsAs(x) => x.expr.as_ref(),
+                ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+                ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+                ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+                ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+                ast::Expr::Paren(x) => x.expr.as_ref(),
+                _ => break,
+            };
+        }
+        if let ast::Expr::Ident(ident) = receiver {
+            let name = ident.sym.as_ref();
+            if crate::analysis::builtin_constructor_length(name).is_some()
+                && !ctx.shadows_unqualified_global(name)
+                && matches!(&object_expr, Expr::GlobalGet(0))
+            {
+                object_expr = Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::GlobalGet(0)),
+                    property: name.to_string(),
+                };
+            }
+        }
+    }
+
+    // Retain metadata folds for global function sentinels and builtin static
+    // methods, whose value representation is not a named closure. Builtin
+    // constructors are mutable closure values, so their `.name` / `.length`
+    // use the ordinary property path established above.
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if prop_ident.sym.as_ref() == "length" {
-            // Peel transparent TS/paren wrappers so `(Array as any).length` —
-            // the pervasive Test262 / cast idiom — folds the same as the bare
-            // `Array.length`.
+            // Peel transparent TS/paren wrappers so global-function metadata
+            // casts (for example `(parseInt as any).length`) keep their fold.
             let mut recv = member.obj.as_ref();
             loop {
                 recv = match recv {
@@ -558,23 +575,15 @@ pub(crate) fn lower_member_tail(
             }
             if let ast::Expr::Ident(obj_ident) = recv {
                 let name = obj_ident.sym.as_ref();
-                // The receiver must resolve to the *global* builtin (not a
-                // local shadow). A bare ident lowers to `GlobalGet(0)` (after
-                // the reroute-undo above); wrapped in a cast/paren it keeps the
-                // #973 value-form `PropertyGet { GlobalGet(0), <name> }`. A
-                // shadowing local would lower to `LocalGet`, matching neither —
-                // so the fold is correctly skipped.
-                let is_global_builtin = match &object_expr {
+                let is_global_function_value = match &object_expr {
                     Expr::GlobalGet(0) => true,
                     Expr::PropertyGet {
                         object, property, ..
-                    } => matches!(object.as_ref(), Expr::GlobalGet(0)) && property.as_str() == name,
+                    } => matches!(object.as_ref(), Expr::GlobalGet(0)) && property == name,
                     _ => false,
                 };
-                if is_global_builtin {
-                    if let Some(len) = crate::analysis::builtin_constructor_length(name)
-                        .or_else(|| crate::analysis::builtin_global_function_length(name))
-                    {
+                if let Some(len) = crate::analysis::builtin_global_function_length(name) {
+                    if !ctx.shadows_unqualified_global(name) && is_global_function_value {
                         return Ok(Expr::Number(len as f64));
                     }
                 }
@@ -612,7 +621,9 @@ pub(crate) fn lower_member_tail(
                 Expr::GlobalGet(0) => {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                         let name = obj_ident.sym.as_ref();
-                        if crate::analysis::is_builtin_global_value_name(name) {
+                        if crate::analysis::builtin_global_function_length(name).is_some()
+                            && !ctx.shadows_unqualified_global(name)
+                        {
                             return Ok(Expr::String(name.to_string()));
                         }
                     }

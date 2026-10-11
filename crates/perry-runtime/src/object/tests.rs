@@ -436,6 +436,70 @@ fn closure_name_can_be_redefined_with_define_property() {
     }
 }
 
+#[test]
+fn builtin_constructor_name_and_length_are_own_runtime_properties() {
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::closure::test_clear_closure_side_tables();
+    let global_ptr = js_object_alloc(0, 0);
+    super::global_this::populate_global_this_builtins(global_ptr);
+
+    for (ctor_name, key_name, expected_value) in [("Map", "name", "Map"), ("Object", "length", "1")]
+    {
+        let ctor_key =
+            crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
+        let value = f64::from_bits(js_object_get_field_by_name(global_ptr, ctor_key).bits());
+        let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
+        let key_value = f64::from_bits(JSValue::string_ptr(key).bits());
+        let mut global_slot: crate::object::PicCacheSlot = std::ptr::null_mut();
+        let packed = std::sync::atomic::AtomicU64::new(u64::from(u32::MAX));
+        let ic_value = crate::object::field_get_set::js_object_get_field_ic_slow(
+            global_ptr as i64,
+            ctor_key,
+            &mut global_slot,
+            &packed,
+        );
+        assert_eq!(
+            crate::object::js_object_has_own(ic_value, key_value).to_bits(),
+            crate::value::TAG_TRUE,
+            "global property IC must preserve the {ctor_name} closure value"
+        );
+        assert_eq!(
+            crate::object::js_object_has_own(value, key_value).to_bits(),
+            crate::value::TAG_TRUE,
+            "{ctor_name}.{key_name} should be own before deletion"
+        );
+
+        let descriptor = js_object_get_own_property_descriptor(value, key_value);
+        let descriptor_obj =
+            crate::value::js_nanbox_get_pointer(descriptor) as *const crate::object::ObjectHeader;
+        assert!(!descriptor_obj.is_null(), "descriptor should be present");
+        let descriptor_value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let descriptor_value = js_object_get_field_by_name(descriptor_obj, descriptor_value_key);
+        let actual = if descriptor_value.is_string() {
+            js_string_to_rust(descriptor_value)
+        } else {
+            descriptor_value.as_number().to_string()
+        };
+        assert_eq!(actual, expected_value, "{ctor_name}.{key_name} descriptor");
+
+        assert_eq!(
+            crate::object::js_object_delete_dynamic_value(value, key_value),
+            1,
+            "{ctor_name}.{key_name} should be configurable"
+        );
+        assert_eq!(
+            crate::object::js_object_has_own(value, key_value).to_bits(),
+            crate::value::TAG_FALSE,
+            "{ctor_name}.{key_name} should not be own after deletion"
+        );
+        assert_eq!(
+            js_object_get_own_property_descriptor(value, key_value).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "{ctor_name}.{key_name} descriptor should be absent after deletion"
+        );
+    }
+}
+
 extern "C" fn closure_accessor_getter(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,

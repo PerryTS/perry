@@ -1,14 +1,12 @@
 //! `<BuiltinFn>.name` / `Object.getOwnPropertyDescriptor(<BuiltinFn>, "name")`
 //! HIR-level folds (#2144).
 //!
-//! Built-in constructors (`TypeError`, `Promise`, …) and the static functions
-//! on built-in namespaces (`Math.min`, `Promise.race`, `Array.isArray`, …)
-//! are not represented as named closure values in Perry — bare reads of them
-//! return the 0 sentinel. The direct `.name` access is folded in
-//! `lower/expr_member.rs`; the descriptor-form access (the spec defines
-//! `name` as `{ value, writable:false, enumerable:false, configurable:true }`)
-//! is folded by callers in `expr_call/native_module.rs`. Both rely on the
-//! AST-shape recognizer here.
+//! Intrinsic built-in static functions (`Math.min`, `Promise.race`,
+//! `Array.isArray`, …) are not all represented as named closure values in
+//! Perry, so their `.name`/`.length` reads and descriptor probes may need
+//! compile-time folds. Built-in constructors are real mutable closure values;
+//! their ordinary property reads and descriptors must stay on the runtime
+//! path so deletes and redefinitions are observed.
 
 use swc_ecma_ast as ast;
 

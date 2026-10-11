@@ -1,0 +1,1 @@
+Built-in constructor property reads and `Object` ownership/descriptor operations now preserve the actual constructor object, so deleting or redefining configurable properties such as `Map.name` and `Object.length` is observable. Intrinsic static-function metadata folds remain intact.

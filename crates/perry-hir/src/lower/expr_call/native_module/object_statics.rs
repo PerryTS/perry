@@ -9,6 +9,45 @@ use super::*;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
+fn global_builtin_constructor_name(ctx: &LoweringContext, argument: &ast::Expr) -> Option<String> {
+    let mut value = argument;
+    loop {
+        value = match value {
+            ast::Expr::TsAs(x) => x.expr.as_ref(),
+            ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+            ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+            ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+            ast::Expr::Paren(x) => x.expr.as_ref(),
+            _ => break,
+        };
+    }
+    let ast::Expr::Ident(ident) = value else {
+        return None;
+    };
+    let name = ident.sym.as_ref();
+    (crate::analysis::builtin_constructor_length(name).is_some()
+        && !ctx.shadows_unqualified_global(name))
+    .then(|| name.to_string())
+}
+
+fn preserve_builtin_constructor_value(
+    ctx: &LoweringContext,
+    argument: &ast::Expr,
+    lowered: Expr,
+) -> Expr {
+    if let Some(name) = global_builtin_constructor_name(ctx, argument) {
+        if matches!(&lowered, Expr::GlobalGet(0)) {
+            return Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: name,
+            };
+        }
+    }
+    lowered
+}
+
 pub(super) fn try_object_statics(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -80,6 +119,13 @@ pub(super) fn try_object_statics(
                 "hasOwn" => {
                     let mut iter = args.into_iter();
                     let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     let key = iter.next().unwrap_or(Expr::Undefined);
                     return Ok(Ok(Expr::ObjectHasOwn(Box::new(obj), Box::new(key))));
                 }
@@ -152,6 +198,13 @@ pub(super) fn try_object_statics(
                 "defineProperty" => {
                     let mut iter = args.into_iter();
                     let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     let key = iter.next().unwrap_or(Expr::Undefined);
                     let descriptor = iter.next().unwrap_or(Expr::Undefined);
                     return Ok(Ok(Expr::ObjectDefineProperty(
@@ -177,6 +230,13 @@ pub(super) fn try_object_statics(
                     // descriptor object's keys.
                     let mut iter = args.into_iter();
                     let target = iter.next().unwrap_or(Expr::Undefined);
+                    let target = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, target.clone())
+                        })
+                        .unwrap_or(target);
                     let descs = iter.next().unwrap_or(Expr::Undefined);
                     if let Expr::Object(props) = &descs {
                         // Static descriptor literal — desugar to a Sequence
@@ -211,21 +271,15 @@ pub(super) fn try_object_statics(
                     )));
                 }
                 "getOwnPropertyDescriptor" => {
-                    // #2144/#3655: built-in function `.name` /
-                    // `.length` descriptors.
-                    //
-                    // `Object.getOwnPropertyDescriptor(<BuiltinCtor>,
-                    // "name"|"length")` and
-                    // `…(<BuiltinNs>.<staticFn>, "name"|"length")`
-                    // need a compile-time fold because those builtin
-                    // values are often intrinsic sentinels rather than
-                    // first-class closures. Per spec both descriptors
-                    // are non-writable, non-enumerable, configurable
-                    // data properties. Fold when we can statically
-                    // recognize the receiver shape — same gating logic
-                    // as the direct `.name` / `.length` folds in
-                    // `expr_member.rs`.
-                    if call.args.len() >= 2 && args.len() >= 2 {
+                    // Retain the descriptor fold for intrinsic function
+                    // sentinels, but a builtin constructor is a mutable closure
+                    // value: deletes/redefinitions must be observed at runtime.
+                    let is_builtin_constructor = call
+                        .args
+                        .first()
+                        .and_then(|arg| global_builtin_constructor_name(ctx, &arg.expr))
+                        .is_some();
+                    if !is_builtin_constructor && call.args.len() >= 2 && args.len() >= 2 {
                         let key_name = match call.args[1].expr.as_ref() {
                             ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
                             _ => None,
@@ -241,11 +295,11 @@ pub(super) fn try_object_statics(
                             if lowered_obj_is_global_intrinsic {
                                 match key_name {
                                     Some("name") => {
-                                        let folded =
+                                        if let Some(fname) =
                                             super::super::name_fold::builtin_fn_name_for_arg(
                                                 call.args[0].expr.as_ref(),
-                                            );
-                                        if let Some(fname) = folded {
+                                            )
+                                        {
                                             return Ok(Ok(
                                                 super::super::name_fold::name_data_descriptor(
                                                     fname,
@@ -283,6 +337,13 @@ pub(super) fn try_object_statics(
                     }
                     let mut iter = args.into_iter();
                     let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     let key = iter.next().unwrap_or(Expr::Undefined);
                     return Ok(Ok(Expr::ObjectGetOwnPropertyDescriptor(
                         Box::new(obj),
@@ -290,18 +351,45 @@ pub(super) fn try_object_statics(
                     )));
                 }
                 "getOwnPropertyDescriptors" => {
+                    let mut iter = args.into_iter();
+                    let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     return Ok(Ok(Expr::ObjectGetOwnPropertyDescriptors(Box::new(
-                        args.into_iter().next().unwrap_or(Expr::Undefined),
+                        obj,
                     ))));
                 }
                 "getOwnPropertyNames" => {
+                    let mut iter = args.into_iter();
+                    let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     return Ok(Ok(Expr::ObjectGetOwnPropertyNames(Box::new(
-                        args.into_iter().next().unwrap_or(Expr::Undefined),
+                        obj,
                     ))));
                 }
                 "getOwnPropertySymbols" => {
+                    let mut iter = args.into_iter();
+                    let obj = iter.next().unwrap_or(Expr::Undefined);
+                    let obj = call
+                        .args
+                        .first()
+                        .map(|arg| {
+                            preserve_builtin_constructor_value(ctx, &arg.expr, obj.clone())
+                        })
+                        .unwrap_or(obj);
                     return Ok(Ok(Expr::ObjectGetOwnPropertySymbols(Box::new(
-                        args.into_iter().next().unwrap_or(Expr::Undefined),
+                        obj,
                     ))));
                 }
                 _ => {} // Fall through to generic handling
