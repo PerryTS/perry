@@ -53,11 +53,10 @@ extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
 
-// Maximum nesting depth for try blocks. Jump buffers live in fixed heap
-// slabs per thread. They keep jump-buffer addresses stable and
-// avoid ld64's 64KB inline initialized-TLS limit on arm64_32. Raised from 128
-// (#5065): legal recursion through try/catch must reach 1024 open handlers.
-const MAX_TRY_DEPTH: usize = 1024;
+// Jump buffers live in fixed-size heap slabs per thread. Each slab keeps
+// published jmp_buf addresses stable as try depth grows, while avoiding
+// ld64's 64KB inline initialized-TLS limit on arm64_32.
+const JUMP_BUFFER_SLAB_SIZE: usize = 256;
 
 /// How a handler-stack entry catches (#7302).
 ///
@@ -83,8 +82,10 @@ struct ExceptionState {
     // Group captured fields per depth, but keep jump buffers separately aligned.
     // Putting their 16-byte alignment and a one-byte kind into every record
     // adds 15 KiB of padding per thread in the default 64-bit configuration.
-    jump_buffers: Box<[JmpBuf]>,
-    handler_kinds: Box<[HandlerKind]>,
+    // The Vec may move its Box handles, but each Box allocation is stable after
+    // a jmp_buf pointer has been returned to generated code or the C trampoline.
+    jump_buffer_slabs: Vec<Box<[JmpBuf]>>,
+    handler_kinds: Vec<HandlerKind>,
     savepoints: Vec<std::mem::MaybeUninit<CatchSavepoint>>,
     try_depth: usize,
     current_exception: f64,
@@ -94,12 +95,14 @@ struct ExceptionState {
 
 impl ExceptionState {
     fn new() -> Self {
+        let mut jump_buffer_slabs = Vec::new();
+        jump_buffer_slabs.push(crate::zeroed_cache::new_zeroed_cache(JUMP_BUFFER_SLAB_SIZE));
         Self {
-            // Build the fixed slabs directly on the heap, without large TLS
-            // initializers or native-stack temporaries (arm64_32).
-            // Zeroed (#11507): 256 KiB that a slot's `setjmp` arms before use.
-            jump_buffers: crate::zeroed_cache::new_zeroed_cache(MAX_TRY_DEPTH),
-            handler_kinds: vec![HandlerKind::Setjmp; MAX_TRY_DEPTH].into_boxed_slice(),
+            // Build the zeroed slab directly on the heap, without a large TLS
+            // initializer or native-stack temporary (arm64_32). Each new slab
+            // is allocated the same way when a thread reaches another chunk.
+            jump_buffer_slabs,
+            handler_kinds: vec![HandlerKind::Setjmp; JUMP_BUFFER_SLAB_SIZE],
             // Snapshots have no escaping addresses. Allocate only the nesting
             // depth reached by this thread; each push initializes its slot
             // before publishing try_depth, which bounds the root scanner.
@@ -109,6 +112,39 @@ impl ExceptionState {
             has_exception: false,
             in_finally: false,
         }
+    }
+
+    /// Make storage for `depth` available before publishing a handler there.
+    /// Appending slabs can move the Vec of Box handles, but never the separate
+    /// heap allocations whose addresses have escaped to setjmp trampolines.
+    fn ensure_depth_storage(&mut self, depth: usize) {
+        let slab_index = depth / JUMP_BUFFER_SLAB_SIZE;
+        while self.jump_buffer_slabs.len() <= slab_index {
+            self.jump_buffer_slabs
+                .push(crate::zeroed_cache::new_zeroed_cache(JUMP_BUFFER_SLAB_SIZE));
+        }
+        let required = (slab_index + 1) * JUMP_BUFFER_SLAB_SIZE;
+        if self.handler_kinds.len() < required {
+            self.handler_kinds.resize(required, HandlerKind::Setjmp);
+        }
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu",
+        target_pointer_width = "64"
+    ))]
+    fn jump_buffer(&self, depth: usize) -> &JmpBuf {
+        &self.jump_buffer_slabs[depth / JUMP_BUFFER_SLAB_SIZE][depth % JUMP_BUFFER_SLAB_SIZE]
+    }
+
+    fn jump_buffer_mut(&mut self, depth: usize) -> &mut JmpBuf {
+        &mut self.jump_buffer_slabs[depth / JUMP_BUFFER_SLAB_SIZE][depth % JUMP_BUFFER_SLAB_SIZE]
+    }
+
+    fn jump_buffer_ptr(&mut self, depth: usize) -> *mut i32 {
+        self.jump_buffer_mut(depth).as_mut_ptr()
     }
 }
 
@@ -152,10 +188,8 @@ pub extern "C" fn js_eh_try_push() {
 
 fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
     with_exception_state(|s| unsafe {
-        if (*s).try_depth >= MAX_TRY_DEPTH {
-            panic!("Try block nesting too deep");
-        }
         let depth = (*s).try_depth;
+        (*s).ensure_depth_storage(depth);
         let savepoint = CatchSavepoint::capture();
         // Native vector growth cannot trigger a JS GC. No snapshot address
         // escapes, and the scanner visits only the published active prefix.
@@ -166,13 +200,9 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
                 .get_unchecked_mut(depth)
                 .write(savepoint);
         }
-        // SAFETY: the fixed handler and jump-buffer slabs contain
-        // MAX_TRY_DEPTH entries, and depth was checked above.
-        *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = kind;
+        (&mut (*s).handler_kinds)[depth] = kind;
         (*s).try_depth = depth + 1;
-        (&mut (*s).jump_buffers)
-            .get_unchecked_mut(depth)
-            .as_mut_ptr()
+        (*s).jump_buffer_ptr(depth)
     })
 }
 
@@ -211,7 +241,7 @@ pub(crate) fn current_setjmp_stack_limit() -> Option<usize> {
             return None;
         }
         // GC_STORE_AUDIT(STACK): C trampoline CFA, not a managed heap pointer.
-        let buf = (*s).jump_buffers[depth].data.as_ptr() as *const usize;
+        let buf = (*s).jump_buffer(depth).data.as_ptr() as *const usize;
         Some(buf.add(31).read())
     })
 }
@@ -440,7 +470,7 @@ pub(crate) fn hand_to_worker_base(value: f64) {
             (*s).try_depth = depth + 1;
             crate::async_context::unwind_context_guards(depth);
             (&(*s).savepoints)[depth].assume_init_read().restore();
-            (*s).jump_buffers[depth].as_mut_ptr()
+            (*s).jump_buffer_ptr(depth)
         });
         // See `js_throw`: force the non-unwinding POSIX-style longjmp.
         #[cfg(windows)]
@@ -526,7 +556,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         crate::closure::reset_throw_not_callable_counter();
 
         let depth = (*s).try_depth - 1;
-        if (*s).handler_kinds[depth] == HandlerKind::NativeInactive {
+        if (&(*s).handler_kinds)[depth] == HandlerKind::NativeInactive {
             // A callback arms its own trampoline. Outside it, jumping to a
             // previous trampoline would cross native frames into dead storage.
             eprintln!("perry: JavaScript throw outside native callback trap");
@@ -546,8 +576,8 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // path skips Rust cleanups exactly like longjmp does (the runtime is
         // built panic=abort; see crate::eh), so restoring at throw time is
         // correct for both.
-        match (*s).handler_kinds[depth] {
-            HandlerKind::Setjmp => (*s).jump_buffers[depth].as_mut_ptr(),
+        match (&(*s).handler_kinds)[depth] {
+            HandlerKind::Setjmp => (*s).jump_buffer_ptr(depth),
             HandlerKind::Unwind => std::ptr::null_mut(),
             HandlerKind::NativeInactive => unreachable!(),
         }
@@ -961,8 +991,9 @@ mod tests {
         std::thread::spawn(|| {
             with_exception_state(|state| {
                 let state = unsafe { &*state };
-                assert_eq!(state.jump_buffers.len(), MAX_TRY_DEPTH);
-                for buf in state.jump_buffers.iter() {
+                assert_eq!(state.jump_buffer_slabs.len(), 1);
+                assert_eq!(state.jump_buffer_slabs[0].len(), JUMP_BUFFER_SLAB_SIZE);
+                for buf in state.jump_buffer_slabs[0].iter() {
                     assert!(buf.data.iter().all(|&word| word == 0));
                 }
             });
@@ -978,19 +1009,57 @@ mod tests {
                 assert!((*state).savepoints.is_empty());
             });
             let previous = crate::object::js_new_target_get();
+            let pushes = 5 * JUMP_BUFFER_SLAB_SIZE + 17;
+            let earlier_depth = JUMP_BUFFER_SLAB_SIZE / 2;
             let mut buffers = Vec::new();
-            for depth in 0..MAX_TRY_DEPTH {
+            for depth in 0..earlier_depth {
                 crate::object::js_new_target_set((depth + 1) as f64);
                 buffers.push(js_try_push());
                 with_exception_state(|state| unsafe {
                     assert!((*state).savepoints.len() >= (*state).try_depth);
                 });
             }
-            with_exception_state(|state| unsafe {
-                assert_eq!((*state).jump_buffers[0].as_mut_ptr(), buffers[0]);
-            });
-            for expected_depth in [MAX_TRY_DEPTH, MAX_TRY_DEPTH / 2] {
-                while current_try_depth() > expected_depth {
+            let landed = arm_trap_and_run(buffers[earlier_depth - 1], || -> () {
+                // The trampoline above is armed in the first slab. Grow past
+                // five slabs before throwing back into that saved context.
+                for depth in earlier_depth..pushes {
+                    crate::object::js_new_target_set((depth + 1) as f64);
+                    buffers.push(js_try_push());
+                    with_exception_state(|state| unsafe {
+                        assert!((*state).savepoints.len() >= (*state).try_depth);
+                    });
+                }
+
+                with_exception_state(|state| unsafe {
+                    assert_eq!((*state).jump_buffer_slabs.len(), 6);
+                    assert_eq!((*state).handler_kinds.len(), 6 * JUMP_BUFFER_SLAB_SIZE);
+                    for depth in [
+                        0,
+                        JUMP_BUFFER_SLAB_SIZE - 1,
+                        JUMP_BUFFER_SLAB_SIZE,
+                        2 * JUMP_BUFFER_SLAB_SIZE,
+                        4 * JUMP_BUFFER_SLAB_SIZE,
+                        5 * JUMP_BUFFER_SLAB_SIZE,
+                        pushes - 1,
+                    ] {
+                        assert_eq!(
+                            (*state).jump_buffer_ptr(depth),
+                            buffers[depth],
+                            "jump buffer address at depth {depth} must remain stable after slab growth"
+                        );
+                    }
+                });
+
+                let mut roots = Vec::new();
+                let mut mark = |value: f64| roots.push(value);
+                let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+                scan_exception_roots_mut(&mut visitor);
+                assert_eq!(
+                    roots,
+                    (1..=pushes).map(|n| n as f64).collect::<Vec<_>>()
+                );
+
+                while current_try_depth() > earlier_depth {
                     js_try_end();
                 }
                 let mut roots = Vec::new();
@@ -999,16 +1068,18 @@ mod tests {
                 scan_exception_roots_mut(&mut visitor);
                 assert_eq!(
                     roots,
-                    (1..=expected_depth).map(|n| n as f64).collect::<Vec<_>>()
+                    (1..=earlier_depth)
+                        .map(|n| n as f64)
+                        .collect::<Vec<_>>()
                 );
-            }
-            crate::object::js_new_target_set(-1.0);
-            let landed =
-                arm_trap_and_run(buffers[MAX_TRY_DEPTH / 2 - 1], || -> () { js_throw(99.0) });
+
+                crate::object::js_new_target_set(-1.0);
+                js_throw(99.0)
+            });
             assert!(landed.is_none());
             assert_eq!(
                 crate::object::js_new_target_get(),
-                (MAX_TRY_DEPTH / 2) as f64
+                earlier_depth as f64
             );
             js_clear_exception();
             while current_try_depth() > 0 {
@@ -1017,8 +1088,9 @@ mod tests {
             // Storage retains initialized but inactive snapshots after pop.
             // They must neither retain nor rewrite roots at depth zero.
             with_exception_state(|state| unsafe {
-                assert_eq!((*state).savepoints.len(), MAX_TRY_DEPTH);
+                assert_eq!((*state).savepoints.len(), pushes);
                 assert_eq!((*state).try_depth, 0);
+                assert_eq!((*state).jump_buffer_slabs.len(), 6);
             });
             let mut roots = Vec::new();
             let mut mark = |value: f64| roots.push(value);
@@ -1130,16 +1202,10 @@ mod tests {
 
     #[test]
     fn try_push_pop_beyond_old_limit_does_not_panic() {
-        // Regression for #5065: old fixed limit was 128 and js_try_push panicked
-        // (aborting the process) at the 129th simultaneously-active try frame.
-        // Relative to the entry depth so it's robust under shared TLS
-        // (`--test-threads=1`) alongside the other tests in this module.
+        // Cross multiple heap slabs, relative to the entry depth so this also
+        // behaves correctly when run after other tests on the same TLS thread.
         let base = current_try_depth();
-        let pushes = MAX_TRY_DEPTH - base;
-        assert!(
-            pushes > 128,
-            "expected room for >128 frames beyond the old limit"
-        );
+        let pushes = 5 * JUMP_BUFFER_SLAB_SIZE + 1;
         for _ in 0..pushes {
             let p = js_try_push();
             assert!(!p.is_null(), "js_try_push returned null jmp_buf");

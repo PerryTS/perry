@@ -39,7 +39,7 @@ impl NativeCatch {
         let depth = self.depth;
         unsafe {
             assert_eq!((*s).try_depth, depth + 1, "unbalanced native callback trap");
-            assert_eq!((*s).handler_kinds[depth], HandlerKind::NativeInactive);
+            assert_eq!((&(*s).handler_kinds)[depth], HandlerKind::NativeInactive);
             #[cfg(test)]
             if crate::native_payload::callback_sabotage("catch_pop") {
                 return;
@@ -93,9 +93,7 @@ pub(crate) unsafe fn catch_native_callback(
         (s, depth)
     };
     *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = HandlerKind::Setjmp;
-    let env = (&mut (*s).jump_buffers)
-        .get_unchecked_mut(depth)
-        .as_mut_ptr();
+    let env = (*s).jump_buffer_ptr(depth);
     // POD context avoids generic FnOnce/Option transport on every callback.
     struct Invocation {
         callee: f64,
