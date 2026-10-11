@@ -32,6 +32,9 @@ mod receiver_root_tests {
     fn stream_receiver_root_survives_a_precise_full_collection() {
         // Exercise the actual root scanner, rather than only checking tag bits.
         std::thread::spawn(|| unsafe {
+            // Stream tests share process-global registries. Serialize the real
+            // collection with scanner fixtures that install fake roots there.
+            let _serial = crate::streams::tests::serial_guard();
             perry_runtime::gc::gc_init();
             crate::common::dispatch::install_streams();
             let stream = crate::streams::alloc_readable_from_bytes(vec![1, 2, 3]);

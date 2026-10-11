@@ -349,7 +349,7 @@ mod strategy;
 mod subclass;
 mod tee;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod transform;
 mod writable;
 

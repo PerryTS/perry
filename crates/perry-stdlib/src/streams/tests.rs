@@ -1,12 +1,12 @@
 use super::transform::{run_web_compression_codec, split_utf8_prefix};
 use super::*;
 
-/// #6602: the id-allocator tests below mutate shared pool state (quarantine
-/// limit, free list) — serialize them so cargo's parallel test threads don't
-/// interleave allocations between a retire and its recycle assertion.
+/// Stream tests share process-global registries and allocator state. Serialize
+/// tests that mutate allocator pools or install scanner fixtures with fake
+/// roots so parallel collections cannot observe or erase their temporary data.
 static ALLOCATOR_TEST_SERIAL: Mutex<()> = Mutex::new(());
 
-pub(super) fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
     ALLOCATOR_TEST_SERIAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
