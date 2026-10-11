@@ -71,10 +71,10 @@ extern "C" fn fake_generator_body(
 /// name and doc always claimed.
 fn warm_generator_intrinsics() {
     // Function bags now carry attributed canonical keys. These production
-    // scanners rewrite their metadata and interned strings; none roots the
-    // receiver whose movement is the subject of the witness below.
+    // scanner rewrites owned shape metadata. Canonical backings and image
+    // atoms are stationary; the weak intern cache clears on collection. None
+    // roots the receiver whose movement is the subject of the witness below.
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     crate::object::ensure_generator_intrinsics();
 }
 

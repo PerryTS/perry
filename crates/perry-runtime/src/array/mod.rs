@@ -101,8 +101,9 @@ mod tests;
 mod typed_array_receiver_tests;
 
 pub(crate) use self::alloc::{
-    array_length_range_error, js_array_alloc_key_list, js_array_alloc_key_list_reserved,
-    js_array_alloc_pointer_elements, js_array_alloc_with_length_exact,
+    array_length_range_error, js_array_alloc_canonical_keys, js_array_alloc_key_list,
+    js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
+    js_array_alloc_with_length_exact,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
@@ -117,7 +118,7 @@ pub use self::concat_reverse::{
     js_array_fill_range, js_array_reverse, js_array_reverse_value,
 };
 pub(crate) use self::element_shape::{
-    forget_element_shape, invalidate_all_element_shapes, note_element_store,
+    forget_element_shape, forget_element_shape_after_full_prune, invalidate_all_element_shapes, note_element_store,
     note_element_store_resolved_flags, prune_dead_element_shape_owners, transfer_element_shape,
 };
 pub use self::element_shape::{
@@ -309,9 +310,10 @@ pub(crate) use self::flat_clone::{
 };
 pub(crate) use self::header::{
     array_byte_size, array_has_plain_shape_resolved, array_is_frozen, array_is_sealed_or_no_extend,
-    array_numeric_layout_resolved, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds_resolved,
-    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
-    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
+    array_numeric_layout_resolved, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds_resolved, array_numeric_raw_f64_set_inbounds,
+    array_object_flags, array_object_flags_from_tag, array_object_flags_resolved,
+    array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
     buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value_from_flags,
     clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
     finish_array_dense_move_layout, gc_element_slot_range, mark_array_layout_unknown,

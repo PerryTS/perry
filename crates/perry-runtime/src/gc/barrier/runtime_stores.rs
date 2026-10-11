@@ -99,17 +99,7 @@ pub(crate) fn remembered_dirty_page_count() -> usize {
         let old = old.borrow();
         EXTERNAL_DIRTY_SLOT_PAGES.with(|external| {
             let external = external.borrow();
-            if external.is_empty() {
-                return old.len();
-            }
-            let mut pages = crate::fast_hash::new_ptr_hash_set();
-            for &page in old.iter() {
-                pages.insert(page);
-            }
-            for &page in external.keys() {
-                pages.insert(page);
-            }
-            pages.len()
+            old.len() + external.keys().filter(|page| !old.contains(page)).count()
         })
     })
 }

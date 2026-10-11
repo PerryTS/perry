@@ -394,3 +394,30 @@ fn decode_root_word_round_trips_each_representation() {
         "rewriting a bare address must not add a tag"
     );
 }
+
+#[test]
+fn producer_walks_publish_provenance_for_every_slot_and_restore_the_caller() {
+    let _roots = ShadowAndGlobalRootResetGuard;
+    let _outer = super::super::pin::CopyingWalkPhaseGuard::enter("outer_test_walk");
+    for (kind, expected) in [
+        (ProbeSlot::Shadow, "mutable_root_slots/shadow_stack"),
+        (ProbeSlot::Global, "mutable_root_slots/global_root"),
+    ] {
+        with_staged_slot(kind, crate::value::TAG_UNDEFINED, || {
+            let mut seen = 0;
+            visit_mutable_root_slots(|slot| {
+                if matches!(slot.kind, MutableRootSlotKind::NativeStack) {
+                    assert_eq!(
+                        super::super::pin::copying_walk_phase(),
+                        Some("mutable_root_slots/native_stack")
+                    );
+                } else {
+                    seen += 1;
+                    assert_eq!(super::super::pin::copying_walk_phase(), Some(expected));
+                }
+            });
+            assert_eq!(seen, 1, "the staged producer must actually be visited");
+        });
+        assert_eq!(super::super::pin::copying_walk_phase(), Some("outer_test_walk"));
+    }
+}

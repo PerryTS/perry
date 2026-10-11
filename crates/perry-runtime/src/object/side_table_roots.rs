@@ -302,6 +302,9 @@ pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
 /// reclaimable arenas, so both cache copies must be marked and
 /// rewritten. The trie witnesses are weak and cannot substitute for this.
 pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if visitor.young_scope() {
+        return; // I3: static shapes only hold stationary old key lists.
+    }
     let st = crate::state::state();
     {
         let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };

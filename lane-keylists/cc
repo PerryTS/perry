@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Observe the runtime actually selected by the linker; link a pure twin."""
+import hashlib, json, os, re, shutil, subprocess, sys
+from pathlib import Path
+args=sys.argv[1:]
+shim=os.environ.get('KEYLISTS_OBSERVER_OBJECT')
+wrap='-Wl,--wrap=js_gc_release_current_thread_collection_side_allocations'
+pure=os.environ.get('KEYLISTS_PURE_OUTPUT')
+if pure and shim in args and wrap in args:
+ out=Path(pure).parent
+ objects=out/'objects'/Path(pure).name
+ objects.mkdir(parents=True,exist_ok=True)
+ for i,a in enumerate(args):
+  if a.endswith('.o') and a!=shim and Path(a).exists():
+   saved=objects/(str(i)+'-'+Path(a).name)
+   shutil.copy2(a,saved)
+   args[i]=str(saved)
+  elif a.endswith('.lib') and Path(a).exists():
+   saved=objects/(str(i)+'-'+Path(a).name)
+   shutil.copy2(a,saved)
+   args[i]=str(saved)
+ (out/(Path(pure).name+'.link.json')).write_text(json.dumps(args,indent=2)+'\n')
+ runtime=next((Path(a) for a in args if a.endswith('/libperry_runtime.a')),None)
+ if runtime and runtime.parent != out/'observe-runtime':
+  # No-auto compilation may select a coherent stream-dispatch library graph.
+  # Observe that archive, preserving its code and its selected features.
+  key=hashlib.sha256((str(runtime)+str(runtime.stat().st_mtime_ns)).encode()).hexdigest()[:16]
+  local=out/'linked-runtime'/key
+  local.mkdir(parents=True,exist_ok=True)
+  copied=local/runtime.name
+  if not copied.exists():
+   shutil.copy2(runtime,copied)
+   symbols=subprocess.check_output(['nm','--defined-only',str(copied)],stderr=subprocess.DEVNULL).decode()
+   suffixes={'obs_minors':'COPYING_MINORS','obs_step':'STEP_TOTAL_US','obs_remark':'REMARK_TOTAL_US','obs_minor':'MINOR_TOTAL_US','obs_full':'FULL_TOTAL_US'}
+   names={}
+   for alias,suffix in suffixes.items():
+    found={l.split()[-1] for l in symbols.splitlines() if l.split() and l.split()[-1].endswith(suffix)}
+    assert len(found)==1,(runtime,suffix,found)
+    names[alias]=found.pop()
+   subprocess.run(['objcopy',*[f'--globalize-symbol={s}' for s in names.values()],str(copied)],check=True)
+   total_names=['PERRY_LANE_FULL_COUNT','PERRY_LANE_MINOR_COUNT','PERRY_LANE_FULL_PAUSE_US','PERRY_LANE_MINOR_PAUSE_US']
+   phase_names=['PERRY_LANE_PHASE_INS', 'PERRY_LANE_PHASE_US', 'PERRY_LANE_KEY_BIRTHS', 'PERRY_LANE_KEY_BYTES']
+   if all(name in symbols for name in phase_names): total_names += phase_names
+   totals=''
+   if all(name in symbols for name in total_names):
+    totals='#define KEYLISTS_PROCESS_TOTALS 1\n'+'\n'.join('extern _Atomic uint64_t '+name+('[10]' if 'PHASE_' in name else '')+';' for name in total_names)+'\n'
+   (local/'gc-symbols.h').write_text('\n'.join(f'extern _Atomic uint64_t {a} __asm__("{s}");' for a,s in names.items())+'\n'+totals)
+   subprocess.run(['/usr/bin/cc','-O2','-I',str(local),'-c',str(Path(__file__).with_name('gc-observe.c')),'-o',str(local/'gc-observe.o')],check=True)
+  args=[str(copied) if a==str(runtime) else str(local/'gc-observe.o') if a==shim else a for a in args]
+  shim=str(local/'gc-observe.o')
+  header=local/'gc-symbols.h'
+ else:header=Path(shim).with_name('gc-symbols.h')
+ args=[a for a in args if not a.startswith(('-Wl,--undefined=_RNvNtNt','-Wl,--undefined=PERRY_LANE_'))]
+ for symbol in re.findall(r'__asm__\("([^"\n]+)"\)',header.read_text()):
+  args.append('-Wl,--undefined='+symbol)
+ for symbol in re.findall(r'extern _Atomic uint64_t (PERRY_LANE_\w+)(?:\[10\])?;',header.read_text()):
+  args.append('-Wl,--undefined='+symbol)
+ result=subprocess.run(['/usr/bin/cc',*args])
+ if result.returncode:sys.exit(result.returncode)
+ clean=[a for a in args if a not in [shim,wrap] and not a.startswith(('-Wl,--undefined=_RNvNtNt','-Wl,--undefined=PERRY_LANE_'))]
+ original=os.environ.get('KEYLISTS_ORIGINAL_BASE')
+ observed=os.environ.get('KEYLISTS_OBS_BASE')
+ if original and observed:
+  for i,a in enumerate(clean):
+   if not a.endswith('.a'):continue
+   if runtime and runtime.parent != out/'observe-runtime' and a==str(copied):
+    a=str(runtime)
+   if a.startswith(str(out/'observe-runtime')):
+    clean[i]=str(Path(original)/'target/release'/Path(a).name)
+   elif a.startswith(observed+'/'):
+    clean[i]=original+a[len(observed):]
+ clean[clean.index('-o')+1]=pure
+ sys.exit(subprocess.run(['/usr/bin/cc',*clean]).returncode)
+sys.exit(subprocess.run(['/usr/bin/cc',*args]).returncode)

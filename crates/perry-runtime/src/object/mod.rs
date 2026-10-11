@@ -635,8 +635,8 @@ pub(crate) struct ObjectHotTables {
     /// cannot be in the table at all.
     ///
     /// WEAK, per #6759 phase 3 and the discipline `canonical_keys` uses: the
-    /// address is rewritten on move by `alloc::scan_class_keys_roots_mut` and
-    /// the entry is dropped on death by `alloc::prune_dead_class_keys_entries`.
+    /// address is old and never moves (I3). The entry is dropped on death by
+    /// `alloc::prune_dead_class_keys_entries` after full traces.
     ///
     /// `PtrHasher`, not SipHash: the key is a codegen-minted class id, never
     /// external input, and `js_object_alloc_class_with_keys` remembers on
@@ -820,11 +820,26 @@ fn shape_cache_insert(
         // SAFETY: a live keys array or null; `canonicalize` allocates, roots
         // its own operand, and `across` roots the caller's object.
         if keys.count() == 0 {
-            // The empty list has no canonical array — the trie's root owns
-            // none — and a zero-length keys array is NOT interchangeable with
-            // null here: `js_build_class_keys_array` hands this pointer back
-            // to generated code. Leave it exactly as it was.
-            (live, keys)
+            // A class's empty backing is observable by generated code, so
+            // retain its non-null representation. Every cached backing,
+            // including an empty one supplied by a caller, must satisfy I3.
+            let stationary = keys.arr().is_null()
+                || unsafe {
+                    crate::arena::pointer_in_old_gen(keys.arr() as usize)
+                        && (*crate::gc::header_from_trusted_user_ptr(keys.arr().cast())).gc_flags
+                            & crate::gc::GC_FLAG_SHAPE_SHARED
+                            != 0
+                };
+            if stationary {
+                (live, keys)
+            } else {
+                live.across(|| {
+                    ObjectKeys::new(
+                        crate::array::js_array_alloc_canonical_keys(0, true, false),
+                        0,
+                    )
+                })
+            }
         } else {
             live.across(|| unsafe {
                 canonical_keys::canonicalize(
@@ -1409,8 +1424,6 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     crate::event_target::state::scan_roots(visitor);
     // Object-owned weak layout caches: rewrite moves without retaining keys.
-    canonical_keys::scan_canonical_keys_roots_mut(visitor);
-    scan_class_keys_roots_mut(visitor);
     for slot in [
         &HTTP_METHODS_CACHE,
         &FS_CONSTANTS_CACHE,

@@ -449,9 +449,6 @@ fn rematerialized_names_reuse_the_traced_site_key_after_movement() {
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(super::super::scan_read_holder_roots_mut);
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    crate::gc::gc_register_mutable_root_scanner(
-        crate::object::canonical_keys::scan_canonical_keys_roots_mut,
-    );
     let scope = RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
     let bytes = b"retained-dynamic-key";

@@ -338,13 +338,31 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
 }
 
 pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
+    layout_clear_for_ptr_impl::<false>(user_ptr);
+}
+
+/// Only the synchronous full sweep whose death-prune fan-out has completed.
+///
+/// # Safety
+/// `user_ptr` must be a swept allocation whose element-shape owner record
+/// was removed by this collection's completed full dead-owner fan-out.
+pub(super) unsafe fn layout_clear_after_full_prune(user_ptr: usize) {
+    layout_clear_for_ptr_impl::<true>(user_ptr);
+}
+
+#[inline]
+fn layout_clear_for_ptr_impl<const FULL_PRUNED: bool>(user_ptr: usize) {
     if user_ptr == 0 {
         return;
     }
     crate::array::clear_array_numeric_layout_ptr(user_ptr);
     // #7480: this runs on object death / address recycle, so drop the record
     // outright rather than only clearing the bit.
-    crate::array::forget_element_shape(user_ptr);
+    if FULL_PRUNED {
+        unsafe { crate::array::forget_element_shape_after_full_prune(user_ptr) };
+    } else {
+        crate::array::forget_element_shape(user_ptr);
+    }
     if user_ptr >= GC_HEADER_SIZE + 0x1000 {
         unsafe {
             (*header_from_user_ptr(user_ptr as *const u8))._reserved &= !GC_LAYOUT_ALL_POINTERS;

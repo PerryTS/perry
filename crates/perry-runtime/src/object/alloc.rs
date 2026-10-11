@@ -27,23 +27,6 @@ fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::Obj
         .insert(class_id, (keys.arr() as usize, field_count, keys.count()));
 }
 
-/// GC root scanner: rewrite each remembered keys-array address across a move.
-/// WEAK — the address is visited as metadata, never marked, so remembering a
-/// class's keys array does not keep it alive.
-pub fn scan_class_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let st = crate::state::state();
-    let mut map = st.object_hot.class_keys_by_id.borrow_mut();
-    for entry in map.values_mut() {
-        if entry.0 == 0 {
-            continue;
-        }
-        let mut addr = entry.0;
-        if visitor.visit_metadata_usize_slot(&mut addr) {
-            entry.0 = addr;
-        }
-    }
-}
-
 /// Post-trace death prune. A dropped entry costs one rebuild of the class's
 /// keys array — `registered_class_keys_array` already answers `None` for a
 /// zeroed address and every caller re-derives — which is what makes
@@ -81,8 +64,8 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
 }
 
 /// This agent's memoized keys array for `class_id`. The address is current
-/// only until the next allocation: a caller that allocates before its last
-/// use must root it or read this again after the allocation.
+/// stable for the list lifetime (I3). A caller that allocates before its last
+/// use still roots it so a full trace retains the weakly held list.
 pub(crate) fn registered_class_keys_array(
     class_id: u32,
 ) -> Option<(crate::object::ObjectKeys, u32)> {
@@ -567,7 +550,7 @@ pub extern "C" fn js_build_class_keys_array(
         return cached.arr();
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
-        let arr = crate::array::js_array_alloc_with_length_longlived(0);
+        let arr = crate::array::js_array_alloc_canonical_keys(0, true, false);
         let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),

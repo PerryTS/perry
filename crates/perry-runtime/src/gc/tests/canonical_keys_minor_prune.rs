@@ -1,24 +1,7 @@
-//! Minor death ordering, including a must-fail trie-size witness. The skip
-//! exists only in libtest: no production knob, log, or registry is added.
+//! I3: canonical backings are mortal old metadata, never nursery objects.
 use super::super::*;
 use super::support::*;
-use crate::array::ArrayHeader;
 use crate::object::canonical_keys::{self, CanonicalKeys, SharedLayout};
-
-crate::perry_thread_local! {
-    static SKIP_MINOR_PRUNE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-pub(in crate::gc) fn skip_minor_prune() -> bool {
-    SKIP_MINOR_PRUNE.with(|v| v.get())
-}
-
-struct SkipPrune;
-impl Drop for SkipPrune {
-    fn drop(&mut self) {
-        SKIP_MINOR_PRUNE.with(|v| v.set(false));
-    }
-}
 
 fn scanners() {
     register_runtime_handle_root_scanner_for_tests();
@@ -28,195 +11,168 @@ fn scanners() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
-unsafe fn object(names: &[&str], value: f64) -> *mut crate::object::ObjectHeader {
-    // Use the ordinary JSON-record birth, whose descriptor is weak. Setter
-    // growth installs transition-cache carriers, which legitimately keep
-    // lists alive until the full-trace carrier census; those lists are not
-    // dead minor owners and cannot witness this prune.
-    let keys = list(names);
-    assert!(crate::arena::pointer_in_nursery(keys.addr()));
-    let obj =
-        crate::object::alloc_plain::alloc_plain_record_with_keys(names.len() as u32, keys.view());
-    for index in 0..names.len() {
-        crate::object::js_object_set_field(obj, index as u32, crate::JSValue::number(value));
-    }
-    obj
-}
-
-unsafe fn list(names: &[&str]) -> CanonicalKeys {
-    let mut raw = crate::array::js_array_alloc(names.len() as u32);
-    for name in names {
-        raw = crate::array::js_array_push(
-            raw,
-            crate::JSValue::try_short_string(name.as_bytes()).unwrap_or_else(|| {
-                crate::JSValue::string_ptr(crate::string::js_string_from_bytes(
-                    name.as_ptr(),
-                    name.len() as u32,
-                ))
-            }),
-        );
-    }
-    canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), raw, names.len() as u32)
-}
-
-unsafe fn assert_names(arr: *const ArrayHeader, names: &[&str]) {
-    for (i, name) in names.iter().enumerate() {
-        let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
-        assert_eq!(
-            crate::string::js_string_key_bytes(crate::array::js_array_get(arr, i as u32), &mut sso),
-            Some(name.as_bytes())
-        );
-    }
+unsafe fn list(name: &[u8]) -> CanonicalKeys {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    canonical_keys::extend_key(
+        &SharedLayout::shape_cache_entry(),
+        CanonicalKeys::EMPTY,
+        key,
+    )
 }
 
 #[test]
-fn a_minor_prunes_young_lists_in_copying_and_fallback_paths() {
+fn old_backings_survive_both_minor_paths_and_die_at_full_trace() {
     for copying in [true, false] {
         let _guard = CopyingNurseryTestGuard::new(0);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _force = ForcedEvacuationTestGuard::on();
         scanners();
         canonical_keys::reset_for_test();
-        let dead = unsafe { list(&["dead", "young"]) };
-        assert!(crate::arena::pointer_in_nursery(dead.addr()));
-        assert_eq!(canonical_keys::published_lists_for_test().len(), 1);
+        let keys = unsafe { list(b"mortal_old_metadata_key") };
+        assert!(crate::arena::pointer_in_old_gen(keys.addr()));
         if !copying {
             js_gc_write_barriers_emitted(0);
         }
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert!(matches!(trace.collection_kind, GcCollectionKind::Minor));
         assert_eq!(trace.copying_nursery.eligible, copying);
-        assert_eq!(canonical_keys::published_lists_for_test().len(), 0);
+        assert_eq!(
+            canonical_keys::published_lists_for_test(),
+            vec![keys.as_ptr()]
+        );
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+        assert!(
+            canonical_keys::published_lists_for_test().is_empty(),
+            "movement pin must not pin liveness"
+        );
         canonical_keys::reset_for_test();
     }
 }
 
 #[test]
-fn a_list_promoted_in_this_minor_remains_interned() {
+fn stationary_backing_rewrites_young_keys_through_remembered_slots() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _age = crate::gc::tenuring::set_survivals_for_test(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = ForcedEvacuationTestGuard::on();
-    let _age = crate::gc::tenuring::set_survivals_for_test(1);
     scanners();
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
-    let before = unsafe { list(&["live", "keys"]) };
-    assert!(crate::arena::pointer_in_nursery(before.addr()));
-    let root = scope.root_raw_mut_ptr(before.as_ptr());
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
-    assert!(trace.copying_nursery.promoted_objects > 0);
-    let after = root.with_const_ptr(|p: *const ArrayHeader| p as usize);
-    assert_ne!(before.addr(), after);
-    assert!(crate::arena::pointer_in_old_gen(after));
+    // An explicitly installed young child keeps the four-evacuation control.
+    // Production publication requests first-copy tenure for these leaves.
+    let backing = crate::array::js_array_alloc_canonical_keys(1, true, false);
+    let key = crate::string::js_string_from_bytes(
+        b"a_young_heap_key_longer_than_sso".as_ptr(),
+        b"a_young_heap_key_longer_than_sso".len() as u32,
+    );
     unsafe {
-        assert_eq!(list(&["live", "keys"]).addr(), after);
-        assert_names(after as *const _, &["live", "keys"]);
+        crate::array::note_array_slot(backing, 0, crate::JSValue::string_ptr(key).bits());
+        (*backing).length = 1;
     }
-    gc_collect_minor();
-    assert_eq!(unsafe { list(&["live", "keys"]).addr() }, after);
-    canonical_keys::reset_for_test();
-}
-
-#[test]
-fn a_live_child_rewitnesses_its_dead_parent_before_the_flip() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = ForcedEvacuationTestGuard::on();
-    scanners();
-    canonical_keys::reset_for_test();
-    let scope = RuntimeHandleScope::new();
-    let parent = unsafe { list(&["parent"]) };
-    // Whole-list publication allocates a separate backing for the child.
-    let child = unsafe { list(&["parent", "child"]) };
-    assert_ne!(parent.addr(), child.addr());
-    let child = scope.root_raw_mut_ptr(child.as_ptr());
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
-    assert!(trace.copying_nursery.copied_objects > 0);
-    let after = child.with_const_ptr(|p: *const ArrayHeader| p as usize);
-    assert!(!canonical_keys::published_lists_for_test()
-        .iter()
-        .any(|&p| p as usize == parent.addr()));
-    unsafe {
-        assert_eq!(list(&["parent", "child"]).addr(), after);
-        let new_parent = list(&["parent"]);
-        assert_names(new_parent.as_ptr(), &["parent"]);
-        assert_eq!(list(&["parent", "child"]).addr(), after);
-    }
-    canonical_keys::reset_for_test();
-}
-
-fn churn(sabotaged: bool) -> bool {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let _force = ForcedEvacuationTestGuard::on();
-    let _age =
-        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
-    scanners();
-    canonical_keys::reset_for_test();
-    let scope = RuntimeHandleScope::new();
-    let sentinel = scope.root_raw_mut_ptr(unsafe { object(&["keep", "again"], 42.0) });
-    let mut bounded = true;
-    for round in 0..4 {
-        let minted_before = canonical_keys::canonical_stats().1;
-        for i in 0..2048 {
-            let name = format!("shape_key_{i}");
-            let obj = unsafe { object(&[&name, "again"], (round * 2048 + i) as f64) };
-            unsafe {
-                let keys = crate::object::object_keys(obj);
-                assert_eq!(keys.count(), 2);
-                assert_names(keys.arr(), &[&name, "again"]);
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                assert_eq!(
-                    crate::object::js_object_get_field_by_name(obj, key).as_number(),
-                    (round * 2048 + i) as f64
-                );
-            }
-        }
-        assert!(canonical_keys::canonical_stats().1 > minted_before,
-            "re-interning after pruning must mint new nodes, even when array addresses are recycled");
-        assert_eq!(canonical_keys::published_lists_for_test().len(), 2049);
-        let trace = {
-            let _skip = sabotaged.then(|| {
-                SKIP_MINOR_PRUNE.with(|v| v.set(true));
-                SkipPrune
-            });
-            collect_minor_trace(GcTriggerKind::Direct)
-        };
-        assert!(matches!(trace.collection_kind, GcCollectionKind::Minor));
-        assert!(trace.copying_nursery.eligible);
-        if round == 0 {
-            assert!(
-                trace.copying_nursery.copied_objects > 0,
-                "the witness must exercise evacuation before its sentinel ages into old generation"
+    let keys = CanonicalKeys::from_rooted(backing, 1);
+    let root = scope.root_raw_mut_ptr(keys.as_ptr());
+    let mut before = unsafe { crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr() };
+    for _ in 0..4 {
+        assert!(crate::arena::pointer_in_nursery(before as usize));
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert!(
+            trace.copying_nursery.copied_objects + trace.copying_nursery.promoted_objects > 0,
+            "the child really must move"
+        );
+        root.with_const_ptr(|p: *const crate::ArrayHeader| unsafe {
+            assert_eq!(p as usize, keys.addr());
+            let word = crate::array::js_array_get(p, 0);
+            let after = word.as_string_ptr();
+            assert_ne!(before, after);
+            before = after;
+            let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
+            assert_eq!(
+                crate::string::js_string_key_bytes(word, &mut sso),
+                Some(b"a_young_heap_key_longer_than_sso".as_slice())
             );
-        }
-        let remaining = canonical_keys::published_lists_for_test().len();
-        let (edges, addresses, bytes) = canonical_keys::canonical_trie_stats();
-        eprintln!("minor trie churn: round={round} sabotage={sabotaged} published={remaining} edges={edges} addresses={addresses} reserved_payload_bytes={bytes}");
-        bounded &= remaining == 1 && edges == 2 && addresses == 1;
-        if sabotaged {
-            break; // Never dereference the deliberately stale edges.
-        }
-        sentinel.with_const_ptr(|p| unsafe {
-            assert_names(crate::object::object_keys(p).arr(), &["keep", "again"])
         });
     }
+    assert!(crate::arena::pointer_in_old_gen(before as usize));
     canonical_keys::reset_for_test();
-    bounded
 }
 
 #[test]
-fn reinterning_after_repeated_minor_prunes_returns_correct_new_lists() {
-    assert!(
-        churn(false),
-        "dead shape lists must leave the trie at every minor"
+fn published_key_moves_to_old_on_its_first_minor_without_pinning_liveness() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _age = crate::gc::tenuring::set_survivals_for_test(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    scanners();
+    canonical_keys::reset_for_test();
+    let scope = RuntimeHandleScope::new();
+    let keys = unsafe { list(b"first_copy_tenured_key") };
+    let root = scope.root_raw_mut_ptr(keys.as_ptr());
+    let before = unsafe { crate::array::js_array_get(keys.as_ptr(), 0).as_string_ptr() };
+    assert!(crate::arena::pointer_in_nursery(before as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(trace.copying_nursery.promoted_objects > 0);
+    root.with_const_ptr(|p: *const crate::ArrayHeader| unsafe {
+        assert_eq!(p as usize, keys.addr());
+        let after = crate::array::js_array_get(p, 0).as_string_ptr();
+        assert_ne!(after, before, "the key must really relocate");
+        assert!(crate::arena::pointer_in_old_gen(after as usize));
+        assert_eq!(
+            (*header_from_user_ptr(after.cast())).gc_flags & GC_FLAG_PINNED,
+            0
+        );
+    });
+    assert_eq!(
+        unsafe { list(b"first_copy_tenured_key").addr() },
+        keys.addr()
     );
+    drop(scope);
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(canonical_keys::published_lists_for_test().is_empty());
+    canonical_keys::reset_for_test();
+}
+
+/// Force the production relocation funnel directly: selection is an
+/// optimization and may decline a sparse fixture. Clear the movement bit for
+/// the negative control, proving the same block is otherwise movable.
+fn defrag_moves_backing(remove_pin: bool) -> bool {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    canonical_keys::reset_for_test();
+    let capacity = (crate::arena::BLOCK_SIZE / std::mem::size_of::<f64>() + 1) as u32;
+    let backing = crate::array::js_array_alloc_canonical_keys(capacity, true, false);
+    let keys = CanonicalKeys::from_rooted(backing, 0);
+    unsafe {
+        let header = header_from_user_ptr(keys.as_ptr().cast());
+        assert_ne!((*header).gc_flags & GC_FLAG_SHAPE_SHARED, 0);
+        if remove_pin {
+            (*header).gc_flags &= !GC_FLAG_SHAPE_SHARED;
+        }
+    }
+    let mut selected = crate::fast_hash::new_ptr_hash_set();
+    selected.insert(crate::arena::generation_page_for_addr(keys.addr()));
+    let mut occupants = 0;
+    crate::arena::old_arena_walk_objects_on_pages(&selected, |_| occupants += 1);
+    assert_eq!(occupants, 1, "the pin witness must have a private block");
+    let mut new = Vec::new();
+    let mut old = Vec::new();
+    let trace =
+        super::super::oldgen::evacuate_selected_old_pages_collecting(&selected, &mut new, &mut old);
+    let moved = old
+        .iter()
+        .any(|&header| unsafe { header.add(1) as usize == keys.addr() });
+    if remove_pin {
+        assert!(
+            trace.old_page_moved_objects > 0,
+            "negative control must exercise the mover"
+        );
+    }
+    canonical_keys::reset_for_test();
+    moved
 }
 
 #[test]
-fn skipping_minor_prune_turns_the_trie_size_witness_red() {
+fn canonical_movement_pin_blocks_defrag_and_idle_compaction_funnel() {
+    assert!(!defrag_moves_backing(false));
     assert!(
-        !churn(true),
-        "the witness must detect a skipped minor prune"
+        defrag_moves_backing(true),
+        "removing the pin must turn the stationary-address witness red"
     );
 }

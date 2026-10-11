@@ -259,7 +259,7 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
 /// canonical copy of the class list), rooted by the test the way the codegen
 /// per-class global roots it, and passed RAW, the way generated code passes
 /// the global's value. The instance allocation is the collection point.
-fn class_inline_keys_birth_follows_the_move(stamped: bool) {
+fn class_inline_keys_birth_keeps_old_backing(stamped: bool) {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
@@ -284,8 +284,8 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
         ));
         let before = addr_of(&keys) as *mut ArrayHeader;
         assert!(
-            crate::arena::pointer_in_nursery(before as usize),
-            "premise ({label}): the class keys array is young"
+            crate::arena::pointer_in_old_gen(before as usize),
+            "premise ({label}): I3 class keys array is old"
         );
         let shape_id = crate::object::shapes::shape_id_for_keys_ensure(before, 2);
 
@@ -298,10 +298,9 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)
         };
         let after = addr_of(&keys) as *mut ArrayHeader;
-        assert_ne!(
+        assert_eq!(
             after, before,
-            "premise ({label}): subject not live — the birth allocation did not move the \
-             keys array, so this run proved nothing. Check the trigger arming."
+            "I3 ({label}): the old keys address remains stable during instance allocation."
         );
         let installed = crate::object::object_keys(obj).arr();
         assert_eq!(
@@ -314,12 +313,12 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
 
 #[test]
 fn class_inline_keys_birth_installs_the_live_keys_array_when_its_allocation_collects() {
-    class_inline_keys_birth_follows_the_move(false);
+    class_inline_keys_birth_keeps_old_backing(false);
 }
 
 #[test]
 fn class_inline_keys_stamped_birth_installs_the_live_keys_array_when_its_allocation_collects() {
-    class_inline_keys_birth_follows_the_move(true);
+    class_inline_keys_birth_keeps_old_backing(true);
 }
 
 /// Finding 2, `js_object_alloc_class_dynamic_parent`. The merged list is
@@ -368,8 +367,8 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
             }
             let merged_before = keys_of(grown);
             assert!(
-                crate::arena::pointer_in_nursery(merged_before as usize),
-                "premise ({phase}): the merged list is young"
+                crate::arena::pointer_in_old_gen(merged_before as usize),
+                "premise ({phase}): I3 merged list is old"
             );
             if phase == "hit" {
                 // Fill the shape cache without collecting.
@@ -388,10 +387,9 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
                 own_packed.len() as u32,
             );
             let merged_after = keys_of(grown);
-            assert_ne!(
+            assert_eq!(
                 merged_after, merged_before,
-                "premise ({phase}): subject not live — the birth allocation did not move the \
-                 merged list"
+                "I3 ({phase}): the old merged list remains stable during instance allocation."
             );
             let installed = crate::object::object_keys(inst).arr();
             assert_eq!(
@@ -500,11 +498,11 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
     );
 }
 
-/// One backing serves a whole growth chain, and the collector moves it as
-/// one array: after a minor every list on it resolves at the new address
+/// One old backing serves a whole growth chain: after a minor every list
+/// on it still resolves at the same address
 /// with its own count, and the tip keeps growing in place there.
 #[test]
-fn a_moved_backing_keeps_every_list_on_it() {
+fn a_stationary_backing_keeps_every_list_on_it() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
@@ -524,8 +522,8 @@ fn a_moved_backing_keeps_every_list_on_it() {
             "premise: [mv_0] and [mv_0..2] share a backing"
         );
         assert!(
-            crate::arena::pointer_in_nursery(before as usize),
-            "premise: the backing is young"
+            crate::arena::pointer_in_old_gen(before as usize),
+            "premise: I3 backing is old"
         );
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert!(
@@ -533,7 +531,7 @@ fn a_moved_backing_keeps_every_list_on_it() {
             "premise: the minor copied"
         );
         let after = keys_of(o);
-        assert_ne!(after, before, "premise: the minor moved the backing");
+        assert_eq!(after, before, "I3: the minor cannot move the backing");
         assert_eq!(
             keys_of(short),
             after,
@@ -551,42 +549,33 @@ fn a_moved_backing_keeps_every_list_on_it() {
                 );
             }
         }
-        // The trie followed the move: re-growing [mv_0] hits [mv_0, mv_1] at
+        // The trie kept its stable address: re-growing [mv_0] hits [mv_0, mv_1] at
         // the new address, and the tip grows in place there.
         let proof = SharedLayout::shape_cache_entry();
         let one = canonical_keys::canonicalize(&proof, after, 1);
         assert_eq!(
             (one.as_ptr(), one.len()),
             (after, 1),
-            "the moved [mv_0] is known"
+            "the stationary [mv_0] is known"
         );
         let two = canonical_keys::extend_key(&proof, one, nursery_key("mv_1"));
         assert_eq!((two.as_ptr(), two.len()), (after, 2));
         set(o, nursery_key("mv_3"), 3.0);
-        assert_eq!(keys_of(o), after, "the moved tip grows in place");
+        assert_eq!(keys_of(o), after, "the stationary tip grows in place");
     }
 }
 
 // ------------------------------------------------- weak-table death ordering
 
-/// The step-2.5 weak tables (the class keys memo and the canonical trie)
-/// REWRITE their keys on a move and never MARK them. A dead key therefore has
-/// to leave both tables in the collection that frees its storage, before that
-/// storage can be handed out again: a survivor would be walked by the next
-/// cycle's rewrite pass as a forwarding header (#8040/#8174), and a recycled
-/// ARRAY at that address would be served as a class's keys. This is the
-/// evidence behind both `dead_owner:` verdicts in
-/// `scripts/gc_rekeyed_key_tables.json`.
+/// The class memo and canonical trie hold stationary old backings weakly.
+/// Full-trace death pruning must retire both words before storage is reused;
+/// otherwise a recycled array could be served under the dead layout's identity.
 #[test]
 fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
     const DEAD_MEMO_CLASS_ID: u32 = 0x0C1_7762;
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
-    // The rewrite passes under test: each runs over the dead key before the
-    // prune does, exactly as in production.
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::alloc::scan_class_keys_roots_mut);
     canonical_keys::reset_for_test();
     crate::arena::arena_reset_all_blocks_to_zero();
 
@@ -600,7 +589,7 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
             .any(|list| list as usize == addr)
     };
 
-    // A young canonical list nothing roots, also remembered as a class's keys
+    // An old canonical list nothing roots, also remembered as a class's keys
     // (the memo stores canonical lists; `remember_class_keys` is its writer).
     let raw = crate::array::js_array_alloc(1);
     let raw = crate::array::js_array_push(raw, crate::JSValue::from_bits(crate::value::TAG_HOLE));
@@ -613,32 +602,27 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
         .borrow_mut()
         .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1));
     assert!(
-        crate::arena::pointer_in_nursery(addr),
-        "premise: the list is young"
+        crate::arena::pointer_in_old_gen(addr),
+        "I3: the list is old"
     );
     assert!(trie_names(addr), "premise: the trie published the list");
     assert_eq!(memo(), Some(addr), "premise: the memo names the list");
 
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
-    assert_eq!(
-        trace.copying_nursery.copied_objects, 0,
-        "premise: nothing reached the list, so the minor did not copy it"
-    );
-    assert_eq!(
-        memo(),
-        None,
-        "INVARIANT: the class keys memo still names {addr:#x} after the minor that freed it"
-    );
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(memo(), Some(addr), "I3: a minor retains old weak lists");
+    assert!(trie_names(addr));
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert_eq!(memo(), None, "the full death prune retires the class memo");
     assert!(
         !trie_names(addr),
-        "INVARIANT: the canonical trie still names {addr:#x} after the minor that freed it"
+        "the full death prune retires trie witnesses"
     );
 
     // The storage really is reused -- otherwise the ordering above was never
     // at stake -- and the reused array is not served under the old entries.
     let mut reused = false;
     for _ in 0..64 {
-        let next = crate::array::js_array_alloc_with_length_exact(capacity);
+        let next = crate::array::js_array_alloc_canonical_keys(capacity, false, false);
         reused |= next as usize == addr;
     }
     assert!(
@@ -676,10 +660,10 @@ fn atom_bits(atom: usize) -> u64 {
 /// S3b: a key text has ONE string object in an agent — its atom — and every
 /// canonical list written after the atom exists holds it. The atom table holds
 /// immortal image leaves without scanning or rewriting them. A moving minor
-/// moves the lists while every key and a fresh pool mint keep the same atom
-/// address. Interning is separate: the intern cache never hands out an atom.
+/// moves the receiver while stationary key lists and a fresh pool mint keep
+/// the same atom address. Interning is separate: the intern cache never hands out an atom.
 #[test]
-fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
+fn immortal_atom_keeps_its_identity_while_its_receiver_moves() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
@@ -700,6 +684,7 @@ fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
         let o = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         set(o, nursery_key("atom_mv_a"), 1.0);
         set(o, copy, 2.0);
+        let receiver_before = addr_of(&o);
         let list = keys_of(o);
         assert_eq!(
             crate::array::js_array_get(list, 1).bits(),
@@ -712,10 +697,16 @@ fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
             trace.copying_nursery.copied_objects > 0,
             "premise: the minor copied"
         );
+        assert_ne!(addr_of(&o), receiver_before, "premise: the receiver moved");
+        assert_eq!(
+            keys_of(o),
+            list,
+            "INVARIANT: the key backing stays stationary"
+        );
         let moved = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
         assert_eq!(moved, atom, "INVARIANT: image atoms never move");
         let header = crate::value::addr_class::try_read_tracked_gc_header(moved)
-            .expect("the moved atom is a tracked cell");
+            .expect("the image atom is a tracked cell");
         assert_eq!(
             (*header.as_ptr()).gc_flags & GC_FLAG_FORWARDED,
             0,
@@ -724,9 +715,9 @@ fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
         assert_eq!(
             crate::array::js_array_get(keys_of(o), 1).bits(),
             atom_bits(moved),
-            "INVARIANT: the list follows its atom through the move"
+            "INVARIANT: the stationary list retains the image atom"
         );
-        // After the move: minting again returns the moved atom — never a third
+        // After the move: minting again returns the same image atom — never a third
         // string. Interning a copy does NOT: an atom is identity, not
         // eligibility (`string::intern::AtomTable`).
         assert_ne!(
@@ -737,9 +728,9 @@ fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
         assert_eq!(
             crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize,
             moved,
-            "a second mint finds the moved atom"
+            "a second mint finds the same image atom"
         );
-        // A list written after the move holds the moved atom.
+        // A list written after the move holds the same image atom.
         let o2 = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         set(o2, nursery_key("atom_mv_b"), 1.0);
         set(o2, nursery_key("atom_mv_kind"), 2.0);
@@ -751,30 +742,54 @@ fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
     }
 }
 
+/// Old backing birth must reload a still-movable, non-atom key after its
+/// allocation collects. Atoms now live in the immutable image instead.
+#[test]
+fn old_backing_birth_reloads_key_after_collection() {
+    list_written_across_old_backing_collection(false);
+}
+
 /// S3b, a collection DURING the write: the canonical backing allocation that
 /// publishes a list holding an atom is itself the collection point. The
 /// published list must hold the atom's immutable image address.
 #[test]
 fn a_list_written_across_collection_holds_the_immortal_atom() {
+    list_written_across_old_backing_collection(true);
+}
+
+fn list_written_across_old_backing_collection(with_atom: bool) {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
     let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
     canonical_keys::reset_for_test();
-    let text = b"atom_during_kind";
+    let name = if with_atom {
+        "atom_during_kind"
+    } else {
+        "non_atom_during_key"
+    };
+    let text = name.as_bytes();
     let hash = atom_hash(text);
     unsafe {
-        let atom =
-            crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize;
-        assert!(
-            !crate::arena::pointer_in_nursery(atom),
-            "premise: the atom is born outside the nursery"
-        );
+        let atom = with_atom.then(|| {
+            crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize
+        });
+        if let Some(atom) = atom {
+            assert!(
+                !crate::arena::pointer_in_nursery(atom),
+                "premise: the atom is born outside the nursery"
+            );
+        }
         let scope = RuntimeHandleScope::new();
-        let copy = scope.root_string_ptr(nursery_key("atom_during_kind"));
-        // The empty list plus this key is a fresh backing: its allocation is
-        // the collection point.
+        let copy = scope.root_string_ptr(nursery_key(name));
+        let before = copy.with_const_ptr(|k: *const crate::StringHeader| k as usize);
+        assert!(crate::arena::pointer_in_nursery(before));
+        // Fill a whole old block before arming the trigger. Clear available
+        // holes so the backing allocation must enter the old-block slow path.
+        let full_capacity = (crate::arena::BLOCK_SIZE / 8 - 2) as u32;
+        let _ = crate::array::js_array_alloc_canonical_keys(full_capacity, true, false);
+        old_free::old_free_reset_for_test();
         arm_collection_on_next_block(&trigger);
         let list = copy.with_const_ptr(|k: *const crate::StringHeader| {
             canonical_keys::extend_key(
@@ -783,15 +798,27 @@ fn a_list_written_across_collection_holds_the_immortal_atom() {
                 k,
             )
         });
-        let live = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
-        assert_eq!(
-            live, atom,
-            "INVARIANT: collection preserves the image address"
+        assert!(crate::arena::pointer_in_old_gen(list.addr()));
+        let after = copy.with_const_ptr(|k: *const crate::StringHeader| k as usize);
+        assert_ne!(
+            after, before,
+            "premise: the old-block slow path moved the key copy"
         );
+        let live = if let Some(atom) = atom {
+            let live = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
+            assert_eq!(
+                live, atom,
+                "INVARIANT: collection preserves the image address"
+            );
+            live
+        } else {
+            assert!(crate::string::atom_lookup(text, hash).is_none());
+            after
+        };
         assert_eq!(
             crate::array::js_array_get(list.as_ptr(), 0).bits(),
             atom_bits(live),
-            "INVARIANT: the list holds the atom's live address"
+            "INVARIANT: the list holds the key's live address"
         );
     }
 }

@@ -28,7 +28,6 @@ fn register_object_model_scanners() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
 }
 
 /// Precise roots only, so the dead receiver really dies.

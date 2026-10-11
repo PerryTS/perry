@@ -137,7 +137,21 @@ fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
         // Isolate the malloc parent's pin/shadow-root tracing in both positive
         // controls and sabotages. Its stores now correctly remember the child,
         // which would independently retain it and mask a missing pin trace.
+        // Remove the malloc parent's independent remembering path without
+        // deleting the old-page index or the key backing's child custody.
         reset_remembered_set();
+        crate::arena::old_arena_walk_objects(|header| unsafe {
+            if (*(header as *const GcHeader)).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
+                let user = header.add(GC_HEADER_SIZE);
+                visit_gc_rewrite_slots(header.cast(), |slot| {
+                    crate::gc::runtime_write_barrier_slot(
+                        user as usize,
+                        slot.slot as usize,
+                        slot.read(),
+                    );
+                });
+            }
+        });
     }
     match collection {
         Collection::Full => crate::gc::js_gc_collect(),
@@ -321,7 +335,21 @@ fn pinned_promise_reaction_runs(cross_thread: bool, fulls: usize) -> bool {
     }
     // A freed reaction cell is handed back to a closure that records -1.
     for _ in 0..4096 {
-        let _ = crate::closure::js_closure_alloc(crate::fn_info!(overwrite_cb, 1), 0);
+        let fresh = crate::closure::js_closure_alloc(crate::fn_info!(overwrite_cb, 1), 0);
+        let _no_collect = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let old = crate::arena::arena_alloc_gc_old(
+                std::mem::size_of::<crate::closure::ClosureHeader>(),
+                8,
+                GC_TYPE_CLOSURE,
+            );
+            // GC_STORE_AUDIT(INIT): unpublished capture-free closure clone.
+            std::ptr::copy_nonoverlapping(
+                fresh.cast::<u8>(),
+                old,
+                std::mem::size_of::<crate::closure::ClosureHeader>(),
+            );
+        }
     }
     if !cross_thread {
         unsafe { crate::gc::unpin_object(header_of(p as *mut u8)) };

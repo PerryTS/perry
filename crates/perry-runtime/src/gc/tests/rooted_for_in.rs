@@ -49,11 +49,9 @@ fn run(inherited_proxy: bool, descriptor_trap: bool) {
     // restore the cache root and its weak metadata rewrites explicitly.
     // Long-lived canonical arrays used to conceal the missing registrations.
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     // The shape table's descriptors name those same young lists; its weak
     // rewrite must run too, or a descriptor keeps a moved list's old address.
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_class_keys_roots_mut);
     let scope = RuntimeHandleScope::new();
     let target = object(&scope);
     crate::object::js_object_set_prototype_of(

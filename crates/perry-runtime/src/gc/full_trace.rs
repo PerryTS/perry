@@ -113,6 +113,43 @@ pub(crate) fn handle_trace_active() -> bool {
         || POOL_TRACE_ARMED.with(Cell::get)
 }
 
+/// Shared shape storage is private key/attribute metadata, never a JS array.
+/// Its words are heap edges, short strings, holes or tagged scalar attributes;
+/// no producer publishes proxy, Fetch or pool ids there. Child objects retain
+/// their own observer gates independently of this source-word contract.
+#[inline(always)]
+pub(super) unsafe fn object_words_may_name_handles(header: *const super::GcHeader) -> bool {
+    if (*header).obj_type != super::GC_TYPE_ARRAY
+        || (*header).gc_flags & super::GC_FLAG_SHAPE_SHARED == 0
+    {
+        return true;
+    }
+    #[cfg(any(test, debug_assertions))]
+    if (*header).gc_flags & super::GC_FLAG_FORWARDED == 0 {
+        let array = (header as *const u8)
+            .add(super::GC_HEADER_SIZE)
+            .cast::<crate::array::ArrayHeader>();
+        let count = (*array).length as usize + crate::array::array_front_offset(array);
+        assert!(
+            super::GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>() + count * 8
+                <= (*header).size as usize
+        );
+        let slots = array.add(1).cast::<u64>();
+        for i in 0..count {
+            let bits = *slots.add(i);
+            let proxy = bits & crate::value::TAG_MASK == crate::value::POINTER_TAG
+                && crate::value::addr_class::is_proxy_id_band(
+                    (bits & crate::value::POINTER_MASK) as usize,
+                );
+            assert!(
+                !proxy && !is_fetch_handle_word(bits) && !is_pool_handle_word(bits),
+                "shared shape storage contains a foreign handle id"
+            );
+        }
+    }
+    false
+}
+
 /// Fetch handles are POINTER_TAG-boxed or raw ids inside the fetch band. Pure
 /// arithmetic, so ordinary heap pointers never pay for the thread-local read
 /// and cross-crate indirect call below.

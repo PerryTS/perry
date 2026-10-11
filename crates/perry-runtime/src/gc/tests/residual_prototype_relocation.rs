@@ -88,7 +88,6 @@ fn marked_prototype() -> usize {
 /// see `ScopedRootScannerRegistryGuard::new`.)
 fn register_key_table_scanners() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
 }
 
 fn forget_owners(owners: &[usize]) {

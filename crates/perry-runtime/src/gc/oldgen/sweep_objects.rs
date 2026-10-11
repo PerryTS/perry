@@ -379,7 +379,12 @@ impl ArenaSweepObjectsState {
                 continue;
             }
             if is_old {
-                self.account_old_object(header, total_size, true, false);
+                self.account_old_object(
+                    header,
+                    total_size,
+                    true,
+                    flags & GC_FLAG_SHAPE_SHARED != 0,
+                );
             }
             kept_live = true;
             if general {
@@ -552,7 +557,12 @@ impl ArenaSweepObjectsState {
         count_in_live_census: bool,
     ) {
         if block_idx >= self.old_block_start {
-            self.account_old_object(header, (*header).size as usize, true, pinned);
+            self.account_old_object(
+                header,
+                (*header).size as usize,
+                true,
+                pinned || flags & GC_FLAG_SHAPE_SHARED != 0,
+            );
         }
         if block_idx < self.block_has_live.len() {
             self.block_has_live[block_idx] = true;
@@ -645,7 +655,15 @@ impl ArenaSweepObjectsState {
         if block_idx < self.resettable_general_n {
             self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
         }
-        finalize_dead_arena_payload(header, user_ptr, self.closure_externals_active);
+        // This existing census vector is armed only by apply_block_skip in
+        // the synchronous full sweep, after the dead-owner fan-out. Sliced
+        // fulls and minors retain per-object table removal.
+        finalize_dead_arena_payload(
+            header,
+            user_ptr,
+            self.closure_externals_active,
+            !self.census_hole_free.is_empty(),
+        );
         if crate::arena::old_sweep_quarantine_enabled() {
             self.quarantine_dead_object(header, total_size, block_idx, dead_old);
         }

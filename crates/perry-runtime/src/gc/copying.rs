@@ -1193,7 +1193,6 @@ pub(super) fn run_copied_minor_attempt(
     } else {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("mutable_root_slots");
         visit_mutable_root_slots(|slot| unsafe {
-            let _kind = super::pin::CopyingWalkPhaseGuard::enter(slot.kind.walk_phase_name());
             let bits = slot.read();
             if let Some(trace) = trace.as_mut() {
                 let pointer_root = collector.ptrs.decode_bits(bits).is_some();
@@ -1208,7 +1207,7 @@ pub(super) fn run_copied_minor_attempt(
             }
             if let Some(new_bits) = slot
                 .pointer_word(bits)
-                .and_then(|_| collector.visit_value_bits(bits))
+                .and_then(|word| collector.visit_root_word(word))
             {
                 slot.write(new_bits);
                 if let Some(trace) = trace.as_mut() {

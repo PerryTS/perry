@@ -740,8 +740,13 @@ unsafe fn finalize_dead_arena_payload(
     header: *mut GcHeader,
     user_ptr: *mut u8,
     closure_externals_active: bool,
+    full_dead_owners_pruned: bool,
 ) {
-    layout_clear_for_ptr(user_ptr as usize);
+    if full_dead_owners_pruned {
+        super::layout::layout_clear_after_full_prune(user_ptr as usize);
+    } else {
+        layout_clear_for_ptr(user_ptr as usize);
+    }
     if closure_externals_active {
         gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
     }
@@ -874,7 +879,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, closure_externals_active);
+                finalize_dead_arena_payload(header, user_ptr, closure_externals_active, false);
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
                 }
@@ -983,7 +988,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, closure_externals_active);
+                finalize_dead_arena_payload(header, user_ptr, closure_externals_active, false);
 
                 // Note: We deliberately do NOT zero the dead object's
                 // payload here. trace_object/trace_array/trace_closure
@@ -1006,7 +1011,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                         header as usize,
                         (*header).size as usize,
                         true,
-                        false,
+                        flags & GC_FLAG_SHAPE_SHARED != 0,
                     );
                 }
                 if block_idx < block_has_live.len() {
@@ -1555,7 +1560,7 @@ pub(super) fn evacuate_selected_old_pages_collecting(
         let flags = (*header).gc_flags;
         crate::arena::pointer_in_old_gen(user_ptr as usize)
             && flags != 0
-            && flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED) == 0
+            && flags & (GC_FLAG_FORWARDED | GC_FLAG_PINNED | GC_FLAG_SHAPE_SHARED) == 0
             && gc_type_is_movable((*header).obj_type)
             && !is_conservatively_pinned(header)
     });

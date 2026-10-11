@@ -457,7 +457,6 @@ fn gc_collect_minor_with_trigger_inner(
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
-    let current_rss_bytes = crate::process::get_rss_bytes();
     // Not budgeted, so the low-pause veto does not apply and the policy is
     // always allowed to run here (#7611 deleted the env veto that used to sit
     // in this slot). The variable stays rather than being folded away: it is
@@ -508,6 +507,9 @@ fn gc_collect_minor_with_trigger_inner(
         };
     }
     clear_mark_seeds();
+    // Only the non-copying evacuation policy consumes RSS. A successful
+    // copied minor has already returned, so it owes no process-memory query.
+    let current_rss_bytes = crate::process::get_rss_bytes();
     // Old-page defrag belongs to the non-copying fallback below. Snapshotting
     // and sorting all old-page metadata before trying the copying fast path
     // charged every ordinary minor an O(old pages) cost even though that path

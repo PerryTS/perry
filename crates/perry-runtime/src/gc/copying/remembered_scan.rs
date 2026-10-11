@@ -47,7 +47,17 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying(
                 return;
             }
             let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+            // The old-page index already supplies the birth generation for
+            // this walk. External/fallback entries still need classification.
+            #[cfg(any(test, debug_assertions))]
+            if arena_parent && old_walk {
+                assert!(matches!(
+                    crate::arena::classify_heap_generation(user),
+                    crate::arena::HeapGeneration::Old
+                ));
+            }
             if arena_parent
+                && !old_walk
                 && !matches!(
                     crate::arena::classify_heap_generation(user),
                     crate::arena::HeapGeneration::Old

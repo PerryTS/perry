@@ -182,7 +182,6 @@ fn descriptor_snapshot_named_array_accessors_copy_in_each_rebind_window() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     super::super::dead_owner_side_tables::register_array_side_table_scanners();
     unsafe {
         // Call the decoded consumer directly: public current-record builders
@@ -303,7 +302,6 @@ fn descriptor_snapshot_named_array_retained_accessor_halves_survive_rebind_copyi
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     super::super::dead_owner_side_tables::register_array_side_table_scanners();
     unsafe {
         for replace_get in [false, true] {

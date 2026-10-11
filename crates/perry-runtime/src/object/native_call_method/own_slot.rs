@@ -259,10 +259,10 @@ mod tests {
             });
             crate::gc::gc_collect_minor();
             recv.with_const_ptr(|obj| unsafe {
-                assert_ne!(
+                assert_eq!(
                     object_keys(obj).arr(),
                     before_keys,
-                    "the indexed keys must actually move"
+                    "I3 indexed key backings remain stationary"
                 );
                 let before = crate::string::test_key_byte_reads();
                 assert_eq!(

@@ -96,7 +96,6 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
     gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
 
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     let func = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::closure::ClosureHeader>(),
         std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -173,7 +172,6 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     // its production scanners, retaining every actual-relocation assertion.
     gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
 
     // Array symbols and class symbols both live in owned holder slots.
     let owner = crate::array::js_array_alloc(0) as usize;
@@ -383,7 +381,11 @@ fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borro
     assert_ne!(child_after, child);
     assert!(crate::arena::pointer_in_nursery(child_after));
     assert!(trace.copying_nursery.copied_objects >= 1);
-    assert_eq!(trace.remembered_set.dirty_objects_scanned, 1);
+    assert_eq!(
+        trace.remembered_set.dirty_objects_scanned,
+        4,
+        "the owner plus three old key-list backings have young child edges"
+    );
     assert!(
         trace.remembered_set.dirty_pages_scanned <= 2,
         "old owner page plus overflow Vec page should bound copied-minor scanning"

@@ -363,6 +363,7 @@ fn a_later_store_into_a_traced_old_parent_keeps_dirty_snapshot_coverage() {
         raw_store(parent, fields, ptr_bits(old_child as usize));
         let mut state =
             GcCycleState::new_full(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
+        state.set_progress_kind(GcProgressKind::NormalIncremental);
         step_to(&mut state, GcCyclePhase::BlockPersistence);
         let page = crate::arena::generation_page_for_addr(fields as usize);
         assert!(
@@ -384,6 +385,30 @@ fn a_later_store_into_a_traced_old_parent_keeps_dirty_snapshot_coverage() {
             "late store lost coverage: {verify:?}"
         );
         assert_eq!(unsafe { *fields }, string_bits(child));
+    });
+}
+
+#[test]
+fn synchronous_full_uses_the_mark_fold_even_for_a_previously_dirty_page() {
+    run_isolated(|| {
+        let (parent, fields, child) = plant_unbarriered_young_edge();
+        js_write_barrier_slot(ptr_bits(parent), fields as u64, ptr_bits(child));
+        assert!(remembered_set_size() > 0, "premise: the page starts dirty");
+        let _ = synchronous_full();
+        assert_eq!(verify_live_parent(parent).missing_edges, 0);
+
+        // Dropping the fold must fail independently of the pre-clear page:
+        // a second visit used to repair this deliberate missing entry.
+        {
+            let _control = remembered_mark_sabotage::Guard::arm();
+            let _ = synchronous_full();
+        }
+        let verify = verify_live_parent(parent);
+        assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
+        assert!(
+            verify.missing_edges > 0,
+            "the dropped fold must be visible: {verify:?}"
+        );
     });
 }
 

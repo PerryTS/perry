@@ -10,7 +10,6 @@ fn old_builtin_attributes_survive_minor(promote_bag: bool) {
     let _tenuring = crate::gc::tenuring::set_survivals_for_test(1);
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
 
     let scope = RuntimeHandleScope::new();
     let owner =
@@ -50,8 +49,8 @@ fn old_builtin_attributes_survive_minor(promote_bag: bool) {
     let descriptor = unsafe { crate::object::shapes::object_shape_descriptor(bag) }.unwrap();
     let keys = descriptor.keys as usize;
     assert!(
-        crate::arena::pointer_in_nursery(keys),
-        "successor keys must be young"
+        crate::arena::pointer_in_old_gen(keys),
+        "I3: successor keys backing must be old"
     );
     if promote_bag {
         assert_eq!(bag, previous_bag);
@@ -79,9 +78,9 @@ fn old_builtin_attributes_survive_minor(promote_bag: bool) {
         assert_ne!(bag_after, bag, "closure bag slot must be rewritten");
     }
     let after = unsafe { crate::object::shapes::object_shape_descriptor(bag_after) }.unwrap();
-    assert_ne!(
+    assert_eq!(
         after.keys as usize, keys,
-        "shape table keys slot must be rewritten"
+        "I3: shape table keys backing stays stationary"
     );
     let name = crate::closure::closure_get_own_dynamic_prop(owner_after, "name").unwrap();
     assert_eq!(

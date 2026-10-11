@@ -1404,7 +1404,9 @@ pub(super) unsafe fn mark_decoded_field_into_worklist(
     // cannot see them, because they are arrays and not the strings it was
     // written for.
     //
-    // ONLY WHEN NO PROXY TRACE IS ACTIVE. `trace_heap_rewrite_slots` reads
+    // Ordinary arrays require NO ACTIVE HANDLE TRACE. Private shared key/
+    // attribute storage has no handle-id words and may also skip this walk.
+    // `trace_heap_rewrite_slots` reads
     // every word of a POINTER-FREE payload through `gc_observe_traced_value`
     // when `proxy_trace_active`, because a proxy id is a POINTER_TAG value in
     // the proxy-id band and not a heap pointer — which is exactly why the
@@ -1419,7 +1421,8 @@ pub(super) unsafe fn mark_decoded_field_into_worklist(
     let proxy_gate = proxy_trace_active && !zero_slot_skip_sabotage::respecting_proxy_gate();
     if !forwarded
         && (gc_type_rewrite_descriptor_kind((*header).obj_type) == GcRewriteDescriptorKind::Leaf
-            || (!proxy_gate && gc_object_yields_no_child_slots(header)))
+            || ((!proxy_gate || !super::full_trace::object_words_may_name_handles(header))
+                && gc_object_yields_no_child_slots(header)))
     {
         return true;
     }

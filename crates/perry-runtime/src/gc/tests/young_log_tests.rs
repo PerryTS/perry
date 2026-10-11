@@ -160,11 +160,13 @@ fn dead_young_closure_owner_is_pruned_by_the_young_prune() {
 
     let _ = gc_collect_minor();
 
+    // The prop is in ordinary metadata; reading a dead closure is invalid.
+    let fresh = young_closure();
     assert!(
-        crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_none(),
+        crate::closure::closure_get_own_dynamic_prop(fresh, "memo").is_none(),
         "the dead young owner's CLOSURE_PROPS entry must be pruned from the log"
     );
-    assert!(crate::closure::closure_static_prototype(dead).is_none());
+    assert!(crate::closure::closure_static_prototype(fresh).is_none());
 }
 
 // -------------------------------------------------------------- descriptors
@@ -358,7 +360,7 @@ fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
 /// replaced it — a young entry reachable only through the cache still moves
 /// and is re-keyed in both the inline slot and the overflow map.
 #[test]
-fn shape_cache_entry_is_moved_by_the_plain_walk() {
+fn shape_cache_entry_is_stationary_across_the_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
 
@@ -367,15 +369,17 @@ fn shape_cache_entry_is_moved_by_the_plain_walk() {
     let keys = unsafe { young_keys_array() };
     let shape_id = 0x9754_0001;
     crate::object::test_shape_cache_insert(shape_id, keys);
+    let (_, before) = crate::object::test_shape_cache_root(shape_id);
+    assert!(crate::arena::pointer_in_old_gen(before));
 
     let _ = gc_collect_minor();
 
     let (inline, overflow) = crate::object::test_shape_cache_root(shape_id);
-    assert_ne!(
-        overflow, keys as usize,
-        "the overflow entry must have been evacuated"
+    assert_eq!(
+        overflow, before,
+        "the canonical overflow entry stays at its birth address"
     );
-    assert!(crate::arena::pointer_in_nursery(overflow));
+    assert!(crate::arena::pointer_in_old_gen(overflow));
     assert_eq!(
         inline, overflow,
         "inline and overflow must agree on the new address"
@@ -586,6 +590,25 @@ fn shape_table_rederivation_rejects_a_suppressed_logging_site() {
         rejected.is_err(),
         "a missing shape log note must be detected"
     );
+}
+
+/// Full scans also depend on writer custody when retaining the minor log;
+/// recomputing the whole log would conceal this missing publication note.
+#[test]
+fn full_shape_walk_rejects_a_suppressed_logging_site() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    crate::object::shapes::test_clear_shape_table();
+    let keys = unsafe { young_keys_array() };
+    {
+        let _negative = crate::object::shapes::TestShapeYoungLogSuppression::new();
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape");
+    }
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, false);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
+    }));
+    assert!(rejected.is_err(), "full walk must reject a missing writer note");
 }
 
 /// Promotion removes a shape address from the minor log, without removing the

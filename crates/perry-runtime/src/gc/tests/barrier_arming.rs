@@ -58,6 +58,45 @@ unsafe fn born_old_parent_with_young_child() -> (usize, *mut u64, usize) {
 }
 
 #[test]
+fn full_root_counts_arm_cold_stores_without_marking_dead_owners_children() {
+    for suppress_reconstruct in [false, true] {
+        let _guard = GcTestIsolationGuard::new();
+        reset_remembered_set();
+        clear_marks();
+        let _window = UnarmedWindowGuard::open();
+        let (_old, fields, young) = unsafe { born_old_parent_with_young_child() };
+        let page = crate::arena::generation_page_for_addr(fields as usize);
+        assert!(!old_page_dirty_for(page));
+        if suppress_reconstruct {
+            // Negative control: announce arming without recovering the store.
+            arm_barrier_for_tests();
+        }
+        let valid = build_valid_pointer_set();
+        let mut state = barrier::RememberedSetRootMarkState::new_with_marking(false);
+        assert!(state.step(&valid, 1));
+        assert_eq!(state.stats().newly_marked, 0);
+        assert!(barrier_remembering_armed());
+        assert_eq!(old_page_dirty_for(page), !suppress_reconstruct);
+        assert_eq!(
+            remembered_reconstruct_census().reconstructs,
+            u64::from(!suppress_reconstruct)
+        );
+        unsafe {
+            assert_eq!(
+                (*header_from_user_ptr(young as *const u8)).gc_flags & GC_FLAG_MARKED,
+                0
+            );
+        }
+        // A subsequent minor consumes the recovered page. The negative
+        // control loses that child through the same production root scan.
+        let stats = mark_remembered_set_roots(&valid);
+        assert_eq!(stats.newly_marked > 0, !suppress_reconstruct);
+        reset_remembered_set();
+        clear_marks();
+    }
+}
+
+#[test]
 fn test_7187_unarmed_barrier_logs_nothing_and_first_snapshot_reconstructs() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();

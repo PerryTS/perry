@@ -456,6 +456,23 @@ pub(crate) fn forget_element_shape(user_ptr: usize) {
     });
 }
 
+/// Full-sweep death pruning already removed every dead owner's record.
+/// Preserve the header/epoch invalidation without repeating its table lookup.
+/// The collector must prove that the full death-prune fan-out has completed.
+pub(crate) unsafe fn forget_element_shape_after_full_prune(user_ptr: usize) {
+    #[cfg(any(test, debug_assertions))]
+    assert!(
+        !ELEMENT_SHAPES.with(|m| m.borrow().contains_key(&user_ptr)),
+        "full death prune left an element-shape record for a swept owner"
+    );
+    if let Some(header) = array_gc_header(user_ptr as *const ArrayHeader) {
+        if header_has_bit(header) {
+            clear_bit(header);
+            bump_epoch();
+        }
+    }
+}
+
 /// **Establish** the invariant for `arr` at `class_id`, verified over
 /// `[0, verified_len)`, under a brand-new proof identity.
 ///

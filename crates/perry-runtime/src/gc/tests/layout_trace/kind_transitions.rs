@@ -24,6 +24,9 @@ fn numbers_to_tagged_during_incremental_mark() {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
     });
+    // This fixture inserts a mutator store between collector slices. Select
+    // the production budgeted policy, including its late-store repair.
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
     run_until(&mut state, GcCyclePhase::BlockPersistence);
     assert!(
         incremental_mark_barrier_active(),

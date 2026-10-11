@@ -84,6 +84,21 @@ fn build_two_key_object(slot: u32, prefix: &[u8]) {
     }
 }
 
+/// Mutable owned lists still relocate. The legacy relocation controls use
+/// this fixture; canonical old lists have separate I3 liveness/pin witnesses.
+fn use_owned_fixture_keys(slot: u32) {
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+        let keys = crate::object::object_keys(obj);
+        let raw = crate::array::js_array_alloc(keys.count());
+        for i in 0..keys.count() {
+            crate::array::js_array_push(raw, crate::array::js_array_get(keys.arr(), i));
+        }
+        shapes::stamp_object_shape(obj, raw, keys.count(), keys.count());
+    }
+}
+
 /// The collector's own rewrite enumeration for `user_ptr`.
 fn rewrite_slots(user_ptr: usize) -> Vec<usize> {
     crate::gc::test_gc_rewrite_slot_addresses(user_ptr)
@@ -136,6 +151,7 @@ fn the_descriptor_record_is_enumerated_as_a_child_slot() {
 /// passing vacuously.
 fn collect_and_report(suppress_edge: bool) -> Option<(KeysEdge, KeysEdge)> {
     build_two_key_object(0, b"e8112_move_");
+    use_owned_fixture_keys(0);
     let obj_before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let before = unsafe { keys_edge_of(obj_before as *const crate::ObjectHeader) }
         .expect("the receiver is published before the collection");
@@ -315,6 +331,7 @@ fn keys_edge_sabotage_is_detected() {
 fn a_keys_array_whose_last_carrier_died_is_still_reclaimed() {
     let _guard = CopyingNurseryTestGuard::new(2);
     build_two_key_object(0, b"e8112_dead_");
+    use_owned_fixture_keys(0);
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let shape_id = unsafe { shapes::object_shape_stamp(obj) };
     assert!(shapes::shape_descriptor_by_id(shape_id).is_some());
@@ -702,12 +719,12 @@ fn dead_canonical_cache_list_storage_is_reused() {
     let list: CanonicalKeys = unsafe { canonicalize(&SharedLayout::shape_cache_entry(), raw, 1) };
     let addr = list.addr();
     let capacity = unsafe { (*list.as_ptr()).capacity };
-    let _ = collect_minor_trace(GcTriggerKind::Direct);
-    // Eden reset must return the actual dead cell. Weak-table pruning alone
+    collect_synchronous_full_trace();
+    // Full sweep must return the actual dead old cell. Weak-table pruning alone
     // would also pass with never-reclaimed long-lived allocation.
     let mut reused = false;
     for _ in 0..64 {
-        let next = crate::array::js_array_alloc_with_length_exact(capacity);
+        let next = crate::array::js_array_alloc_canonical_keys(capacity, false, false);
         reused |= next as usize == addr;
     }
     assert!(
@@ -724,7 +741,6 @@ fn canonical_prefix_and_full_list_survive_element_rewrites() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::support::register_runtime_handle_root_scanner_for_tests();
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     // The shape table's descriptors name those same young lists; its weak
     // rewrite must run too, or a descriptor keeps a moved list's old address.
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
@@ -751,7 +767,7 @@ fn canonical_prefix_and_full_list_survive_element_rewrites() {
         .with_const_ptr(|a| crate::array::js_array_get(a, 0))
         .bits();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
-    assert!(trace.copying_nursery.copied_objects > 0);
+    assert!(trace.copying_nursery.copied_objects + trace.copying_nursery.promoted_objects > 0);
     let first_after = full
         .with_const_ptr(|a| crate::array::js_array_get(a, 0))
         .bits();

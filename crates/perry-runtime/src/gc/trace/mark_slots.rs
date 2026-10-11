@@ -7,7 +7,7 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots(
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
 ) {
-    trace_heap_rewrite_slots_impl::<false>(header, valid_ptrs, worklist, None);
+    trace_heap_rewrite_slots_impl::<false, false>(header, valid_ptrs, worklist, None);
 }
 
 /// Only full-cycle drains pass a buffer. The parent's generation and its
@@ -22,15 +22,52 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering(
 ) {
     if let Some(sticky) = sticky {
         let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-        if barrier_parent_needs_remembering(user) {
-            trace_heap_rewrite_slots_impl::<true>(header, valid_ptrs, worklist, Some(sticky));
-            return;
+        match crate::gc::barrier::barrier_remembering_parent(user) {
+            Some(crate::gc::barrier::RememberingParent::Old) => {
+                trace_heap_rewrite_slots_impl::<true, true>(header, valid_ptrs, worklist, Some(sticky));
+                return;
+            }
+            Some(crate::gc::barrier::RememberingParent::Malloc) => {
+                // Malloc parents are uncommon and cannot use bare old pages.
+                // Reuse the ordinary mark loop, then record their descriptor's
+                // post-observer words through one shared cold helper. This
+                // avoids emitting a third copy of the complete mark loop.
+                trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+                remember_malloc_mark_slots(header, sticky);
+                return;
+            }
+            None => {}
         }
     }
     trace_heap_rewrite_slots(header, valid_ptrs, worklist);
 }
 
-unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
+#[cold]
+#[inline(never)]
+unsafe fn remember_malloc_mark_slots(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
+    // Match the mark loop's early exits. Ephemeron words are not unconditional
+    // strong edges, and a missing native callback must remain detectable.
+    if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
+        return;
+    }
+    #[cfg(test)]
+    if (*header).obj_type == GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("mark")
+    {
+        return;
+    }
+    let weak_holder = crate::weakref::is_weak_holder_header(header);
+    visit_gc_rewrite_slots(header, |slot| {
+        if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            return;
+        }
+        if let Some(word) = FieldWord::decode(slot.read()) {
+            remember_decoded_full_mark_slot(sticky, header, slot, word, false);
+        }
+    });
+}
+
+unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool, const OLD_PARENT: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
@@ -53,40 +90,43 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
         crate::gc::ephemeron::discover(header);
         return; // Neither word is an unconditional strong edge.
     }
-    let proxy_trace_active = super::full_trace::handle_trace_active();
+    let handles_active = super::full_trace::handle_trace_active();
+    let shared_key_words =
+        handles_active && !super::full_trace::object_words_may_name_handles(header);
+    let proxy_trace_active = handles_active && !shared_key_words;
+    // Reuse the physical generation the barrier gate already established.
+    // A malloc owner's slots remain external even inside its own payload.
     #[cfg(not(test))]
     let weak_holder = crate::weakref::is_weak_holder_header(header);
     #[cfg(test)]
     let weak_holder =
         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
-        let mut visit_slot = |slot: GcMutableSlot| {
+        let mut visit_slot = |slot: GcMutableSlot,
+                              sticky: &mut Option<&mut StickyRememberedSet>| {
             if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
-                return;
+                return false;
             }
             if let Some(kind) = slot.layout_kind {
                 record_layout_child_slot_read(kind);
                 record_trace_slot_read();
             }
-            if REMEMBER && !proxy_trace_active {
-                // Without an observer no callback can change the source word.
-                // Decode once, but never equate successful marking with the
-                // barrier's broader coverage question (including raw garbage).
-                if let Some(word) = FieldWord::decode(slot.read()) {
-                    let _marked =
-                        mark_decoded_field_into_worklist(word.addr(), valid_ptrs, worklist, false);
-                    #[cfg(test)]
-                    if !_marked && full_mark_decode_sabotage::requiring_new_mark() {
-                        return;
-                    }
-                    remember_decoded_full_mark_slot(
-                        sticky.as_deref_mut().unwrap(),
-                        header,
-                        slot,
-                        word,
-                    );
-                }
-                return;
+            let bits = slot.read();
+            if !handles_active {
+                // Preserve the collector's observer-free specialization: the
+                // child descriptor can omit its handle gate too.
+                trace_decoded_slot::<REMEMBER, false>(
+                    header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
+                );
+                return false;
+            }
+            if !proxy_trace_active || (REMEMBER && bits & TAG_MASK == STRING_TAG) {
+                // A source string/shared word cannot invoke an observer, but
+                // its child's descriptor still has the globally active gate.
+                trace_decoded_slot::<REMEMBER, true>(
+                    header, slot, bits, valid_ptrs, worklist, sticky, OLD_PARENT,
+                );
+                return false;
             }
             // Foreign proxy/Fetch/pool observers retain the original ordering,
             // post-mark reread and barrier decode; no purity is assumed.
@@ -100,8 +140,14 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
             mark_field_into_worklist(slot.read(), valid_ptrs, worklist, proxy_trace_active);
             #[cfg(test)]
             if let Some(word) = observer_snapshot {
-                remember_decoded_full_mark_slot(sticky.as_deref_mut().unwrap(), header, slot, word);
-                return;
+                remember_decoded_full_mark_slot(
+                    sticky.as_deref_mut().unwrap(),
+                    header,
+                    slot,
+                    word,
+                    OLD_PARENT,
+                );
+                return false;
             }
             if REMEMBER {
                 #[cfg(test)]
@@ -111,11 +157,12 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                         && crate::gc::barrier::remembered_child_needs_tracking(child)
                         && remembered_mark_sabotage::drop_next_entry()
                     {
-                        return;
+                        return false;
                     }
                 }
                 remember_mutable_old_to_young_slot(sticky.as_deref_mut().unwrap(), header, slot);
             }
+            false
         };
         match descriptor {
             GcMutableSlotDescriptor::PointerFreeRange(range) => {
@@ -125,7 +172,9 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                     }
                 }
             }
-            GcMutableSlotDescriptor::Slot(slot) => visit_slot(slot),
+            GcMutableSlotDescriptor::Slot(slot) => {
+                visit_slot(slot, &mut sticky);
+            }
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
                 // Start the header reads of the range's pointer children
                 // before marking any of them: each is a cold DRAM read the
@@ -141,11 +190,38 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                     }
                 }
                 for i in 0..range.slot_count() {
-                    visit_slot(GcMutableSlot::new(range.slot(i), layout_kind));
+                    visit_slot(GcMutableSlot::new(range.slot(i), layout_kind), &mut sticky);
                 }
             }
         }
     });
+}
+
+/// The no-observer and active-child cases share decoding and custody. The
+/// literal observer argument lets the existing leaf test discard its dynamic
+/// gate in the no-observer case, as it did before sharing string decoding.
+#[inline(always)]
+unsafe fn trace_decoded_slot<const REMEMBER: bool, const HANDLES: bool>(
+    header: *mut GcHeader,
+    slot: GcMutableSlot,
+    bits: u64,
+    valid_ptrs: &ValidPointerSet,
+    worklist: &mut Vec<*mut GcHeader>,
+    sticky: &mut Option<&mut StickyRememberedSet>,
+    old_parent: bool,
+) {
+    if let Some(word) = FieldWord::decode(bits) {
+        let _marked = mark_decoded_field_into_worklist(word.addr(), valid_ptrs, worklist, HANDLES);
+        #[cfg(test)]
+        if !_marked && full_mark_decode_sabotage::requiring_new_mark() {
+            return;
+        }
+        if REMEMBER {
+            remember_decoded_full_mark_slot(
+                sticky.as_deref_mut().unwrap(), header, slot, word, old_parent,
+            );
+        }
+    }
 }
 
 /// Sabotage switch for the mark-hoist test: the per-object weak-holder fact

@@ -4,6 +4,7 @@ use super::hot_tls::{
 use super::*;
 
 /// Snapshot the remembered dirty ranges before the collection clears them.
+#[derive(Default)]
 pub(super) struct RememberedDirtySnapshot {
     pub(super) dirty_old_pages: crate::fast_hash::PtrHashSet<usize>,
     pub(super) external_dirty_entries: Vec<(usize, usize)>,
@@ -11,12 +12,14 @@ pub(super) struct RememberedDirtySnapshot {
     pub(super) fallback_headers: Vec<usize>,
 }
 
-/// The **sole read path** for the remembered set.
+/// The collector read boundary for the remembered set.
 ///
-/// Every collector obtains the dirty set here: the budgeted/full cycle's
+/// Every collector obtains dirty ranges here: the budgeted/minor cycle's
 /// `RememberedSetRootMarkState::new`, the copying nursery fast path and its
 /// preflight, the cycle's pre-clear coverage snapshot, and the evacuation
-/// verifier. The barrier *writes* `DIRTY_OLD_PAGES` /
+/// verifier. A full root scan needs only `remembered_dirty_counts`, which
+/// preserves the same lazy-arming boundary without copying unused ranges.
+/// The barrier *writes* `DIRTY_OLD_PAGES` /
 /// `EXTERNAL_DIRTY_SLOT_PAGES` / `REMEMBERED_SET`; `remembered_set_clear`
 /// empties them; nothing else reads them for collection decisions. That is
 /// what lets #7187's lazy arming be sound by construction rather than by
@@ -48,6 +51,21 @@ pub(super) fn remembered_dirty_snapshot() -> RememberedDirtySnapshot {
         dirty_pages,
         fallback_headers,
     }
+}
+
+/// Full root scans arm the barrier and report the log, but do not root its
+/// children. Count existing entries without constructing a slot snapshot.
+pub(super) fn remembered_dirty_counts() -> (usize, usize) {
+    arm_and_reconstruct_remembered_set_if_unarmed();
+    let entries = DIRTY_OLD_PAGES.with(|s| s.borrow().len())
+        + EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+            s.borrow()
+                .values()
+                .map(|owners| owners.len())
+                .sum::<usize>()
+        })
+        + REMEMBERED_SET.with(|s| s.borrow().len());
+    (entries, remembered_dirty_page_count())
 }
 
 /// Gen-GC Phase C3: mark the remembered set as roots. Old-gen

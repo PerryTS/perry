@@ -306,7 +306,7 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
 }
 
 #[test]
-fn test_dead_nursery_owner_descriptor_entries_pruned_on_copied_minor() {
+fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let (obj, _) = unsafe { alloc_nursery_test_object(0) };
     let addr = obj as usize;
@@ -319,11 +319,10 @@ fn test_dead_nursery_owner_descriptor_entries_pruned_on_copied_minor() {
 
     let _ = gc_collect_minor();
 
-    assert!(
-        crate::object::get_property_attrs(addr, "gone").is_none(),
-        "dead from-space owner's descriptor entry must be pruned by the \
-         copied-minor pass"
-    );
+    // Descriptors belong to a stationary old key list. Reading the dead
+    // receiver address is invalid; a fresh receiver must inherit no attrs.
+    let (fresh, _) = unsafe { alloc_nursery_test_object(0) };
+    assert!(crate::object::get_property_attrs(fresh as usize, "gone").is_none());
 }
 
 #[test]

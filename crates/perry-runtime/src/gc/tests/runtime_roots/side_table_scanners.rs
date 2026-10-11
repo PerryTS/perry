@@ -549,7 +549,6 @@ fn builtin_closure_length_bag_survives_a_copying_minor() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
 
     let scope = RuntimeHandleScope::new();
     let owner =

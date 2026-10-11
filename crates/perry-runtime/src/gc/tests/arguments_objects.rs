@@ -116,9 +116,9 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
     gc_collect_minor();
     let after = arguments(&[4.0, 5.0, 6.0], undefined, false);
     let after_keys = unsafe { object_keys(after).arr() };
-    assert_ne!(
+    assert_eq!(
         before_keys, after_keys,
-        "the cached keys must actually evacuate"
+        "I3: the cached old keys must stay stationary"
     );
     assert_eq!(get(after, "0").bits(), 4.0f64.to_bits());
     assert_eq!(get(after, "length").bits(), 3.0f64.to_bits());

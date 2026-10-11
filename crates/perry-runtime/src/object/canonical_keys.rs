@@ -51,18 +51,16 @@
 //!   substitute its equal immutable image header, just as relocation changes
 //!   its address without changing the prefix's string value;
 //! * the collector sees one ordinary array: its header length covers every
-//!   written slot, it is traced and moved as a whole, and nodes and
+//!   written slot, it is traced as a whole and never moves, and nodes and
 //!   descriptors hold `(backing, count)` — never an interior pointer. A key
 //!   string that moves is rewritten in the backing once, which is the right
 //!   answer for every list sharing it: they name the same key.
 //!
-//! ## Node ids, not addresses, so the collector touches one `Vec`
+//! ## Stable node ids and stationary backing addresses
 //!
-//! Edges are keyed by NODE ID, which the collector cannot move. Only
-//! `Node::addr` and the address index are address-typed, so a minor visits a
-//! contiguous `Vec<Node>` and patches a handful of index entries, instead of
-//! rekeying an address-keyed edge map the way `move_shape_family` must rekey
-//! `families`.
+//! Edges are keyed by NODE ID, which the collector cannot move. The backing
+//! addresses never move, so neither nodes nor the address index
+//! need a relocation scanner. Full traces prune unreachable backings.
 //!
 //! ## Weak, exactly like the transition cache — and that is what bounds it
 //!
@@ -70,8 +68,8 @@
 //! move, dropped on death) after strong rooting pinned up to 16,384 keys
 //! arrays and, through them, their descriptors: 786k descriptors on a
 //! workload holding under 400 live objects. This table is weak for the same
-//! reason, through the same two mechanisms — [`scan_canonical_keys_roots_mut`]
-//! and [`prune_dead_canonical_keys`].
+//! reason, through [`prune_dead_canonical_keys`] after full traces. I3 backings are
+//! born old and movement-pinned: minors cannot move or reclaim them.
 //!
 //! That answers L8.3.15c's retention worry, which assumed the intern table
 //! would hold its arrays: **it holds none**. A node whose array died is
@@ -788,6 +786,23 @@ impl Appended {
         }
     }
 
+    /// A key published under stationary old metadata belongs in old storage
+    /// on its first evacuation. Set the collector's existing per-object
+    /// tenure bit before publication, rather than making its promotion depend
+    /// on which root reaches it first. This does not pin or root the string;
+    /// the normal minor still forwards every reference to its old copy.
+    unsafe fn prepare_old_parent_key(self) {
+        let key = match self {
+            Appended::Key(key) => key,
+            Appended::Slot(value) if value.is_string() => value.as_string_ptr(),
+            _ => return,
+        };
+        if !key.is_null() && crate::arena::pointer_in_nursery(key as usize) {
+            let header = crate::gc::header_from_trusted_user_ptr(key.cast()).cast_mut();
+            (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+        }
+    }
+
     /// The same slot, spelled with its text's ATOM when one exists — the one
     /// string a read site's pooled key also is (`string::intern::AtomTable`).
     ///
@@ -1001,6 +1016,7 @@ pub(crate) unsafe fn extend_slot(
     }
     // A new list is about to be WRITTEN: it holds the atom of this key's text.
     let appended = appended.atomized(appended.slot_hash());
+    appended.prepare_old_parent_key();
 
     // Whether the child's slots are all heap string pointers is the parent's
     // answer AND this slot's, so it is read before the allocation and never
@@ -1038,7 +1054,8 @@ pub(crate) unsafe fn extend_slot(
     let capacity = backing_capacity(parent_len + 1);
     #[cfg(test)]
     try_with_table(|t| t.allocated_slots += u64::from(capacity));
-    let allocate = || crate::object::key_attrs::alloc_key_list(capacity, all_ptr, with_attrs);
+    let allocate =
+        || crate::object::key_attrs::alloc_canonical_key_list(capacity, all_ptr, with_attrs);
     // Reload both operands only after the child allocation can no longer
     // move them. No GC allocation occurs while the fresh array is filled.
     let ((fresh, parent), appended) = match appended {
@@ -1385,7 +1402,7 @@ pub(crate) unsafe fn canonicalize(
     #[cfg(test)]
     try_with_table(|t| t.allocated_slots += u64::from(len));
     let (fresh, keys) = src.across_const::<ArrayHeader, _>(|| {
-        crate::object::key_attrs::alloc_key_list(len, all_ptr, with_attrs)
+        crate::object::key_attrs::alloc_canonical_key_list(len, all_ptr, with_attrs)
     });
     let (slots, available) = crate::object::keys_array_dense_slots(keys);
     assert!(available >= len as usize);
@@ -1400,6 +1417,7 @@ pub(crate) unsafe fn canonicalize(
         if let Appended::Slot(v) = slot {
             if v.is_string() {
                 if let Appended::Slot(atom) = slot.atomized(slot.slot_hash()) {
+                    Appended::Slot(atom).prepare_old_parent_key();
                     // GC_STORE_AUDIT(INIT): `fresh` is unpublished; its length
                     // is set on the next line, after the last slot is written.
                     *dst.add(i) = f64::from_bits(atom.bits());
@@ -1493,42 +1511,6 @@ pub(crate) unsafe fn rebuild_removing(
         len = next.len();
     }
     list.with_mut_ptr(|arr: *mut ArrayHeader| CanonicalKeys::new(arr, len))
-}
-
-/// GC root scanner. The arrays are WEAK: rewritten on move, never marked —
-/// see the module note on #6759 phase 3.
-pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let young = visitor.young_scope();
-    let _ = CANONICAL_KEYS.try_with(|t| {
-        let mut t = t.borrow_mut();
-        for id in 1..t.nodes.len() {
-            let addr = t.nodes[id].addr;
-            if addr == 0 {
-                continue;
-            }
-            // A minor can only move a young address, and the node table is one
-            // contiguous `Vec` — so the address check is cheaper here than a
-            // fourth young log would be.
-            if young && !crate::gc::young_log::addr_is_minor_relevant(addr) {
-                continue;
-            }
-            let mut next = addr;
-            if visitor.visit_metadata_usize_slot(&mut next) && next != addr {
-                t.nodes[id].addr = next;
-                if t.nodes[id].published {
-                    // The whole table is already exclusively borrowed, and a
-                    // metadata visit only rewrites this address. Re-key now;
-                    // staging every move allocated a temporary Vec each GC.
-                    let len = t.nodes[id].len;
-                    t.by_addr.remove(&(addr, len));
-                    t.by_addr.insert((next, len), id as u32);
-                    if t.last_created.2 == id as u32 {
-                        t.last_created.0 = next;
-                    }
-                }
-            }
-        }
-    });
 }
 
 /// Post-trace death prune. A node whose array did not survive is dropped,

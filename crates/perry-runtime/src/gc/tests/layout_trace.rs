@@ -2,6 +2,7 @@ use super::super::*;
 use super::support::*;
 mod array_layout;
 mod element_shape;
+mod full_prune_cleanup;
 mod header_kinds;
 mod kind_transitions;
 mod large_array_slots;

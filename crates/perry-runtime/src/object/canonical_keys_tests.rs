@@ -18,7 +18,6 @@ fn key(name: &str) -> *mut StringHeader {
 fn born_layout_uses_owned_keys_after_weak_cache_clear_and_collection() {
     let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
-    crate::gc::gc_register_mutable_root_scanner(scan_canonical_keys_roots_mut);
     reset_for_test();
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -29,12 +28,18 @@ fn born_layout_uses_owned_keys_after_weak_cache_clear_and_collection() {
         for (i, (name, _)) in entries.iter().enumerate() {
             keys = extend_key_with_entry(&proof, keys, key(name), attrs[i]);
         }
+        assert!(crate::arena::pointer_in_old_gen(keys.addr()));
         let backing = scope.root_raw_mut_ptr(keys.as_ptr());
         crate::string::discard_weak_interns();
         assert!(crate::string::intern_lookup_bytes(b"name").is_none());
         crate::gc::js_gc_collect();
         let _no_gc = crate::gc::GcSuppressScope::new();
         let owned = backing.get_raw_mut_ptr::<ArrayHeader>();
+        assert_eq!(
+            owned as usize,
+            keys.addr(),
+            "canonical backing stays stationary"
+        );
         let found = probe_born_layout(&proof, &entries, &attrs).expect("live owner, empty cache");
         assert_eq!(found.as_ptr(), owned);
         assert_eq!(found.len(), 3);
@@ -50,7 +55,6 @@ fn born_layout_uses_owned_keys_after_weak_cache_clear_and_collection() {
 fn image_adoption_preserves_shared_prefix_and_gc_layout() {
     let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
-    crate::gc::gc_register_mutable_root_scanner(scan_canonical_keys_roots_mut);
     reset_for_test();
     #[repr(C, align(8))]
     struct Image {
@@ -82,6 +86,7 @@ fn image_adoption_preserves_shared_prefix_and_gc_layout() {
         let prefix = extend_key(&proof, CanonicalKeys::EMPTY, key("site-name"));
         let leaf = extend_key(&proof, prefix, key("tail"));
         assert_eq!(prefix.addr(), leaf.addr(), "premise: one shared backing");
+        assert!(crate::arena::pointer_in_old_gen(leaf.addr()));
         let backing = scope.root_raw_mut_ptr(leaf.addr() as *mut ArrayHeader);
         let image = &IMAGE.string as *const StringHeader;
         backing.with_mut_ptr(|a| {
@@ -94,6 +99,11 @@ fn image_adoption_preserves_shared_prefix_and_gc_layout() {
         });
         crate::gc::js_gc_collect();
         backing.with_const_ptr(|a: *const ArrayHeader| {
+            assert_eq!(
+                a as usize,
+                leaf.addr(),
+                "image adoption preserves stationary backing"
+            );
             let (slots, len) = crate::object::keys_array_dense_slots_resolved(a as *mut _);
             assert_eq!(len, 2);
             assert_eq!(

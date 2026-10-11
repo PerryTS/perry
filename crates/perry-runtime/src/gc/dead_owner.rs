@@ -324,6 +324,8 @@ pub(super) struct DeadKeyPrune {
     /// on EVERY cycle, including minors; it does not defer pruning to a full
     /// collection. Both paths receive the current cycle's deadness predicate.
     pub(super) young_prune: Option<DeadKeyPruneFn>,
+    /// The table holds only old, stationary metadata. Minors cannot prove it dead.
+    pub(super) full_only: bool,
 }
 
 /// A prune: drops every entry whose owner the predicate reports dead.
@@ -353,6 +355,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "WASM_MEMORY_BINDINGS",
         owner: DeadKeyOwner::Any,
         prune: crate::webassembly::prune_dead_wasm_memory_bindings,
+        full_only: false,
         young_prune: None,
     },
     // #10166 brief 4: arrays that were full at their first named property.
@@ -360,6 +363,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "FULL_ARRAY_NAMED_PROPS",
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_full_array_named_property_owners,
+        full_only: false,
         young_prune: None,
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
@@ -367,30 +371,35 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "ELEMENT_SHAPES",
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_element_shape_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "MAP_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::map::prune_dead_map_iterator_array_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "SET_KEY_IDENTITIES",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_identity_owners,
+        full_only: false,
         young_prune: Some(crate::set::prune_dead_identity_owners_young),
     },
     DeadKeyPrune {
         table: "SET_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_iterator_array_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "SET_COMPACTION_LOG",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_compaction_log_owners,
+        full_only: false,
         young_prune: None,
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
@@ -398,6 +407,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "OBJECT_PROTOTYPES",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prototype_chain::prune_dead_object_prototype_owners,
+        full_only: false,
         young_prune: None,
     },
     // Lane 3: the inherited-read cache is re-keyed by a metadata visitor, so
@@ -411,6 +421,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "state().shapes.inner (descriptors + indices)",
         owner: DeadKeyOwner::Any,
         prune: crate::object::shapes::prune_dead_shape_keys,
+        full_only: false,
         young_prune: Some(crate::object::shapes::prune_dead_shape_keys_young),
     },
     // A prototype identity's word is traced through its carriers; a word whose
@@ -421,6 +432,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::shapes::prune_dead_shape_prototypes,
         // A minor roots every young word (`scan_shape_table_rekey_mut`),
         // so only a full trace can find a word's prototype dead.
+        full_only: false,
         young_prune: None,
     },
     // #10868 step 2.5 stage 1b: the canonical keys trie holds its arrays
@@ -432,6 +444,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "CANONICAL_KEYS (canonical keys trie)",
         owner: DeadKeyOwner::Any,
         prune: crate::object::canonical_keys::prune_dead_canonical_keys,
+        full_only: true,
         young_prune: None,
     },
     // #10868 step 2.5: the same weak discipline for the class keys-array
@@ -440,6 +453,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "state().object_hot.class_keys_by_id (class -> keys array memo)",
         owner: DeadKeyOwner::Any,
         prune: crate::object::alloc::prune_dead_class_keys_entries,
+        full_only: true,
         young_prune: None,
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
@@ -447,18 +461,21 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "state().exotic_expando.entries",
         owner: DeadKeyOwner::Any,
         prune: crate::object::exotic_expando::prune_dead_exotic_expando_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS",
         owner: DeadKeyOwner::Any,
         prune: crate::symbol::prune_dead_symbol_property_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "SYMBOL_POINTERS",
         owner: DeadKeyOwner::Symbol,
         prune: crate::symbol::prune_dead_symbol_pointers,
+        full_only: false,
         young_prune: None,
     },
     #[cfg(feature = "wasm-host")]
@@ -466,6 +483,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "WASM_FUNCREF_EXTERNALS",
         owner: DeadKeyOwner::Closure,
         prune: crate::closure::prune_dead_closure_side_table_owners,
+        full_only: false,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
     // Always listed; the prunes forward to the interpreter once `dyn-eval` is
@@ -474,12 +492,14 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "dyn_eval::LIFETIME.owners + FN_REGISTRY",
         owner: DeadKeyOwner::Closure,
         prune: crate::dyn_eval_hooks::prune_dead_function_owners,
+        full_only: false,
         young_prune: Some(crate::dyn_eval_hooks::prune_dead_function_owners_young),
     },
     DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_builtin_closure_metadata_owners,
+        full_only: false,
         young_prune: Some(crate::object::prune_dead_builtin_closure_metadata_owners_young),
     },
     // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
@@ -490,24 +510,28 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "FUNCTION_CLASS_IDS",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_function_class_id_keys,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS",
         owner: DeadKeyOwner::Any,
         prune: crate::node_vm::prune_dead_vm_owner_entries,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "UTF16_INDEX_CACHE",
         owner: DeadKeyOwner::Any,
         prune: crate::string::prune_dead_utf16_indexes,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "FILEHANDLE_OBJECT_FDS",
         owner: DeadKeyOwner::Any,
         prune: crate::fs::prune_dead_filehandle_fd_entries,
+        full_only: false,
         young_prune: None,
     },
     // #8190/#8191/#8192/#8194: four more REKEYED tables that the #8174 audit
@@ -518,24 +542,28 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "CONSOLE_INSTANCES",
         owner: DeadKeyOwner::Any,
         prune: crate::builtins::prune_dead_console_instance_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "BOXED_PRIMITIVE_PAYLOADS",
         owner: DeadKeyOwner::Any,
         prune: crate::builtins::prune_dead_boxed_primitive_payload_owners,
+        full_only: false,
         young_prune: None,
     },
     DeadKeyPrune {
         table: "TRANSITION_CACHE_GLOBAL",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prune_dead_transition_cache_entries,
+        full_only: false,
         young_prune: Some(crate::object::prune_dead_transition_cache_entries_young),
     },
     DeadKeyPrune {
         table: "REFLECT_METADATA",
         owner: DeadKeyOwner::Any,
         prune: crate::proxy::prune_dead_reflect_metadata_targets,
+        full_only: false,
         young_prune: None,
     },
     #[cfg(feature = "node-api-host")]
@@ -543,6 +571,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "NODE_API_OBJECT_METADATA",
         owner: DeadKeyOwner::Any,
         prune: crate::node_api_host::prune_dead_object_meta_owners,
+        full_only: false,
         young_prune: None,
     },
 ];
@@ -564,11 +593,7 @@ fn fan_out(
     // them before a copied-minor flip or full/fallback sweep can reuse memory.
     // This is cache cleanup only: no heap walk and no weak-holder latch.
     for entry in DEAD_KEY_PRUNES {
-        #[cfg(test)]
-        if young_only
-            && entry.table == "CANONICAL_KEYS (canonical keys trie)"
-            && super::tests::canonical_keys_minor_prune::skip_minor_prune()
-        {
+        if young_only && entry.full_only {
             continue;
         }
         let is_dead: &dyn Fn(usize) -> bool = match entry.owner {

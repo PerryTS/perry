@@ -5951,14 +5951,19 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     inner.young_keys.extend(carrier_notes);
     let rewrite_phase = visitor.is_metadata_rewrite_phase();
     // #9754: a minor-scoped pass visits only the young-logged keys addresses;
-    // the full walk below rebuilds the log from what it finds.
+    // the full walk below retains and updates the writer-maintained log.
     if visitor.young_scope() {
         scan_shape_table_young(visitor, table, &mut inner, rewrite_phase);
         return;
     }
-    // The full walk rebuilds the log from the tables at the end. Before that,
-    // settle what the log named, so an address that left the heap takes its
-    // entries with it here too. The rebuild below discards `relogged`.
+    // Writers already name every minor candidate. Keep that log through a
+    // full walk instead of sorting and classifying all old, stationary
+    // families again just to rediscover that they need no minor work.
+    #[cfg(any(debug_assertions, test))]
+    inner
+        .young_keys
+        .debug_assert_logged(SHAPE_YOUNG_LOG_NAME, &relevant_shape_keys(table, &inner));
+    // Settle released addresses before visiting the authoritative families.
     let drained = inner.young_keys.take_sorted();
     let mut relogged = Vec::new();
     for keys in drained {
@@ -6036,6 +6041,9 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     }
     for (old, new) in moved_families {
         move_shape_family(table, &mut inner, old, new);
+        if new != 0 {
+            relogged.push(new);
+        }
     }
 
     if rewrite_phase && !inner.indices.is_empty() {
@@ -6051,6 +6059,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         for (old, new) in moved {
             if let Some(shape) = inner.indices.remove(&old) {
                 inner.indices.insert(new, shape);
+                relogged.push(new as u64);
             }
         }
         // Drop indices entries whose keys-array address was recycled: the
@@ -6071,11 +6080,24 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
     }
 
-    // A full walk is authoritative: rebuild the young log from the tables.
-    let kept = relevant_shape_keys(table, &inner);
+    // Rekeys above contribute their destination, while surviving mutable
+    // lists retain their existing writer note. Drop promoted or retired
+    // candidates using the same predicate as the minor walk.
+    relogged.extend(inner.young_keys.take_sorted());
+    relogged.sort_unstable();
+    relogged.dedup();
+    let mut kept = Vec::with_capacity(relogged.len());
+    for keys in relogged {
+        if inner.families.contains_key(&keys) || inner.indices.contains_key(&(keys as usize)) {
+            relog_or_retire_shape_keys(table, &mut inner, &mut kept, keys);
+        }
+    }
     let kept_len = kept.len() as u64;
-    let _ = inner.young_keys.take_sorted();
     inner.young_keys.extend(kept);
+    #[cfg(any(debug_assertions, test))]
+    inner
+        .young_keys
+        .debug_assert_logged(SHAPE_YOUNG_LOG_NAME, &relevant_shape_keys(table, &inner));
     crate::gc::young_log::note_walk(
         SHAPE_YOUNG_LOG_NAME,
         crate::gc::young_log::YoungLogWalk {

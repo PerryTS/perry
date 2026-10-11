@@ -126,6 +126,73 @@ unsafe fn old_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
     (header, GcMutableSlot::new(fields, None))
 }
 
+unsafe fn malloc_parent(bits: u64) -> (*mut GcHeader, GcMutableSlot) {
+    let shape_id = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1)
+        .expect("fixture shape id");
+    let payload = std::mem::size_of::<crate::object::ObjectHeader>()
+        + crate::object::INLINE_SLOT_FLOOR * 8;
+    let parent = gc_malloc(payload, GC_TYPE_OBJECT).cast::<crate::object::ObjectHeader>();
+    std::ptr::write_bytes(parent.cast::<u8>(), 0, payload);
+    crate::object::shapes::store_kind::premark_plain_ordinary(parent);
+    (*parent).parent_class_id = shape_id;
+    let fields = parent.cast::<u8>().add(std::mem::size_of::<crate::object::ObjectHeader>())
+        .cast::<u64>();
+    *fields = bits;
+    layout_note_slot(parent as usize, 0, bits);
+    js_shadow_slot_set(0, ptr_bits(parent as usize));
+    let header = header_from_user_ptr(parent.cast());
+    (*header).gc_flags |= GC_FLAG_MARKED;
+    assert!(matches!(crate::gc::barrier::barrier_remembering_parent(parent as usize),
+        Some(crate::gc::barrier::RememberingParent::Malloc)));
+    (header, GcMutableSlot::new(fields, None))
+}
+
+fn malloc_coverage(drop_entry: bool) {
+    for classifier in [false, true] {
+        isolated(move || unsafe {
+            let child = young_leaf();
+            let (parent, _) = malloc_parent(string_bits(child));
+            let valid = valid_set(classifier);
+            let _drop = drop_entry.then(trace::remembered_mark_sabotage::Guard::arm);
+            let sticky = fold(parent, &valid);
+            assert_ne!((*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED, 0);
+            assert!(sticky.old_pages.is_empty(), "malloc custody must be owner-qualified");
+            assert_coverage(&sticky, drop_entry);
+        });
+    }
+}
+
+#[test]
+fn malloc_full_mark_records_owner_qualified_post_mark_edges() {
+    malloc_coverage(false);
+}
+
+#[test]
+fn dropping_malloc_full_mark_coverage_is_detected_independently_of_liveness() {
+    malloc_coverage(true);
+}
+
+#[test]
+fn malloc_ephemeron_words_are_not_unconditional_remembered_edges() {
+    isolated(|| unsafe {
+        let child = young_leaf();
+        let payload = std::mem::size_of::<crate::weakref::storage::WeakStorage>()
+            + std::mem::size_of::<crate::weakref::storage::Entry>() + 3 * 4;
+        let storage = gc_malloc(payload, GC_TYPE_WEAK_STORAGE)
+            .cast::<crate::weakref::storage::WeakStorage>();
+        std::ptr::write_bytes(storage.cast::<u8>(), 0, payload);
+        (*storage).capacity = 1;
+        (*storage).len = 1;
+        (*(*storage).entries()).key = string_bits(child);
+        (*(*storage).entries()).value = string_bits(child);
+        let header = header_from_user_ptr(storage.cast());
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        let sticky = fold(header, &valid_set(false));
+        assert_eq!((*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED, 0);
+        assert!(sticky.old_pages.is_empty() && sticky.external_pages.is_empty());
+    });
+}
+
 unsafe fn fold(header: *mut GcHeader, valid: &ValidPointerSet) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
     let mut worklist = Vec::new();
@@ -148,6 +215,55 @@ fn assert_coverage(sticky: &StickyRememberedSet, expect_missing: bool) {
         );
     } else {
         assert_eq!(stats.missing_edges, 0, "{stats:?}");
+    }
+}
+
+#[test]
+fn remembered_inline_ranges_still_mark_children_and_cover_later_pages() {
+    for classifier in [false, true] {
+        for capacity in [8, 1200] {
+            for precovered in [false, true] {
+                isolated(move || unsafe {
+                    let array = crate::array::js_array_alloc_canonical_keys(capacity, true, false);
+                    let first = young_leaf();
+                    let last = young_leaf();
+                    crate::array::note_array_slot(array, 0, string_bits(first));
+                    crate::array::note_array_slot(array, capacity as usize - 1, string_bits(last));
+                    (*array).length = capacity;
+                    let header = header_from_user_ptr(array.cast());
+                    (*header).gc_flags |= GC_FLAG_MARKED;
+                    let slots = crate::array::array_elements_ptr(array) as *mut u64;
+                    let first_page = crate::arena::generation_page_for_addr(slots as usize);
+                    let last_page = crate::arena::generation_page_for_addr(
+                        slots.add(capacity as usize - 1) as usize,
+                    );
+                    assert_eq!(first_page == last_page, capacity == 8);
+                    let mut sticky = StickyRememberedSet::default();
+                    if precovered {
+                        sticky.old_pages.insert(first_page);
+                    }
+                    let valid = valid_set(classifier);
+                    let mut worklist = Vec::new();
+                    trace::trace_heap_rewrite_slots_remembering(
+                        header,
+                        &valid,
+                        &mut worklist,
+                        Some(&mut sticky),
+                    );
+                    // Existing coverage must never bypass child marking. A range
+                    // spanning pages must also remember the independently stored
+                    // child on its last page.
+                    for child in [first, last] {
+                        assert_ne!(
+                            (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+                            0
+                        );
+                    }
+                    assert!(sticky.old_pages.contains(&last_page));
+                    assert_coverage(&sticky, false);
+                });
+            }
+        }
     }
 }
 
@@ -429,6 +545,16 @@ extern "C" fn observer(bits: u64, mark: extern "C" fn(u64, *mut c_void), ctx: *m
     });
     true
 }
+extern "C" fn non_mutating_observer(
+    bits: u64,
+    mark: extern "C" fn(u64, *mut c_void),
+    ctx: *mut c_void,
+) -> bool {
+    assert_eq!(bits, ptr_bits(7));
+    OBSERVER_HITS.with(|hits| hits.set(hits.get() + 1));
+    mark(OBSERVER_CHILD.with(Cell::get), ctx);
+    true
+}
 struct ObserverScope;
 impl Drop for ObserverScope {
     fn drop(&mut self) {
@@ -438,10 +564,10 @@ impl Drop for ObserverScope {
         OBSERVER_CHILD.with(|child| child.set(0));
     }
 }
-fn changing_observer(sabotage: bool) {
+fn changing_observer_parent(sabotage: bool, malloc: bool) {
     isolated(move || unsafe {
         let child = young_leaf();
-        let (parent, slot) = old_parent(ptr_bits(7));
+        let (parent, slot) = if malloc { malloc_parent(ptr_bits(7)) } else { old_parent(ptr_bits(7)) };
         OBSERVER_SLOT.with(|value| value.set(slot.slot));
         OBSERVER_CHILD.with(|value| value.set(string_bits(child)));
         OBSERVER_HITS.with(|value| value.set(0));
@@ -466,12 +592,186 @@ fn changing_observer(sabotage: bool) {
     });
 }
 
+fn changing_observer(sabotage: bool) {
+    changing_observer_parent(sabotage, false);
+}
+
+#[test]
+fn malloc_full_mark_records_foreign_observer_rewrites() {
+    changing_observer_parent(false, true);
+}
+
 #[test]
 fn foreign_observer_changes_are_remembered_from_the_post_mark_word() {
     changing_observer(false);
 }
 
 #[test]
+fn an_active_foreign_observer_cannot_observe_string_words() {
+    for classifier in [false, true] {
+        isolated(move || unsafe {
+            let array = crate::array::js_array_alloc_canonical_keys(8, true, false);
+            let first = young_leaf();
+            let last = young_leaf();
+            crate::array::note_array_slot(array, 0, string_bits(first));
+            crate::array::note_array_slot(array, 7, string_bits(last));
+            (*array).length = 8;
+            let header = header_from_user_ptr(array.cast());
+            (*header).gc_flags |= GC_FLAG_MARKED;
+            OBSERVER_HITS.with(|value| value.set(0));
+            crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(
+                observer_phase,
+                observer,
+            );
+            let _scope = ObserverScope;
+            crate::gc::full_trace::begin_full_trace();
+            assert!(crate::gc::full_trace::handle_trace_active());
+            let valid = valid_set(classifier);
+            assert!(!crate::gc::full_trace::observe_handle(
+                string_bits(first),
+                &valid
+            ));
+            let sticky = fold(header, &valid);
+            assert_eq!(OBSERVER_HITS.with(Cell::get), 0);
+            for child in [first, last] {
+                assert_ne!(
+                    (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+                    0
+                );
+            }
+            assert_coverage(&sticky, false);
+        });
+    }
+}
+
+#[test]
 fn a_stale_snapshot_across_a_foreign_observer_loses_coverage() {
     changing_observer(true);
+}
+
+#[test]
+fn string_decode_keeps_the_child_descriptor_observer_gate() {
+    for negative in [false, true] {
+        isolated(move || unsafe {
+            // Word tags are not an object-class proof. Even a string-tagged edge
+            // must queue a pointer-free payload when a handle observer is active.
+            let (array, _) = alloc_old_test_array(1);
+            layout_init_pointer_free(array.cast());
+            let child_header = header_from_user_ptr(array.cast());
+            assert!(gc_object_yields_no_child_slots(child_header));
+            let (parent, _) = old_parent(string_bits(array as usize));
+            crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(
+                observer_phase,
+                observer,
+            );
+            let _scope = ObserverScope;
+            crate::gc::full_trace::begin_full_trace();
+            let _control = negative.then(trace::zero_slot_skip_sabotage::Guard::arm);
+            let mut sticky = StickyRememberedSet::default();
+            let mut worklist = Vec::new();
+            trace::trace_heap_rewrite_slots_remembering(
+                parent,
+                &valid_set(false),
+                &mut worklist,
+                Some(&mut sticky),
+            );
+            let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert!(worklist.contains(&child_header));
+            }));
+            assert_eq!(verdict.is_err(), negative);
+        });
+    }
+}
+
+#[test]
+fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers() {
+    for shared in [false, true] {
+        isolated(move || unsafe {
+            let (array, slots) = if shared {
+                let array = crate::array::js_array_alloc_canonical_keys(8, false, false);
+                (array, crate::array::array_elements_ptr(array))
+            } else {
+                let (array, slots) = alloc_old_test_array(8);
+                layout_init_pointer_free(array.cast());
+                (array, slots)
+            };
+            *slots = if shared {
+                crate::value::INT32_TAG | 1
+            } else {
+                ptr_bits(7)
+            };
+            (*array).length = 1;
+            let child = young_leaf();
+            OBSERVER_CHILD.with(|value| value.set(string_bits(child)));
+            OBSERVER_HITS.with(|value| value.set(0));
+            crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(
+                observer_phase,
+                non_mutating_observer,
+            );
+            let _scope = ObserverScope;
+            crate::gc::full_trace::begin_full_trace();
+            let (parent, _) = old_parent(ptr_bits(array as usize));
+            let valid = valid_set(false);
+            let mut sticky = StickyRememberedSet::default();
+            let mut worklist = Vec::new();
+            trace::trace_heap_rewrite_slots_remembering(
+                parent,
+                &valid,
+                &mut worklist,
+                Some(&mut sticky),
+            );
+            let header = header_from_user_ptr(array.cast());
+            assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+            assert_eq!(worklist.contains(&header), !shared);
+            if !shared {
+                trace::trace_heap_rewrite_slots_remembering(
+                    header,
+                    &valid,
+                    &mut Vec::new(),
+                    Some(&mut sticky),
+                );
+                assert_ne!(
+                    (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+                    0
+                );
+            }
+            assert_eq!(OBSERVER_HITS.with(Cell::get), usize::from(!shared));
+        });
+    }
+}
+
+#[test]
+fn a_non_array_shared_bit_does_not_suppress_its_foreign_observer() {
+    isolated(|| unsafe {
+        let child = young_leaf();
+        let (parent, slot) = old_parent(ptr_bits(7));
+        (*parent).gc_flags |= GC_FLAG_SHAPE_SHARED;
+        assert!(crate::gc::full_trace::object_words_may_name_handles(parent));
+        OBSERVER_SLOT.with(|value| value.set(slot.slot));
+        OBSERVER_CHILD.with(|value| value.set(string_bits(child)));
+        OBSERVER_HITS.with(|value| value.set(0));
+        crate::gc::full_trace::perry_ffi_gc_register_pool_handle_trace(observer_phase, observer);
+        let _scope = ObserverScope;
+        crate::gc::full_trace::begin_full_trace();
+        let sticky = fold(parent, &valid_set(false));
+        assert_eq!(OBSERVER_HITS.with(Cell::get), 1);
+        assert_coverage(&sticky, false);
+    });
+}
+
+#[test]
+fn a_foreign_handle_cannot_be_declared_shared_key_metadata() {
+    isolated(|| unsafe {
+        let array = crate::array::js_array_alloc_canonical_keys(1, false, false);
+        *crate::array::array_elements_ptr(array) = ptr_bits(7);
+        (*array).length = 1;
+        let header = header_from_user_ptr(array.cast());
+        let red = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::gc::full_trace::object_words_may_name_handles(header);
+        }));
+        assert!(
+            red.is_err(),
+            "the shared-storage declaration must reject a handle word"
+        );
+    });
 }

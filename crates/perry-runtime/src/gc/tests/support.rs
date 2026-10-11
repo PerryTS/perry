@@ -179,7 +179,8 @@ pub(super) fn complete_budgeted_gc_cycle() -> JsGcStepResult {
 /// to a known-empty state.
 pub(super) fn reset_remembered_set() {
     remembered_set_clear();
-    crate::arena::old_arena_page_index_clear_for_tests();
+    // The old-page index describes retained heap objects, not roots. Clearing
+    // it strands old key-list children when a second fixture collects.
 }
 
 pub(super) struct IncrementalMarkBarrierTestGuard<'a> {
@@ -411,6 +412,7 @@ impl GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
+        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
         Self {
             _scanner_guard: scanner_guard,
             _lock: lock,
@@ -432,6 +434,7 @@ impl Drop for GcTestIsolationGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
+        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
     }
 }
 
@@ -491,6 +494,7 @@ impl CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
+        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
         js_gc_write_barriers_emitted(1);
         let frame = js_shadow_frame_push(slot_count);
         Self {
@@ -508,6 +512,7 @@ impl Drop for CopyingNurseryTestGuard {
         reset_shadow_stack();
         reset_global_roots();
         reset_remembered_set();
+        super::super::verify::rebuild_minor_old_to_young_remembered_set().restore();
         js_gc_write_barriers_emitted(0);
     }
 }

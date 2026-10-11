@@ -1076,6 +1076,7 @@ VERDICTS = {
     "covered_elsewhere",  # a registered scanner in ANOTHER file visits it
     "not_a_gc_pointer",  # id, counter, epoch, code address, .rodata, Rust-owned
     "test_only",  # #[cfg(test)] storage
+    "weak_pinned_old",  # weak metadata with a checked old, stationary birth contract
     "non_moving_snapshot",  # deliberately untraced within a pinned collector window
     "weak_heap_change_cache",  # cleared before free/move; never a strong root
     "open_gap",  # a real unrooted GC pointer, with an issue
@@ -1179,6 +1180,9 @@ def inventory_problems(inventory: list[dict], root: Path | None = None) -> list[
                 f"{label}: covered_elsewhere must name the `scanner` that covers it, or "
                 f"the claim cannot be checked or maintained"
             )
+        if verdict == "weak_pinned_old":
+            from gc_keylist_invariant import keylist_contract_problems
+            problems.extend(keylist_contract_problems(entry, root))
         if verdict == "non_moving_snapshot":
             problems.extend(snapshot_contract_problems(entry, root))
         if verdict == "weak_heap_change_cache":
@@ -2012,6 +2016,8 @@ def self_test() -> int:
         )
     failures.extend(inventory_problems(inventory, REPO_ROOT))
     failures.extend(snapshot_contract_self_test())
+    from gc_keylist_invariant import keylist_contract_self_test
+    failures.extend(keylist_contract_self_test(REPO_ROOT))
     # …and the structural checker must itself be able to fail.
     long_why = "x" * 30
     for bad, expect in (

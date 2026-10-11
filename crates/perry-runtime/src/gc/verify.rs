@@ -307,16 +307,23 @@ pub(super) unsafe fn remember_decoded_full_mark_slot(
     parent_header: *mut GcHeader,
     mutable_slot: GcMutableSlot,
     word: trace::FieldWord,
+    old_parent: bool,
 ) -> bool {
     let slot = mutable_slot.slot;
     if slot.is_null() || !mutable_slot.is_parent_owned() || !word.needs_tracking() {
         return false;
     }
+    // The object-boundary proof replaces a generation lookup per inline
+    // slot. Containment is still checked: old external buffers must enter
+    // through their owning descriptor, never as bare old pages (#7538).
+    let start = parent_header as usize;
+    let external = !old_parent
+        || (slot as usize) < start
+        || (slot as usize) >= start + (*parent_header).size as usize;
     #[cfg(test)]
     if trace::remembered_mark_sabotage::drop_next_entry() {
         return false;
     }
-    let external = slot_is_external_to(parent_header, slot);
     #[cfg(test)]
     let external = if trace::full_mark_decode_sabotage::generation_only_custody() {
         mutable_slot.external()

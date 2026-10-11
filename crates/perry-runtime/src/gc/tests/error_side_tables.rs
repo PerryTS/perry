@@ -206,8 +206,11 @@ fn test_dead_error_side_table_entries_cleared() {
         "dead error's diagnostic record must be cleared, not left for a \
          fresh error at the recycled address to inherit"
     );
+    // User properties live in the error's ordinary metadata. Check a fresh
+    // error instead of dereferencing the dead error's unswept bytes.
+    let fresh = crate::error::js_error_new() as usize;
     assert!(
-        crate::node_submodules::diagnostics::error_user_prop(err, "inherited").is_none(),
+        crate::node_submodules::diagnostics::error_user_prop(fresh, "inherited").is_none(),
         "dead error's user-prop entry must be cleared, not left for a \
          fresh error at the recycled address to inherit"
     );

@@ -667,6 +667,27 @@ pub(crate) unsafe fn alloc_key_list(
     keys
 }
 
+/// Allocate both halves of the I3 metadata in stationary old storage.
+/// The attributes prefix is immutable with its keys prefix, so keeping a
+/// pointer-free young child only made the reserve dirty on every new layout.
+pub(crate) unsafe fn alloc_canonical_key_list(
+    capacity: u32,
+    all_ptr: bool,
+    with_attrs: bool,
+) -> *mut ArrayHeader {
+    if !with_attrs {
+        return crate::array::js_array_alloc_canonical_keys(capacity, all_ptr, false);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let attrs = crate::array::js_array_alloc_canonical_keys(capacity.max(1), false, false);
+    let handle = scope.root_raw_mut_ptr(attrs);
+    let (keys, attrs) = handle.across_mut::<ArrayHeader, _>(|| {
+        crate::array::js_array_alloc_canonical_keys(capacity, all_ptr, true)
+    });
+    attach_attrs(keys, attrs);
+    keys
+}
+
 /// Copy the entries of `src_keys` positions `from..from + n` into `dst_attrs`
 /// at the SAME positions, which must be the written end of `dst_attrs`. A
 /// source without attributes contributes default entries.

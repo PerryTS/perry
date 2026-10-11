@@ -815,6 +815,32 @@ def _rs_sources(roots):
                         yield path, fh.read()
 
 
+_C_EXPORT_DEF_RE = re.compile(
+    r"(?m)^[ \t]*(?:[A-Za-z_]\w*[ \t*]+)+(js_\w+)\s*\([^;{}]*\)\s*\{"
+)
+
+
+def _c_symbol_bodies(roots):
+    """Native C definitions and bodies, never prototypes or prose.
+
+    Keep C exports in the same symbol and direct-call populations as Rust.
+    Missing unsupported declaration shapes still fail archive verification.
+    """
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.endswith('.c'):
+                    continue
+                with open(os.path.join(dirpath, name), encoding='utf-8', errors='replace') as fh:
+                    src = _strip_noncode(fh.read())
+                for match in _C_EXPORT_DEF_RE.finditer(src):
+                    body = _balanced_body(src, match.end() - 1)
+                    if body is not None:
+                        yield match.group(1), body
+
+
 def _macro_rule_bodies(text):
     """Every `macro_rules!` body in `text`, stripped to code.
 
@@ -832,11 +858,12 @@ def _macro_rule_bodies(text):
 
 
 def runtime_symbols(roots=SYMBOL_ROOTS):
-    """Every `js_*` the runtime exports, written out OR macro-generated."""
+    """Every `js_*` export: Rust, native C, or macro-generated."""
     syms = set()
     for _path, src in _rs_sources(roots):
         syms.update(_EXTERN_C_FN_RE.findall(src))
         syms.update(_macro_defined_symbols(src))
+    syms.update(name for name, _body in _c_symbol_bodies(roots))
     if roots == SYMBOL_ROOTS:
         syms.update(codegen_birth_bodies())
     return syms
@@ -1315,6 +1342,8 @@ def runtime_symbol_bodies(roots=SYMBOL_ROOTS):
                 for sym in _macro_defined_symbols(src):
                     for macro_body in _macro_rule_bodies(src):
                         bodies[sym].append(macro_body)
+    for name, body in _c_symbol_bodies(roots):
+        bodies[name].append(body)
     if roots == SYMBOL_ROOTS:
         for name, body in codegen_birth_bodies().items():
             # Normalize LLVM call spelling for the runtime call-graph reader.
@@ -7273,6 +7302,27 @@ _POLL_REACH_FIXTURE = {
 
 def poll_reach_self_test():
     ok = True
+    with tempfile.TemporaryDirectory() as native:
+        with open(os.path.join(native, 'exports.c'), 'w') as output:
+            output.write('''
+void js_c_leaf(void) { const char *s = "js_string_coerce(v)"; }
+void js_c_new(int value) { js_c_bridge(value); }
+int js_c_bridge(int value) { return js_string_coerce(value); }
+int js_c_bridge(int value) { return js_number_coerce(value); }
+void js_c_prototype(void);
+// void js_c_comment(void) { js_string_coerce(value); }
+const char *decoy = "void js_c_string(void) { js_string_coerce(value); }";
+''')
+        roots = (native,)
+        names = runtime_symbols(roots)
+        bodies = runtime_symbol_bodies(roots)
+        reaching = poll_reaching_runtime_symbols(runtime_direct_callees(bodies),
+                                                  {'js_string_coerce', 'js_number_coerce'})
+        if (names != {'js_c_leaf', 'js_c_new', 'js_c_bridge'}
+                or len(bodies.get('js_c_bridge', [])) != 2
+                or reaching != {'js_c_new', 'js_c_bridge'}):
+            print('self-test FAIL: native C export/body/call population', file=sys.stderr)
+            ok = False
     poll = {"js_object_get_field_by_name", "js_string_coerce",
             "js_number_coerce"}
     # Through the SAME stripper `runtime_symbol_bodies` applies, so the decoy

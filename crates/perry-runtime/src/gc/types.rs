@@ -1374,6 +1374,13 @@ pub const GC_FLAG_PINNED: u8 = 0x04;
 /// Without the bit the clone fires on every property added to every
 /// fresh object literal — a 20-property row object allocates 19
 /// throwaway keys_array clones per row.
+/// In old generation this also pins MOVEMENT (I3), including old-page defrag
+/// and idle compaction. It does not pin liveness: full GC still sweeps a dead
+/// backing. Canonical key lists are born old with this bit; owned key lists
+/// remain movable. Key strings and the attributes child retain normal tracing.
+/// This bit belongs only to private key/attribute array storage: its words
+/// never name foreign proxy, Fetch or pool handles. The collector may use that
+/// source-word proof; the referenced children's descriptors remain authoritative.
 pub const GC_FLAG_SHAPE_SHARED: u8 = 0x08;
 /// Set on strings that live in the intern table. Prevents in-place
 /// mutation and allows `js_object_set_field_by_name` to skip the

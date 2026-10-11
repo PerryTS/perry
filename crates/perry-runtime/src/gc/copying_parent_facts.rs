@@ -171,11 +171,19 @@ fn unvalidated_child(bits: u64) -> Option<usize> {
 }
 
 impl CopyingNurseryCollector {
-    /// The root visitors' form of [`Self::visit_value_bits_child`]. Always
-    /// inlined too: out of line it added a call frame per root word.
-    #[inline(always)]
-    pub(super) fn visit_value_bits(&mut self, bits: u64) -> Option<u64> {
-        self.visit_value_bits_child(bits)?.1
+    /// A producer already decoded this root's encoding. Reuse that word,
+    /// retaining the mixed shadow ABI's aligned-address admission and the
+    /// same pointer classifier/mark before re-encoding a moved address.
+    #[inline]
+    pub(super) fn visit_root_word(&mut self, word: RootWord) -> Option<u64> {
+        let addr = word.addr();
+        if matches!(word, RootWord::Bare { .. })
+            && !CopyingPointerSet::raw_pointer_candidate(addr as u64)
+        {
+            return None;
+        }
+        let new_addr = self.mark_addr(addr)?;
+        (new_addr != addr).then(|| word.encode(new_addr))
     }
 
     /// Decode, classify and mark one value word ONCE: the child's address as

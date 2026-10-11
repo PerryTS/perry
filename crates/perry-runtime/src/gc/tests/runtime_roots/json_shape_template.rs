@@ -255,16 +255,13 @@ fn stringify_shape_cache_keys_array_is_marked_and_rewritten() {
     clear_marks();
     clear_mark_seeds();
 
+    // This scanner's relocation contract uses a mutable owned key list.
+    // Canonical lists are old and stationary under I3.
     let keys_arr = unsafe {
-        let obj = crate::object::js_object_alloc(0, 1);
         let key = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
-        crate::object::js_object_set_field_by_name(obj, key, 1.0);
-        let keys = crate::object::object_keys(obj).arr();
-        assert!(!keys.is_null(), "probe object must have a keys array");
-        assert!(
-            crate::arena::pointer_in_nursery(keys as usize),
-            "the keys array must be movable or the rewrite half tests nothing"
-        );
+        let keys = crate::array::js_array_alloc(1);
+        crate::array::js_array_push(keys, crate::JSValue::string_ptr(key));
+        assert!(crate::arena::pointer_in_nursery(keys as usize));
         crate::json::test_seed_stringify_shape_cache(keys);
         keys
     };

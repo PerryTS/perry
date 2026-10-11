@@ -1041,7 +1041,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 None
             }
             RuntimeRootVisitMode::CopyingMark { collector } => {
-                decode_nanboxed_root_word(bits).and_then(|_| collector.visit_value_bits(bits))
+                decode_nanboxed_root_word(bits).and_then(|word| collector.visit_root_word(word))
             }
             RuntimeRootVisitMode::CopyingRewrite { collector } => {
                 decode_nanboxed_root_word(bits).and_then(|_| collector.rewrite_value_bits(bits))
@@ -1440,9 +1440,19 @@ pub(super) fn atomic_store_ordering(
 pub(super) fn visit_shadow_stack_root_slots(
     mut visit: impl FnMut(MutableRootSlot),
 ) -> stack_maps::NativeStackWalkStats {
-    let native_stack_walk = stack_maps::visit_stack_map_root_slots(&mut visit);
+    // Producer provenance is constant for the whole walk. Publish it once
+    // rather than replacing and restoring the same TLS label at every slot.
+    let native_stack_walk = {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter(
+            MutableRootSlotKind::NativeStack.walk_phase_name(),
+        );
+        stack_maps::visit_stack_map_root_slots(&mut visit)
+    };
     #[cfg(any(test, not(perry_native_stack_maps)))]
     SHADOW.with(|cell| unsafe {
+        let _phase = super::pin::CopyingWalkPhaseGuard::enter(
+            MutableRootSlotKind::ShadowStack.walk_phase_name(),
+        );
         let s = &mut *cell.get();
         if s.len == 0 || s.ptr.is_null() {
             return;
@@ -1488,6 +1498,9 @@ pub(super) fn visit_shadow_stack_root_slots(
 
 /// Visit every registered module-global root slot.
 pub(super) fn visit_global_root_slots(mut visit: impl FnMut(MutableRootSlot)) {
+    let _phase = super::pin::CopyingWalkPhaseGuard::enter(
+        MutableRootSlotKind::GlobalRoot.walk_phase_name(),
+    );
     GLOBAL_ROOTS.with(|roots| {
         let roots = roots.borrow();
         for &root_ptr in roots.iter() {

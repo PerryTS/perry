@@ -205,47 +205,54 @@ unsafe fn fill_fresh_capacity_with_holes(ptr: *mut ArrayHeader) {
 }
 
 pub(crate) fn js_array_alloc_key_list(capacity: u32, all_ptr: bool) -> *mut ArrayHeader {
-    let capacity = array_capacity_or_throw(capacity);
-    let ptr = arena_alloc_gc(
-        array_byte_size(capacity as usize),
-        8,
-        crate::gc::GC_TYPE_ARRAY,
-    ) as *mut ArrayHeader;
-    unsafe {
-        (*ptr).length = 0;
-        (*ptr).capacity = capacity;
-        fill_fresh_capacity_with_holes(ptr);
-        clear_array_numeric_layout(ptr);
-        if all_ptr {
-            crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
-        } else {
-            crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        }
-    }
-    ptr
+    alloc_key_list(capacity, all_ptr, false, false)
 }
 
-/// [`js_array_alloc_key_list`] for a key list that carries ATTRIBUTES
-/// (`object/key_attrs.rs`): one physical slot in front of logical element 0
-/// is reserved for the attributes pointer, under `GC_ARRAY_NAMED_PROPS`, so
-/// `array_front_offset` is 1 from birth and every element reader (which goes
-/// through `array_elements_ptr`) sees the same logical layout as an
-/// attribute-free list. The reserve word starts as `TAG_HOLE`, a non-pointer,
-/// so a collection before the attributes are attached traces nothing there.
+/// An owned key list with a traced attributes reserve.
 pub(crate) fn js_array_alloc_key_list_reserved(capacity: u32, all_ptr: bool) -> *mut ArrayHeader {
+    alloc_key_list(capacity, all_ptr, true, false)
+}
+
+/// I3: canonical backings are old from birth and never relocate. This is a
+/// movement pin, not a root: a full trace still reclaims an unreachable list.
+pub(crate) fn js_array_alloc_canonical_keys(
+    capacity: u32,
+    all_ptr: bool,
+    with_attrs: bool,
+) -> *mut ArrayHeader {
+    alloc_key_list(capacity, all_ptr, with_attrs, true)
+}
+
+fn alloc_key_list(
+    capacity: u32,
+    all_ptr: bool,
+    with_attrs: bool,
+    canonical: bool,
+) -> *mut ArrayHeader {
     let capacity = array_capacity_or_throw(capacity);
-    let reserve = crate::object::key_attrs::KEYS_ATTRS_FRONT_SLOTS;
-    let ptr = arena_alloc_gc(
-        array_byte_size(capacity as usize + reserve),
-        8,
-        crate::gc::GC_TYPE_ARRAY,
-    ) as *mut ArrayHeader;
+    let reserve = if with_attrs {
+        crate::object::key_attrs::KEYS_ATTRS_FRONT_SLOTS
+    } else {
+        0
+    };
+    let bytes = array_byte_size(capacity as usize + reserve);
+    let ptr = if canonical {
+        crate::arena::arena_alloc_gc_old_born_tenured(bytes, 8, crate::gc::GC_TYPE_ARRAY)
+    } else {
+        arena_alloc_gc(bytes, 8, crate::gc::GC_TYPE_ARRAY)
+    } as *mut ArrayHeader;
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
-        // GC_STORE_AUDIT(INIT): the reserve word of a just-allocated array
-        // nothing references yet; a non-pointer, so no edge and no barrier.
-        std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
+        let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
+        if canonical {
+            (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+        }
+        if with_attrs {
+            (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
+            // GC_STORE_AUDIT(INIT): unpublished reserve, initialized to a non-pointer.
+            std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
+        }
         fill_fresh_capacity_with_holes(ptr);
         clear_array_numeric_layout(ptr);
         if all_ptr {
@@ -253,8 +260,6 @@ pub(crate) fn js_array_alloc_key_list_reserved(capacity: u32, all_ptr: bool) -> 
         } else {
             crate::gc::layout_init_pointer_free(ptr as *mut u8);
         }
-        let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
-        (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
         debug_assert_eq!(crate::array::array_front_offset(ptr), reserve);
     }
     ptr

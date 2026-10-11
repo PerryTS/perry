@@ -1642,9 +1642,15 @@ impl GcCycleState {
                             self.reclaim_state.as_mut().expect("reclaim state exists");
                         if reclaim_state.remembered_set_clear.is_none()
                             && self.pre_clear_dirty_snapshot.is_none()
+                            && (self.minor.is_some() || self.progress_kind.is_budgeted())
                         {
-                            // Snapshot the pre-clear dirty set so the
-                            // post-restore repair can rescan it (#5029).
+                            // Minors leave untraced old parents alive; sliced
+                            // fulls allow stores after a parent's mark visit.
+                            // Both need pre-clear repair (#5029). A synchronous
+                            // full has neither gap: its completed mark visits
+                            // already fold every surviving parent's edges into
+                            // live_old_to_young_sticky, and sweep retires the
+                            // others. Do not visit those same slots twice.
                             self.pre_clear_dirty_snapshot =
                                 Some(super::barrier::remembered_dirty_snapshot());
                         }
