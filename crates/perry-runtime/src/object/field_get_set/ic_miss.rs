@@ -767,8 +767,8 @@ pub(super) fn get_field_ic_miss_impl(
         }
     }
     // Only run the closure / buffer / typedarray probes on real heap
-    // receivers (>= 0x100000). A Web-Fetch handle (Headers/Request/Response/
-    // Blob, id in [0x40000, 0x100000)) or any other small native handle is NOT
+    // receivers (>= HANDLE_BAND_MAX). A Web-Fetch handle (Headers/Request/Response/
+    // Blob, id in the fetch band) or any other small native handle is NOT
     // a heap pointer; `closure_dynamic_prop_by_key` reaches `is_closure_ptr`,
     // which dereferences `[obj + 12]` for CLOSURE_MAGIC and SIGSEGVs on the
     // handle's unmapped low address (hit by hono's logger reading a property
@@ -2040,9 +2040,9 @@ pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64
     // Definitions share the shape-authoritative append/overwrite used by
     // object literals. It returns the refreshed value after a collecting
     // store; a decline leaves all operands untouched.
-    if let Some(stored) = unsafe {
-        crate::object::define_own_data::define_own_data_from_shape(receiver, key, value)
-    } {
+    if let Some(stored) =
+        unsafe { crate::object::define_own_data::define_own_data_from_shape(receiver, key, value) }
+    {
         return stored;
     }
     let scope = crate::gc::RuntimeHandleScope::new();

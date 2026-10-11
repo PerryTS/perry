@@ -443,7 +443,7 @@ unsafe fn stringify_object_walk(
             // integer, e.g. an `http.Agent` in an object literal, a fetch/zlib/
             // stream handle, or a revocable-Proxy id), not a real heap pointer.
             // Reading the GC header of such a value
-            // segfaults. Skip the whole small-handle band `[0, 0x100000)` — not
+            // segfaults. Skip the whole small-handle band `[0, 0x200000)` — not
             // just the `< 0x1000` low guard (#4904/#1843 — a Proxy id at 0xF000D
             // in a Next.js render object crashed exactly here). Real closures
             // live far above the band.

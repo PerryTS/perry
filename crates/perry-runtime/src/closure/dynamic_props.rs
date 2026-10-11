@@ -854,11 +854,11 @@ mod tests_1802 {
     }
 
     /// #4740: `is_closure_ptr` must NOT dereference an address in the
-    /// `[0x10000, 0x100000)` native-handle band. Web Fetch response handles
+    /// `[0x10000, HANDLE_BAND_MAX)` native-handle band. Web Fetch response handles
     /// (`0x40000+`), node:http / axios / fastify ids live there and are not
     /// real pointers — probing `*(ptr + 12)` for `CLOSURE_MAGIC` on one reads
     /// a tiny unmapped address (the reported `0x4000c`) and SIGSEGVs on the
-    /// IC-miss property-lookup path. With the floor at `0x100000` the probe is
+    /// IC-miss property-lookup path. With the floor at `HANDLE_BAND_MAX` the probe is
     /// skipped and these return `false` without touching memory. Complements
     /// the #4739 own-field-probe integration repro with a direct unit assertion
     /// on the predicate's floor.

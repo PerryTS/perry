@@ -4,25 +4,25 @@
 //!
 //! A property access may dereference its receiver only when the value is
 //! POINTER-tagged (`bits >> 48 == 0x7FFD`) AND its 48-bit payload lies above
-//! the native-registry handle band (`payload > 0x0F_FFFF`: small ids that
+//! the native-registry handle band (`payload > 0x1F_FFFF`: small ids that
 //! native modules hand out as POINTER-tagged values and that are not
 //! addresses). Spelled as two tests that is six instructions on x86-64 —
-//! `xor`/`mov`/`shr $48`/`jne` and `cmp $0xfffff`/`jbe` — on every hit of every
+//! `xor`/`mov`/`shr $48`/`jne` and `cmp $0x1fffff`/`jbe` — on every hit of every
 //! read.
 //!
 //! The two tests are one range:
 //!
 //! ```text
-//! t = bits - (POINTER_TAG | 0x10_0000)
-//! t <u 2^48 - 0x10_0000     <=>     tag == 0x7FFD  &&  payload >= 0x10_0000
+//! t = bits - (POINTER_TAG | 0x20_0000)
+//! t <u 2^48 - 0x20_0000     <=>     tag == 0x7FFD  &&  payload >= 0x20_0000
 //! ```
 //!
 //! A higher tag leaves `t >= 2^48`; a lower tag, a small handle or a plain
 //! double wraps `t` past `2^63`. Both fail the one compare, so it is exact —
 //! [`tests::fused_test_equals_tag_and_handle_band_predicate`] checks every one
 //! of the 65,536 tags against every payload boundary. On the pointer edge the
-//! handle is `t + 0x10_0000`, and a load at a fixed offset from the handle is
-//! a load at `offset + 0x10_0000` from `t` ([`emit_field_ptr`]), so the
+//! handle is `t + 0x20_0000`, and a load at a fixed offset from the handle is
+//! a load at `offset + 0x20_0000` from `t` ([`emit_field_ptr`]), so the
 //! handle itself need never be materialised on a hit path.
 //!
 //! #11161 introduced this compare for the class-field read route; this module
@@ -46,18 +46,43 @@ const _: () = assert!(RECEIVER_SPAN == 0x0000_FFFF_FFE0_0000);
 /// `2^47 - HANDLE_FLOOR`: the user-address span above the handle band.
 pub(crate) const STORE_SPAN: u64 = (1u64 << 47) - HANDLE_FLOOR;
 
-/// The emitted decimal spellings of the handle floor and the values derived
-/// from it. Every IR literal that tests "payload above the handle band" uses
-/// one of these; `literals_match_the_floor` ties them to `HANDLE_FLOOR`.
-pub(crate) const HANDLE_FLOOR_LITERAL: &str = "2097152";
-/// `HANDLE_FLOOR - 1`, the operand of an `icmp ugt` "above the band" test.
-pub(crate) const HANDLE_BAND_TOP_LITERAL: &str = "2097151";
-/// `RECEIVER_BIAS` as a signed i64 literal.
-pub(crate) const RECEIVER_BIAS_LITERAL: &str = "9222527611926740992";
-/// `RECEIVER_SPAN` as a signed i64 literal.
-pub(crate) const RECEIVER_SPAN_LITERAL: &str = "281474974613504";
-/// `STORE_SPAN` as a signed i64 literal.
-pub(crate) const STORE_SPAN_LITERAL: &str = "140737486258176";
+// Format LLVM decimal operands at compile time from the shared constants.
+const fn decimal_len(mut value: u64) -> usize {
+    let mut len = 1;
+    while value >= 10 {
+        value /= 10;
+        len += 1;
+    }
+    len
+}
+
+const fn decimal_bytes<const N: usize>(mut value: u64) -> [u8; N] {
+    let mut bytes = [b'0'; N];
+    let mut i = N;
+    while i > 0 {
+        i -= 1;
+        bytes[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    bytes
+}
+
+macro_rules! decimal_literal {
+    ($value:expr) => {{
+        const BYTES: [u8; decimal_len($value)] = decimal_bytes($value);
+        match std::str::from_utf8(&BYTES) {
+            Ok(literal) => literal,
+            Err(_) => panic!("decimal formatter emitted non-ASCII"),
+        }
+    }};
+}
+
+/// The handle floor and its derived LLVM operands have no independent spelling.
+pub(crate) const HANDLE_FLOOR_LITERAL: &str = decimal_literal!(HANDLE_FLOOR);
+pub(crate) const HANDLE_BAND_TOP_LITERAL: &str = decimal_literal!(HANDLE_FLOOR - 1);
+pub(crate) const RECEIVER_BIAS_LITERAL: &str = decimal_literal!(RECEIVER_BIAS);
+pub(crate) const RECEIVER_SPAN_LITERAL: &str = decimal_literal!(RECEIVER_SPAN);
+pub(crate) const STORE_SPAN_LITERAL: &str = decimal_literal!(STORE_SPAN);
 
 /// The receiver test's two outputs: the biased value (`bits - RECEIVER_BIAS`)
 /// every address on the pointer edge is derived from, and the `i1` that is

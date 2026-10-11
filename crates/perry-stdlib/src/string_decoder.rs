@@ -200,8 +200,6 @@ unsafe fn this_string_decoder_handle(this: perry_runtime::closure::JsThis) -> i6
     let bits = this_value.to_bits();
     let handle = if bits >> 48 == 0x7FFD {
         (bits & 0x0000_FFFF_FFFF_FFFF) as i64
-    } else if this_value.is_finite() && this_value > 0.0 && this_value.fract() == 0.0 {
-        this_value as i64
     } else {
         0
     };

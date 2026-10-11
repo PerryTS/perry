@@ -58,7 +58,7 @@
 //!   native-module receiver is `OrdinaryUnmarked`; a proof-carrying one is
 //!   `OrdinaryNumericProof`; both are other ShapeIds.
 //! * **Not a Proxy**: a Proxy is a POINTER-tagged id in the handle band, below
-//!   `0x100000`, so the small-handle test refuses it before any load.
+//!   `0x200000`, so the small-handle test refuses it before any load.
 //!
 //! # Nothing is re-read per object
 //!
@@ -279,11 +279,11 @@ pub(crate) fn emit_static_store_ic(
     let add_label = ctx.block_label(add_idx);
 
     // Receiver: POINTER tag AND payload above the handle band, as ONE unsigned
-    // range compare. `t = bits - (POINTER_TAG | 0x100000)` is below
-    // `2^48 - 0x100000` exactly when the top sixteen bits are 0x7FFD and the
-    // payload is >= 0x100000 (a smaller payload, or any other tag, wraps above
+    // range compare. `t = bits - (POINTER_TAG | 0x200000)` is below
+    // `2^48 - 0x200000` exactly when the top sixteen bits are 0x7FFD and the
+    // payload is >= 0x200000 (a smaller payload, or any other tag, wraps above
     // the bound). Native registry ids and the Proxy id band live below
-    // 0x100000, so neither is ever dereferenced. The handle is `t + 0x100000`.
+    // 0x200000, so neither is ever dereferenced. The handle is `t + 0x200000`.
     // The one shared form every read and write route takes
     // (`crate::expr::receiver_range`).
     let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);

@@ -132,7 +132,7 @@ pub(crate) fn emit_private_site_guard(
     let blk = ctx.block();
     let word = blk.load_atomic_monotonic(I64, site, 8);
     let bits = blk.bitcast_double_to_i64(obj);
-    // `bits - (POINTER_TAG + 0x100000) < 2^48 - 0x100000`: POINTER-tagged and
+    // `bits - (POINTER_TAG + HANDLE_BAND_MAX) < 2^48 - HANDLE_BAND_MAX`: POINTER-tagged and
     // above the small-handle band, in one compare.
     let biased = blk.sub(
         I64,

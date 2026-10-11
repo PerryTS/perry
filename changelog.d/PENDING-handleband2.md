@@ -1,0 +1,3 @@
+Finish #12383's tagged-handle migration: plain numbers and subnormal doubles no longer decode as native handles in instanceof, native method calls, stream consumers, or StringDecoder receivers. Blob/Response stream bridge stubs and the opt-in streams extension now return tagged JS values. Typed stream receivers retain expando writes after codegen strips the pointer tag.
+
+Generate receiver-range LLVM literals from the shared constants at compile time, extend the address-floor inventory to the complete handle band, and repair the merged arithmetic predicate typo. Add local HTTP fetch/body and connected TCP socket coverage for number operations, keys, JSON, native brands, and subnormal instanceof operands, plus focused bridge and receiver tests.

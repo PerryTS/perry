@@ -138,12 +138,6 @@ fn boxed_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
 }
 
-fn is_integral_handle_value(value: f64) -> bool {
-    let jsval = JSValue::from_bits(value.to_bits());
-    (jsval.is_int32() && jsval.as_int32() > 0)
-        || (jsval.is_number() && value.is_finite() && value > 0.0 && value.fract() == 0.0)
-}
-
 fn is_undefined_value(value: f64) -> bool {
     value.to_bits() == crate::value::TAG_UNDEFINED
         || JSValue::from_bits(value.to_bits()).is_undefined()
@@ -411,7 +405,7 @@ fn promise_ptr_from_value(value: f64) -> Option<*mut crate::Promise> {
 }
 
 fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
-    if !is_integral_handle_value(stream) {
+    if crate::object::stream_handle_id(stream).is_none() {
         return None;
     }
     let f = STREAM_CONSUMER_GET_READER.load(Ordering::Acquire);
@@ -431,7 +425,7 @@ fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
 }
 
 fn registered_reader_read_promise(reader: f64) -> Option<*mut crate::Promise> {
-    if !is_integral_handle_value(reader) {
+    if crate::object::stream_handle_id(reader).is_none() {
         return None;
     }
     let f = STREAM_CONSUMER_READER_READ.load(Ordering::Acquire);

@@ -10,8 +10,8 @@
 //! # Architecture
 //!
 //! Each stream variant owns a per-process `HashMap<usize, …>` keyed
-//! by a numeric handle (registry id cast to `f64`, the same ABI
-//! perry-stdlib used). User-supplied `start` / `pull` / `cancel` /
+//! by a POINTER-tagged handle, matching perry-stdlib.
+//! User-supplied `start` / `pull` / `cancel` /
 //! `write` / `close` / `abort` / `transform` / `flush` callbacks are
 //! stored as raw `i64` closure pointers and pinned across GC cycles
 //! by a single registered root scanner — same #35 / `events` pattern
@@ -68,7 +68,6 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-#[cfg(test)]
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 #[cfg(test)]
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -277,6 +276,19 @@ fn scan_stream_roots(visitor: &mut GcRootVisitor<'_>) {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
+fn stream_value(id: usize) -> f64 {
+    f64::from_bits(POINTER_TAG | id as u64)
+}
+
+fn stream_id(value: f64) -> usize {
+    let bits = value.to_bits();
+    if bits & !POINTER_MASK == POINTER_TAG {
+        (bits & POINTER_MASK) as usize
+    } else {
+        0
+    }
+}
+
 fn next_id(slot: &Mutex<usize>) -> usize {
     let mut guard = slot.lock().unwrap();
     let id = *guard;
@@ -421,7 +433,7 @@ unsafe fn invoke_start(stream_id: usize) {
         match g.get_mut(&stream_id) {
             Some(s) if !s.started => {
                 s.started = true;
-                (s.start_cb, stream_id as f64)
+                (s.start_cb, stream_value(stream_id))
             }
             _ => return,
         }
@@ -440,7 +452,7 @@ unsafe fn maybe_pull(stream_id: usize) {
                 let need = s.chunks.is_empty() || (s.chunks.len() as f64) < s.high_water_mark;
                 if need && s.pull_cb != 0 {
                     s.pulling = true;
-                    (s.pull_cb, stream_id as f64, true)
+                    (s.pull_cb, stream_value(stream_id), true)
                 } else {
                     (0, 0.0, false)
                 }
@@ -509,7 +521,7 @@ pub unsafe extern "C" fn js_readable_stream_new(
     );
     invoke_start(id);
     maybe_pull(id);
-    id as f64
+    stream_value(id)
 }
 
 /// Build a single-chunk readable stream from an owned byte buffer.
@@ -537,7 +549,7 @@ pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_get_reader(stream_handle: f64) -> f64 {
     ensure_gc_registered();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let mut g = READABLE_STREAMS.lock().unwrap();
     let s = match g.get_mut(&id) {
         Some(s) => s,
@@ -562,12 +574,12 @@ pub unsafe extern "C" fn js_readable_stream_get_reader(stream_handle: f64) -> f6
             closed_promise: closed_p,
         },
     );
-    reader_id as f64
+    stream_value(reader_id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_locked(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     let locked = g
         .get(&id)
@@ -582,7 +594,7 @@ pub unsafe extern "C" fn js_readable_stream_cancel(
     reason: f64,
 ) -> *mut Promise {
     let promise = promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let cb = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
@@ -617,13 +629,13 @@ pub unsafe extern "C" fn js_readable_stream_from_blob(_blob_id: f64) -> f64 {
     // doesn't yet expose a cross-wrapper handle-bytes accessor. See
     // the punted-gaps section of this module's docs.
     let id = alloc_readable_from_bytes(Vec::new());
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 {
     let id = alloc_readable_from_bytes(Vec::new());
-    id as f64
+    stream_value(id)
 }
 
 /// `ReadableStream.from(asyncIterable)` — deferred (issue #237 followup).
@@ -643,7 +655,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
     stream_handle: f64,
     chunk: f64,
 ) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let chunk_bits = chunk.to_bits();
     let popped = {
         let mut g = READABLE_STREAMS.lock().unwrap();
@@ -668,7 +680,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
@@ -702,7 +714,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     stream_handle: f64,
     reason: f64,
 ) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let reason_bits = reason.to_bits();
     let reader_id = {
         let mut g = READABLE_STREAMS.lock().unwrap();
@@ -728,7 +740,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     match g.get(&id) {
         Some(s) if s.state == ReadableState::Readable => {
@@ -746,7 +758,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handl
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     let promise = promise_new();
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) if r.locked => r.stream_handle,
         Some(_) => {
@@ -796,7 +808,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     let stream_id = {
         let mut g = READERS.lock().unwrap();
         match g.get_mut(&reader_id) {
@@ -815,7 +827,7 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_closed(reader_handle: f64) -> *mut Promise {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     match READERS.lock().unwrap().get(&reader_id) {
         Some(r) => r.closed_promise,
         None => {
@@ -828,7 +840,7 @@ pub unsafe extern "C" fn js_reader_closed(reader_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *mut Promise {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) => r.stream_handle,
         None => {
@@ -837,7 +849,7 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
             return p;
         }
     };
-    js_readable_stream_cancel(stream_id as f64, reason)
+    js_readable_stream_cancel(stream_value(stream_id), reason)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -855,7 +867,7 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
 /// iterables.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let chunks: Vec<u64> = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
@@ -894,8 +906,8 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
     }
 
     let mut arr: *mut ArrayHeader = js_array_alloc(2);
-    arr = js_array_push(arr, JsValue::from_number(id_a as f64));
-    arr = js_array_push(arr, JsValue::from_number(id_b as f64));
+    arr = js_array_push(arr, JsValue::from_bits(stream_value(id_a).to_bits()));
+    arr = js_array_push(arr, JsValue::from_bits(stream_value(id_b).to_bits()));
     f64::from_bits(JsValue::from_object_ptr(arr as *mut u8).bits())
 }
 
@@ -911,8 +923,8 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     writable_handle: f64,
 ) -> *mut Promise {
     let promise = promise_new();
-    let r_id = readable_handle as usize;
-    let w_id = writable_handle as usize;
+    let r_id = stream_id(readable_handle);
+    let w_id = stream_id(writable_handle);
 
     loop {
         let chunk_or_done: Result<u64, bool> = {
@@ -1014,13 +1026,13 @@ pub unsafe extern "C" fn js_writable_stream_new(
         closure_from_bits(abort_bits.to_bits()),
         hwm,
     );
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f64 {
     ensure_gc_registered();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let mut g = WRITABLE_STREAMS.lock().unwrap();
     let s = match g.get_mut(&id) {
         Some(s) => s,
@@ -1043,12 +1055,12 @@ pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f6
             ready_promise: ready_p,
         },
     );
-    writer_id as f64
+    stream_value(writer_id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = WRITABLE_STREAMS.lock().unwrap();
     let locked = g
         .get(&id)
@@ -1060,7 +1072,7 @@ pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Promise {
     let promise = promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let (cb, closed_p) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
@@ -1085,7 +1097,7 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f64) -> *mut Promise {
     let promise = promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let reason_bits = reason.to_bits();
     let (cb, closed_p) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
@@ -1116,7 +1128,7 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
     let promise = promise_new();
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) if w.locked => w.stream_handle,
         _ => {
@@ -1153,7 +1165,7 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => {
@@ -1165,12 +1177,12 @@ pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
     if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
         return transform_close(stream_id);
     }
-    js_writable_stream_close(stream_id as f64)
+    js_writable_stream_close(stream_value(stream_id))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => {
@@ -1179,12 +1191,12 @@ pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mu
             return p;
         }
     };
-    js_writable_stream_abort(stream_id as f64, reason)
+    js_writable_stream_abort(stream_value(stream_id), reason)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = {
         let mut g = WRITERS.lock().unwrap();
         match g.get_mut(&writer_id) {
@@ -1203,7 +1215,7 @@ pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.closed_promise,
         None => {
@@ -1216,7 +1228,7 @@ pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_ready(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.ready_promise,
         None => {
@@ -1229,7 +1241,7 @@ pub unsafe extern "C" fn js_writer_ready(writer_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => return 0.0,
@@ -1302,28 +1314,28 @@ pub unsafe extern "C" fn js_transform_stream_new(
         },
     );
     TRANSFORM_PAIRS.lock().unwrap().insert(writable_id, id);
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_readable(handle: f64) -> f64 {
-    let id = handle as usize;
+    let id = stream_id(handle);
     TRANSFORM_STREAMS
         .lock()
         .unwrap()
         .get(&id)
-        .map(|t| t.readable_handle as f64)
+        .map(|t| stream_value(t.readable_handle))
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_transform_stream_writable(handle: f64) -> f64 {
-    let id = handle as usize;
+    let id = stream_id(handle);
     TRANSFORM_STREAMS
         .lock()
         .unwrap()
         .get(&id)
-        .map(|t| t.writable_handle as f64)
+        .map(|t| stream_value(t.writable_handle))
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
@@ -1349,10 +1361,14 @@ unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     };
     if transform_cb != 0 && readable_id != 0 {
         let closure = JsClosure::from_raw(transform_cb as *const RawClosureHeader);
-        let _ = closure.call2(perry_ffi::JsThis::UNDEFINED, chunk, readable_id as f64);
+        let _ = closure.call2(
+            perry_ffi::JsThis::UNDEFINED,
+            chunk,
+            stream_value(readable_id),
+        );
     } else {
         // Identity transform — pass-through.
-        js_readable_stream_controller_enqueue(readable_id as f64, chunk);
+        js_readable_stream_controller_enqueue(stream_value(readable_id), chunk);
     }
     promise_resolve_bits(promise, TAG_UNDEFINED);
     promise
@@ -1375,10 +1391,10 @@ unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     };
     if flush_cb != 0 && readable_id != 0 {
         let closure = JsClosure::from_raw(flush_cb as *const RawClosureHeader);
-        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, readable_id as f64);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, stream_value(readable_id));
     }
     if readable_id != 0 {
-        js_readable_stream_controller_close(readable_id as f64);
+        js_readable_stream_controller_close(stream_value(readable_id));
     }
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
         s.state = WritableState::Closed;
@@ -1730,6 +1746,25 @@ mod tests {
             assert!(read_bytes_from_chunk(TAG_UNDEFINED).is_none());
             // Number bits (raw f64=42.0) — top 16 ≠ 0x7FFD.
             assert!(read_bytes_from_chunk(42.0_f64.to_bits()).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tagged_handle_tests {
+    use super::*;
+    #[test]
+    fn boundary_values_are_tagged_and_numbers_are_rejected() {
+        for id in [
+            1,
+            perry_runtime::value::addr_class::STREAM_ID_BAND_START,
+            perry_ffi::RECEIVER_HANDLE_FLOOR - 1,
+        ] {
+            let value = stream_value(id);
+            assert_eq!(value.to_bits() & !POINTER_MASK, POINTER_TAG);
+            assert_eq!(stream_id(value), id);
+            assert_eq!(stream_id(id as f64), 0);
+            assert_eq!(stream_id(f64::from_bits(id as u64)), 0);
         }
     }
 }

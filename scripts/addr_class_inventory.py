@@ -75,8 +75,8 @@ BAND_LITERAL_RE = re.compile(
 
 GC_HEADER_CAST_RE = re.compile(r"as\s+\*(?:const|mut)\s+(?:crate::gc::)?GcHeader\b")
 
-# HANDLE FLOOR (#6279) — a hand-rolled address floor that is BELOW
-# `HANDLE_BAND_MAX` (0x100000).  `0x1000` / `0x10000` are an order of magnitude
+# HANDLE FLOOR (#6279) — a hand-rolled address floor instead of
+# `HANDLE_BAND_MAX` (2 MiB).  `0x1000` / `0x10000` are an order of magnitude
 # too low, so the fetch (0x40000..0xE0000), zlib (0xE0000..0xF0000) and proxy
 # (0xF0000..) handle bands sail straight through into a dereference.  This is
 # the *wrong-literal* case that BAND_LITERAL_RE structurally cannot see: that
@@ -89,8 +89,8 @@ GC_HEADER_CAST_RE = re.compile(r"as\s+\*(?:const|mut)\s+(?:crate::gc::)?GcHeader
 # our problem.
 HANDLE_FLOOR_RE = re.compile(
     r"(?:\bptr\b|\baddr\b|\bbits\b|_ptr\b|_addr\b|_bits\b|as\s+usize|as\s+u64)"
-    r"[^;]{0,60}?(?:<|>|<=|>=)\s*(?:crate::gc::GC_HEADER_SIZE\s*\+\s*)?0x1_?0?000\b"
-    r"|0x1_?0?000\b\s*(?:<|<=)\s*[A-Za-z_]*(?:ptr|addr|bits)\b",
+    r"[^;]{0,60}?(?:<|>|<=|>=)\s*(?:crate::gc::GC_HEADER_SIZE\s*\+\s*)?0x(?:1(?:_?0){3,5}|[4EF](?:_?0){4}|2(?:_?0){5})\b"
+    r"|0x(?:1(?:_?0){3,5}|[4EF](?:_?0){4}|2(?:_?0){5})\b\s*(?:<|<=)\s*[A-Za-z_]*(?:ptr|addr|bits)\b",
     re.IGNORECASE,
 )
 
@@ -109,7 +109,14 @@ HANDLE_FLOOR_RE = re.compile(
 # next to it, so a band predicate in the surrounding lines clears the finding —
 # same pairing contract as `lone-valid-obj-ptr` below.  Reported under the
 # `handle-floor` rule so it shares that rule's per-file ratchet.
-HANDLE_FLOOR_RANGE_RE = re.compile(r"\(\s*0x1_?0?000\s*\.\.")
+HANDLE_FLOOR_RANGE_RE = re.compile(
+    # Preserve the existing low-floor coverage regardless of operand spelling.
+    r"\(\s*0x1_?0?000\s*\.\."
+    # Extended boundaries are address guards, not Unicode codepoint ranges.
+    r"|\(\s*0x(?:1(?:_?0){5}|[4EF](?:_?0){4}|2(?:_?0){5})\s*\.\."
+    r"[^\n;]*\.contains\(&[A-Za-z_]*(?:ptr|addr|bits)\b",
+    re.IGNORECASE,
+)
 
 # LONE is_valid_obj_ptr (#6279) — `is_valid_obj_ptr` used as the ONLY guard
 # before a dereference.  Its own doc says it is not sufficient:
@@ -371,6 +378,10 @@ def run_self_tests() -> int:
     # An address compared against a floor BELOW HANDLE_BAND_MAX is the bug.
     for src in (
         "if (obj as usize) < 0x10000 {\n",
+        "if ptr < 0x100000 {\n",
+        "if addr >= 0x200000 {\n",
+        "if 0x20_0000 <= obj_ptr {\n",
+        "if bits < 0xF0000 {\n",
         "if ptr.is_null() || (ptr as usize) < 0x1000 {\n",
         "if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {\n",
         "} else if top16 == 0 && bits >= 0x1000 {\n",
@@ -386,19 +397,20 @@ def run_self_tests() -> int:
         "const CHUNK: usize = 0x10000;\n",
         "let mut buf = vec![0u8; 0x10000];\n",
         "if len > 0x10000 {\n",
+        "if (0xE0000..=0xE007F).contains(&cp) {}\n",
     ):
         expect(
             not any(f.rule == "handle-floor" for f in scan_text(runtime, src)),
             f"handle-floor must NOT flag a size literal: {src.strip()}",
         )
 
-    # The CORRECT boundary is not a handle-floor finding (band-literal owns it).
+    # Even a current boundary must come from the shared constant.
     expect(
-        not any(
+        any(
             f.rule == "handle-floor"
             for f in scan_text(runtime, "if (ptr as usize) < 0x100000 {\n")
         ),
-        "handle-floor must not fire on the correct HANDLE_BAND_MAX boundary",
+        "handle-floor must flag a hand-typed handle boundary",
     )
 
     # Comment-only mentions are ignored, same as the other rules.
@@ -416,6 +428,9 @@ def run_self_tests() -> int:
     # probes survived the #6279 sweep and kept faulting on a Proxy id.
     for src in (
         "    if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {\n        return false;\n    }\n",
+        "if (0x1000..MAX).contains(&value) {}\n",
+        "if (0x20_0000..MAX).contains(&obj_ptr) {}\n",
+        "if (0x10_0000..MAX).contains(&raw_bits) {}\n",
         "    } else if (0x10000..=RAW_PTR_MAX).contains(&bits) {\n        deref(bits)\n",
     ):
         expect(
@@ -441,13 +456,13 @@ def run_self_tests() -> int:
         not any(f.rule == "handle-floor" for f in scan_text(runtime, paired_range)),
         "handle-floor must accept a range pre-filter paired with a band predicate",
     )
-    # A range whose floor is already the CORRECT boundary is not a finding.
+    # The range form must use the shared constant too.
     expect(
-        not any(
+        any(
             f.rule == "handle-floor"
             for f in scan_text(runtime, "if (0x100000..MAX).contains(&addr) {\n")
         ),
-        "handle-floor must not fire on a range starting at HANDLE_BAND_MAX",
+        "handle-floor must flag a hand-typed range boundary",
     )
 
     # --- lone-valid-obj-ptr rule (#6279) ------------------------------------
@@ -556,7 +571,7 @@ def run_self_tests() -> int:
     # Band literals in code are caught; comment-only mentions are not.
     hits = scan_text(runtime, "if addr < 0x100000 {\n")
     expect(
-        len(hits) == 1 and hits[0].rule == "band-literal",
+        {f.rule for f in hits} == {"band-literal", "handle-floor"},
         "band literal in code should be flagged",
     )
     expect(
@@ -596,7 +611,7 @@ def run_self_tests() -> int:
     expect(
         not scan_text(
             "crates/perry-runtime/src/value/addr_class.rs",
-            "pub const HANDLE_BAND_MAX: usize = 0x100000;\n",
+            "pub const HANDLE_BAND_MAX: usize = 0x200000;\n",
         ),
         "addr_class.rs must be exempt",
     )
@@ -766,7 +781,7 @@ def main(argv: list[str] | None = None) -> int:
             "#",
             "# Pre-existing sites for the two rules that CANNOT be fixed in one pass:",
             "#",
-            "#   handle-floor        a hand-rolled address floor BELOW HANDLE_BAND_MAX",
+            "#   handle-floor        a hand-rolled handle-band address floor",
             "#                       (0x1000 / 0x10000). Does not reject the fetch, zlib",
             "#                       or proxy handle bands, so it can deref a handle and",
             "#                       segfault on Linux. macOS hides it behind a 2 TB floor.",

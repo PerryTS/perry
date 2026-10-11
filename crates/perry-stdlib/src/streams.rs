@@ -564,7 +564,7 @@ unsafe impl Send for ReaderData {}
 unsafe impl Send for WriterData {}
 
 // Band boundaries owned by `perry_runtime::value::addr_class` (the runtime's
-// finite-number stream probes classify against the same range).
+// tagged stream-handle probes classify against the same range).
 pub(crate) const STREAM_HANDLE_ID_START: usize =
     perry_runtime::value::addr_class::STREAM_ID_BAND_START;
 pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
@@ -1736,13 +1736,13 @@ unsafe fn js_readable_stream_cancel_inner(
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_blob(blob_id: f64) -> f64 {
     let bytes = crate::fetch::blob_bytes_clone(blob_id as usize).unwrap_or_default();
-    alloc_readable_from_bytes(bytes) as f64
+    stream_value(alloc_readable_from_bytes(bytes))
 }
 
 #[cfg(not(feature = "web-fetch"))]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_blob(_blob_id: f64) -> f64 {
-    alloc_readable_from_bytes(Vec::new()) as f64
+    stream_value(alloc_readable_from_bytes(Vec::new()))
 }
 
 #[cfg(feature = "web-fetch")]
@@ -1754,7 +1754,7 @@ pub unsafe extern "C" fn js_readable_stream_from_response(resp_id: f64) -> f64 {
 #[cfg(not(feature = "web-fetch"))]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_response(_resp_id: f64) -> f64 {
-    alloc_readable_from_bytes(Vec::new()) as f64
+    stream_value(alloc_readable_from_bytes(Vec::new()))
 }
 
 fn ptr_addr_from_nanbox(value: f64) -> Option<usize> {
@@ -2793,3 +2793,48 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
 }
 
 pub(crate) use self::subclass::readable_body_state;
+
+#[cfg(test)]
+mod handle_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn raw_and_tagged_typed_receivers_store_stream_expandos() {
+        unsafe {
+            let stream = js_readable_stream_new(
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                1.0,
+            );
+            let id = stream_id(stream);
+            unsafe extern "C" fn probe(id: usize) -> bool {
+                js_stream_handle_kind(id) != 0
+            }
+            perry_runtime::object::js_register_stream_handle_probe(probe);
+            for (receiver, key_name, value) in
+                [(id as u64, "raw", 1.0), (stream.to_bits(), "tagged", 2.0)]
+            {
+                let key =
+                    perry_runtime::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
+                perry_runtime::object::js_object_set_field_by_name(
+                    receiver as *mut perry_runtime::object::ObjectHeader,
+                    key,
+                    value,
+                );
+                assert_eq!(stream_expando_get(id, key_name), Some(value));
+            }
+        }
+    }
+
+    #[test]
+    fn blob_and_response_bridge_results_are_tagged() {
+        unsafe {
+            let blob = js_readable_stream_from_blob(0.0);
+            assert!(stream_id(blob) >= STREAM_HANDLE_ID_START);
+            #[cfg(not(feature = "web-fetch"))]
+            assert!(stream_id(js_readable_stream_from_response(0.0)) >= STREAM_HANDLE_ID_START);
+            assert_eq!(stream_id(STREAM_HANDLE_ID_START as f64), 0);
+        }
+    }
+}

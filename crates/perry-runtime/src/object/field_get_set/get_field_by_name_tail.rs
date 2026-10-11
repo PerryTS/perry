@@ -45,7 +45,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 // undefined/null tag or null pointer — return undefined
                 return JSValue::undefined();
             }
-            // Issue #340: small-handle receivers (raw < 0x100000) come
+            // Issue #340: small-handle receivers (raw < HANDLE_BAND_MAX) come
             // from native modules (axios, fastify, ...) that
             // store objects in registries and expose integer ids. The
             // handle property dispatcher (registered by stdlib via

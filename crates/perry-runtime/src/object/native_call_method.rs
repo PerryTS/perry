@@ -1811,9 +1811,9 @@ pub(crate) unsafe fn native_call_method_tower(
     // receiver. The decomposed form `const f = proxy.method; f(args)` already
     // works because the property read routes through `js_proxy_get`. The fused
     // form, however, reaches this generic dispatcher with the proxy id intact.
-    // Proxy ids encode to small pointer-tagged values (band 0xF0000..0x100000),
+    // Proxy ids encode to small pointer-tagged values (band 0xF0000..0x200000),
     // so without this guard the receiver is misclassified as a native-module
-    // *integer handle* by the `raw_ptr < 0x100000` small-handle dispatch below
+    // *integer handle* by the `raw_ptr < 0x200000` small-handle dispatch below
     // (when an app links a native handle dispatcher, e.g. mysql2 / Fastify),
     // which returns null for an unknown id — silently dropping the call.
     //

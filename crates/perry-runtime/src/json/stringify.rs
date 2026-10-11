@@ -521,7 +521,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         // real heap objects, so JSON.stringify of an object holding e.g. an
         // `http.Agent`, a fetch/zlib/stream handle, or a revocable-Proxy id
         // emits `null` instead of segfaulting on the ArrayHeader/keys_array
-        // deref below. The whole small-handle band `[0, 0x100000)` is bogus, not
+        // deref below. The whole small-handle band `[0, HANDLE_BAND_MAX)` is bogus, not
         // just the `< 0x1000` low guard (#4904/#1843).
         if crate::value::addr_class::is_handle_band(ptr as usize) {
             buf.push_str("null");
@@ -805,7 +805,7 @@ pub(crate) unsafe fn stringify_value_depth(
         // pointer. Such values aren't JSON-serializable and dereferencing them
         // (gc_obj_type → is_object_pointer / array probe) segfaults. Emit `null`,
         // the same way closures are dropped. The whole small-handle band
-        // `[0, 0x100000)` is bogus, not just the `< 0x1000` low guard
+        // `[0, HANDLE_BAND_MAX)` is bogus, not just the `< 0x1000` low guard
         // (#4904/#1843 — a Proxy id at 0xF0005 crashed Next.js render).
         if crate::value::addr_class::is_handle_band(ptr as usize) {
             buf.push_str("null");

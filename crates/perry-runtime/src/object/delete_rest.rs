@@ -75,7 +75,7 @@ pub extern "C" fn js_object_delete_field(
         }
     }
     // The hand-typed 0x10000 floor here was an order of magnitude below the real
-    // boundary (HANDLE_BAND_MAX = 0x100000), so the fetch (0x40000..0xE0000) and
+    // boundary (HANDLE_BAND_MAX = 0x200000), so the fetch (0x40000..0xE0000) and
     // zlib (0xE0000..0xF0000) handle bands fell through to the heap path below
     // and got dereferenced -> SIGSEGV on Linux. Use the centralized predicate.
     if crate::value::addr_class::is_handle_band(obj as usize) {

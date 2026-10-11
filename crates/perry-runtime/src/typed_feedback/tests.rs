@@ -2791,7 +2791,7 @@ fn typed_feedback_roots_rewrite_shape_observations() {
 #[test]
 fn normalize_raw_object_addr_rejects_inline_nanboxed_receivers() {
     // The inline payloads below are deliberately >= the native-handle band
-    // ceiling (`addr_class::HANDLE_BAND_MAX`, 0x100000) and < 2^48, i.e. they
+    // ceiling (`addr_class::HANDLE_BAND_MAX`, 0x200000) and < 2^48, i.e. they
     // alias *plausible heap addresses*. That is the case only the tag check
     // catches: the downstream `is_handle_band` / `addr >> 48` fallbacks already
     // reject tiny or out-of-range payloads, so a small value like 0x6f6a would

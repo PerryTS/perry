@@ -63,16 +63,6 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
             return Some(raw);
         }
     }
-    if (1..addr_class::HANDLE_BAND_MAX as u64).contains(&bits) {
-        return Some(bits as i64);
-    }
-    if value.is_finite()
-        && value > 0.0
-        && value.fract() == 0.0
-        && value < addr_class::HANDLE_BAND_MAX as f64
-    {
-        return Some(value as i64);
-    }
     None
 }
 
@@ -81,9 +71,8 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
 /// user-defined `@@hasInstance` has had its turn (that hook may legitimately
 /// answer `true` for a primitive) and BEFORE any native brand probe.
 ///
-/// #11261: the native probes resolve their operand through
-/// `small_native_handle_id`, which also accepts a plain positive integral
-/// number as a registry handle id. So `3 instanceof EventEmitter` answered
+/// #11261: native probes formerly decoded plain numbers as handle ids.
+/// So `3 instanceof EventEmitter` answered
 /// `true` whenever a live emitter happened to hold handle id 3 — the
 /// perry-stdlib-bundled emitter mints ids from 1 (the shared FFI pool), so
 /// the first few emitters in a program made small numbers "emitters".
@@ -92,9 +81,9 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
 /// booleans, strings (heap and inline), bigints, INT32 numbers that are not
 /// registered class references (a class ref is a callable constructor), and
 /// IEEE doubles. The raw-bitcast band (top 16 bits zero, non-zero bits) is
-/// deliberately NOT classified here: legacy raw heap pointers and raw handle
-/// ids share it with subnormal numbers, and the downstream probes already
-/// decode it. Symbols are POINTER-tagged heap cells; classifying them needs a
+/// deliberately NOT classified here: legacy raw heap pointers share it with
+/// subnormal numbers, so downstream address probes verify ownership. Native
+/// handles require POINTER_TAG and never decode subnormal numbers. Symbols are POINTER-tagged heap cells; classifying them needs a
 /// registry lookup that would tax every object operand, and no native probe
 /// matches a symbol cell, so they are left to the existing paths.
 #[inline]
@@ -975,5 +964,63 @@ mod primitive_lhs_native_brand_tests_11261 {
             !number,
             "a number is never instanceof EventEmitter (#11261)"
         );
+    }
+}
+
+#[cfg(test)]
+mod tagged_native_handle_tests {
+    use super::*;
+
+    #[test]
+    fn numbers_never_decode_as_native_handles() {
+        let start = crate::value::addr_class::STREAM_ID_BAND_START as u64;
+        let end = crate::value::addr_class::STREAM_ID_BAND_END as u64;
+        for id in [
+            1,
+            start - 1,
+            start,
+            start + 1,
+            (start + end) / 2,
+            end - 1,
+            end,
+        ] {
+            assert_eq!(small_native_handle_id(id as f64), None, "number {id}");
+            assert_eq!(
+                small_native_handle_id(f64::from_bits(id)),
+                None,
+                "subnormal bits {id}"
+            );
+            let tagged = f64::from_bits(crate::value::POINTER_TAG | id);
+            let expected =
+                crate::value::addr_class::is_small_handle(id as usize).then_some(id as i64);
+            assert_eq!(small_native_handle_id(tagged), expected);
+        }
+    }
+
+    #[test]
+    fn subnormal_numbers_are_never_sockets() {
+        unsafe extern "C" fn socket_probe(id: i64) -> bool {
+            id == 1
+        }
+        unsafe extern "C" fn no_socket(_: i64) -> bool {
+            false
+        }
+        let old = crate::object::net_socket_handle_probe();
+        unsafe {
+            crate::object::js_register_net_socket_handle_probe(socket_probe);
+        }
+        assert_eq!(
+            js_instanceof(
+                f64::from_bits(crate::value::POINTER_TAG | 1),
+                CLASS_ID_NET_SOCKET
+            )
+            .to_bits(),
+            crate::value::TAG_TRUE
+        );
+        let result = js_instanceof(f64::from_bits(1), CLASS_ID_NET_SOCKET);
+        unsafe {
+            crate::object::js_register_net_socket_handle_probe(old.unwrap_or(no_socket));
+        }
+        assert_eq!(result.to_bits(), crate::value::TAG_FALSE);
     }
 }

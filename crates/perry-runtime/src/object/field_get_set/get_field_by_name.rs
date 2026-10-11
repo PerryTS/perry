@@ -856,7 +856,7 @@ fn get_field_by_name_past_data_probe(
     // only fall back to the backing size when no own key exists. Other backed
     // reads (`.has`/`.get`/… as METHODS) route through `js_native_call_method`.
     // Guarded by `is_above_handle_band` (like the class-object probe below) so a
-    // native handle id in [0x10000, 0x100000) never reaches `own_key_present`'s
+    // native handle id in [0x10000, HANDLE_BAND_MAX) never reaches `own_key_present`'s
     // ObjectHeader deref; real subclass instances are ordinary heap objects
     // above the band.
     if !key.is_null()

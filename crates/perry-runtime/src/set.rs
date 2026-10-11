@@ -3109,7 +3109,7 @@ mod tests {
             // accepted this (0 >> 47 == 0), letting the collector derive a
             // slot range from an unmapped / unrelated low address.
             ("low-addr", 0x4000u64 as *mut f64),
-            // Handle-band id (just below HANDLE_BAND_MAX = 0x100000).
+            // Handle-band id (within the band below HANDLE_BAND_MAX).
             ("handle-band", 0x80000u64 as *mut f64),
         ];
 

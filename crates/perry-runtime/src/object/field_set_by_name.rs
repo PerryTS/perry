@@ -366,7 +366,10 @@ pub extern "C" fn js_object_set_field_by_name(
         // expando (`stream.allReady = ...`); without a store the write was
         // dropped, which stalled the Next.js dynamic-SSR render. Route to the
         // stdlib per-stream expando table (GC-traced there).
-        if let Some(addr) = crate::object::stream_handle_id(f64::from_bits(obj as u64)) {
+        // This entry takes a typed receiver pointer: native callers may have
+        // stripped POINTER_TAG already. Decode its payload, never a JS number.
+        if crate::value::addr_class::is_stream_id_band(normalized_obj as usize) {
+            let addr = normalized_obj as usize;
             if !key.is_null() {
                 if let (Some(probe), Some(setter)) = (
                     crate::object::stream_handle_probe(),

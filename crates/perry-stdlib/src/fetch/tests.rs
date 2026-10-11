@@ -107,7 +107,7 @@ fn string_from_header_rejects_handle_band_ids() {
         1usize,                                  // common native handle
         addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
         addr_class::FETCH_HANDLE_BAND_START + 2, // a fetch handle id
-        addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
+        addr_class::HANDLE_BAND_MAX - 1,         // 0x1FFFFF
     ] {
         assert!(addr_class::is_handle_band(id));
         // Must return None without dereferencing the bogus pointer.

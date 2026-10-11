@@ -234,7 +234,7 @@ to the same physical root still deduplicate by canonical path.
 
 ### Handle-Based Dispatch
 - TWO systems: `HANDLE_METHOD_DISPATCH` (methods) and `HANDLE_PROPERTY_DISPATCH` (properties)
-- Both must be registered. Small pointer detection: value < 0x100000 = handle.
+- Both must be registered. Native JS handles require POINTER_TAG; compare the decoded payload with addr_class::HANDLE_BAND_MAX. A JavaScript number is never a handle.
 
 ### objc2 v0.6 API
 - `define_class!` with `#[unsafe(super(NSObject))]`, `msg_send!` returns `Retained` directly

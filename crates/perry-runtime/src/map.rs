@@ -384,7 +384,7 @@ pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
     } else if bits >> 48 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
         // #6271 class: the bare-address branch must reject the handle bands, not
         // just small integers. A hand-rolled `> 0x10000` floor sits an order of
-        // magnitude BELOW `HANDLE_BAND_MAX` (0x100000), so every fetch / zlib /
+        // magnitude BELOW `HANDLE_BAND_MAX` (0x200000), so every fetch / zlib /
         // proxy handle passed it and was treated as a candidate heap address.
         bits as usize
     } else {

@@ -273,8 +273,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     };
     if crate::value::addr_class::is_small_handle(raw_ptr) {
         // #5989: registry HANDLES (fetch/native ids) live below HANDLE_BAND_MAX
-        // (0x100000). The old guard only excluded the first 64KB, so a handle
-        // in [0x10000, 0x100000) indexed as `h[key]` fell through to the raw
+        // (2 MiB). The old guard only excluded the first 64KB, so a handle
+        // in [0x10000, HANDLE_BAND_MAX) indexed as `h[key]` fell through to the raw
         // ObjectHeader walk below and dereferenced the id as a pointer —
         // react-server-dom's flight wake path indexes a handle-valued object
         // and segfaulted at the handle address. Route through the by-name read,

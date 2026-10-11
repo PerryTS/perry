@@ -536,7 +536,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                                                       // already gate on `> HANDLE_BAND_TOP`; mirror that here so any
                                                                       // handle-band receiver routes to the `js_value_length_f64` slow
                                                                       // path, which classifies it by registry without dereferencing the
-                                                                      // raw id. `HANDLE_BAND_TOP` = 0xFFFFF (addr_class::HANDLE_BAND_MAX
+                                                                      // raw id. `HANDLE_BAND_TOP` = 0x1FFFFF (addr_class::HANDLE_BAND_MAX
                                                                       // - 1).
             let above_band = blk.icmp_ugt(
                 I64,

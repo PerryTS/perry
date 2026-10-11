@@ -382,7 +382,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // Heap-allocated pointers: discriminate Array / Error from generic
     // Object via the GC header type byte.
     //
-    // A handle-band value (`< 0x100000`: Web Fetch `Headers`/`Request`/
+    // A handle-band value (`< 0x200000`: Web Fetch `Headers`/`Request`/
     // `Response`/`Blob` ids, net/http small handles, …) is a registry id, NOT a
     // heap pointer. It reaches here when the SDK coerces such a handle to a
     // string — e.g. an implicit `ToString(headers)` while assembling a request —

@@ -834,7 +834,7 @@ fn lower_property_site(
 
     // Issue #72: validate the receiver is actually a GC_TYPE_OBJECT
     // before reading its ShapeId. The receiver
-    // guard (`obj_handle > 0x100000`) keeps non-pointer NaN-boxes out,
+    // guard (`obj_handle >= HANDLE_BAND_MAX`) keeps non-pointer NaN-boxes out,
     // but real heap pointers to Arrays/Strings/Buffers all clear that
     // threshold. A chained `obj.rowsRaw.length` (whose static type
     // analysis can't prove `obj.rowsRaw` is an Array — the outer
@@ -858,7 +858,7 @@ fn lower_property_site(
     // `req.params`, etc.).
     //
     // Threshold matches `js_native_call_method`'s small-handle
-    // detection (raw_ptr < 0x100000).
+    // detection (raw_ptr < HANDLE_BAND_MAX).
     //
     // Under the fused receiver test (every key but `.length`) this fact is
     // already proven on every edge into `pget.recv_ok`, so no second branch
@@ -869,7 +869,7 @@ fn lower_property_site(
             &entry_handle,
             crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
         )
-    }); // 0x100000
+    }); // HANDLE_BAND_MAX
 
     // #7883: the guard chain BRANCHES OUT to the slow exit on the first
     // failing predicate instead of AND-ing eight of them into one flat `hit`.

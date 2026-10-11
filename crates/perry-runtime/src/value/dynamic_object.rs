@@ -58,7 +58,7 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         let handle = (bits & POINTER_MASK) as usize;
         // A POINTER_TAG value in a handle band (Web Fetch
         // Headers/Request/Response/Blob, net/http small handles, zlib stream
-        // ids, revocable-proxy ids — all `< 0x100000`) is a registry id, not a
+        // ids, revocable-proxy ids — all `< HANDLE_BAND_MAX`) is a registry id, not a
         // heap pointer. None of them carry a `.length`, and dereferencing the
         // raw id (`handle - 8` GcHeader read, or `*handle` u32 below) hits
         // unmapped low memory → SIGSEGV. Reject the band explicitly before
@@ -972,7 +972,7 @@ mod length_handle_band_tests {
 
     /// A POINTER_TAG-boxed *handle-band* value (Web Fetch
     /// Headers/Request/Response/Blob ids, net/http handles, zlib/proxy ids —
-    /// all `< 0x100000`) is a registry id, not a heap pointer. Reaching the
+    /// all `< HANDLE_BAND_MAX`) is a registry id, not a heap pointer. Reaching the
     /// `.length` slow path with such a value must return `0.0` WITHOUT
     /// dereferencing the raw id (which would SIGSEGV at the unmapped low
     /// address). Regression for the doctor / mcp-list startup crash where a
@@ -989,7 +989,7 @@ mod length_handle_band_tests {
             addr_class::FETCH_HANDLE_BAND_START + 5, // 0x40005 — the crash addr
             addr_class::FETCH_HANDLE_BAND_END - 1,   // top of fetch band
             addr_class::PROXY_ID_BAND_START,         // revocable-proxy id
-            addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF — last handle-band id
+            addr_class::HANDLE_BAND_MAX - 1,         // 0x1FFFFF — last handle-band id
         ] {
             assert!(addr_class::is_handle_band(id));
             let boxed = crate::value::js_nanbox_pointer(id as i64);

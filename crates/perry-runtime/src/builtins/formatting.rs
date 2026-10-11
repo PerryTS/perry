@@ -1442,7 +1442,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 // tape or not, crashed `console.log`). Mirrors the main
                 // `format_jsvalue` formatter's GC-header dispatch.
                 //
-                // A small registry-id handle (`< 0x100000`, e.g. a Web Fetch
+                // A small registry-id handle (`< 0x200000`, e.g. a Web Fetch
                 // Request) carries no GC header, so reading `ptr - 8` would
                 // deref unmapped memory — print a placeholder instead.
                 if crate::proxy::js_proxy_is_proxy(value) != 0 {

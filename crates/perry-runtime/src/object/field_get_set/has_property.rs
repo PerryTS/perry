@@ -1346,7 +1346,7 @@ pub(crate) unsafe fn prototype_value_has_property(
         (proto_bits & crate::value::POINTER_MASK) as usize
     } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(proto_bits as usize) {
         // The literal floor here was 0x10000, an order of magnitude BELOW
-        // HANDLE_BAND_MAX (0x100000), so this raw-pointer branch admitted
+        // HANDLE_BAND_MAX (0x200000), so this raw-pointer branch admitted
         // handle-band values and handed them to a dereference.
         proto_bits as usize
     } else {
