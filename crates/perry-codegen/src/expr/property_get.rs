@@ -442,6 +442,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }
+            if is_array_expr(ctx, object) {
+                let recv_box = lower_expr(ctx, object)?;
+                let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+                let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                return Ok(composed_ics::emit_record_length(
+                    ctx, &recv_box, &bits, &handle,
+                ));
+            }
             if let Some(length) = super::string_length::try_lower(ctx, object)? {
                 return Ok(length);
             }

@@ -550,394 +550,86 @@ fn lower_guarded_array_index_get_with_index(
     // Replay selects the existing numeric tier, including its full inline
     // receiver/layout/bounds checks and cold runtime guard. The observation
     // itself never admits a load or suppresses a check.
-    let inline_guard = !typed_feedback_emission_enabled();
+    // Shape is the authority. Own non-hole elements need no prototype test.
+    // Forwarding, descriptors, sparse indices and holes use the same cold ABI.
     let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
     let fallback_idx = ctx.new_block(&format!("{}.fallback", block_prefix));
-    // A non-negative ordinary-array index at or above `length` has no own
-    // element: defining an array-index property would have raised `length`.
-    // Once the same structural checks used by the raw-load tier have also
-    // proved that there are no indexed descriptors and no indexed prototype
-    // properties, that result is `undefined` without consulting the generic
-    // polymorphic getter. Sparse-set membership tests hit exactly this arm for
-    // absent ids, so keep it separate from the in-bounds raw-load block.
-    let inline_oob_idx = if inline_guard {
-        Some(ctx.new_block(&format!("{}.guard.oob", block_prefix)))
-    } else {
-        None
-    };
     let merge_idx = ctx.new_block(&format!("{}.merge", block_prefix));
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
-    // The inline guard can heal one ordinary growth/evacuation forwarding
-    // edge before it admits the raw load. Keep the exact handle proved by
-    // each predecessor so the fast block never re-derives a stale address
-    // from the original boxed receiver.
-    let mut inline_fast_handle: Option<(String, String)> = None;
-    let mut runtime_fast_handle: Option<(String, String)> = None;
-    // The value tier's hole arm (inline guard only): the fast block branches
-    // there on a hole instead of selecting `undefined` unguarded.
-    let mut fast_hole_label: Option<String> = None;
-    let mut fast_hole_branch: Option<String> = None;
-    let mut fast_capacity: Option<String> = None;
+    let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
+    let range_idx = ctx.new_block(&format!("{}.guard.range", block_prefix));
+    let deref_label = ctx.block_label(deref_idx);
+    let range_label = ctx.block_label(range_idx);
+    let bits = ctx.block().bitcast_double_to_i64(arr_box);
+    let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+    let heap = ctx
+        .block()
+        .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    ctx.block().cond_br(&heap, &deref_label, &fallback_label);
 
-    if inline_guard {
-        // Normal builds do not collect feedback. Inline the plain-array
-        // structural guard instead of paying an out-of-line call merely to
-        // rediscover the same header facts before the direct slot load below.
-        // Prototype-chain invalidators are summarized by one sticky runtime
-        // byte; per-array descriptors and forwarding remain receiver-local.
-        //
-        // Repsel 4a.1: the NUMERIC tier gets the same inline guard — plus an
-        // `_reserved & GC_ARRAY_RAW_F64_LAYOUT (0x80)` dense-proof test on the
-        // header word the plain guard already loads. A dense-flagged array
-        // needs no runtime call at all (the raw-f64 slot IS the value, no
-        // hole select). Arrays not yet flagged take a COLD out-of-line
-        // `js_typed_feedback_numeric_array_index_get_guard` call, whose
-        // first-touch path verifies-and-rewrites the layout (setting the
-        // flag), so the steady state is the inline tier. This ends the
-        // typed-`number[]`-slower-than-untyped inversion for reads.
-        // ONE header word is the structural guard (DESIGN arrayread §2.2).
-        // `[h-8]` read as a little-endian i32 is {obj_type, gc_flags,
-        // _reserved}; masked with the type byte, `GC_FLAG_FORWARDED` and
-        // `OBJ_FLAG_ARRAY_DESCRIPTORS` it must equal `GC_TYPE_ARRAY`: an
-        // ordinary array, not a growth/evacuation stub, with no element
-        // descriptors. The rest of the read follows from runtime invariants:
-        // * an in-bounds non-hole element is an own data property, so the
-        //   prototype facts (the process-wide protector byte and the array's
-        //   custom-proto bit) are consulted only on the hole/out-of-bounds arm;
-        // * `[length, capacity)` holds `TAG_HOLE` (`array_truncate_length`), so
-        //   a value read is bounded by `capacity` and a slot past `length`
-        //   reaches the hole arm like any other hole;
-        // * `capacity` is under the allocation ceiling (`ARRAY_MAX_CAPACITY`),
-        //   so the size-derived element base is exact without a plausibility
-        //   bound.
-        // A forwarded stub fails the word; the cold arm follows one edge and
-        // re-checks the destination's word.
-        let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
-        let deref_label = ctx.block_label(deref_idx);
-        let follow_idx = ctx.new_block(&format!("{}.guard.follow", block_prefix));
-        let follow_label = ctx.block_label(follow_idx);
-        let live_deref_idx = ctx.new_block(&format!("{}.guard.live", block_prefix));
-        let live_deref_label = ctx.block_label(live_deref_idx);
-        let cold_guard_idx = if require_numeric_layout {
-            Some(ctx.new_block(&format!("{}.guard.cold", block_prefix)))
-        } else {
-            None
-        };
-        let guard_fail_label = match cold_guard_idx {
-            Some(idx) => ctx.block_label(idx),
-            None => fallback_label.clone(),
-        };
-        let range_idx = ctx.new_block(&format!("{}.guard.range", block_prefix));
-        let range_label = ctx.block_label(range_idx);
-        let hole_idx = ctx.new_block(&format!("{}.guard.hole", block_prefix));
-        let hole_label = ctx.block_label(hole_idx);
-        if !require_numeric_layout {
-            fast_hole_label = Some(hole_label.clone());
-        }
-        let band_offset = {
-            // POINTER_TAG and a handle above the 1 MiB runtime-id band, as one
-            // range compare: `bits - (POINTER_TAG << 48 | 1 MiB) <u 2^48 - 1 MiB`.
-            let blk = ctx.block();
-            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
-            let heap_candidate = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
-            blk.cond_br(&heap_candidate, &deref_label, &guard_fail_label);
-            band_offset
-        };
+    ctx.current_block = deref_idx;
+    let handle = ctx.block().add(I64, &offset, crate::expr::receiver_range::HANDLE_FLOOR_LITERAL);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let live = emit_array_guard_word_ok(ctx.block(), &word);
+    ctx.block().cond_br(&live, &range_label, &fallback_label);
 
-        ctx.current_block = deref_idx;
-        let (arr_handle, word) = {
-            let blk = ctx.block();
-            // In the band the tag is POINTER_TAG, so the handle is the band
-            // offset plus the 1 MiB it was measured from.
-            let arr_handle = blk.add(
-                I64,
-                &band_offset,
-                crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
-            );
-            let word = emit_array_guard_word(blk, &arr_handle);
-            let word_ok = emit_array_guard_word_ok(blk, &word);
-            blk.cond_br(&word_ok, &range_label, &follow_label);
-            (arr_handle, word)
-        };
-        let deref_end = ctx.block().label.clone();
-
-        ctx.current_block = follow_idx;
-        let live_handle = {
-            // Array growth and GC evacuation leave the live user address in
-            // the first payload word of a forwarded array stub. Follow one
-            // edge, then re-check the destination's word. Longer or corrupt
-            // chains take the boxed fallback. A word that failed for any
-            // other reason selects the original handle and fails again.
-            let blk = ctx.block();
-            let type_byte = blk.and(I32, &word, "255");
-            let is_array = blk.icmp_eq(I32, &type_byte, "1"); // GC_TYPE_ARRAY
-            let forwarded_bit = blk.and(I32, &word, "32768"); // GC_FLAG_FORWARDED << 8
-            let is_forwarded = blk.icmp_ne(I32, &forwarded_bit, "0");
-            let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
-            let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
-            let forwarding_target = blk.load(I64, &original_arr_ptr);
-            let live_handle =
-                blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
-            let live_top = blk.lshr(I64, &live_handle, "48");
-            let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
-            let live_above_handle_band = blk.icmp_ugt(
-                I64,
-                &live_handle,
-                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
-            );
-            let live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
-            // A forwarding word is not trusted until its address is in the
-            // heap band: never dereference a malformed target.
-            blk.cond_br(&live_heap_candidate, &live_deref_label, &fallback_label);
-            live_handle
-        };
-
-        ctx.current_block = live_deref_idx;
-        // Only the record's proven cursor owns the private source root that
-        // needs eager forwarding repair. Ordinary indexed reads keep their
-        // existing fallback custody and local-flow facts.
-        let repair_slot = unsigned_index.and(receiver_slot);
-        let repair_idx =
-            repair_slot.map(|_| ctx.new_block(&format!("{}.guard.repair", block_prefix)));
-        let live_success_label = repair_idx
-            .map(|idx| ctx.block_label(idx))
-            .unwrap_or_else(|| range_label.clone());
-        {
-            let blk = ctx.block();
-            let live_word = emit_array_guard_word(blk, &live_handle);
-            let word_ok = emit_array_guard_word_ok(blk, &live_word);
-            blk.cond_br(&word_ok, &live_success_label, &guard_fail_label);
-        }
-        if let (Some(repair_idx), Some(slot)) = (repair_idx, repair_slot) {
-            // The verified forwarding destination is the same JS array. Repair
-            // the existing local root on this cold edge so later length and
-            // element reads use its live storage, including after body growth.
-            ctx.current_block = repair_idx;
-            let blk = ctx.block();
-            let tagged = blk.or(I64, &live_handle, crate::nanbox::POINTER_TAG_I64);
-            let boxed = blk.bitcast_i64_to_double(&tagged);
-            blk.store(DOUBLE, &boxed, slot);
-            blk.br(&range_label);
-        }
-        let live_end = ctx.block().label.clone();
-
-        let numeric_in_bounds_idx = require_numeric_layout
-            .then(|| ctx.new_block(&format!("{}.guard.numeric_in_bounds", block_prefix)));
-        let numeric_in_bounds_label = numeric_in_bounds_idx.map(|idx| ctx.block_label(idx));
-        let oob_label = ctx.block_label(inline_oob_idx.expect("normal-build OOB block"));
-        ctx.current_block = range_idx;
-        let (range_handle, reserved, bound, range_capacity) = {
-            let blk = ctx.block();
-            let handle = blk.phi(I64, &[(&arr_handle, &deref_end), (&live_handle, &live_end)]);
-            let arr_ptr = blk.inttoptr(I64, &handle);
-            // `_reserved` for the numeric tier's layout bits; the value tier
-            // reads it on the hole arm only.
-            let reserved = if require_numeric_layout {
-                Some(emit_array_reserved(blk, &handle))
-            } else {
-                None
-            };
-            // A value read is bounded by `capacity` (the hole invariant covers
-            // `[length, capacity)`). The numeric tier exposes raw slot bits
-            // under a dense-layout proof that covers `[0, length)` only, so it
-            // keeps the `length` bound.
-            let (bound, range_capacity) = if require_numeric_layout {
-                (blk.load(I32, &arr_ptr), None)
-            } else {
-                let capacity_addr = blk.add(I64, &handle, "4");
-                let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
-                let capacity = blk.load(I32, &capacity_ptr);
-                (capacity.clone(), Some(capacity))
-            };
-            // Unsigned: a negative index is out of bounds here and is sorted
-            // out on the hole arm.
-            let index_in_bounds = blk.icmp_ult(I32, idx_i32, &bound);
-            if require_numeric_layout {
-                // Dense raw-f64 proof: every slot in [0, length) holds
-                // canonical raw f64 bits (GC_ARRAY_RAW_F64_LAYOUT, 0x80).
-                //
-                // Repsel 4a.2 (#6904): a NUMBER-CONTEXT read (the caller will
-                // ToNumber the element regardless — `coerce_numeric_fallback`)
-                // additionally accepts the hole-tolerant invariant
-                // (GC_ARRAY_RAW_F64_HOLES, 0x1000): every slot is canonical
-                // raw f64 OR TAG_HOLE, and the fast arm canonicalizes any NaN
-                // payload (TAG_HOLE included) to the quiet NaN — bit-exact
-                // with ToNumber(undefined) for a hole and with ToNumber(NaN)
-                // for a stored NaN. That reads a hole as undefined without the
-                // hole arm, so it also needs the prototype facts.
-                let raw_mask = if coerce_numeric_fallback {
-                    "4224" // 0x1080 = RAW_F64_LAYOUT | RAW_F64_HOLES
-                } else {
-                    "128" // dense only: the raw slot is exposed verbatim
-                };
-                let reserved = reserved.as_deref().expect("numeric tier loads _reserved");
-                let raw_bits = blk.and(I16, reserved, raw_mask);
-                let is_raw = blk.icmp_ne(I16, &raw_bits, "0");
-                let mut in_bounds_ok = blk.and(I1, &index_in_bounds, &is_raw);
-                if coerce_numeric_fallback {
-                    let default_prototype_chain =
-                        crate::expr::array_proto_guard::emit_array_default_prototype_chain(
-                            blk, reserved,
-                        );
-                    in_bounds_ok = blk.and(I1, &in_bounds_ok, &default_prototype_chain);
-                }
-                // An in-bounds array without the requested numeric layout must
-                // still visit the cold rebuilding guard.
-                let in_bounds_idx = numeric_in_bounds_idx.expect("numeric in-bounds block");
-                let in_bounds_label = numeric_in_bounds_label
-                    .as_deref()
-                    .expect("numeric in-bounds label");
-                blk.cond_br(&index_in_bounds, in_bounds_label, &hole_label);
-
-                ctx.current_block = in_bounds_idx;
-                ctx.block()
-                    .cond_br(&in_bounds_ok, &fast_label, &guard_fail_label);
-                inline_fast_handle = Some((handle.clone(), ctx.block().label.clone()));
-            } else {
-                inline_fast_handle = Some((handle.clone(), blk.label.clone()));
-                blk.cond_br(&index_in_bounds, &fast_label, &hole_label);
-            }
-            (handle, reserved, bound, range_capacity)
-        };
-        // The value tier's fast block has the range block as its only
-        // predecessor: it computes the element base from this capacity.
-        fast_capacity = range_capacity;
-
-        // The hole / out-of-bounds arm. `undefined` needs three facts: a
-        // non-negative index (a negative one is a named property), no own
-        // element past `capacity` (an over-long `new Array(n)` keeps sparse
-        // indices below `length` as named properties), and a prototype chain
-        // without index properties. Anything else takes the boxed fallback.
-        ctx.current_block = hole_idx;
-        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
-        {
-            let blk = ctx.block();
-            let index_negative = blk.icmp_slt(I32, idx_i32, "0");
-            let arr_ptr = blk.inttoptr(I64, &range_handle);
-            let length = if require_numeric_layout {
-                bound.clone()
-            } else {
-                blk.load(I32, &arr_ptr)
-            };
-            let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
-            let capacity = blk.load(I32, &capacity_ptr);
-            let past_store = blk.icmp_uge(I32, idx_i32, &capacity);
-            let below_length = blk.icmp_ult(I32, idx_i32, &length);
-            let sparse_candidate = blk.and(I1, &past_store, &below_length);
-            let own_absent = blk.or(I1, &index_negative, &sparse_candidate);
-            let own_absent = blk.xor(I1, &own_absent, "true");
-            let reserved = match reserved.as_deref() {
-                Some(reserved) => reserved.to_string(),
-                None => emit_array_reserved(blk, &range_handle),
-            };
-            let default_prototype_chain =
-                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
-            let undefined_ok = blk.and(I1, &own_absent, &default_prototype_chain);
-            blk.cond_br(&undefined_ok, &oob_label, &fallback_label);
-        }
-
-        if let Some(cold_idx) = cold_guard_idx {
-            // Cold arm: the out-of-line guard rebuilds unmarked-but-numeric
-            // arrays into raw-f64 layout (then this call site goes inline on
-            // every later read); everything else routes to the boxed fallback.
-            ctx.current_block = cold_idx;
-            crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
-            // Self-heal a stale growth-forwarded binding first (see
-            // `receiver_repair_slot`): follow the chain, write the live head
-            // back to the local slot. This iteration still takes the guard
-            // on the ORIGINAL value (a forwarded head fails it → boxed
-            // fallback, which follows the chain — correct either way); every
-            // later iteration re-loads the repaired slot and goes inline.
-            if let Some(slot) = receiver_slot {
-                let blk = ctx.block();
-                let fresh = blk.call(DOUBLE, "js_array_refresh_local_head", &[(DOUBLE, arr_box)]);
-                blk.store(DOUBLE, &fresh, slot);
-            }
-            let guard_ok = {
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(arr_box);
-                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                runtime_fast_handle = Some((arr_handle, blk.label.clone()));
-                let guard_i32 = blk.call(
-                    I32,
-                    "js_typed_feedback_numeric_array_index_get_guard",
-                    &[
-                        (I64, &feedback_site_id),
-                        (DOUBLE, arr_box),
-                        (I32, idx_i32),
-                        (I32, "1"),
-                    ],
-                );
-                blk.icmp_ne(I32, &guard_i32, "0")
-            };
-            ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
-        }
-    } else {
-        let guard_ok = {
-            let blk = ctx.block();
-            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-            runtime_fast_handle = Some((arr_handle, blk.label.clone()));
-            let guard_fn = if require_numeric_layout {
-                "js_typed_feedback_numeric_array_index_get_guard"
-            } else {
-                "js_typed_feedback_plain_array_index_get_guard"
-            };
-            let guard_i32 = blk.call(
-                I32,
-                guard_fn,
-                &[
-                    (I64, &feedback_site_id),
-                    (DOUBLE, arr_box),
-                    (I32, idx_i32),
-                    (I32, "1"),
-                ],
-            );
-            blk.icmp_ne(I32, &guard_i32, "0")
-        };
-        ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+    ctx.current_block = range_idx;
+    let blk = ctx.block();
+    let ptr = blk.inttoptr(I64, &handle);
+    let length = blk.load(I32, &ptr);
+    let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+    let capacity = blk.load(I32, &cap_ptr);
+    // Unsigned bounds reject negative keys and presized sparse storage.
+    let logical = blk.icmp_ult(I32, idx_i32, &length);
+    let backed = blk.icmp_ult(I32, idx_i32, &capacity);
+    let mut admitted = blk.and(I1, &logical, &backed);
+    if require_numeric_layout {
+        // Dense raw-f64 is the existing numeric contract. Holes are cold even
+        // in numeric context, so no prototype protector is needed at the site.
+        let dense = blk.and(I32, &word, "8388608");
+        let dense = blk.icmp_ne(I32, &dense, "0");
+        admitted = blk.and(I1, &admitted, &dense);
     }
-
-    let inline_oob = inline_oob_idx.map(|oob_idx| {
-        ctx.current_block = oob_idx;
-        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
-        let value = if require_numeric_layout && coerce_numeric_fallback {
-            // This is ToNumber(undefined), matching the boxed fallback.
-            "0x7FF8000000000000".to_string()
+    if typed_feedback_emission_enabled() {
+        // Diagnostic builds retain their established observing guard.
+        let guard_fn = if require_numeric_layout {
+            "js_typed_feedback_numeric_array_index_get_guard"
         } else {
-            ctx.block()
-                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            "js_typed_feedback_plain_array_index_get_guard"
         };
-        let end_label = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
-        (value, end_label)
-    });
+        let guard = blk.call(
+            I32,
+            guard_fn,
+            &[
+                (I64, &feedback_site_id),
+                (DOUBLE, arr_box),
+                (I32, idx_i32),
+                (I32, "1"),
+            ],
+        );
+        let observed = blk.icmp_ne(I32, &guard, "0");
+        admitted = blk.and(I1, &admitted, &observed);
+    }
+    blk.cond_br(&admitted, &fast_label, &fallback_label);
 
     ctx.current_block = fallback_idx;
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
-    // Materialize the f64 index only here (cold path) so the int→fp conversion
-    // stays out of the numeric loop's hot region.
     let idx_box = unsigned_index
         .map(str::to_owned)
         .unwrap_or_else(|| ctx.block().sitofp(I32, idx_i32, DOUBLE));
-    let fallback_boxed = ctx.block().call(
-        DOUBLE,
-        "js_typed_feedback_array_index_get_fallback_boxed",
-        &[
-            (I64, &feedback_site_id),
-            (DOUBLE, arr_box),
-            (DOUBLE, &idx_box),
-        ],
+    let fallback_boxed = emit_read_cold(
+        ctx,
+        arr_box,
+        idx_i32,
+        &idx_box,
+        &feedback_site_id,
+        true,
+        coerce_numeric_fallback,
+        receiver_slot,
     );
-    let fallback_val = if require_numeric_layout && coerce_numeric_fallback {
-        ctx.block()
-            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &fallback_boxed)])
-    } else {
-        fallback_boxed.clone()
-    };
+    let fallback_val = fallback_boxed.clone();
     let fallback_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     if require_numeric_layout {
@@ -978,80 +670,31 @@ fn lower_guarded_array_index_get_with_index(
     }
 
     ctx.current_block = fast_idx;
-    let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
-        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => {
-            ctx.block().phi(
-                I64,
-                &[
-                    (inline_handle.as_str(), inline_pred.as_str()),
-                    (runtime_handle.as_str(), runtime_pred.as_str()),
-                ],
-            )
-        }
-        (Some((handle, _)), None) | (None, Some((handle, _))) => handle.clone(),
-        (None, None) => unreachable!("guarded array fast block has no predecessor handle"),
-    };
-    // The handle PHI must precede the census load/add/store in this join.
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
-    let fast_blk = ctx.block();
-    let fast_val = if require_numeric_layout {
-        // The guard on the way into this block (inline tier or the runtime
-        // `numeric_array_index_get_guard`) already proved: a plain,
-        // non-forwarded `Array`, in raw-f64 (or, for number-context reads,
-        // raw-f64-or-holes) layout, with `index` in bounds. So load the slot
-        // inline instead of calling `js_array_numeric_get_f64_unboxed`,
-        // whose hot path re-validates exactly those same conditions and then
-        // does this load.
-        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
-        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let elements_addr = fast_blk.array_elements_addr(&arr_handle);
-        let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
-        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-        let raw = fast_blk.load(DOUBLE, &element_ptr);
-        if coerce_numeric_fallback {
-            // Repsel 4a.2: number-context canonicalization — any NaN payload
-            // (a TAG_HOLE slot under the raw-f64-or-holes proof, or a stored
-            // canonical NaN) becomes the quiet NaN. Bit-exact:
-            // ToNumber(undefined) = NaN for a hole, ToNumber(NaN) = NaN for a
-            // stored NaN, identity for every real number. PROOF-GATED: only
-            // sound because the guard admitted raw-f64-or-holes slots — an
-            // arbitrary NaN-boxed tag would be wrongly collapsed to NaN.
-            let is_ord = fast_blk.fcmp("ord", &raw, &raw);
-            fast_blk.select(I1, &is_ord, DOUBLE, &raw, "0x7FF8000000000000")
-        } else {
-            // Dense-only proof: no HOLE slots exist; the raw slot IS the
-            // element value, exposed verbatim.
-            raw
-        }
+    let blk = ctx.block();
+    let idx = blk.zext(I32, idx_i32, I64);
+    let offset = blk.shl(I64, &idx, "3");
+    // Reuse the canonical storage machinery, including shifted/named arrays.
+    let base = blk.array_elements_addr_with_capacity(&handle, &capacity);
+    let addr = blk.add(I64, &base, &offset);
+    let ptr = blk.inttoptr(I64, &addr);
+    let bits = blk.load(I64, &ptr);
+    let fast_val = blk.bitcast_i64_to_double(&bits);
+    let fast_end_label = blk.label.clone();
+    if require_numeric_layout {
+        blk.br(&merge_label);
     } else {
-        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
-        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let elements_addr = match fast_capacity.as_deref() {
-            Some(capacity) => fast_blk.array_elements_addr_with_capacity(&arr_handle, capacity),
-            None => fast_blk.array_elements_addr(&arr_handle),
-        };
-        let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
-        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-        // The slot is read as bits: the hole test is an integer compare.
-        let fast_raw_bits = fast_blk.load(I64, &element_ptr);
-        let fast_raw = fast_blk.bitcast_i64_to_double(&fast_raw_bits);
-        // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
-        // `undefined`.
-        let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
-        if fast_hole_label.is_some() {
-            // Inline tier: a hole (including any slot past `length`) branches
-            // to the hole arm, which owns the prototype facts.
-            fast_hole_branch = Some(is_hole);
-            fast_raw
+        let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
+        if crate::expr::store_census::enabled() {
+            let hole_idx = ctx.new_block(&format!("{}.census.hole", block_prefix));
+            let hole_label = ctx.block_label(hole_idx);
+            ctx.block().cond_br(&hole, &hole_label, &merge_label);
+            ctx.current_block = hole_idx;
+            crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
+            ctx.block().br(&fallback_label);
         } else {
-            let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-            fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw)
+            ctx.block().cond_br(&hole, &fallback_label, &merge_label);
         }
-    };
-    let fast_end_label = fast_blk.label.clone();
-    match (fast_hole_label.as_deref(), fast_hole_branch.as_deref()) {
-        (Some(hole), Some(is_hole)) => fast_blk.cond_br(is_hole, hole, &merge_label),
-        _ => fast_blk.br(&merge_label),
     }
     if require_numeric_layout {
         let fast = LoweredValue {
@@ -1098,14 +741,102 @@ fn lower_guarded_array_index_get_with_index(
     }
 
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![
-        (fast_val.as_str(), fast_end_label.as_str()),
-        (fallback_val.as_str(), fallback_end_label.as_str()),
-    ];
-    if let Some((oob_value, oob_end_label)) = inline_oob.as_ref() {
-        incoming.push((oob_value.as_str(), oob_end_label.as_str()));
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&fast_val, &fast_end_label),
+            (&fallback_val, &fallback_end_label),
+        ],
+    ))
+}
+
+/// One link-coalesced cold body for the operation. It keeps the exact generic
+/// property-key getter and numeric consumer's coercion, without a second
+/// numeric-layout promotion path. No site or module duplicates the body.
+pub(super) fn emit_read_cold(
+    ctx: &mut FnCtx<'_>,
+    receiver: &str,
+    _index: &str,
+    boxed_index: &str,
+    site: &str,
+    numeric_layout: bool,
+    coerce: bool,
+    _receiver_slot: Option<&str>,
+) -> String {
+    let name = "perry_array_read_cold_shared";
+    if !ctx.pending_helpers.iter().any(|f| f.name == name) {
+        let mut helper = crate::function::LlFunction::new(
+            name,
+            DOUBLE,
+            vec![
+                (DOUBLE, "%receiver".into()),
+                (DOUBLE, "%key".into()),
+                (I64, "%site".into()),
+                (I1, "%numeric".into()),
+                (I1, "%coerce".into()),
+            ],
+        );
+        // Identical across modules: the linker keeps one body per program.
+        helper.linkage = "linkonce_odr".into();
+        helper.no_inline = true;
+        let saved_func = std::mem::replace(ctx.func, helper);
+        let saved_block = ctx.current_block;
+        ctx.current_block = ctx.new_block("entry");
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
+        let keyed = ctx.new_block("runtime_key");
+        let numeric = ctx.new_block("numeric_miss");
+        let convert = ctx.new_block("convert");
+        let done = ctx.new_block("return");
+        let kl = ctx.block_label(keyed);
+        let nl = ctx.block_label(numeric);
+        let cl = ctx.block_label(convert);
+        let dl = ctx.block_label(done);
+        ctx.block().cond_br("%numeric", &nl, &kl);
+        ctx.current_block = keyed;
+        let keyed_value =
+            super::runtime_key::emit_claimable_array_key_body(ctx, "%receiver", "%key");
+        let kp = ctx.block().label.clone();
+        ctx.block().br(&cl);
+        ctx.current_block = numeric;
+        let boxed = ctx.block().call(
+            DOUBLE,
+            "js_typed_feedback_array_index_get_fallback_boxed",
+            &[(I64, "%site"), (DOUBLE, "%receiver"), (DOUBLE, "%key")],
+        );
+        let np = ctx.block().label.clone();
+        ctx.block().br(&cl);
+        ctx.current_block = convert;
+        let value = ctx
+            .block()
+            .phi(DOUBLE, &[(&boxed, &np), (&keyed_value, &kp)]);
+        let cp = ctx.block().label.clone();
+        let coercion = ctx.new_block("coercion");
+        let col = ctx.block_label(coercion);
+        ctx.block().cond_br("%coerce", &col, &dl);
+        ctx.current_block = coercion;
+        let numeric = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &value)]);
+        let np = ctx.block().label.clone();
+        ctx.block().br(&dl);
+        ctx.current_block = done;
+        let result = ctx.block().phi(DOUBLE, &[(&value, &cp), (&numeric, &np)]);
+        ctx.block().ret(DOUBLE, &result);
+        let helper = std::mem::replace(ctx.func, saved_func);
+        ctx.current_block = saved_block;
+        ctx.pending_helpers.push(helper);
     }
-    Ok(ctx.block().phi(DOUBLE, &incoming))
+    ctx.block().call(
+        DOUBLE,
+        name,
+        &[
+            (DOUBLE, receiver),
+            (DOUBLE, boxed_index),
+            (I64, site),
+            (I1, if numeric_layout { "true" } else { "false" }),
+            (I1, if coerce { "true" } else { "false" }),
+        ],
+    )
 }
 
 pub(super) fn packed_f64_loop_fact(
@@ -1357,4 +1088,121 @@ pub(crate) fn lower_record_next(
         .block()
         .phi(I1, &[("true", &fp), ("false", &ep), (&cold_ready, &cp)]);
     Ok((value, ready))
+}
+#[cfg(test)]
+mod compact_read_tests {
+    use crate::{compile_module, CompileOptions};
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Function, Module, Param, Stmt};
+
+    fn ir(body: Vec<Stmt>) -> String {
+        let mut module = Module::new("compact_array_reads");
+        module.functions.push(Function {
+            id: 1,
+            name: "read".into(),
+            type_params: vec![],
+            params: vec![
+                Param {
+                    id: 1,
+                    name: "array".into(),
+                    ty: Type::Array(Box::new(Type::Any)),
+                    default: None,
+                    decorators: vec![],
+                    is_rest: false,
+                    arguments_object: None,
+                },
+                Param {
+                    id: 2,
+                    name: "key".into(),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: vec![],
+                    is_rest: false,
+                    arguments_object: None,
+                },
+            ],
+            return_type: Type::Any,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: true,
+            captures: vec![],
+            decorators: vec![],
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let ll = String::from_utf8(
+            compile_module(
+                &module,
+                CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        #[cfg(feature = "llvm-inprocess")]
+        crate::testing::verify_ir(&ll, "compact_array_reads").unwrap();
+        ll
+    }
+
+    #[test]
+    fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
+        let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(1)),
+        }))]);
+        assert!(
+            ll.contains("67141887"),
+            "type, forwarding and descriptor word"
+        );
+        assert!(ll.contains("icmp ult i32"), "logical and backing bounds");
+        assert!(
+            ll.contains(crate::nanbox::TAG_HOLE_I64),
+            "hole must side-exit"
+        );
+        assert!(ll.contains("call double @perry_array_read_cold_shared"));
+        assert!(ll.contains("@js_typed_feedback_array_index_get_fallback_boxed"));
+        assert!(!ll.contains("call double @js_array_refresh_local_head"));
+        assert!(!ll.contains("guard.follow") && !ll.contains("guard.oob"));
+        assert!(!ll.contains("load i8, ptr @PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"));
+    }
+
+    #[test]
+    fn compact_array_length_uses_header_and_generic_miss() {
+        let ll = ir(vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "length".into(),
+            byte_offset: 0,
+        }))]);
+        assert!(ll.contains("plen.check_gc") && ll.contains("33023"));
+        assert!(ll.contains("uitofp i32"));
+        assert!(ll.contains("call double @js_value_length_property_f64"));
+        assert!(
+            !ll.contains("perry_length_cold_") && !ll.contains("call i64 @js_array_length_leaf")
+        );
+    }
+
+    #[test]
+    fn rejected_keys_share_one_body_across_sites() {
+        let read = || Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::LocalGet(2)),
+        };
+        let ll = ir(vec![Stmt::Expr(read()), Stmt::Return(Some(read()))]);
+        assert_eq!(
+            ll.lines()
+                .filter(|l| l.starts_with("define ") && l.contains("@perry_array_read_cold_"))
+                .count(),
+            1
+        );
+        assert!(ll.contains("define linkonce_odr double @perry_array_read_cold_shared"));
+        assert!(!ll.contains("perry_array_key_cold_"));
+        assert!(
+            !ll.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+            "plain-key misses must not retain the numeric promotion runtime"
+        );
+    }
 }

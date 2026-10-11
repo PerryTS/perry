@@ -663,7 +663,7 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         !clone.contains("js_typed_i32_arg_to_raw")
             && clone.contains("fptosi double")
             && clone.contains("arr.guard.deref")
-            && clone.contains("call double @js_typed_feedback_array_index_get_fallback_boxed("),
+            && clone.contains("call double @perry_array_read_cold_shared("),
         "the clone must decode the established integer proof inline and use a guarded direct-slot tier:\n{clone}"
     );
     assert!(
@@ -702,7 +702,8 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         "negative, fractional, and unproven Number calls must retain the public fallback:\n{ir}"
     );
     assert!(
-        generic.contains("aidxkey.sso") && generic.contains("js_array_get_index_or_string"),
+        generic.contains("call double @perry_array_read_cold_")
+            && ir.contains("call double @js_array_get_index_or_string("),
         "the generic miss body must preserve arbitrary JavaScript property-key semantics:\n{generic}"
     );
 }
@@ -733,7 +734,8 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
         "the published receiver-shape capability must guard the live index and retain its receiver-safe miss:\n{wrapper}"
     );
     assert!(
-        generic.contains("js_array_get_index_or_string")
+        generic.contains("call double @perry_array_read_cold_")
+            && ir.contains("call double @js_array_get_index_or_string(")
             && !generic.contains("js_object_get_field_by_name"),
         "the pshape generic arm must preserve arbitrary keys without re-looking up this.column:\n{generic}"
     );
@@ -1025,6 +1027,7 @@ fn checked_reader_gets_a_handle_abi_clone_with_no_array_fallback() {
         clone.contains("load double")
             && clone.contains("select i1")
             && !clone.contains("js_typed_feedback_array_index_get_fallback_boxed")
+            && !clone.contains("perry_array_read_cold_shared")
             && !clone.contains("js_array_get_index_or_string")
             && !clone.contains("arr.guard"),
         "the private clone must contain a hole-aware direct load and no ordinary fallback:\n{clone}"
@@ -1115,82 +1118,16 @@ fn versioned_checked_reader_admission_canonicalizes_one_forwarding_edge() {
 }
 
 #[test]
-fn guarded_read_can_follow_one_forwarding_edge_but_rechecks_the_live_header() {
+fn guarded_read_sends_forwarding_and_holes_to_shared_runtime() {
     let ir = emit();
     let clone = function_body(
         &ir,
         "@perry_method_index_method_clone_ts__Reader__read$idx_u31_12(",
     );
-    // One IR block of the guarded read, by its label prefix.
-    let block = |name: &str| -> &str {
-        clone
-            .split("\narr.")
-            .find(|chunk| chunk.starts_with(&format!("{name}.")))
-            .unwrap_or_else(|| panic!("clone has no arr.{name} block:\n{clone}"))
-    };
-    // The structural guard is ONE header word: type, FORWARDED and
-    // ARRAY_DESCRIPTORS under one mask, compared with GC_TYPE_ARRAY.
-    let deref = block("guard.deref");
-    assert!(
-        deref.contains("load i32")
-            && deref.contains(", 67141887")
-            && deref.contains("icmp eq i32")
-            && deref.contains("label %arr.guard.range.")
-            && deref.contains("label %arr.guard.follow."),
-        "the hot guard must be one masked header-word compare:\n{deref}"
-    );
-    // A failed word (a forwarded stub among others) follows one edge off the
-    // hot path, validating the target address before any dereference.
-    let follow = block("guard.follow");
-    let live_handle = follow
-        .lines()
-        .find(|line| line.contains(" = select i1") && line.contains(", i64 "))
-        .and_then(|line| line.trim().split_once(" = ").map(|(name, _)| name))
-        .unwrap_or_else(|| panic!("the follow block selects no live handle:\n{follow}"));
-    assert!(
-        follow.contains(", 32768")
-            && follow.contains("label %arr.guard.live.")
-            && follow.contains("label %arr.fallback.")
-            && !follow.contains(&format!("sub i64 {live_handle}, 8")),
-        "the selected target must branch on its address before any live-header load:\n{follow}"
-    );
-    let live = block("guard.live");
-    assert!(
-        live.contains(&format!("sub i64 {live_handle}, 8"))
-            && live.contains(", 67141887")
-            && live.contains("label %arr.guard.range."),
-        "the live header must be re-checked with the same word:\n{live}"
-    );
-    let range = block("guard.range");
-    assert!(
-        range.contains("phi i64") && range.contains(live_handle),
-        "the revalidated live handle {live_handle} must reach the bounds check:\n{range}"
-    );
-    let fast = block("fast");
-    assert!(
-        fast.contains("load i64")
-            && fast.contains(crate::nanbox::TAG_HOLE_I64)
-            && fast.contains("label %arr.guard.hole.")
-            && !fast.contains("js_array_get_index_or_string"),
-        "the fast block loads the slot and branches to the hole arm on a hole:\n{fast}"
-    );
-    // The prototype facts are consulted only on the hole / out-of-bounds arm,
-    // and the #6809 plausibility bounds are gone.
-    for (name, body) in [("deref", deref), ("range", range), ("fast", fast)] {
-        assert!(
-            !body.contains("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
-            "{name} must not read the protector:\n{body}"
-        );
-    }
-    let hole = block("guard.hole");
-    assert!(
-        hole.contains("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
-            && hole.contains("icmp slt i32")
-            && hole.contains("label %arr.fallback."),
-        "the hole arm owns the protector and the negative-index exit:\n{hole}"
-    );
-    assert!(
-        !clone.contains("16000000"),
-        "no plausibility bound is left in the read:\n{clone}"
-    );
+    assert!(clone.contains("67141887") && clone.contains("arr.guard.range"));
+    assert!(clone.contains("icmp ult i32") && clone.contains(crate::nanbox::TAG_HOLE_I64));
+    assert!(clone.contains("call double @perry_array_read_cold_shared"));
+    assert!(!clone.contains("guard.follow") && !clone.contains("guard.hole"));
+    assert!(!clone.contains("PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"));
+    assert!(!clone.contains("16000000"));
 }

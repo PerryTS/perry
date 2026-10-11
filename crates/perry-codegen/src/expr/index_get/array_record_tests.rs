@@ -84,10 +84,10 @@ fn array_record_unsigned_index_preserves_number_on_cold_read() {
         .unwrap();
     let fallback = ll
         .lines()
-        .find(|line| line.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"))
+        .find(|line| line.contains("call double @perry_array_read_cold_shared"))
         .expect("ordinary boxed fallback");
     assert!(
-        fallback.contains(&format!("double {original})")),
+        fallback.contains(&format!("double {original},")),
         "the fallback must receive the original positive JS index above 2^31: {fallback}"
     );
     assert!(
@@ -272,33 +272,19 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
 }
 
 #[test]
-fn array_record_index_repairs_the_existing_source_root_after_forwarding() {
+fn array_record_index_retains_boxed_cold_forwarding_custody() {
     let ll = ir(Expr::IndexGet {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(2)])),
     });
-    let label = ll
-        .lines()
-        .find(|line| line.starts_with("array_record_index.guard.repair") && line.contains(':'))
-        .expect("the verified forward edge must repair the source root");
-    let block = ll
-        .split_once(label)
-        .unwrap()
-        .1
-        .split("\n\n")
-        .next()
-        .unwrap();
+    assert!(ll.contains("array_record_index.guard.deref") && ll.contains("67141887"));
+    assert!(ll.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
     assert!(
-        block.contains("store double") || block.contains("store ptr addrspace(1)"),
-        "publish the live head: {block}"
-    );
-    assert!(block.contains("br label %array_record_index.guard.range"));
-    assert!(
-        !block.contains("call "),
-        "repair needs no helper or allocation"
+        !ll.contains("guard.follow") && !ll.contains("guard.repair"),
+        "forwarding remains in the shared generic runtime, with no duplicated site repair"
     );
     #[cfg(feature = "llvm-inprocess")]
-    crate::testing::verify_ir(&ll, "array_record_source_repair").unwrap();
+    crate::testing::verify_ir(&ll, "array_record_source_cold").unwrap();
 }
 
 #[test]
@@ -308,8 +294,8 @@ fn ordinary_index_read_preserves_its_existing_forwarding_custody() {
         index: Box::new(Expr::LocalGet(2)),
     });
     assert!(
-        ll.contains("guard.live"),
-        "ordinary read still validates forwarding"
+        ll.contains("67141887") && ll.contains("js_typed_feedback_array_index_get_fallback_boxed"),
+        "ordinary read rejects forwarding into its shared fallback"
     );
     assert!(
         !ll.contains("guard.repair"),
@@ -415,25 +401,15 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
             property: "length".into(),
             byte_offset: 0,
         });
-        let check = ll
-            .split("plen.check_gc")
-            .skip(2)
-            .next()
-            .expect("guard block");
-        let check = check.split("plen.typed_array").next().unwrap();
         assert!(
-            check.contains("load i8"),
-            "ordinary guard keeps separate header bytes: {check}"
+            ll.contains("load i16") && ll.contains("33023"),
+            "one live Array header word is the shape check: {ll}"
         );
+        assert!(ll.contains("icmp ult i64") && ll.contains("281474975662080"));
+        assert!(ll.contains("call double @js_value_length_property_f64("));
         assert!(
-            !check.contains("load i16"),
-            "a packed guard changes indexed-loop register allocation"
-        );
-        assert!(ll.contains("icmp ugt i64") && ll.contains("2097151"));
-        assert!(
-            !ll.contains("call double @perry_length_cold_")
-                && ll.contains("call double @js_value_length_property_key_ic_f64("),
-            "an ordinary site keeps its proven typed tier and cold tier inline: {ll}"
+            !ll.contains("call double @perry_length_cold_") && !ll.contains("plen.typed_array"),
+            "Array misses must use the shared generic property helper: {ll}"
         );
         #[cfg(feature = "llvm-inprocess")]
         crate::testing::verify_ir(&ll, "ordinary_length_hot").unwrap();
@@ -683,19 +659,14 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         ll.contains("record.read.cold") && ll.contains("i32 5"),
         "the residual array read shares the record dispatcher"
     );
-    assert_eq!(
-        ll.lines()
-            .filter(
-                |l| l.starts_with("define internal double @perry_length_cold_")
-                    && l.contains("noinline")
-            )
-            .count(),
-        1,
-        "record length sites share one real cold body"
+    assert!(
+        !ll.lines()
+            .any(|l| l.starts_with("define ") && l.contains("@perry_length_cold_")),
+        "length cold semantics use the existing shared runtime helper"
     );
     assert!(
-        ll.contains("call double @perry_length_cold_"),
-        "a record length site reaches the shared cold body"
+        ll.contains("call double @js_value_length_property_f64("),
+        "each record length miss must retain exact property semantics"
     );
     assert!(
         !ll.contains("arrlike.u8.brand"),

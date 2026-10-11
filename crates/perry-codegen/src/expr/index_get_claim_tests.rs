@@ -54,13 +54,18 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
 #[test]
 fn string_key_on_a_declared_array_keeps_the_receiver_boxed() {
     let ir = declared_array_read_ir("declared_array_string_key", Expr::String("0".to_string()));
+    let call = ir
+        .lines()
+        .find(|l| l.contains("call double @perry_array_read_cold_"))
+        .expect("one shared cold key operation");
+    let operands: Vec<_> = call.split('(').nth(1).unwrap().split(',').take(2).collect();
     assert!(
-        ir.contains("aidxkey.sso") && ir.contains("call double @js_string_index_get_boxed("),
-        "the claim-safe SSO tag arm was not emitted:\n{ir}"
+        operands.len() == 2 && operands.iter().all(|v| v.trim().starts_with("double ")),
+        "the claim-safe slow operation must receive the boxed receiver and key: {call}"
     );
     assert!(
-        ir.contains("aidxkey.raw") && ir.contains("call double @js_array_get_index_or_string("),
-        "the pointer/primitive receiver fallback disappeared:\n{ir}"
+        !ir.contains("sso.split.sso"),
+        "the slow body must not be duplicated at the site"
     );
 }
 
@@ -72,8 +77,8 @@ fn numeric_key_on_a_declared_array_keeps_the_guarded_array_tier() {
         "the numeric receiver-validation tier was not emitted:\n{ir}"
     );
     assert!(
-        ir.contains("arr.guard.oob") && ir.contains("9222246136947933185"),
-        "a structurally-proven OOB ordinary-array read must return the undefined tag inline:\n{ir}"
+        ir.contains("arr.fallback") && ir.contains("call double @perry_array_read_cold_shared"),
+        "an OOB ordinary-array read must retain the exact shared runtime fallback:\n{ir}"
     );
     assert!(
         !ir.contains("aidxkey.sso") && !ir.contains("call double @js_string_index_get_boxed("),
@@ -118,20 +123,20 @@ fn numeric_layout_oob_array_read_ir() -> String {
 }
 
 #[test]
-fn numeric_layout_oob_array_read_returns_undefined_inline() {
+fn numeric_layout_oob_array_read_uses_shared_cold_body() {
     let ir = numeric_layout_oob_array_read_ir();
     assert!(
-        ir.contains("arr.guard.oob") && ir.contains("9222246136947933185"),
-        "a numeric-layout OOB read must inline the undefined tag:\n{ir}"
+        ir.contains("arr.fallback") && ir.contains("call double @perry_array_read_cold_"),
+        "a numeric-layout OOB read must use the shared generic fallback:\n{ir}"
     );
     assert!(
-        ir.contains("arr.guard.numeric_in_bounds"),
+        ir.contains("arr.guard.range") && ir.contains("8388608"),
         "only the in-bounds arm may require the numeric element-layout proof:\n{ir}"
     );
 }
 
 #[test]
-fn instrumented_numeric_array_read_keeps_handle_phi_first() {
+fn instrumented_numeric_array_read_keeps_census_after_sole_admission() {
     // Census enablement is cached process-wide. Use a fresh test process so
     // this test also exercises the instrument when the suite defaults to OFF.
     const CHILD: &str = "NUMERIC_PHI_TEST_CHILD";
@@ -168,15 +173,12 @@ fn instrumented_numeric_array_read_keeps_handle_phi_first() {
     }
     assert!(!instructions.is_empty(), "numeric fast route absent:\n{ir}");
     assert!(
-        instructions[0].contains(" = phi i64 ")
-            && instructions[0].contains("%arr.guard.numeric_in_bounds.")
-            && instructions[0].contains("%arr.guard.cold."),
-        "the admitted inline/cold handles must merge before any ordinary instruction: {instructions:?}"
+        !instructions.iter().any(|line| line.contains(" = phi i64 ")),
+        "the compact path has one admitted handle, with no cold handle merge: {instructions:?}"
     );
     assert!(
         instructions
             .iter()
-            .skip(1)
             .any(|line| line.contains("@PERRY_STORE_CENSUS")),
         "the fast route's census must actually be emitted: {instructions:?}"
     );
@@ -340,7 +342,12 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
     // separate from the numeric tier's single packed-arraylike exit.
     let property = super::class_field_barrier_tests::block_body(&ir, "dynkey.property.")
         .expect("the property-key dispatch block exists");
-    assert_eq!(property.matches("call double @js_dyn_index_get_site(").count(), 1);
+    assert_eq!(
+        property
+            .matches("call double @js_dyn_index_get_site(")
+            .count(),
+        1
+    );
     assert!(!property.contains("@js_packed_arraylike_index_get("));
     // The inline hits themselves: a guarded ordinary-Array element load, and
     // the elements-backed Array-subclass probe's own load.
@@ -791,98 +798,20 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
             },
         ],
     );
+    assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
+    assert!(ir.contains("fptosi double") && ir.contains("fcmp oeq"));
+    assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
+    assert!(ir.contains("call double @perry_array_read_cold_"));
     assert!(
-        ir.contains("aidxkey.int.exact") && ir.contains("aidxkey.generic"),
-        "the dynamic key must be classified inline before choosing a route:\n{ir}"
-    );
-    let exact = super::class_field_barrier_tests::block_body(&ir, "aidxkey.int.")
-        .expect("the range-checked key block exists");
-    assert!(
-        exact.contains("fptosi double")
-            && exact.contains("sitofp i64")
-            && exact.contains("fcmp oeq"),
-        "the integer test must be the fptosi/sitofp round trip:\n{exact}"
-    );
-    assert!(
-        ir.contains("arrlike.ic.header") && ir.contains("arrlike.elem.store"),
-        "an integer key must reach the inline element-read hit:\n{ir}"
-    );
-    // Only an ordinary `ObjectHeader` has the words the MRU cache hit reads,
-    // so the object arm must re-test `GC_TYPE_OBJECT` itself: the brand block
-    // only proves "not GC_TYPE_ARRAY". Native Buffers, typed arrays, lazy
-    // JSON arrays and every other exotic managed cell must leave through the
-    // exit BEFORE that load — reading their header word at offset 0/4 as a
-    // `(class_id, ShapeId)` identity would compare garbage.
-    let kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.kind.")
-        .expect("the object-kind guard exists");
-    assert!(
-        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.u8.brand"),
-        "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load; everything \
-         else goes to the byte-view arm:\n{kind}"
-    );
-    // #10515: the byte-view arm admits only a byte-view brand (#10694: a Node
-    // `Buffer`, `GC_TYPE_BUFFER`, or a `Uint8Array`, `GC_TYPE_BUFFER_UINT8ARRAY`)
-    // resolved by the common byte-cell admission. The view arm selects its
-    // owner, then guards its storage before falling through to the same exit.
-    let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
-        .expect("the byte-view brand guard exists");
-    assert!(
-        u8_brand.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_BUFFER))
-            && u8_brand.contains(&format!(
-                ", {}",
-                crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
-            ))
-            && !u8_brand.contains("@PERRY_U8_INLINE_CACHE")
-            && u8_brand.contains("arrlike.u8.view"),
-        "the byte-view arm must test both byte-view brands and offer the \
-         view to the common owner admission:\n{u8_brand}"
-    );
-    // A view reads its owner straight-line: a bag link (GC_TYPE_OBJECT)
-    // selects the bag's fixed owner slot, then the one owner admission guards
-    // the pointer layout before the load.
-    let view = super::class_field_barrier_tests::block_body(&ir, "bytes.view.owner.")
-        .expect("the pointer-layout guard exists");
-    assert!(
-        view.contains("load i64")
-            && view.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_OBJECT))
-            && view.contains(&format!(", {}", crate::runtime_abi::BYTES_VIEW_BAG_OWNER))
-            && view.contains("select i1")
-            && view.contains("arrlike.ic.miss")
-            && view.contains(", 15")
-            && view.contains(", 18"),
-        "one view admission must select the owner link, guard its layout, and exclude shared/native owners: {view}"
-    );
-    let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")
-        .expect("the view byte load exists");
-    assert!(
-        load.contains("load i8")
-            && load.contains("uitofp i8")
-            && !load.contains("asm")
-            && !load.contains("call double @"),
-        "admitted regular views share the ordinary byte load: {load}"
-    );
-    // The elements-backed subclass probe, the lazy-JSON-array probe and the
-    // dense-tail family token now live behind that exit rather than at every
-    // read site.
-    let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
-        .expect("the exit block exists");
-    assert!(
-        miss.contains("call double @js_packed_arraylike_index_get("),
-        "the exit must be one call:\n{miss}"
-    );
-    assert!(
-        ir.contains("call double @js_array_get_index_or_string("),
-        "non-index keys must keep the complete key route:\n{ir}"
+        !ir.contains("arrlike.elem.store"),
+        "claimed-array misses must stay out of line"
     );
 }
 
 /// The canonical-i32 arm of the same `packed[sparse[x]]` site: an erased
-/// Array declaration admits object-backed Array subclasses, so a canonical
-/// integer key must not be committed to the guarded plain-array tier — whose
-/// feedback fallback classifies the receiver out of line on every read (the
-/// 2.2× wolf-ecs regression after #8872). The element arm brands the
-/// receiver once and sends non-`GC_TYPE_ARRAY` heap pointers to the
-/// receiver-unknown numeric tiers instead.
+/// Array declaration can carry other runtime shapes. One guarded plain-array
+/// tier admits its own slots; every other shape uses the existing shared
+/// runtime fallback without duplicating a receiver classification tower.
 #[test]
 fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_tier() {
     const SPARSE: u32 = 41;
@@ -932,25 +861,16 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
             },
         ],
     );
+    assert!(ir.contains("aidx.canonical") && ir.contains("aidx.dynamic.guard.deref"));
+    assert!(ir.contains("67141887") && ir.contains("aidx.dynamic.fast"));
+    assert!(ir.contains("call double @perry_array_read_cold_shared"));
     assert!(
-        ir.contains("aidx.canonical") && ir.contains("aidx.claimed.brand"),
-        "the canonical-i32 arm must brand the claimed receiver before the plain tier:\n{ir}"
-    );
-    let brand = super::class_field_barrier_tests::block_body(&ir, "aidx.claimed.brand")
-        .expect("the brand block exists");
-    assert!(
-        brand.contains("load i8, ptr") && brand.contains("icmp eq i8") && brand.contains(", 1"),
-        "the brand block must read the GcHeader type byte and test GC_TYPE_ARRAY:\n{brand}"
+        !ir.contains("aidx.claimed.brand"),
+        "the receiver must not be branded twice"
     );
     assert!(
-        ir.contains("aidx.claimed.array") && ir.contains("aidx.dynamic.fast"),
-        "a plain Array keeps the guarded element tier:\n{ir}"
-    );
-    assert!(
-        ir.contains("aidx.claimed.other")
-            && ir.matches("arrlike.elem.store").count() >= 2
-            && ir.matches("call double @js_packed_arraylike_index_get(").count() >= 2,
-        "every other heap receiver must reach the inline element-read hit and its single exit from BOTH the canonical and the runtime-key arm:\n{ir}"
+        !ir.contains("arrlike.elem.store"),
+        "non-Array shapes use the existing cold runtime"
     );
 }
 
@@ -1030,8 +950,8 @@ fn generic_key_recovers_numeric_elements_without_losing_claim_safe_fallback() {
     );
     assert!(
         ir.contains("aidx.runtime_key")
-            && ir.contains("aidxkey.sso")
-            && ir.contains("call double @js_string_index_get_boxed(")
+            && ir.contains("sso.split.sso")
+            && ir.contains("call double @js_dyn_index_get(")
             && ir.contains("call double @js_array_get_index_or_string("),
         "the generic key lost its exact boxed-receiver fallback:\n{ir}"
     );

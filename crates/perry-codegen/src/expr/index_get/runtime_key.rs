@@ -16,9 +16,9 @@
 
 use anyhow::Result;
 
-use crate::types::{DOUBLE, I1, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I32, I64};
 
-use super::{lower_guarded_array_index_get, lower_inline_dyn_typed_array_get, unbox_to_i64, FnCtx};
+use super::{lower_guarded_array_index_get, FnCtx};
 
 pub(super) fn lower_array_index_get_via_runtime_key(
     ctx: &mut FnCtx<'_>,
@@ -26,13 +26,16 @@ pub(super) fn lower_array_index_get_via_runtime_key(
     idx_double: &str,
     coerce_numeric_fallback: bool,
 ) -> String {
-    let boxed = crate::expr::array_or_sso_index_get(ctx, arr_box, idx_double);
-    if coerce_numeric_fallback {
-        ctx.block()
-            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)])
-    } else {
-        boxed
-    }
+    super::guarded_array::emit_read_cold(
+        ctx,
+        arr_box,
+        "0",
+        idx_double,
+        "0",
+        false,
+        coerce_numeric_fallback,
+        None,
+    )
 }
 
 /// Split a dynamic numeric array key into the signed-i32 element tier and the
@@ -97,86 +100,15 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
         .cond_br(&is_canonical_i32, &element_label, &runtime_label);
 
     ctx.current_block = element_idx;
-    let element_value = if preserve_claimed_receiver_fallback {
-        // An erased Array declaration admits object-backed Array subclasses
-        // (`class Archetype extends Array` — wolf-ecs `packed[sparse[x]]`) and
-        // typed arrays as readily as plain Arrays. The guarded plain-array
-        // tier rejects those on its `GC_TYPE_ARRAY` brand and its feedback
-        // fallback then classifies the receiver out of line on every read.
-        // Read the brand once here: a plain Array keeps the guarded tier,
-        // every other heap pointer takes the receiver-unknown numeric tiers
-        // (inline typed-array read, dense-subclass `arrlike.ic`, complete
-        // dispatcher) that the runtime-key arm already uses for the same
-        // receivers. Non-pointers keep the guarded tier's unchanged fallback.
-        let brand_idx = ctx.new_block("aidx.claimed.brand");
-        let array_idx = ctx.new_block("aidx.claimed.array");
-        let other_idx = ctx.new_block("aidx.claimed.other");
-        let claimed_merge_idx = ctx.new_block("aidx.claimed.merge");
-        let brand_label = ctx.block_label(brand_idx);
-        let array_label = ctx.block_label(array_idx);
-        let other_label = ctx.block_label(other_idx);
-        let claimed_merge_label = ctx.block_label(claimed_merge_idx);
-        {
-            let blk = ctx.block();
-            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
-            let tag = blk.lshr(I64, &arr_bits, "48");
-            let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
-                                                              // The same heap band the receiver-unknown tiers dereference in.
-            let above_handle_band = blk.icmp_ugt(
-                I64,
-                &arr_handle,
-                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
-            );
-            let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
-            let in_heap = blk.and(I1, &above_handle_band, &below_heap_limit);
-            let heap_candidate = blk.and(I1, &is_pointer, &in_heap);
-            blk.cond_br(&heap_candidate, &brand_label, &array_label);
-        }
-        ctx.current_block = brand_idx;
-        {
-            let blk = ctx.block();
-            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
-            let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-            let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-            let gc_type = blk.load(I8, &gc_type_ptr);
-            let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-            blk.cond_br(&is_array, &array_label, &other_label);
-        }
-        ctx.current_block = array_idx;
-        let array_value = lower_guarded_array_index_get(
-            ctx,
-            arr_box,
-            &idx_i32,
-            "aidx.dynamic",
-            require_numeric_layout,
-            coerce_numeric_fallback,
-            receiver_slot,
-        )?;
-        let array_end = ctx.block().label.clone();
-        ctx.block().br(&claimed_merge_label);
-        ctx.current_block = other_idx;
-        let other_value =
-            lower_inline_dyn_typed_array_get(ctx, arr_box, idx_double, coerce_numeric_fallback);
-        let other_end = ctx.block().label.clone();
-        ctx.block().br(&claimed_merge_label);
-        ctx.current_block = claimed_merge_idx;
-        ctx.block().phi(
-            DOUBLE,
-            &[(&array_value, &array_end), (&other_value, &other_end)],
-        )
-    } else {
-        lower_guarded_array_index_get(
-            ctx,
-            arr_box,
-            &idx_i32,
-            "aidx.dynamic",
-            require_numeric_layout,
-            coerce_numeric_fallback,
-            receiver_slot,
-        )?
-    };
+    let element_value = lower_guarded_array_index_get(
+        ctx,
+        arr_box,
+        &idx_i32,
+        "aidx.dynamic",
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+    )?;
     let element_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -215,84 +147,13 @@ pub(super) fn lower_claimable_array_string_key_get(
     arr_box: &str,
     idx_double: &str,
 ) -> String {
-    let string_idx = ctx.new_block("aidxkey.sso");
-    let array_idx = ctx.new_block("aidxkey.raw");
-    let merge_idx = ctx.new_block("aidxkey.merge");
-    let string_label = ctx.block_label(string_idx);
-    let array_label = ctx.block_label(array_idx);
-    let merge_label = ctx.block_label(merge_idx);
+    super::guarded_array::emit_read_cold(ctx, arr_box, "0", idx_double, "0", false, false, None)
+}
 
-    let bits = ctx.block().bitcast_double_to_i64(arr_box);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
-    let is_sso_string = ctx.block().icmp_eq(I64, &top16, "32761"); // SHORT_STRING_TAG
-    ctx.block()
-        .cond_br(&is_sso_string, &string_label, &array_label);
-
-    ctx.current_block = string_idx;
-    let string_value = ctx.block().call(
-        DOUBLE,
-        "js_string_index_get_boxed",
-        &[(DOUBLE, arr_box), (DOUBLE, idx_double)],
-    );
-    let string_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    // A dynamic key that is an integer-valued double in `[0, 2^32)` IS an
-    // array index, so the receiver-unknown numeric tiers apply to it exactly
-    // as they do to a statically proven index: the inline typed-array read,
-    // then the dense Array-subclass `arrlike.ic` shape cache, then the
-    // complete `js_packed_arraylike_index_get` → `js_dyn_index_get`
-    // dispatcher. Before this, an `Any`-typed key (`packed[sparse[x]]` in the
-    // wolf-ecs SparseSet, `a[b[i]]` in general) always took the out-of-line
-    // `js_array_get_index_or_string` route below. Fractional, negative, NaN
-    // and out-of-range keys keep that route unchanged; `-0` round-trips to
-    // index 0, which is what ToPropertyKey gives it too.
-    let int_idx = ctx.new_block("aidxkey.int");
-    let int_label = ctx.block_label(int_idx);
-    let generic_idx = ctx.new_block("aidxkey.generic");
-    let generic_label = ctx.block_label(generic_idx);
-    ctx.current_block = array_idx;
-    {
-        let blk = ctx.block();
-        let nonnegative = blk.fcmp("oge", idx_double, "0.0");
-        let below_limit = blk.fcmp("olt", idx_double, "4294967296.0");
-        let in_range = blk.and(I1, &nonnegative, &below_limit);
-        blk.cond_br(&in_range, &int_label, &generic_label);
-    }
-    ctx.current_block = int_idx;
-    let int_label_checked = ctx.new_block("aidxkey.int.exact");
-    let int_label_checked_label = ctx.block_label(int_label_checked);
-    {
-        let blk = ctx.block();
-        // In range, so `fptosi` is well-defined; the round trip rejects
-        // fractional keys.
-        let idx_i64 = blk.fptosi(DOUBLE, idx_double, I64);
-        let idx_back = blk.sitofp(I64, &idx_i64, DOUBLE);
-        let is_integer = blk.fcmp("oeq", &idx_back, idx_double);
-        blk.cond_br(&is_integer, &int_label_checked_label, &generic_label);
-    }
-    ctx.current_block = int_label_checked;
-    let index_value = lower_inline_dyn_typed_array_get(ctx, arr_box, idx_double, false);
-    let index_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = generic_idx;
-    let arr_handle = unbox_to_i64(ctx.block(), arr_box);
-    let array_value = ctx.block().call(
-        DOUBLE,
-        "js_array_get_index_or_string",
-        &[(I64, &arr_handle), (DOUBLE, idx_double)],
-    );
-    let array_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[
-            (&string_value, &string_end),
-            (&index_value, &index_end),
-            (&array_value, &array_end),
-        ],
-    )
+pub(super) fn emit_claimable_array_key_body(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_double: &str,
+) -> String {
+    crate::expr::array_or_sso_index_get(ctx, arr_box, idx_double)
 }

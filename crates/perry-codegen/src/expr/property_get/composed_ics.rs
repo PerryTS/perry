@@ -229,45 +229,11 @@ fn emit_record_length_cold(
     recv_box: &str,
     outer_merge_label: &str,
 ) -> (String, String) {
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
-    ctx.ic_globals.push(cache_name.clone());
-
-    let helper_name = format!("perry_length_cold_{}", ctx.module_slug);
-    if !ctx.pending_helpers.iter().any(|f| f.name == helper_name) {
-        let mut helper = crate::function::LlFunction::new(
-            &helper_name,
-            DOUBLE,
-            vec![(DOUBLE, "%receiver".into()), (PTR, "%cache_slot".into())],
-        );
-        helper.linkage = "internal".into();
-        helper.no_inline = true;
-        let saved_func = std::mem::replace(ctx.func, helper);
-        let saved_block = ctx.current_block;
-        ctx.current_block = ctx.new_block("entry");
-        let bits = ctx.block().bitcast_double_to_i64("%receiver");
-        let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-        let done = ctx.new_block("return");
-        let done_label = ctx.block_label(done);
-        let value = emit_nonintrinsic_length_body(
-            ctx,
-            "%receiver",
-            &bits,
-            &handle,
-            "%cache_slot",
-            &done_label,
-        );
-        ctx.current_block = done;
-        ctx.block().ret(DOUBLE, &value);
-        let helper = std::mem::replace(ctx.func, saved_func);
-        ctx.current_block = saved_block;
-        ctx.pending_helpers.push(helper);
-    }
-    let slot = format!("@{cache_name}");
-    let length = ctx
-        .block()
-        .call(DOUBLE, &helper_name, &[(DOUBLE, recv_box), (PTR, &slot)]);
+    let length = ctx.block().call(
+        DOUBLE,
+        "js_value_length_property_f64",
+        &[(DOUBLE, recv_box)],
+    );
     let end = ctx.block().label.clone();
     ctx.block().br(outer_merge_label);
     (length, end)
@@ -701,8 +667,8 @@ fn emit_array_subclass_length_body(
     (length, end)
 }
 
-/// The record's captured array proof narrows only its hot guard. All cold
-/// property semantics still have the same per-module backend.
+/// Array length uses the same compact header guard for records and ordinary
+/// receivers. Every miss calls the existing generic property helper.
 pub(super) fn emit_record_length(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
@@ -732,7 +698,7 @@ pub(super) fn emit_record_length(
     let header = ctx.block().sub(I64, recv_handle, "8");
     let header = ctx.block().inttoptr(I64, &header);
     let word = ctx.block().load(crate::types::I16, &header);
-    let kind = ctx.block().and(crate::types::I16, &word, "33021");
+    let kind = ctx.block().and(crate::types::I16, &word, "33023");
     let live = ctx.block().icmp_eq(crate::types::I16, &kind, "1");
     ctx.block().cond_br(&live, &fl, &sl);
     ctx.current_block = fast;
