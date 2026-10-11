@@ -267,7 +267,10 @@ thread_local! {
     static FS_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
     static UTF8_STREAM_REGISTRY: RefCell<StdHashMap<usize, Utf8StreamState>> = RefCell::new(StdHashMap::new());
     static FS_UTF8_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
-    #[cfg(test)]
+}
+
+#[cfg(test)]
+thread_local! {
     static STREAM_PROPERTY_HOOK: std::cell::Cell<Option<for<'a> fn(&crate::gc::RuntimeHandle<'a>)>> = const { std::cell::Cell::new(None) };
 }
 
