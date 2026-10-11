@@ -63,6 +63,7 @@ pub(super) unsafe fn answer(c: &PicCache, recv: *const ObjectHeader, token: i64)
 #[inline(never)]
 unsafe fn scan_answer(c: &PicCache, recv: *const ObjectHeader, token: i64) -> Option<u64> {
     entry_answer(holder_words(c), recv, token)
+        .or_else(|| super::exotic_read::function_answer(c, recv))
         .or_else(|| class_read::function_bag_answer(c, recv, token))
 }
 

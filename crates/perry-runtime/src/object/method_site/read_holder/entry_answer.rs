@@ -50,7 +50,9 @@ unsafe fn single_entry_answer(
     if c[HOLDER_RECV] != token {
         // Only a multi-shape entry has further receiver tokens; every other
         // site (a class entry's site among them) leaves on this load.
-        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
+        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0
+            || token as u64 != (PIC_ID_TOKEN_BIT | u64::from(token as u32))
+        {
             return None;
         }
         return multi_absent_extra_answer(c, token);

@@ -930,6 +930,15 @@ pub(super) fn get_field_ic_miss_impl(
                 // A plain function on its base shape: the site's holder entry
                 // answers a key its shape and `%Function.prototype%`'s chain
                 // prove (`read_holder::prime_function_read`).
+                if gc_kind == Some(crate::gc::GC_TYPE_ARRAY) {
+                    if let Some(value) =
+                        crate::object::method_site::read_holder::exotic_read::prime_array_read(
+                            obj, key, cache_slot,
+                        )
+                    {
+                        return value;
+                    }
+                }
                 if gc_kind == Some(crate::gc::GC_TYPE_CLOSURE) {
                     if let Some(val) = crate::object::method_site::read_holder::prime_function_read(
                         obj as usize,
@@ -1392,7 +1401,10 @@ pub(crate) unsafe fn pic_outlined_mru_hit(
     // test that keeps a 0 stamp from matching it.
     let stamp = crate::object::shapes::object_shape_stamp(obj_handle);
     if stamp == 0 {
-        return None;
+        return crate::object::method_site::read_holder::exotic_read::array_answer(
+            &*cache, obj_handle,
+        )
+        .map(f64::from_bits);
     }
     let c = &*cache;
     let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;

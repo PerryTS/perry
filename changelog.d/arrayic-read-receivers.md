@@ -1,0 +1,3 @@
+Admit canonical arrays and ordinary function objects to the existing read IC holder entries. Array receiver header facts and Array.prototype's property-bag ShapeId prove inherited and absent reads; dictionary functions use their existing own-property bag's ShapeId when no recorded prototype/deletion state intervenes. This removes repeated generic lookup for `arr.constructor` and absent function statics such as `Array.isBuffer`, without adding a cache or changing the entry layout.
+
+Own overrides, accessor properties, custom prototypes, function `length`/`name`, and Proxy receivers retain their existing lookup semantics. Tests require live leaf hits and invalidation after warm-up.
