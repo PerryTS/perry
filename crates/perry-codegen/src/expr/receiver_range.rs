@@ -139,7 +139,8 @@ pub(crate) enum Route {
     ClassRead = 4,
     /// A class-field write guard's receiver test passed.
     ClassWrite = 5,
-    /// A `"k" in o` presence site's receiver test passed.
+    /// Reserved: presence validation now belongs to the shared runtime exit.
+    #[allow(dead_code)]
     InPresence = 6,
     /// The cached field-index early return's receiver test passed.
     CachedFieldIndex = 7,

@@ -1471,6 +1471,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && !property.starts_with('#')
                 {
                     if ctx.methods.contains_key(&getter_key) {
+                        if let Some((function, keys)) =
+                            super::named_accessor::candidate(ctx, object, property, false)
+                        {
+                            return super::named_accessor::get(
+                                ctx, object, property, &function, &keys,
+                            );
+                        }
                         // The enclosing class is not an exact runtime receiver
                         // proof: `this` may be a subclass overriding this getter.
                         // Even exact instances can gain an own property or have

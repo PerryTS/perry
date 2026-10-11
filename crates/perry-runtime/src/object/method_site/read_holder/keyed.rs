@@ -246,23 +246,35 @@ unsafe fn dynamic_key_walk(recv: *const ObjectHeader, key: KeyRef<'_>) -> Option
     walk_to_key(recv, key, false, HOLDER_MAX_DEPTH)
 }
 
-unsafe fn publish_keyed(cache: &mut KeyedCache, recv: *const ObjectHeader, key: u64, w: &Walk) {
+unsafe fn publish_keyed(
+    cache: &mut KeyedCache,
+    recv: *const ObjectHeader,
+    key: u64,
+    w: &Walk,
+    first_way: usize,
+) -> Option<usize> {
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
-    let available = cache.entries.iter().position(|e| {
-        e.token == 0
-            || (e.identity_key == key && e.token == token)
-            || crate::object::shapes::shape_is_retired(e.token as u32)
-            || (e.holder != 0 && crate::object::shapes::shape_is_retired(e.holder_shape))
-    });
+    let available = cache
+        .entries
+        .iter()
+        .enumerate()
+        .skip(first_way)
+        .find_map(|(i, e)| {
+            (e.token == 0
+                || (e.identity_key == key && e.token == token)
+                || crate::object::shapes::shape_is_retired(e.token as u32)
+                || (e.holder != 0 && crate::object::shapes::shape_is_retired(e.holder_shape)))
+            .then_some(i)
+        });
     let i = if let Some(i) = available {
         i
     } else {
         if cache.evictions >= MAX_EVICTIONS {
-            return;
+            return None;
         }
         cache.evictions += 1;
-        let i = cache.next as usize;
-        cache.next = (cache.next + 1) % WAYS as u32;
+        let i = (cache.next as usize).max(first_way);
+        cache.next = ((i + 1) % WAYS) as u32;
         i
     };
     let old = &cache.entries[i];
@@ -296,6 +308,7 @@ unsafe fn publish_keyed(cache: &mut KeyedCache, recv: *const ObjectHeader, key: 
             .push(HolderSite::Keyed(cache as *mut _ as usize));
         cache.registered = true;
     }
+    Some(i)
 }
 
 pub(super) unsafe fn scan_roots(site: usize, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -452,7 +465,7 @@ unsafe fn shape_read(slot: *mut *mut KeyedCache, obj_bits: u64, bits: u64) -> Op
     // System allocation only: no GC or user code between the proof and its
     // publication, so receiver/key/hop pointers need no handle-scope round trip.
     let cache = crate::object::pic_slot_resolve(slot);
-    publish_keyed(&mut *cache, recv, canonical, &w);
+    let _ = publish_keyed(&mut *cache, recv, canonical, &w, 0);
     Some(value)
 }
 
@@ -515,3 +528,6 @@ pub(crate) unsafe fn test_answer(
 
 #[cfg(test)]
 mod tests;
+
+mod presence;
+pub(crate) use presence::presence_at_site;

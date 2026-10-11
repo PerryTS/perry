@@ -226,7 +226,7 @@ mod get_field_by_name;
 #[cfg(test)]
 mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
-mod has_property;
+pub(crate) mod has_property;
 mod has_property_ic;
 mod ic_miss;
 #[cfg(test)]

@@ -120,37 +120,23 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
     format!("\0perry_namespace_func\0{namespace}\0{member}")
 }
 
-/// The property names the program's compiled classes declare as accessors
-/// (`get k()` / `set k(v)`), across every module (#10498).
-///
-/// A read site's class-getter arm and a store site's class-setter arm can only
-/// ever take an entry for a name some compiled class declares as that kind of
-/// accessor: the runtime admits an entry only when the receiver's class chain
-/// declares the getter name. A site whose
-/// name no class declares therefore emits no arm; it misses to the runtime as
-/// before the arm existed, which still asks the same entry first.
+/// Accessor names known to benefit from the emitted guarded arm. Computed
+/// literal choices extend the existing name sets without evaluating a key or
+/// widening every string read. Unresolved keys retain the runtime path; name
+/// admission never authenticates an answer (the shape/pair/lane guards do).
 #[derive(Debug, Clone, Default)]
 pub struct ClassAccessorNames {
     getters: std::collections::HashSet<String>,
     setters: std::collections::HashSet<String>,
 }
 
+mod computed_names;
+
 impl ClassAccessorNames {
     /// The accessor names declared by the classes of `modules` (instance and
     /// static alike: a superset only costs an arm).
     pub fn collect<'m>(modules: impl IntoIterator<Item = &'m perry_hir::Module>) -> Self {
-        let mut names = Self::default();
-        for module in modules {
-            for class in &module.classes {
-                names
-                    .getters
-                    .extend(class.getters.iter().map(|(name, _)| name.clone()));
-                names
-                    .setters
-                    .extend(class.setters.iter().map(|(name, _)| name.clone()));
-            }
-        }
-        names
+        computed_names::collect(modules)
     }
 
     /// The names given, for a caller that already knows them.
@@ -162,6 +148,7 @@ impl ClassAccessorNames {
         Self {
             getters: getters.into_iter().collect(),
             setters: setters.into_iter().collect(),
+            ..Self::default()
         }
     }
 

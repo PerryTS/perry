@@ -111,9 +111,15 @@ unsafe fn ordinary_own_key_present(obj_bits: u64, key_bits: u64) -> Option<bool>
         (*obj).parent_class_id,
         key_bits,
         text,
-    )?;
+    )
+    .or_else(|| {
+        super::super::field_get_set::has_property::shape_presence::own_position(obj, text)
+            .map(|(position, _proto_id, kind, _)| (position.is_some(), kind))
+    })?;
     let class_id = (*obj).class_id;
-    if class_id >= FIRST_RUNTIME_CLASS_ID
+    if (class_id >= FIRST_RUNTIME_CLASS_ID
+        && !(super::super::class_registry::SYNTHETIC_CLASS_ID_BASE..0xFFFF_0000)
+            .contains(&class_id))
         || !crate::array::subclass_elements::elements_of(obj).is_null()
     {
         return None;
@@ -186,6 +192,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
         let obj_js = crate::JSValue::from_bits(obj_value.to_bits());
+        let coerces_key = !crate::JSValue::from_bits(key_value.to_bits()).is_any_string();
         if obj_js.is_undefined() || obj_js.is_null() {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
@@ -320,6 +327,17 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         };
         if key_str.is_null() {
             return f64::from_bits(TAG_FALSE);
+        }
+
+        if coerces_key {
+            let boxed_key = crate::value::js_nanbox_string(key_str as i64);
+            if shape_may_answer(obj_value.to_bits(), boxed_key.to_bits()) {
+                if let Some(present) =
+                    ordinary_own_key_present(obj_value.to_bits(), boxed_key.to_bits())
+                {
+                    return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+                }
+            }
         }
 
         if obj_js.is_any_string() {

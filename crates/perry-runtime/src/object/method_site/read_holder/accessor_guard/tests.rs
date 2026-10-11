@@ -157,3 +157,61 @@ fn spill_accessor_uses_the_same_pair_and_shape_guards() {
         assert_eq!(changed.getter, 16);
     }
 }
+
+#[test]
+fn emitted_spill_contract_rejects_missing_storage_bounds_and_replaced_pair() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "emitted_spill_contract_rejects_missing_storage_bounds_and_replaced_pair",
+    ) {
+        return;
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let holder = crate::object::object_alloc_plain(0);
+        let pair = crate::object::accessor_pair::pair_new(Default::default());
+        let recv = ObjectHeader {
+            class_id: 0,
+            parent_class_id: crate::object::shapes::SHAPE_ID_BASE + 1,
+            meta: std::ptr::null_mut(),
+        };
+        let token = (u64::from(recv.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+        let mut words = HolderEntry([0; HOLDER_STATE - HOLDER_RECV]);
+        words[HOLDER_RECV] = token;
+        words[HOLDER_OBJ] = holder as i64;
+        words[HOLDER_SHAPE] = i64::from(crate::object::shapes::object_shape_stamp(holder));
+        words[HOLDER_KIND] = (HOLDER_ACCESSOR | u64::from(HOLDER_SLOT_SPILL | 13)) as i64;
+        words[HOLDER_HOPS] = pair as i64;
+        words[HOLDER_HOP_SHAPES] = 8;
+        assert!(
+            validated_accessor::<true>(&words, token).is_none(),
+            "no spill buffer"
+        );
+        crate::object::spill::spill_set(
+            holder as usize,
+            13,
+            crate::value::POINTER_TAG | pair as u64,
+        );
+        words[HOLDER_SHAPE] = i64::from(crate::object::shapes::object_shape_stamp(holder));
+        assert_eq!(
+            validated_accessor::<true>(&words, token),
+            Some((8, pair as usize))
+        );
+        words[HOLDER_KIND] = (HOLDER_ACCESSOR | u64::from(HOLDER_SLOT_SPILL | 4095)) as i64;
+        assert!(
+            validated_accessor::<true>(&words, token).is_none(),
+            "slot outside the live buffer"
+        );
+        words[HOLDER_KIND] = (HOLDER_ACCESSOR | u64::from(HOLDER_SLOT_SPILL | 13)) as i64;
+        let replacement = crate::object::accessor_pair::pair_new(Default::default());
+        crate::object::spill::spill_set(
+            holder as usize,
+            13,
+            crate::value::POINTER_TAG | replacement as u64,
+        );
+        assert!(
+            validated_accessor::<true>(&words, token).is_none(),
+            "same shape, replaced lane pair"
+        );
+    }
+}

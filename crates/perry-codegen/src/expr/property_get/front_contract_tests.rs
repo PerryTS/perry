@@ -135,10 +135,9 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
             "the merge must take the served answer from the actual front call block".into(),
         );
     }
-    if predecessors(blocks, &declined)
-        .iter()
-        .any(|p| *p != call_label && !p.starts_with("pget.recv_"))
-    {
+    if predecessors(blocks, &declined).iter().any(|p| {
+        *p != call_label && !p.starts_with("pget.recv_") && !p.starts_with("pic.acc.kind.")
+    }) {
         return Err(
             "the slow call is reached only from the front decline or receiver failure".into(),
         );
@@ -146,125 +145,44 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     Ok(*index)
 }
 
-/// The class-accessor arm's guards, in chain order (#10498, `accessor_arm.rs`).
-pub(super) const ACCESSOR_ARM_GUARDS: [&str; 7] = [
-    "pic.acc.empty",
-    "pic.acc.cache",
-    "pic.acc.recv",
-    "pic.acc.kind",
-    "pic.acc.holder",
-    "pic.acc.lane",
-    "pic.acc.inline",
-];
+/// The holder must exist and identify an accessor before collecting.
+pub(super) const ACCESSOR_ARM_GUARDS: [&str; 2] = ["pic.acc.empty", "pic.acc.kind"];
 
-/// #10498: the class-accessor arm on `pic.token`'s false edge, ahead of the
-/// front. Returns its guard blocks in chain order, after proving that
-///
-/// * the token compare's false edge is the first guard;
-/// * every guard ends in a live conditional branch whose true edge is the
-///   next guard (the last guard's is the call block) and whose false edge is
-///   the front's entry;
-/// * every guard and the call block has exactly one predecessor (the token
-///   compare for the first, the previous guard otherwise), so every guard
-///   dominates the call;
-/// * the call block makes exactly one call, an indirect
-///   `call double %code(double %recv)` (the compiled getter), and continues
-///   only to the tower's merge.
 pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> {
-    let find = |prefix: &str| -> Result<(&str, &[String]), String> {
-        let found: Vec<_> = blocks
-            .iter()
-            .filter(|(l, _)| l.starts_with(prefix))
-            .collect();
-        match found.as_slice() {
-            [(l, b)] => Ok((l.as_str(), b.as_slice())),
-            _ => Err(format!("expected one `{prefix}` block: {found:?}")),
-        }
-    };
-    let (token, token_body) = find("pic.token")?;
-    let (front, _) = find("pic.miss.front")?;
-    let (call, call_body) = find("pic.acc.call")?;
-    let mut guards = Vec::new();
-    for prefix in ACCESSOR_ARM_GUARDS {
-        guards.push(find(prefix)?);
-    }
-    if tower_cond_br(token_body).2 != guards[0].0 {
-        return Err("the token compare's false edge must enter the accessor arm".into());
-    }
-    for (i, (label, body)) in guards.iter().enumerate() {
-        if !body.last().is_some_and(|l| l.starts_with("br i1 %")) {
-            return Err(format!(
-                "accessor guard {label} must branch on a live predicate"
-            ));
-        }
-        let (_, on_true, on_false) = tower_cond_br(body);
-        let next = guards.get(i + 1).map(|(l, _)| *l).unwrap_or(call);
-        if i == guards.len() - 1 {
-            let (inline, inline_body) = find("pic.acc.storage.inline")?;
-            let (spill, spill_body) = find("pic.acc.storage.spill")?;
-            let (join, join_body) = find("pic.acc.storage.join")?;
-            if predecessors(blocks, label) != [guards[i - 1].0]
-                || on_true != spill
-                || on_false != inline
-                || predecessors(blocks, inline) != [*label]
-                || predecessors(blocks, spill) != [*label]
-                || targets(inline_body) != [join]
-                || targets(spill_body) != [join]
-                || predecessors(blocks, join) != [inline, spill]
-                || tower_cond_br(join_body).1 != call
-                || tower_cond_br(join_body).2 != front
-            {
-                return Err("both storage loads must join at the guarded pair comparison".into());
-            }
-            if [inline_body, spill_body, join_body].iter().any(|body| {
-                body.iter()
-                    .any(|line| line.contains(" call ") || line.contains(" invoke "))
-            }) {
-                return Err("storage validation must contain only loads and comparisons".into());
-            }
-            continue;
-        }
-        if on_true != next || on_false != front {
-            return Err(format!(
-                "accessor guard {label} must continue to {next} and decline to the front: {body:?}"
-            ));
-        }
-        let pred = if i == 0 { token } else { guards[i - 1].0 };
-        if predecessors(blocks, label) != [pred] {
-            return Err(format!(
-                "accessor guard {label} must be reached only from {pred}"
-            ));
-        }
-    }
-    for (_, body) in &guards {
-        if body.iter().any(|line| line.contains(" call ")) {
-            return Err("primary validation must expand guards without a selector call".into());
-        }
-    }
-    let (join, _) = find("pic.acc.storage.join")?;
-    if predecessors(blocks, call) != [join] {
-        return Err("the getter call must be reached only through every guard".into());
-    }
-    let calls: Vec<&String> = call_body
+    let (token, token_body) = tower_block(blocks, "pic.token");
+    let (entry, body) = tower_block(blocks, "pic.acc.empty");
+    let (kind, kind_body) = tower_block(blocks, "pic.acc.kind");
+    let (front, _) = tower_block(blocks, "pic.miss.front");
+    let (slow, _) = tower_block(blocks, "pic.miss.call");
+    let arms: Vec<_> = blocks
         .iter()
-        .filter(|l| l.contains(" call ") || l.contains(" invoke ") || l.starts_with("call "))
+        .filter(|(l, _)| l.starts_with("pic.acc."))
         .collect();
-    if calls.len() != 1 || !calls[0].contains(" = call double %") {
-        return Err(format!(
-            "the accessor arm makes exactly one indirect getter call: {call_body:?}"
-        ));
-    }
-    if !call_body
-        .last()
-        .is_some_and(|l| l.starts_with("br label %pget.recv_merge."))
+    if arms.len() != 2
+        || body.len() != 3
+        || !body[0].contains("load ptr")
+        || !body[1].contains("icmp ne ptr")
+        || !body[1].ends_with(", null")
+        || !body[2].starts_with("br i1 %")
+        || kind_body.len() != 5
+        || !kind_body[0].contains("getelementptr i8")
+        || !kind_body[1].contains("load i64")
+        || !kind_body[2].contains("and i64")
+        || !kind_body[2].ends_with(&format!(", {}", perry_abi::PIC_HOLDER_ACCESSOR_BIT))
+        || !kind_body[3].contains("icmp ne i64")
+        || !kind_body[3].ends_with(", 0")
+        || targets(body) != [kind, front]
+        || targets(kind_body) != [slow, front]
+        || predecessors(blocks, kind) != [entry]
+        || predecessors(blocks, entry) != [token]
+        || tower_cond_br(token_body).2 != entry
     {
-        return Err(format!(
-            "the getter's answer must reach the merge: {call_body:?}"
-        ));
+        return Err(
+            "only a non-null accessor holder may bypass the leaf front for the shared slow exit"
+                .into(),
+        );
     }
-    let mut declines: Vec<_> = guards[..guards.len() - 1].iter().map(|(l, _)| *l).collect();
-    declines.push(join);
-    Ok(declines)
+    Ok(vec![entry, kind])
 }
 
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {
@@ -482,7 +400,10 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
             "(ptr @PERRY_EMPTY_SHAPE_DIR,",
             1,
         );
-        assert_ne!(wrong, blocks, "{target}: operand sabotage must alter IR");
+        assert_ne!(
+            wrong, blocks,
+            "{target}: operand negative control must alter IR"
+        );
         assert!(
             verify_front_directory(&wrong).is_err(),
             "{target}: disconnected directory operand"

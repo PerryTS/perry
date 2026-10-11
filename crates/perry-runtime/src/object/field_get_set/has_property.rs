@@ -3,7 +3,7 @@
 
 use super::*;
 
-mod shape_presence;
+pub(crate) mod shape_presence;
 
 /// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
 /// (#6160). Covers the registration schemes the generic symbol resolver
@@ -220,6 +220,10 @@ pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
     if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
         return f64::from_bits(JSValue::bool(present).bits());
     }
+    in_operator_generic(obj, key)
+}
+
+pub(crate) fn in_operator_generic(obj: f64, key: f64) -> f64 {
     if !in_rhs_is_object(obj) {
         throw_in_operator_non_object(obj, key);
     }
@@ -270,6 +274,11 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             let obj_handle = scope.root_nanbox_u64(obj.to_bits());
             let key = unsafe { crate::object::js_to_property_key(key) };
             let obj = f64::from_bits(obj_handle.get_nanbox_u64());
+            // Coercion can replace the key and mutate/move the receiver.
+            // Consume the resulting shape before the exotic dispatch walk.
+            if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
+                return f64::from_bits(JSValue::bool(present).bits());
+            }
             (obj, JSValue::from_bits(obj.to_bits()), key)
         }
     };

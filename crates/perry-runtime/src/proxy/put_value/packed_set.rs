@@ -154,6 +154,25 @@ pub extern "C" fn js_put_value_set_packed_miss(
     cache_slot: *mut PackedSetWaysSlot,
     packed: *const AtomicU64,
 ) -> f64 {
+    // A validated setter proof already establishes that the key is not own.
+    // Consume it before rechecking own stores or warm transitions. An own
+    // key addition retires the receiver shape and makes this proof decline.
+    if let Some(stored) = unsafe { setter_site::try_hit(cache_slot, target, key, value) } {
+        return stored;
+    }
+    packed_set_miss_body(target, key, value, strict, cache_slot, packed)
+}
+
+// Only a declined setter proof enters the complete own-store/transition walk.
+#[inline(never)]
+fn packed_set_miss_body(
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+    strict: i32,
+    cache_slot: *mut PackedSetWaysSlot,
+    packed: *const AtomicU64,
+) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
     // The receiver shape answers an own writable binding before any site
     // admission or migration. A saturated site needs no further lookup or
@@ -238,13 +257,6 @@ pub extern "C" fn js_put_value_set_packed_miss(
         })
     };
     let target_bits = target.to_bits();
-    // The site's compiled-setter entry: a store whose key the receiver
-    // inherits as a class accessor misses the emitted ways by construction.
-    // Its hit is two ShapeId compares and one lane load (`setter_site`), so it
-    // is asked before any other miss work re-derives what it already proves.
-    if let Some(stored) = unsafe { setter_site::try_hit(cache_slot, target, key, value) } {
-        return stored;
-    }
     // The ways the emitted code does not compare. Nothing here allocates or
     // runs user code, so `target` and `value` are still the caller's values
     // when the full walk below needs them.

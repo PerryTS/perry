@@ -238,10 +238,59 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
+    // Cached getters must not enter the large miss body's spill frame.
+    // This is the one collecting read entry used by emitted sites; only a
+    // declined holder proof pays the full operation's dispatch and rooting.
+    let obj = obj_handle as usize as *const ObjectHeader;
+    let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
+    let accessor = !cache.is_null()
+        && unsafe {
+            (*cache)[crate::object::method_site::read_holder::HOLDER_KIND] as u64
+                & crate::codegen_abi::PIC_HOLDER_ACCESSOR_BIT as u64
+                != 0
+        };
+    // Native aliases also cache own data and class methods without the
+    // accessor bit. Preserve that existing collecting consumer's admission.
+    if !cache.is_null() && crate::value::addr_class::is_above_handle_band(obj as usize) {
+        unsafe {
+            let header =
+                &*((obj as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                // --- 1. the site's accessor entry ---------------------------
+                // An inherited getter: the emitted compare and the
+                // leaf front both miss on it by construction (the key is not
+                // own, and a getter can collect). Its hit is two ShapeId
+                // compares and one lane load (`read_holder`), so it is asked
+                // before anything else this entry would re-derive. An
+                // explicit-this native alias (#11725) keeps the miss
+                // handler's order: its alias read comes first.
+                if crate::object::native_this_alias::object_alias(obj).is_some() {
+                    if let Some(value) =
+                        crate::object::method_site::read_holder::try_alias_cached_accessor(
+                            obj, key, cache_slot,
+                        )
+                    {
+                        return value;
+                    }
+                } else if accessor {
+                    if let Some(value) =
+                        crate::object::method_site::read_holder::try_cached_accessor(
+                            obj, cache_slot,
+                        )
+                    {
+                        return f64::from_bits(value.bits());
+                    }
+                }
+            }
+        }
+    }
+    // Non-accessor candidates have already visited the GC-leaf front.
+    // An accessor cannot be served there. Do not repeat a declined probe.
     ic_slow_body(obj_handle, key, cache_slot, packed)
 }
 
-/// The body of [`js_object_get_field_ic_slow`].
+/// The shared miss body of [`js_object_get_field_ic_slow`].
+#[inline(never)]
 fn ic_slow_body(
     obj_handle: i64,
     key: *const crate::StringHeader,
@@ -261,31 +310,6 @@ fn ic_slow_body(
         unsafe {
             let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                // --- 1. the site's accessor entry ---------------------------
-                // An inherited getter: the emitted compare and the
-                // leaf front both miss on it by construction (the key is not
-                // own, and a getter can collect). Its hit is two ShapeId
-                // compares and one lane load (`read_holder`), so it is asked
-                // before anything else this entry would re-derive. An
-                // explicit-this native alias (#11725) keeps the miss
-                // handler's order: its alias read comes first.
-                if crate::object::native_this_alias::object_alias(obj).is_some() {
-                    if let Some(value) =
-                        crate::object::method_site::read_holder::try_alias_cached_accessor(
-                            obj, key, cache_slot,
-                        )
-                    {
-                        return value;
-                    }
-                } else {
-                    if let Some(value) =
-                        crate::object::method_site::read_holder::try_cached_accessor(
-                            obj, cache_slot,
-                        )
-                    {
-                        return f64::from_bits(value.bits());
-                    }
-                }
                 let plain = header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0;
                 // --- 2. the MRU token hit the emitted hit path declined -----
                 if plain && !packed.is_null() {

@@ -63,6 +63,11 @@
 //!    no shape transition can have happened at any access this pass licenses.
 //!    Returns nested inside a CLOSURE body are not exempt: that value escapes
 //!    at an unbounded later time (`UseWalk::in_closure`).
+//! Named accessors on non-exported, non-nested classes without inheritance or
+//! computed members use this same proof. Each property read/write records the
+//! accessor as a method call for rule 3; field/accessor shadowing is excluded.
+//! Accessor call arguments conservatively carry no numeric parameter proof.
+//!
 //! 3. **`this`-flow containment**: the constructor chain, chain field
 //!    initializers, and every method called on the local are walked with a
 //!    strict `this`-usage discipline (field access on `this`, vetted
@@ -352,6 +357,29 @@ fn collect_shape_proven_ptr_locals_impl(
     candidates.retain(|id, class_name| {
         match report::admission_cause(classes, class_name, &chain_classes(classes, class_name)) {
             None => true,
+            Some(cause)
+                if classes
+                    .get(class_name)
+                    .is_some_and(|c| !c.getters.is_empty() || !c.setters.is_empty()) =>
+            {
+                let chain = chain_classes(classes, class_name);
+                // Widen only contained, direct-new locals. Return/element and
+                // routed-this proofs retain their existing accessor refusal.
+                let admitted = purpose == CollectionPurpose::UnguardedRepresentation
+                    && !module_dispatch.has_shape_barrier_sites()
+                    && chain.len() == 1
+                    && chain[0].extends.is_none()
+                    && chain[0].extends_name.is_none()
+                    && chain[0].extends_expr.is_none()
+                    && chain[0].native_extends.is_none()
+                    && chain[0].computed_members.is_empty()
+                    && chain[0].fields.iter().all(|f| f.key_expr.is_none())
+                    && named_accessors_are_disjoint(chain[0]);
+                if !admitted {
+                    report::deny_local(*id, &names, &depths, Some(class_name), cause);
+                }
+                admitted
+            }
             Some(cause) => {
                 report::deny_local(*id, &names, &depths, Some(class_name), cause);
                 false
@@ -764,6 +792,49 @@ pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
     out
 }
 
+/// Named accessors can share the existing containment proof when no own
+/// field/method shadows them. Inherited and static accessors remain excluded.
+pub(super) fn named_accessors_are_disjoint(class: &Class) -> bool {
+    let mut names: HashSet<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
+    names.extend(class.methods.iter().map(|f| f.name.as_str()));
+    let mut get = HashSet::new();
+    let mut set = HashSet::new();
+    !class.is_exported
+        && !class.is_nested
+        && class.decorators.is_empty()
+        && class.fields.iter().all(|f| f.decorators.is_empty())
+        && class
+            .constructor
+            .as_ref()
+            .is_none_or(|f| f.params.iter().all(|p| p.default.is_none()))
+        && class
+            .methods
+            .iter()
+            .all(|f| f.params.iter().all(|p| p.default.is_none()))
+        && class.getters.iter().all(|(_, f)| f.params.is_empty())
+        && class.setters.iter().all(|(_, f)| {
+            f.params.len() == 1
+                && f.params
+                    .iter()
+                    .all(|p| !p.is_rest && p.default.is_none() && p.decorators.is_empty())
+        })
+        && class.getters.iter().chain(&class.setters).all(|(n, f)| {
+            f.captures.is_empty()
+                && f.decorators.is_empty()
+                && !names.contains(format!("__get_{n}").as_str())
+                && !names.contains(format!("__set_{n}").as_str())
+        })
+        && class.static_accessor_names.is_empty()
+        && class
+            .getters
+            .iter()
+            .all(|(n, _)| !n.starts_with('#') && !names.contains(n.as_str()) && get.insert(n))
+        && class
+            .setters
+            .iter()
+            .all(|(n, _)| !n.starts_with('#') && !names.contains(n.as_str()) && set.insert(n))
+}
+
 /// Whether one class in the resolved chain declares the same instance method
 /// name more than once. Overrides in different classes are intentional and
 /// remain resolvable by the prototype chain; duplicate declarations within a
@@ -789,6 +860,14 @@ pub(super) fn chain_method_map<'a>(
         for method in &class.methods {
             out.entry(method.name.clone())
                 .or_insert_with(|| (class.name.clone(), method));
+        }
+        for (name, function) in &class.getters {
+            out.entry(format!("__get_{name}"))
+                .or_insert_with(|| (class.name.clone(), function));
+        }
+        for (name, function) in &class.setters {
+            out.entry(format!("__set_{name}"))
+                .or_insert_with(|| (class.name.clone(), function));
         }
     }
     out
@@ -1055,7 +1134,14 @@ impl<'a> UseWalk<'a> {
                     // the enclosing function's local.
                     if !self.in_closure {
                         if let Expr::LocalGet(id) = e {
-                            if self.tracked_root(*id).is_some() {
+                            if let Some(root) = self.tracked_root(*id) {
+                                let class = self.classes[&self.candidates[&root]];
+                                if class.getters.is_empty() && class.setters.is_empty() {
+                                    return;
+                                }
+                                // Returning an accessor instance exposes its
+                                // class prototype to later calls of this birth.
+                                self.disq_root(root, report::ESC_RETURN);
                                 return;
                             }
                         }
@@ -1131,6 +1217,24 @@ impl<'a> UseWalk<'a> {
         }
     }
 
+    fn note_accessor(&mut self, root: u32, property: &str, setter: bool) {
+        let class_name = &self.candidates[&root];
+        let key = format!("__{}_{property}", if setter { "set" } else { "get" });
+        let chain = chain_classes(self.classes, class_name);
+        if chain_method_map(&chain).contains_key(&key) {
+            // Empty arguments conservatively deny parameter-mediated numeric
+            // stores while still vetting the accessor's complete this-flow.
+            self.method_calls
+                .entry(root)
+                .or_default()
+                .entry(key)
+                .or_default()
+                .push(&[]);
+        } else {
+            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
+        }
+    }
+
     fn walk_expr(&mut self, e: &'a Expr) {
         match e {
             // Safe: declared-chain field read on a tracked member.
@@ -1141,7 +1245,7 @@ impl<'a> UseWalk<'a> {
                     if let Some(root) = self.tracked_root(*id) {
                         self.note_field_read(root);
                         if !self.candidate_chain_has_field(root, property) {
-                            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
+                            self.note_accessor(root, property, false);
                         }
                         return;
                     }
@@ -1159,7 +1263,7 @@ impl<'a> UseWalk<'a> {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         if !self.candidate_chain_has_field(root, property) {
-                            self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
+                            self.note_accessor(root, property, true);
                         } else {
                             self.field_stores
                                 .entry(root)
@@ -1207,7 +1311,7 @@ impl<'a> UseWalk<'a> {
                     if id == rid {
                         if let Some(root) = self.tracked_root(*id) {
                             if !self.candidate_chain_has_field(root, property) {
-                                self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
+                                self.note_accessor(root, property, true);
                             } else {
                                 self.field_stores
                                     .entry(root)

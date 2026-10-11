@@ -549,6 +549,68 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         }
     }
 
+    // A named-accessor local needs a private class binding as well as a
+    // contained instance: handing the constructor to another module could
+    // expose its prototype without naming `.prototype` in this module.
+    // Reuse the existing dispatch-stability fact; no new proof table.
+    if hir
+        .classes
+        .iter()
+        .any(|c| !c.getters.is_empty() || !c.setters.is_empty())
+    {
+        // Member/parameter decorator arguments are not expression children in
+        // the binding walk. They may hand ANY class to opaque user code, even
+        // when the decorated member belongs to a different class.
+        let decorated_function = |f: &perry_hir::Function| {
+            !f.decorators.is_empty() || f.params.iter().any(|p| !p.decorators.is_empty())
+        };
+        let decorator_exposure = hir.functions.iter().any(&decorated_function)
+            || hir.classes.iter().any(|c| {
+                !c.decorators.is_empty()
+                    || c.fields
+                        .iter()
+                        .chain(&c.static_fields)
+                        .any(|f| !f.decorators.is_empty())
+                    || c.constructor.as_ref().is_some_and(&decorated_function)
+                    || c.methods
+                        .iter()
+                        .chain(&c.static_methods)
+                        .chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f))
+                        .chain(c.computed_members.iter().map(|m| &m.function))
+                        .any(&decorated_function)
+            });
+        let mut births: HashMap<String, usize> = HashMap::new();
+        let mut note_binding =
+            |expr: &Expr| match expr {
+                Expr::ClassRef(name) => {
+                    if hir.classes.iter().any(|c| {
+                        c.name == *name && (!c.getters.is_empty() || !c.setters.is_empty())
+                    }) {
+                        facts.prototype_touched_classes.insert(name.clone());
+                    }
+                }
+                Expr::New { class_name, .. } => {
+                    *births.entry(class_name.clone()).or_default() += 1;
+                }
+                _ => {}
+            };
+        perry_hir::tdz_check::for_each_module_expr(hir, &mut note_binding);
+        for global in &hir.globals {
+            if let Some(init) = &global.init {
+                for_each_expr(init, &mut note_binding);
+            }
+        }
+        // With one birth site, containment at that site's local covers every
+        // instance. Another birth might expose this same class's prototype.
+        for class in &hir.classes {
+            if (!class.getters.is_empty() || !class.setters.is_empty())
+                && (decorator_exposure || births.get(&class.name) != Some(&1))
+            {
+                facts.prototype_touched_classes.insert(class.name.clone());
+            }
+        }
+    }
+
     // Representation-selection Phase 3b, #7034 §4. Computed LAST, and read
     // through the partially-built `facts` — the barrier flags above must
     // already be final, because a §5.2 barrier anywhere in the module denies

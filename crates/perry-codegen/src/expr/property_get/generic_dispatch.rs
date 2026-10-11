@@ -1048,11 +1048,9 @@ fn lower_property_site(
             let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
             emit_plain_array_length_arm(ctx, &handle, &token_miss_label, &merge_label, true)
         });
-    // #10498: a site whose reads inherit a compiled class getter answers them
-    // inline, ahead of the front (`accessor_arm`). 64-bit targets only, as the
-    // method site: the entry's words address 8-byte slots behind the header.
-    // Only for a name some compiled class of the program declares as a getter:
-    // no other site can ever take an entry.
+    // Only the existing holder's accessor-kind bit selects the collecting
+    // exit. Empty-MRU data reads retain their leaf front; all authentication
+    // belongs to the shared runtime consumer, including computed names.
     let accessor_entry = match fused_recv.as_ref() {
         Some(f)
             if array_length_arm.is_none()
@@ -1071,22 +1069,15 @@ fn lower_property_site(
             .unwrap_or_else(|| token_miss_label.clone());
         ctx.block().cond_br(&token_eq, &hit_label, &miss);
     }
-    let accessor_header_bytes =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    let accessor_arm = accessor_entry.map(|(entry_idx, biased)| {
+    if let Some((entry_idx, _)) = accessor_entry {
         super::accessor_arm::emit_class_accessor_arm(
             ctx,
             entry_idx,
-            &packed_word,
-            PACKED_GET_EMPTY,
             &cache_slot_ref,
-            &biased,
-            &obj_box,
-            accessor_header_bytes,
+            &call_label,
             &token_miss_label,
-            &merge_label,
-        )
-    });
+        );
+    }
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -1311,9 +1302,6 @@ fn lower_property_site(
     ];
     if let Some((answered, front_end_label)) = front_arm.as_ref() {
         incoming.push((answered, front_end_label));
-    }
-    if let Some((value, accessor_end_label)) = accessor_arm.as_ref() {
-        incoming.push((value, accessor_end_label));
     }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));

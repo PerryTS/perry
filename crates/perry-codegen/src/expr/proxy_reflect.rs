@@ -384,6 +384,11 @@ fn put_value_static_property_fast_path(
     let Expr::String(property) = key else {
         return None;
     };
+    if same_side_effect_free_receiver(target, receiver)
+        && super::named_accessor::candidate(ctx, target, property, true).is_some()
+    {
+        return Some(property.clone());
+    }
     // Source-level `arr.length = value` lowers to `PutValueSet`, while the
     // Array-exotic length implementation lives in `PropertySet::lower`.
     // Preserve that statically proven receiver contract here just as

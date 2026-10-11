@@ -1351,11 +1351,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
         // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
         Expr::In { property, object } => {
-            // A literal key gets a presence inline cache (`in_presence_ic`).
-            // The cache records a ShapeId and nothing else, so the key it
-            // stands for has to be fixed at the site: a dynamic key keeps the
-            // bare call. `full_outline_ic_enabled` is the size mode that asks
-            // every IC to stay out of the emitted function.
+            // Fixed keys retain the inline own-hit arm. Dynamic keys share
+            // the existing keyed entry through the one runtime operation.
             let constant_key = matches!(&**property, Expr::String(_))
                 && !crate::codegen::full_outline_ic_enabled();
             rooting::with_operands_rooted(ctx, &[property, object], |ctx, vals| {
@@ -1364,10 +1361,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx, &vals[1], &vals[0],
                     ));
                 }
+                let site = ctx.ic_site_counter;
+                ctx.ic_site_counter += 1;
+                let name = super::inline_cache_global_name(ctx, site);
+                ctx.ic_globals.push(name.clone());
+                let slot_ref = format!("@{name}");
                 Ok(ctx.block().call(
                     DOUBLE,
-                    "js_in_operator",
-                    &[(DOUBLE, &vals[1]), (DOUBLE, &vals[0])],
+                    "js_in_operator_presence_ic",
+                    &[
+                        (DOUBLE, &vals[1]),
+                        (DOUBLE, &vals[0]),
+                        (crate::types::PTR, &slot_ref),
+                    ],
                 ))
             })
         }

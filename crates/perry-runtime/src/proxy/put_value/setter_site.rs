@@ -25,8 +25,8 @@ const DEEP_SITE_TAG: u64 = SITE_TAG ^ (1 << 48);
 const _: () = assert!(PACKED_SET_SETTER_WORD == crate::codegen_abi::PACKED_SET_SETTER_WORD);
 const _: () = assert!(crate::value::POINTER_MASK == crate::codegen_abi::SETTER_SITE_ADDRESS_MASK);
 
-/// The site's entry. The emitted store tower reads it at the offsets
-/// `perry_abi::SETTER_SITE_*_OFFSET` pin (`setter_arm.rs` in codegen).
+/// The collecting setter entry. Its stable ABI offsets remain pinned by
+/// `perry_abi::SETTER_SITE_*_OFFSET`; emitted sites only call the shared exit.
 #[repr(C)]
 struct Entry {
     receiver_shape: u32,

@@ -3198,6 +3198,7 @@ pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
+mod named_accessor;
 pub(crate) mod proxy_reflect;
 pub(crate) mod put_value_store_ic;
 pub(crate) mod receiver_range;

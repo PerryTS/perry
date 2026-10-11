@@ -1737,3 +1737,117 @@ fn a_contested_func_id_carries_no_fact() {
         Some("C")
     );
 }
+
+#[test]
+fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
+    let mut c = class_c();
+    c.getters.push((
+        "derived".into(),
+        function(
+            90,
+            "derived",
+            vec![Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "x".into(),
+                byte_offset: 0,
+            }))],
+        ),
+    ));
+    c.setters.push((
+        "input".into(),
+        function(
+            91,
+            "input",
+            vec![Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "x".into(),
+                value: Box::new(Expr::Number(3.0)),
+            })],
+        ),
+    ));
+    let stmts = vec![
+        let_c(1, "contained"),
+        Stmt::Expr(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "derived".into(),
+            byte_offset: 0,
+        }),
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(1)),
+            receiver: Box::new(Expr::LocalGet(1)),
+            key: Box::new(Expr::String("input".into())),
+            value: Box::new(Expr::Number(2.0)),
+            strict: true,
+        }),
+    ];
+    c.setters[0].1.params.push(Param {
+        id: 99,
+        name: "v".into(),
+        ty: Type::Any,
+        default: None,
+        decorators: vec![],
+        is_rest: false,
+        arguments_object: None,
+    });
+    let mut module = Module::new("accessors");
+    module.classes.push(c.clone());
+    module.functions.push(function(92, "run", stmts.clone()));
+    let facts = super::super::collect_module_dispatch_facts(&module);
+    assert!(promote(&stmts, &classes_of(&c), &facts).contains_key(&1));
+    let decorator = perry_hir::Decorator {
+        name: "expose".into(),
+        args: vec![Expr::ClassRef("C".into())],
+        is_factory: true,
+        is_reflect_metadata: false,
+    };
+    let mut decorated = module.clone();
+    let mut unrelated = class_c();
+    unrelated.name = "Other".into();
+    unrelated.id = 93;
+    unrelated.methods.push(function(93, "decorated", vec![]));
+    unrelated.methods[0].decorators.push(decorator.clone());
+    decorated.classes.push(unrelated);
+    let opaque = super::super::collect_module_dispatch_facts(&decorated);
+    assert!(!promote(&stmts, &classes_of(&c), &opaque).contains_key(&1));
+    let method = &mut decorated.classes[1].methods[0];
+    method.decorators.clear();
+    method.params = c.setters[0].1.params.clone();
+    method.params[0].decorators.push(decorator.clone());
+    let opaque_param = super::super::collect_module_dispatch_facts(&decorated);
+    assert!(!promote(&stmts, &classes_of(&c), &opaque_param).contains_key(&1));
+    decorated.classes[1].methods.clear();
+    decorated.classes[1].fields[0].decorators.push(decorator);
+    let opaque_field = super::super::collect_module_dispatch_facts(&decorated);
+    assert!(!promote(&stmts, &classes_of(&c), &opaque_field).contains_key(&1));
+    let mut returned = stmts.clone();
+    returned.push(Stmt::Return(Some(Expr::LocalGet(1))));
+    assert!(!promote(&returned, &classes_of(&c), &facts).contains_key(&1));
+    module.init.push(Stmt::Expr(new_c()));
+    let shared = super::super::collect_module_dispatch_facts(&module);
+    assert!(!promote(&stmts, &classes_of(&c), &shared).contains_key(&1));
+    module.init.clear();
+    module.globals.push(perry_hir::Global {
+        id: 10,
+        name: "exposed".into(),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::ClassRef("C".into())),
+    });
+    let global = super::super::collect_module_dispatch_facts(&module);
+    assert!(!promote(&stmts, &classes_of(&c), &global).contains_key(&1));
+    module.globals.clear();
+    module.init.push(Stmt::Expr(Expr::ClassRef("C".into())));
+    let exposed = super::super::collect_module_dispatch_facts(&module);
+    assert!(!promote(&stmts, &classes_of(&c), &exposed).contains_key(&1));
+    c.getters[0].1.body = vec![Stmt::Return(Some(Expr::This))];
+    assert!(!promote(&stmts, &classes_of(&c), &facts).contains_key(&1));
+    c.getters[0].1.body = vec![];
+    c.setters[0].1.body = vec![Stmt::Return(Some(Expr::This))];
+    assert!(!promote(&stmts, &classes_of(&c), &facts).contains_key(&1));
+    c.setters[0].1.body = vec![];
+    c.setters[0].1.params[0].default = Some(Expr::This);
+    assert!(!promote(&stmts, &classes_of(&c), &facts).contains_key(&1));
+    c.setters[0].1.params[0].default = None;
+    c.fields.push(field("derived"));
+    assert!(!promote(&stmts, &classes_of(&c), &facts).contains_key(&1));
+}

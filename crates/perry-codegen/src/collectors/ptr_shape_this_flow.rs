@@ -65,7 +65,7 @@ pub(super) fn chain_this_flow_verdict<'a, 'b>(
             let Some((owner, func)) = methods.get(m.as_str()) else {
                 return Err(report::ESC_UNRESOLVED_METHOD);
             };
-            if !analysis.method_safe(owner, func) {
+            if !analysis.function_this_safe(owner, m, func, false) {
                 return Err(report::METHOD_THIS_ESCAPE);
             }
         }
@@ -161,14 +161,10 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         true
     }
 
-    pub(super) fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
-        self.function_this_safe(owner, &func.name, func, false)
-    }
-
     /// Phase 5a root-method variant: `return this` is safe only as the final
     /// statement of the method whose receiver was already guarded. It creates
     /// no alias until every specialized field access has completed. Nested
-    /// methods continue through [`Self::method_safe`] and may not return the
+    /// methods continue through `function_this_safe` and may not return the
     /// receiver, preserving Phase 3b's no-escape contract.
     pub(in crate::collectors) fn method_safe_with_terminal_this_return(
         &mut self,
