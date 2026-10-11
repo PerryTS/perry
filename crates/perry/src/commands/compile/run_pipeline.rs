@@ -6651,6 +6651,11 @@ pub fn run_with_parse_cache(
         ctx.needs_wasm_runtime = true;
     }
     let use_wasm_host = ctx.needs_wasm_runtime;
+    if use_wasm_host && find_perry_workspace_root().is_none() {
+        eprintln!(
+            "warning: WebAssembly runtime was requested, but Perry could not find its source workspace to build the required `perry-runtime/wasm-host` feature. The default prebuilt runtime lacks this feature, so linking may fail unless the selected runtime was built with it. Set `PERRY_WORKSPACE_ROOT` to a Perry source checkout (including `crates/perry-runtime` and `crates/perry-wasm-host`), or use a wasm-enabled runtime archive."
+        );
+    }
     let wasm_host_lib_resolved = if use_wasm_host {
         // Prefer a Cargo freshness check when workspace source is available.
         // Merely finding an archive is insufficient after the host ABI grows:

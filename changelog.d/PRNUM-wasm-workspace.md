@@ -1,0 +1,1 @@
+When a program needs the WebAssembly host runtime but Perry cannot find its source workspace, compilation now warns that the default prebuilt runtime lacks the required `perry-runtime/wasm-host` feature and explains how to provide a workspace or a wasm-enabled runtime archive. The warning is emitted before auto-optimization and no-auto fallback paths.
