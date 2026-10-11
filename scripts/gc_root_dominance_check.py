@@ -3467,6 +3467,130 @@ def classify_heap_source(ins, exempt=True, assume_boxes_in_gc_heap=False):
             return (True, False, src)
     return (True, True, None)
 
+
+ARRAY_VALUE_HELPERS = {
+    # These return a JS value in an f64-sized box. The numeric fast-path
+    # helper is outside this change's recognition scope.
+    "js_array_get_element", "js_array_get_element_f64",
+    "js_array_get_f64", "js_array_get_f64_unchecked",
+}
+
+
+def _array_element_loads(f, def_of):
+    """Find inline array payload loads without treating arbitrary loads as JS values.
+
+    The current fast path validates an ArrayHeader by loading its type word
+    from `base - 8`, masking the type/flags, and comparing with the array kind
+    (1). It then loads an i64 payload through address arithmetic rooted at
+    that same masked base. Requiring both shapes avoids classifying counters,
+    ordinary object fields, or numeric arithmetic as heap values.
+    """
+    defs = def_of
+
+    array_bases = set()
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            # %tag = and i32 %header, 67141887
+            # %is_array = icmp eq i32 %tag, 1
+            cmp = re.search(r"icmp\s+eq\s+i32\s+%([\w.$]+),\s*1\b", ins.text)
+            if not cmp:
+                continue
+            tag = defs.get(cmp.group(1))
+            if tag is None or not re.search(
+                    r"=\s*and\s+i32\s+%[\w.$]+,\s*67141887\b", tag.text):
+                continue
+            header_load = defs.get(next(iter(operand_regs(tag.text)), ""))
+            if header_load is None or "= load i32," not in header_load.text:
+                continue
+            header_ptr = next(iter(operand_regs(header_load.text)), "")
+            inttoptr = defs.get(header_ptr)
+            if inttoptr is None or "= inttoptr i64" not in inttoptr.text:
+                continue
+            sub = defs.get(next(iter(operand_regs(inttoptr.text)), ""))
+            if sub is None or not re.search(
+                    r"=\s*sub\s+i64\s+%([\w.$]+),\s*8\b", sub.text):
+                continue
+            base = sub.text.split("=", 1)[1]
+            base_reg = re.search(r"%([\w.$]+)", base)
+            if not base_reg:
+                continue
+            masked = defs.get(base_reg.group(1))
+            if masked is not None and re.search(
+                    r"=\s*and\s+i64\s+%[\w.$]+,\s*281474976710655\b", masked.text):
+                array_bases.add(base_reg.group(1))
+
+    loads = set()
+    if not array_bases:
+        return loads
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if "= load i64," not in ins.text:
+                continue
+            ptr = LOAD_FROM_RE.search(ins.text)
+            if ptr is None:
+                continue
+            inttoptr = defs.get(ptr.group(1))
+            if inttoptr is None or "= inttoptr i64" not in inttoptr.text:
+                continue
+            address = defs.get(next(iter(operand_regs(inttoptr.text)), ""))
+            if address is None or not re.search(
+                    r"=\s*add\s+i64\s+%([\w.$]+),\s*%([\w.$]+)",
+                    address.text):
+                continue
+            lhs, rhs = re.search(
+                r"=\s*add\s+i64\s+%([\w.$]+),\s*%([\w.$]+)",
+                address.text).groups()
+            base_side, offset_side = defs.get(lhs), defs.get(rhs)
+            if base_side is None or offset_side is None:
+                continue
+            base_match = re.search(r"=\s*sub\s+i64\s+%([\w.$]+),\s*8\b",
+                                   base_side.text)
+            if not base_match or base_match.group(1) not in array_bases:
+                continue
+            if not re.search(r"=\s*shl\s+i64\s+%[\w.$]+,\s*3\b",
+                             offset_side.text):
+                continue
+            loads.add(ins.result)
+    return loads
+
+
+def heap_value_origins(def_of, reg, slot_load_sources, local_slots,
+                       array_loads):
+    """Follow boxed heap values through SSA copies and local stack slots.
+
+    Local slot loads use their reaching stores, computed by a monotone CFG
+    fixed point. This handles loops/cycles without a recursion cutoff;
+    constant-only slots still have no heap origin. Rooting remains attached
+    to each destination alloca in `check_func_unrooted_allocas`.
+    """
+    origins = []
+    seen = set()
+    work = [reg]
+    while work:
+        current = work.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        ins = def_of.get(current)
+        if ins is None:
+            continue
+        if current in array_loads:
+            origins.append(ins)
+            continue
+        if is_transparent(ins):
+            work.extend(operand_regs(ins.text))
+            continue
+        if "= load " in ins.text:
+            slot = LOAD_FROM_RE.search(ins.text)
+            if slot and slot.group(1) in local_slots:
+                work.extend(slot_load_sources.get(current, ()))
+                continue
+        if ins.callee in ARRAY_VALUE_HELPERS:
+            origins.append(ins)
+        elif ins.callee is not None or "= load " in ins.text:
+            origins.append(ins)
+    return origins
+
 ALLOCA_RE = re.compile(r"^\s*%([\w.$]+)\s*=\s*alloca\s+(.+)$")
 LOAD_FROM_RE = re.compile(r"=\s*load\s+[^,]+,\s*ptr\s+%([\w.$]+)")
 # Types that can hold a NaN-boxed JS value or a raw heap address. An `i32`/`i1`
@@ -3772,6 +3896,52 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
             if lm and lm.group(1) in allocas:
                 loads[lm.group(1)].append(ins)
 
+    # Reaching definitions for local slots. A function-wide union would let a
+    # later heap-valued store taint a preceding numeric copy. The finite
+    # store-set lattice converges across loops and preserves per-load order.
+    block_in = {b: {} for b in f.blocks}
+    block_out = {b: {} for b in f.blocks}
+
+    def merge_slot_states(states):
+        merged = defaultdict(set)
+        for state in states:
+            for slot, values in state.items():
+                merged[slot].update(values)
+        return {slot: values for slot, values in merged.items()}
+
+    def transfer_slot_state(block, state):
+        state = {slot: set(values) for slot, values in state.items()}
+        for ins in f.insns[block]:
+            sm = STORE_RE.match(ins.text)
+            if sm and sm.group(3) in allocas:
+                value = sm.group(2).strip()
+                state[sm.group(3)] = {value[1:]} if value.startswith("%") else set()
+        return state
+
+    changed = True
+    while changed:
+        changed = False
+        for block in f.blocks:
+            incoming = merge_slot_states(
+                block_out[pred] for pred in f.preds[block])
+            outgoing = transfer_slot_state(block, incoming)
+            if incoming != block_in[block] or outgoing != block_out[block]:
+                block_in[block], block_out[block] = incoming, outgoing
+                changed = True
+
+    slot_load_sources = {}
+    for block in f.blocks:
+        state = {slot: set(values) for slot, values in block_in[block].items()}
+        for ins in f.insns[block]:
+            sm = STORE_RE.match(ins.text)
+            if sm and sm.group(3) in allocas:
+                value = sm.group(2).strip()
+                state[sm.group(3)] = {value[1:]} if value.startswith("%") else set()
+            lm = LOAD_FROM_RE.search(ins.text)
+            if ins.result and lm and lm.group(1) in allocas:
+                slot_load_sources[ins.result] = set(state.get(lm.group(1), ()))
+    array_loads = _array_element_loads(f, def_of)
+
     store_blocks = defaultdict(set)   # alloca -> blocks that (re)store it
     for reg_, sts in stores.items():
         for st_ in sts:
@@ -3825,8 +3995,12 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
             val = sm.group(2).strip()
             if not val.startswith("%"):
                 continue        # a constant seed (`undefined`) names no heap
-            origins = provenance(def_of, val[1:])
-            hazardous = any(_is_heap_source(o, **source_opts) for o in origins)
+            origins = heap_value_origins(def_of, val[1:], slot_load_sources,
+                                         set(allocas), array_loads)
+            hazardous = any(o.result in array_loads
+                            or o.callee in ARRAY_VALUE_HELPERS
+                            or _is_heap_source(o, **source_opts)
+                            for o in origins)
             exemptions = []
             if not hazardous:
                 # This site would have been reported before #7210's predicate
@@ -3898,6 +4072,96 @@ entry.0:
   %ret = call double @perry_fn_user__init(double %a)
   %this = load double, ptr %slot
   ret double %this
+}
+"""
+
+_SELFTEST_ARRAY_READ_PREFIX = """\
+define double @perry_fn_selftest__array_read() {
+entry.0:
+  %slot = alloca double
+  %arr = call i64 @js_array_alloc(i32 1)
+  %base = and i64 %arr, 281474976710655
+  %header.addr = sub i64 %base, 8
+  %header.ptr = inttoptr i64 %header.addr to ptr
+  %header = load i32, ptr %header.ptr
+  %kind = and i32 %header, 67141887
+  %is.array = icmp eq i32 %kind, 1
+  %payload.base = sub i64 %base, 8
+  %index = zext i32 2 to i64
+  %offset = shl i64 %index, 3
+  %payload.addr = add i64 %payload.base, %offset
+  %payload.ptr = inttoptr i64 %payload.addr to ptr
+  %raw = load i64, ptr %payload.ptr
+  %boxed = bitcast i64 %raw to double
+  store double %boxed, ptr %slot
+  call void @js_gc_loop_safepoint()
+  %after = load double, ptr %slot
+  ret double %after
+}
+"""
+
+_SELFTEST_ARRAY_HELPER = """\
+define double @perry_fn_selftest__array_helper() {
+entry.0:
+  %slot = alloca double
+  %arr = call i64 @js_array_alloc(i32 1)
+  %value = call double @js_array_get_f64(i64 %arr, i32 0)
+  store double %value, ptr %slot
+  call void @js_gc_loop_safepoint()
+  %after = load double, ptr %slot
+  ret double %after
+}
+"""
+
+_SELFTEST_SLOT_COPY = """\
+define double @perry_fn_selftest__slot_copy() {
+entry.0:
+  %first = alloca double
+  %second = alloca double
+  %value = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %boxed = bitcast i64 %value to double
+  store double %boxed, ptr %first
+  %copy1 = load double, ptr %first
+  store double %copy1, ptr %second
+  call void @js_gc_loop_safepoint()
+  %after = load double, ptr %second
+  ret double %after
+}
+"""
+
+_SELFTEST_SLOT_PHI_CYCLE = """\
+define double @perry_fn_selftest__slot_phi_cycle(i1 %again) {
+entry.0:
+  %slot = alloca double
+  %value = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %boxed = bitcast i64 %value to double
+  store double %boxed, ptr %slot
+  br label %loop.1
+loop.1:
+  %joined = phi double [ %boxed, %entry.0 ], [ %joined, %loop.1 ]
+  store double %joined, ptr %slot
+  br i1 %again, label %loop.1, label %exit.2
+exit.2:
+  call void @js_gc_loop_safepoint()
+  %after = load double, ptr %slot
+  ret double %after
+}
+"""
+
+_SELFTEST_ROOTED_SOURCE_COPY = """\
+define double @perry_fn_selftest__rooted_source_copy() {
+entry.0:
+  %rooted = alloca double
+  %unrooted = alloca double
+  %value = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %boxed = bitcast i64 %value to double
+  store double %boxed, ptr %rooted
+  call void @js_shadow_slot_bind(i32 0, ptr %rooted)
+  %copy = load double, ptr %rooted
+  store double %copy, ptr %unrooted
+  call void @js_gc_loop_safepoint()
+  %after = load double, ptr %unrooted
+  ret double %after
 }
 """
 
@@ -6504,6 +6768,113 @@ entry.0:
             print(f"self-test FAIL: rooted control -> {n_allocas} gc-capable "
                   "allocas, expected 1", file=sys.stderr)
             ok = False
+
+        # #11871: provenance must survive an array element read and any number
+        # of local stack-slot copies. Rooting is destination-specific: a copy
+        # out of a rooted source slot still needs its own bind.
+        array_slot_bound = _SELFTEST_ARRAY_READ_PREFIX.replace(
+            "  store double %boxed, ptr %slot\n",
+            "  store double %boxed, ptr %slot\n"
+            "  call void @js_shadow_slot_bind(i32 0, ptr %slot)\n")
+        array_no_window = _SELFTEST_ARRAY_READ_PREFIX.replace(
+            "  call void @js_gc_loop_safepoint()\n", "")
+        array_numeric_only = _SELFTEST_ARRAY_READ_PREFIX.replace(
+            "  %raw = load i64, ptr %payload.ptr\n",
+            "  %raw = add i64 1, 2\n")
+        array_numeric_only = array_numeric_only.replace(
+            "  %boxed = bitcast i64 %raw to double\n",
+            "  %boxed = sitofp i64 %raw to double\n")
+        array_numeric_i32 = _SELFTEST_ARRAY_READ_PREFIX.replace(
+            "  %raw = load i64, ptr %payload.ptr\n",
+            "  %raw.i32 = load i32, ptr %payload.ptr\n"
+            "  %raw = zext i32 %raw.i32 to i64\n")
+        array_numeric_i32 = array_numeric_i32.replace(
+            "  %boxed = bitcast i64 %raw to double\n",
+            "  %boxed = sitofp i64 %raw to double\n")
+        future_heap_store = """\
+define double @perry_fn_selftest__future_heap_store() {
+entry.0:
+  %source = alloca double
+  %destination = alloca double
+  store double 1.0, ptr %source
+  %number = load double, ptr %source
+  store double %number, ptr %destination
+  call void @js_gc_loop_safepoint()
+  %object = call i64 @js_object_alloc_class_inline_keys(i32 1, i32 0, i32 3, i64 0)
+  %boxed = bitcast i64 %object to double
+  store double %boxed, ptr %source
+  %after = load double, ptr %destination
+  ret double %after
+}
+"""
+        slot_copy_bound = _SELFTEST_SLOT_COPY.replace(
+            "  store double %copy1, ptr %second\n",
+            "  store double %copy1, ptr %second\n"
+            "  call void @js_shadow_slot_bind(i32 1, ptr %second)\n")
+        slot_copy_no_window = _SELFTEST_SLOT_COPY.replace(
+            "  call void @js_gc_loop_safepoint()\n", "")
+        provenance_cases = (
+            ("inline array element", _SELFTEST_ARRAY_READ_PREFIX, 1),
+            ("array helper", _SELFTEST_ARRAY_HELPER, 1),
+            ("array helper alias", _SELFTEST_ARRAY_HELPER.replace(
+                "js_array_get_f64", "js_array_get_element"), 1),
+            ("two-slot copy", _SELFTEST_SLOT_COPY, 1),
+            ("phi/cycle copy", _SELFTEST_SLOT_PHI_CYCLE, 1),
+            ("rooted source to unrooted destination", _SELFTEST_ROOTED_SOURCE_COPY, 1),
+            ("array destination bound", array_slot_bound, 0),
+            ("copied destination bound", slot_copy_bound, 0),
+            ("fresh slot has no collection window", array_no_window, 0),
+            ("copy has no collection window", slot_copy_no_window, 0),
+            ("numeric array payload", array_numeric_only, 0),
+            ("numeric i32 array payload", array_numeric_i32, 0),
+            ("future heap store cannot taint earlier copy", future_heap_store, 0),
+        )
+        with tempfile.TemporaryDirectory() as provenance_td:
+            for name, text, want in provenance_cases:
+                filename = "11871_" + re.sub(
+                    r"[^a-z0-9]+", "_", name.lower()) + ".ll"
+                path = os.path.join(provenance_td, filename)
+                with open(path, "w") as fh:
+                    fh.write(text)
+                found, _ = _scan_unrooted([path], moving_only=True)
+                all_collectors, _ = _scan_unrooted([path])
+                for mode, violations in (("--moving-only", found),
+                                         ("all collectors", all_collectors)):
+                    if len(violations) != want:
+                        print(f"self-test FAIL: #11871 {name} -> "
+                              f"{len(violations)} {mode} violations, "
+                              f"expected {want}", file=sys.stderr)
+                        ok = False
+            ordinary = os.path.join(provenance_td, "11871_ordinary_collector.ll")
+            with open(ordinary, "w") as fh:
+                fh.write(_SELFTEST_ARRAY_HELPER.replace(
+                    "@js_gc_loop_safepoint()", "@js_gc_collect()"))
+            ordinary_all, _ = _scan_unrooted([ordinary])
+            ordinary_moving, _ = _scan_unrooted([ordinary], moving_only=True)
+            if len(ordinary_all) != 1 or ordinary_moving:
+                print("self-test FAIL: #11871 ordinary-collector control -> "
+                      f"{len(ordinary_all)} full / {len(ordinary_moving)} "
+                      "moving-only, expected 1 / 0", file=sys.stderr)
+                ok = False
+        # The compact valid emitted-IR reduction above pins the array-kind
+        # guard plus header-offset/element-offset address shape. Only the
+        # i64 payload load is a JS-value origin; header and i32 counter loads
+        # remain numeric.
+        with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as fh:
+            fh.write(_SELFTEST_ARRAY_READ_PREFIX)
+            array_fixture = fh.name
+        try:
+            array_fn = parse_file(array_fixture)[0]
+            array_defs = {ins.result: ins for b in array_fn.blocks
+                          for ins in array_fn.insns[b] if ins.result}
+            recognized = _array_element_loads(array_fn, array_defs)
+            if recognized != {"raw"}:
+                print("self-test FAIL: #11871 inline element-load recognizer "
+                      f"found {sorted(recognized)!r}, expected ['raw']",
+                      file=sys.stderr)
+                ok = False
+        finally:
+            os.unlink(array_fixture)
 
         # #11590: the loop-carried window, both directions, under the gated
         # `--moving-only` filter (the poll is the only mover).
