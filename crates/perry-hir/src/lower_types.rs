@@ -641,17 +641,17 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
         ast::Expr::Assign(assign) => infer_type_from_expr(&assign.right, ctx),
 
         // `new C(...)` → `Type::Named(C)` for plain classes, `Type::Generic`
-        // when type args are present (`new Map<K, V>()` must stay Generic so
-        // `is_map_expr` / `is_set_expr` etc. match — they check `base == "Map"`
-        // on the Generic variant). Phase 4.1 lets `new C().method()` flow
+        // when type args are present. Phase 4.1 lets `new C().method()` flow
         // through the method-call inference path above.
         //
-        // Builtin collection types (Map/Set/WeakMap/WeakSet/Array/Promise) are
+        // Builtin collection types (Set/WeakMap/WeakSet/Array/Promise) are
         // intrinsically generic — `new Set([1,2,3])` without explicit `<number>`
         // must still return `Type::Generic { base: "Set" }` so downstream
         // `is_set_expr` matches and dispatches through the Set fast path
         // (otherwise `s.has(...)` falls back to dynamic-method lookup and
         // returns `undefined`).
+        // Unshadowed `new Map`, unlike the others, reads the live global
+        // constructor and has no reliable instance-brand proof (#11869).
         ast::Expr::New(new_expr) => {
             if let Some(ty) = url_encoding_constructor_type(ctx, new_expr.callee.as_ref()) {
                 return ty;
@@ -674,6 +674,16 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                     if ctx.shadows_unqualified_global(&name) {
                         return Type::Any;
                     }
+                }
+                // #11869: unshadowed `Map` construction reads the live global
+                // property and may produce any constructible value, including
+                // an alternate class or a constructor that returns an ordinary
+                // object. A `Generic<Map>` inference here would incorrectly
+                // send later `.get()` / `.set()` calls through Map-only fast
+                // paths. Explicit type annotations remain the programmer's
+                // declared type; inferred construction carries no brand proof.
+                if name == "Map" {
+                    return Type::Any;
                 }
                 // #11128: `new C()` where `C` is a VALUE binding — a local
                 // holding a class value (`const C: any = R`, a factory's

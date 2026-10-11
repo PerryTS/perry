@@ -244,10 +244,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } = callee.as_ref()
             {
                 if super::v8_interop::is_global_object_expr(object) {
-                    if let Some(value) =
-                        crate::lower_call::lower_global_intrinsic_new(ctx, property, args)?
-                    {
-                        return Ok(value);
+                    if property != "Map" {
+                        if let Some(value) =
+                            crate::lower_call::lower_global_intrinsic_new(ctx, property, args)?
+                        {
+                            return Ok(value);
+                        }
                     }
                 }
             }

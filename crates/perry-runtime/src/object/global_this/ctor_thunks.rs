@@ -227,6 +227,12 @@ pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     if name == "Buffer" {
         return crate::object::native_module::buffer_original_prototype_value();
     }
+    if name == "Map" {
+        let addr = crate::array::map_prototype_addr();
+        if addr != 0 {
+            return crate::value::js_nanbox_pointer(addr as i64);
+        }
+    }
     if name == "Function" {
         let addr = crate::array::function_prototype_addr();
         if addr != 0 {

@@ -61,14 +61,13 @@ fn shadowed_global_constructor_reads_the_global_property() {
     }
 }
 
-/// Guards the other side: an unshadowed name keeps its by-name intrinsic
-/// construct, and a shadowed name WITH a dedicated intrinsic node (#6726's
-/// `class Set {}` case) keeps that node rather than going dynamic.
+/// Guards the other side: unrelated builtins keep their existing intrinsic
+/// route, while Map reads the global constructor value for both spellings.
 #[test]
-fn unshadowed_and_dedicated_intrinsics_keep_their_lowering() {
+fn map_constructor_forms_read_the_global_value_once() {
     let source = r#"
-        import { Map } from "./m";
         export function unshadowed(): any { return new globalThis.Event("ping"); }
+        export function bareMap(): any { return new Map([[1, 2]]); }
         export function dedicated(): any { return new globalThis.Map([[1, 2]]); }
     "#;
     let unshadowed = lowered_function_debug(source, "unshadowed");
@@ -76,13 +75,73 @@ fn unshadowed_and_dedicated_intrinsics_keep_their_lowering() {
         unshadowed.contains(r#"New { class_name: "Event""#),
         "an unshadowed global keeps the by-name intrinsic construct:\n{unshadowed}"
     );
-    let dedicated = lowered_function_debug(source, "dedicated");
+    let bare_map = lowered_function_debug(source, "bareMap");
     assert!(
-        dedicated.contains("MapNewFromArray"),
-        "a shadowed global with a dedicated intrinsic node keeps it:\n{dedicated}"
+        bare_map.contains(&global_property_construct("Map")),
+        "an unshadowed `new Map` must evaluate the global constructor:\n{bare_map}"
     );
     assert!(
-        !dedicated.contains(&global_property_construct("Map")),
-        "the dedicated intrinsic node must not be replaced by a dynamic construct:\n{dedicated}"
+        !bare_map.contains("MapNewFromArray") && !bare_map.contains("MapNew)"),
+        "bare Map construction must not skip the observable global Get:\n{bare_map}"
+    );
+    let dedicated = lowered_function_debug(source, "dedicated");
+    assert!(
+        dedicated.contains(&global_property_construct("Map")),
+        "`new globalThis.Map` must evaluate the global constructor:\n{dedicated}"
+    );
+
+    let shadowed_global = lowered_function_debug(
+        r#"
+            import { Map } from "./m";
+            export function dedicated(): any { return new globalThis.Map([[1, 2]]); }
+        "#,
+        "dedicated",
+    );
+    assert!(
+        shadowed_global.contains(&global_property_construct("Map")),
+        "globalThis.Map must remain the global value even when bare Map is imported:\n{shadowed_global}"
+    );
+}
+
+#[test]
+fn resolved_map_types_do_not_brand_live_global_constructions() {
+    use crate::types::Type;
+    use std::collections::HashMap;
+    use swc_ecma_ast::{Decl, ModuleItem, Pat, Stmt};
+
+    let source = r#"
+        const bare = new Map<number, number>();
+        const member = new globalThis.Map<number, number>();
+    "#;
+    let ast = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let span_for = |index: usize| {
+        let ModuleItem::Stmt(Stmt::Decl(Decl::Var(decl))) = &ast.body[index] else {
+            panic!("top-level item {index} is a variable declaration");
+        };
+        let Pat::Ident(binding) = &decl.decls[0].name else {
+            panic!("declaration {index} is an identifier");
+        };
+        binding.id.span.lo.0
+    };
+    let resolved_map = Type::Generic {
+        base: "Map".to_string(),
+        type_args: vec![Type::Number, Type::Number],
+    };
+    let resolved_types = HashMap::from([
+        (span_for(0), resolved_map.clone()),
+        (span_for(1), resolved_map),
+    ]);
+    let hir =
+        super::lower_module_with_class_id_and_types(&ast, "t", "t.ts", 1, Some(resolved_types))
+            .expect("source lowers")
+            .0;
+    let debug = format!("{hir:?}");
+    assert!(
+        debug.contains(r#"name: "bare", ty: Any"#),
+        "tsgo's generic result must not restore a brand for bare Map:\n{debug}"
+    );
+    assert!(
+        debug.contains(r#"name: "member", ty: Any"#),
+        "tsgo's generic result must not restore a brand for globalThis.Map:\n{debug}"
     );
 }

@@ -1,7 +1,7 @@
 //! #6981 — the memoized `Array.prototype` / `Object.prototype` addresses are
 //! raw pointers to MOVABLE objects, so they must survive relocation.
 //!
-//! `array::prototype_addr` memoizes both intrinsic addresses in a PER-THREAD
+//! `array::prototype_addr` memoizes intrinsic addresses in a PER-THREAD
 //! pair of cells (#7988 — the realm they name is per-thread, so a process-wide
 //! cell handed every `perry/thread` agent the first thread's addresses).
 //! `Array.prototype` relocates two ways, and both leave a
@@ -313,6 +313,7 @@ fn the_shipped_cells_are_the_ones_the_scanner_visits() {
     assert_eq!(wiring[3].1, b"String");
     assert_eq!(wiring[4].1, b"Number");
     assert_eq!(wiring[5].1, b"Boolean");
+    assert_eq!(wiring[6].1, b"Map");
     for i in 0..wiring.len() {
         for j in i + 1..wiring.len() {
             assert_ne!(
@@ -363,7 +364,7 @@ fn a_second_agents_prototype_addresses_are_its_own() {
     let both_alive = Arc::new(Barrier::new(2));
 
     let agent = |gate: Arc<Mutex<()>>, barrier: Arc<Barrier>| {
-        move || -> (usize, usize) {
+        move || -> (usize, usize, usize) {
             let addrs = {
                 let _serialized = gate.lock().expect("bootstrap gate");
                 // Bootstrap this agent's realm EXPLICITLY. The comment above
@@ -378,6 +379,7 @@ fn a_second_agents_prototype_addresses_are_its_own() {
                 (
                     crate::array::array_prototype_addr(),
                     crate::array::object_prototype_addr(),
+                    crate::array::map_prototype_addr(),
                 )
             };
             // Hold this thread — and therefore its arena — alive until the other
@@ -397,14 +399,16 @@ fn a_second_agents_prototype_addresses_are_its_own() {
 
     let a = spawn_agent(Arc::clone(&bootstrap_gate), Arc::clone(&both_alive));
     let b = spawn_agent(bootstrap_gate, both_alive);
-    let (a_array, a_object) = a.join().expect("agent A panicked");
-    let (b_array, b_object) = b.join().expect("agent B panicked");
+    let (a_array, a_object, a_map) = a.join().expect("agent A panicked");
+    let (b_array, b_object, b_map) = b.join().expect("agent B panicked");
 
     for (label, addr) in [
         ("A Array.prototype", a_array),
         ("A Object.prototype", a_object),
+        ("A Map.prototype", a_map),
         ("B Array.prototype", b_array),
         ("B Object.prototype", b_object),
+        ("B Map.prototype", b_map),
     ] {
         assert!(
             addr != 0 && addr != usize::MAX,
@@ -425,5 +429,10 @@ fn a_second_agents_prototype_addresses_are_its_own() {
          is why `Object.prototype[i] = v` on a worker never flipped \
          OBJECT_PROTO_HAS_INDEX — the write hook compared against the main \
          thread's address (#7988)"
+    );
+    assert_ne!(
+        a_map, b_map,
+        "two live agents must memoize their OWN Map.prototype; a shared cell \
+         would let construction in one realm use another realm's prototype"
     );
 }

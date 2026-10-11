@@ -289,6 +289,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && !ctx.shadows_unqualified_global("globalThis")
                 && is_reified_global_builtin_constructor(prop_ident.sym.as_ref())
             {
+                if prop_ident.sym.as_ref() == "Map" {
+                    return Ok(global_property_new_dynamic(
+                        "Map",
+                        lower_optional_args(ctx, new_expr.args.as_deref())?,
+                        new_byte_offset,
+                    ));
+                }
                 let mut synthetic = new_expr.clone();
                 synthetic.callee = Box::new(ast::Expr::Ident(ast::Ident::new(
                     prop_ident.sym.clone(),
@@ -973,24 +980,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::ObjectCoerce(Box::new(arg)));
             }
             if class_name == "Map" && !shadowed_by_user_binding {
-                // new Map() or new Map(entries)
-                let args = new_expr
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        args.iter()
-                            .map(|a| lower_expr(ctx, &a.expr))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                if args.is_empty() {
-                    return Ok(Expr::MapNew);
-                } else {
-                    return Ok(Expr::MapNewFromArray(Box::new(
-                        args.into_iter().next().unwrap(),
-                    )));
-                }
+                // A bare identifier is a read of the live global binding.
+                // Evaluate that constructor once before its arguments, then
+                // construct the value it returned. The MapNew fast path
+                // skipped this observable Get entirely and ignored alternate
+                // constructors returned by an accessor.
+                return Ok(global_property_new_dynamic(
+                    "Map",
+                    lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    new_byte_offset,
+                ));
             }
             if class_name == "Set" && !shadowed_by_user_binding {
                 // new Set() or new Set(iterable)

@@ -8,6 +8,24 @@ use swc_ecma_ast as ast;
 use crate::lower::LoweringContext;
 use crate::lower_types::{extract_ts_type, extract_ts_type_with_ctx, infer_type_from_expr};
 
+fn is_unshadowed_global_map_construction(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::New(new_expr) = expr else {
+        return false;
+    };
+    match new_expr.callee.as_ref() {
+        ast::Expr::Ident(ident) if ident.sym.as_ref() == "Map" => {
+            !ctx.shadows_unqualified_global("Map")
+        }
+        ast::Expr::Member(member)
+            if matches!(member.obj.as_ref(), ast::Expr::Ident(global) if global.sym.as_ref() == "globalThis")
+                && matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "Map") =>
+        {
+            !ctx.shadows_unqualified_global("globalThis")
+        }
+        _ => false,
+    }
+}
+
 /// #7547: the type of a declaration in a **`for` initializer**
 /// (`for (let j = 0; …)`).
 ///
@@ -93,9 +111,11 @@ pub(crate) fn infer_decl_type(
                     return inferred;
                 }
                 // Fall back to tsgo resolved types if available
-                if let Some(resolved) = ctx.resolved_types.as_ref() {
-                    if let Some(resolved_ty) = resolved.get(&(ident.id.span.lo.0)) {
-                        return resolved_ty.clone();
+                if !is_unshadowed_global_map_construction(ctx, init_expr.as_ref()) {
+                    if let Some(resolved) = ctx.resolved_types.as_ref() {
+                        if let Some(resolved_ty) = resolved.get(&(ident.id.span.lo.0)) {
+                            return resolved_ty.clone();
+                        }
                     }
                 }
             }
@@ -147,8 +167,14 @@ pub(crate) fn infer_decl_type(
                         // guard: module-export names that legitimately arrive
                         // through local bindings (`Buffer`, the stream and
                         // event classes) keep their arms.
-                    } else if class_name == "Set" || class_name == "Map" {
-                        // Extract type arguments from new Set<T>() or new Map<K, V>()
+                    } else if class_name == "Map" {
+                        // #11869: the live global Map binding is the
+                        // constructor, so its result has no Map brand proof.
+                        // Keep the conservative Any inferred above instead
+                        // of making calls on an alternate constructor's
+                        // result take Map-only fast paths.
+                    } else if class_name == "Set" {
+                        // Extract type arguments from new Set<T>()
                         let type_args: Vec<Type> = new_expr
                             .type_args
                             .as_ref()

@@ -77,6 +77,8 @@ const FUNCTION_PROTO_CACHE: usize = 2;
 const STRING_PROTO_CACHE: usize = 3;
 const NUMBER_PROTO_CACHE: usize = 4;
 const BOOLEAN_PROTO_CACHE: usize = 5;
+/// Row index of the intrinsic `Map.prototype` cell (#11869).
+const MAP_PROTO_CACHE: usize = 6;
 
 /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
 /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
@@ -152,6 +154,7 @@ static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [
     b"String",
     b"Number",
     b"Boolean",
+    b"Map",
 ];
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).
@@ -414,7 +417,7 @@ pub(crate) fn function_prototype_addr() -> usize {
 /// lazy fallback, exactly as before.
 pub(crate) fn prime_prototype_addr_cache() {
     // Every constructor and its prototype already exists in this realm.
-    // Capture all six intrinsic identities before user code can replace a
+    // Capture all seven intrinsic identities before user code can replace a
     // global binding, including before its first primitive property read.
     for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
         if prototype_addrs()[slot].get() == usize::MAX {
@@ -440,7 +443,7 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// The mutating #6981 cases run on cells they own; nothing hands out a writable
 /// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 6] {
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 7] {
     [
         (
             ARRAY_PROTO_CACHE,
@@ -466,7 +469,16 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 6] 
             BOOLEAN_PROTO_CACHE,
             PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE],
         ),
+        (MAP_PROTO_CACHE, PROTOTYPE_ADDR_BUILTINS[MAP_PROTO_CACHE]),
     ]
+}
+
+/// The intrinsic `%Map.prototype%` of this thread's realm. Primed while
+/// global constructors still name their intrinsics and rewritten by the
+/// shared prototype-address root scanner.
+#[inline]
+pub(crate) fn map_prototype_addr() -> usize {
+    resolve_prototype_addr(MAP_PROTO_CACHE)
 }
 
 /// Number of cells this thread owns — i.e. how many

@@ -302,6 +302,12 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
             object, property, ..
         } => {
             if is_global_object_expr(object.as_ref()) {
+                // Map construction observes the current global value. Unlike
+                // the intrinsic-only builtin routes below, this property can
+                // be an accessor that returns another constructor.
+                if property == "Map" {
+                    return None;
+                }
                 // #10359: `lower_new` resolves the name against the module's
                 // classes, class aliases and imports before (or instead of)
                 // the builtin, but a module binding is never a property of
