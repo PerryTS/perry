@@ -558,6 +558,11 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     {
         return a + b;
     }
+    // Primitive strings need neither ToPrimitive nor SSO materialization.
+    // The shared concat owns rooting only if its allocation can collect.
+    if JSValue::from_bits(abits).is_any_string() && JSValue::from_bits(bbits).is_any_string() {
+        return crate::string::js_string_concat_box(a, b);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);

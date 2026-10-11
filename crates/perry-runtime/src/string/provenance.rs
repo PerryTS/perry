@@ -18,14 +18,17 @@ pub(super) fn raw_string_metadata(data: *const u8, len: u32) -> (u32, u32) {
         return (utf16_count::count(text) as u32, STRING_FLAG_WTF8_VALIDATED);
     }
     match valid_wtf8_metadata(bytes) {
-        Some((units, lone)) => (
+        Some((units, lone, canonical)) => (
             units,
-            STRING_FLAG_WTF8_VALIDATED
-                | if lone {
-                    STRING_FLAG_HAS_LONE_SURROGATES
-                } else {
-                    0
-                },
+            (if canonical {
+                STRING_FLAG_WTF8_VALIDATED
+            } else {
+                0
+            }) | if lone {
+                STRING_FLAG_HAS_LONE_SURROGATES
+            } else {
+                0
+            },
         ),
         None => (compute_utf16_len_wtf8(bytes), 0),
     }
@@ -33,10 +36,12 @@ pub(super) fn raw_string_metadata(data: *const u8, len: u32) -> (u32, u32) {
 
 /// Generalized WTF-8 permits surrogate code points, but still rejects bad
 /// continuations, overlong encodings, truncation, and points above U+10FFFF.
-fn valid_wtf8_metadata(bytes: &[u8]) -> Option<(u32, bool)> {
+fn valid_wtf8_metadata(bytes: &[u8]) -> Option<(u32, bool, bool)> {
     let mut at = 0;
     let mut units = 0;
     let mut lone = false;
+    let mut previous_lead = false;
+    let mut canonical = true;
     while at < bytes.len() {
         let lead = bytes[at];
         let width = match lead {
@@ -60,10 +65,14 @@ fn valid_wtf8_metadata(bytes: &[u8]) -> Option<(u32, bool)> {
             }
             lone |= lead == 0xed && second >= 0xa0;
         }
+        let surrogate = width == 3 && lead == 0xed && point[1] >= 0xa0;
+        let trail = surrogate && point[1] >= 0xb0;
+        canonical &= !(previous_lead && trail);
+        previous_lead = surrogate && !trail;
         units += if width == 4 { 2 } else { 1 };
         at += width;
     }
-    Some((units, lone))
+    Some((units, lone, canonical))
 }
 
 /// Surrogate metadata unions; encoding/JSON proofs intersect. One proven operand cannot

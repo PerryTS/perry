@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::gc::RuntimeHandle;
-use crate::string::{StringHeader, STRING_FLAG_HAS_LONE_SURROGATES};
+use crate::string::{StringHeader, STRING_FLAG_HAS_LONE_SURROGATES, STRING_FLAG_WTF8_VALIDATED};
 use crate::value::{
     JSValue, POINTER_MASK, SHORT_STRING_DATA_MASK, STRING_TAG, TAG_HOLE, TAG_UNDEFINED,
 };
@@ -90,6 +90,7 @@ unsafe fn direct_string(element_bits: u64) -> Option<*const StringHeader> {
 struct WellFormedJoinSize {
     byte_len: u64,
     utf16_len: u64,
+    encoding_proof: u32,
 }
 
 /// Prove the common dense path contains only directly writable, well-formed
@@ -112,6 +113,11 @@ unsafe fn well_formed_join_size(
     let mut size = WellFormedJoinSize {
         byte_len: separator_bytes.saturating_mul(repeats),
         utf16_len: separator_utf16.saturating_mul(repeats),
+        encoding_proof: if separator.is_null() || repeats == 0 {
+            STRING_FLAG_WTF8_VALIDATED
+        } else {
+            unsafe { (*separator).flags & STRING_FLAG_WTF8_VALIDATED }
+        },
     };
     let elements = unsafe { array_elements_ptr(arr) };
 
@@ -134,6 +140,9 @@ unsafe fn well_formed_join_size(
             }
             (len as u64, len as u64)
         } else if let Some(string) = unsafe { direct_string(bits) } {
+            // Copying proven pieces preserves canonical encoding because this
+            // path excludes surrogate halves. Unknown pieces cannot grant proof.
+            size.encoding_proof &= unsafe { (*string).flags };
             if unsafe { (*string).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 return None;
             }
@@ -186,7 +195,7 @@ fn try_join_well_formed(
             size.byte_len as u32,
             size.byte_len as u32,
             0,
-            0,
+            size.encoding_proof,
         );
         for index in 0..length as usize {
             if index > 0 {
@@ -251,6 +260,7 @@ struct DirectJoinBuilder<'scope> {
     surrogate_count: u64,
     surrogate_pair_count: u64,
     pending_high_surrogate: bool,
+    encoding_proof: u32,
 }
 
 impl<'scope> DirectJoinBuilder<'scope> {
@@ -271,6 +281,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
             surrogate_count: 0,
             surrogate_pair_count: 0,
             pending_high_surrogate: false,
+            encoding_proof: STRING_FLAG_WTF8_VALIDATED,
         }
     }
 
@@ -286,11 +297,12 @@ impl<'scope> DirectJoinBuilder<'scope> {
 
     #[inline]
     fn flags(&self) -> u32 {
-        if self.surrogate_count > self.surrogate_pair_count.saturating_mul(2) {
-            STRING_FLAG_HAS_LONE_SURROGATES
-        } else {
-            0
-        }
+        self.encoding_proof
+            | if self.surrogate_count > self.surrogate_pair_count.saturating_mul(2) {
+                STRING_FLAG_HAS_LONE_SURROGATES
+            } else {
+                0
+            }
     }
 
     #[inline]
@@ -371,6 +383,9 @@ impl<'scope> DirectJoinBuilder<'scope> {
         if byte_len == 0 {
             return;
         }
+        // This builder repairs surrogate seams. Intersect the existing proof
+        // for all nonempty pieces; arbitrary raw payloads remain unproven.
+        self.encoding_proof &= flags;
 
         let result = self.result_ptr();
         let output = crate::string::string_data(result) as *mut u8;
@@ -460,7 +475,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
         let len = bytes.len() as u32;
         self.check_utf16_growth(len);
         self.reserve(len);
-        unsafe { self.write_prepared_piece(bytes.as_ptr(), len, len, 0) };
+        unsafe { self.write_prepared_piece(bytes.as_ptr(), len, len, STRING_FLAG_WTF8_VALIDATED) };
     }
 
     fn append_sso(&mut self, bits: u64) {
@@ -473,7 +488,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
         // and flag surrogate halves so write_prepared_piece canonicalizes
         // them against adjacent pieces.
         let (utf16_len, flags) = if payload.iter().all(|&byte| byte < 0x80) {
-            (len, 0)
+            (len, STRING_FLAG_WTF8_VALIDATED)
         } else {
             (
                 crate::string::compute_utf16_len_wtf8(payload),
@@ -516,7 +531,7 @@ impl<'scope> DirectJoinBuilder<'scope> {
         let len = bytes.len() as u32;
         self.check_utf16_growth(len);
         self.reserve(len);
-        unsafe { self.write_prepared_piece(bytes.as_ptr(), len, len, 0) };
+        unsafe { self.write_prepared_piece(bytes.as_ptr(), len, len, STRING_FLAG_WTF8_VALIDATED) };
     }
 
     fn append_separator(&mut self, separator: RuntimeHandle<'scope>) {
@@ -825,6 +840,32 @@ mod tests {
     }
 
     #[test]
+    fn join_preserves_proof_only_when_all_heap_pieces_are_proven() {
+        for unknown in [false, true] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let arr = scope.root_raw_mut_ptr(js_array_alloc(2));
+            let text = crate::string::js_string_from_bytes(b"abcdef".as_ptr(), 6);
+            if unknown {
+                // Even bytes that happen to be ASCII cannot borrow a proof
+                // that the producer did not grant.
+                unsafe { (*text).flags &= !STRING_FLAG_WTF8_VALIDATED };
+            }
+            arr.with_mut_ptr(|p| js_array_push_f64(p, boxed_string(text)));
+            arr.with_mut_ptr(|p| {
+                js_array_push_f64(
+                    p,
+                    f64::from_bits(JSValue::try_short_string(b"xy").unwrap().bits()),
+                )
+            });
+            let result = arr.with_const_ptr(|p| js_array_join(p, ptr::null()));
+            unsafe {
+                assert_eq!(result_bytes(result), b"abcdef,xy");
+                assert_eq!((*result).flags & STRING_FLAG_WTF8_VALIDATED != 0, !unknown);
+            }
+        }
+    }
+
+    #[test]
     fn join_canonicalizes_a_surrogate_pair_across_an_empty_field() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr = js_array_alloc(3);
@@ -844,6 +885,7 @@ mod tests {
             assert_eq!((*result).utf16_len, 2);
             assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
             assert_eq!(result_bytes(result), "😀".as_bytes());
+            assert_ne!((*result).flags & STRING_FLAG_WTF8_VALIDATED, 0);
         }
     }
 

@@ -103,6 +103,8 @@ pub(super) fn lower_char_code_at_inline(
     let sso_check_idx = ctx.new_block("cca.sso_check");
     let sso_idx = ctx.new_block("cca.sso");
     let sso_fast_idx = ctx.new_block("cca.sso_fast");
+    let bounds_idx = ctx.new_block("cca.bounds");
+    let oob_idx = ctx.new_block("cca.oob");
     let slow_idx = ctx.new_block("cca.slow");
     let merge_idx = ctx.new_block("cca.merge");
     let hdr_label = ctx.block_label(hdr_idx);
@@ -110,6 +112,8 @@ pub(super) fn lower_char_code_at_inline(
     let sso_check_label = ctx.block_label(sso_check_idx);
     let sso_label = ctx.block_label(sso_idx);
     let sso_fast_label = ctx.block_label(sso_fast_idx);
+    let bounds_label = ctx.block_label(bounds_idx);
+    let oob_label = ctx.block_label(oob_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&entry_ok, &hdr_label, &sso_check_label);
@@ -136,9 +140,13 @@ pub(super) fn lower_char_code_at_inline(
     let sso_in_bounds = ctx.block().icmp_ult(I64, &sso_idx_i64, &sso_len);
     let high_bits = ctx.block().and(I64, &bits, SHORT_STRING_HIGH_BITS);
     let sso_ascii = ctx.block().icmp_eq(I64, &high_bits, "0");
-    let sso_fast_ok = ctx.block().and(I1, &sso_in_bounds, &sso_ascii);
+    let sso_bounds_idx = ctx.new_block("cca.sso_bounds");
+    let sso_bounds_label = ctx.block_label(sso_bounds_idx);
     ctx.block()
-        .cond_br(&sso_fast_ok, &sso_fast_label, &slow_label);
+        .cond_br(&sso_ascii, &sso_bounds_label, &slow_label);
+    ctx.current_block = sso_bounds_idx;
+    ctx.block()
+        .cond_br(&sso_in_bounds, &sso_fast_label, &oob_label);
 
     // `index < len <= 5`, so the shift is at most 32.
     ctx.current_block = sso_fast_idx;
@@ -166,11 +174,21 @@ pub(super) fn lower_char_code_at_inline(
         &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)],
     );
     let byte_len = ctx.block().load(I32, &blen_ptr);
-    let is_ascii = ctx.block().icmp_eq(I32, &utf16_len, &byte_len);
+    let same_lengths = ctx.block().icmp_eq(I32, &utf16_len, &byte_len);
+    // A malformed raw payload can have equal byte/code-unit lengths. Only
+    // the producer's encoding proof makes that equality an ASCII proof.
+    let flags_ptr = ctx
+        .block()
+        .gep_inbounds(crate::types::I8, &hdr_ptr, &[(I64, "16")]);
+    let flags = ctx.block().load(I32, &flags_ptr);
+    let validated = ctx.block().and(I32, &flags, "4");
+    let validated = ctx.block().icmp_ne(I32, &validated, "0");
+    let is_ascii = ctx.block().and(I1, &same_lengths, &validated);
     let idx_i32 = ctx.block().fptosi(DOUBLE, idx_d, I32);
     let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &utf16_len);
-    let fast_ok = ctx.block().and(I1, &is_ascii, &in_bounds);
-    ctx.block().cond_br(&fast_ok, &fast_label, &slow_label);
+    ctx.block().cond_br(&is_ascii, &bounds_label, &slow_label);
+    ctx.current_block = bounds_idx;
+    ctx.block().cond_br(&in_bounds, &fast_label, &oob_label);
 
     // Fast block: one byte load, zero calls.
     ctx.current_block = fast_idx;
@@ -186,7 +204,12 @@ pub(super) fn lower_char_code_at_inline(
     let fast_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    // Slow block: bit-for-bit the pre-#7592 lowering.
+    // Numeric out-of-bounds indices need no conversion or decoder call.
+    ctx.current_block = oob_idx;
+    let oob_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // Slow block: coercing indices and Unicode keep the existing decoder.
     ctx.current_block = slow_idx;
     let recv_handle = str_operand_handle_tag_dispatched(ctx, object, recv_box);
     let slow_idx_i32 = ctx
@@ -206,6 +229,7 @@ pub(super) fn lower_char_code_at_inline(
         &[
             (&fast_val, &fast_pred),
             (&sso_val, &sso_pred),
+            (&crate::nanbox::double_literal(f64::NAN), &oob_pred),
             (&slow_val, &slow_pred),
         ],
     ))

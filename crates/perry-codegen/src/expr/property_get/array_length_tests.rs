@@ -457,7 +457,7 @@ fn emit_outlined_read(property: &str) -> String {
 }
 
 /// Full-outline modules (#5391 path 3) answer a live plain Array's `.length`
-/// ahead of `js_object_get_field_ic`; everything else still takes the call.
+/// ahead of the receiver-specific string/primitive/object dispatch.
 #[test]
 fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
     let ir = emit_outlined_read("length");
@@ -496,13 +496,33 @@ fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
         def(entry_body, operands[1])
     );
 
-    // The helper is still the one call, and the merge joins the two answers.
-    let (call_label, call_body) = block(&blocks, "pget.outline_call");
+    // Object receivers retain their IC. A flat-string load is dominated by
+    // its exact tag test; other primitive receivers keep property semantics.
+    let (call_label, call_body) = block(&blocks, "pget.outline_length_object");
     let call = call_body
         .iter()
         .find(|l| l.contains("@js_object_get_field_ic("))
-        .expect("the outlined helper is called from `pget.outline_call`");
+        .expect("object length reads must retain the outlined IC");
     let call_value = call.split_once(" = ").map(|(v, _)| v).unwrap();
+    let (_, primitive_body) = block(&blocks, "pget.outline_length_primitive");
+    let (string_guard, on_string, on_other) = cond_br(primitive_body);
+    assert!(def(primitive_body, &string_guard).ends_with(", 32767"));
+    assert_eq!(strip_suffix(&on_string), "pget.outline_length_string");
+    assert_eq!(strip_suffix(&on_other), "pget.outline_length_other");
+    let (_, string_body) = block(&blocks, "pget.outline_length_string");
+    assert!(string_body.iter().any(|l| l.contains("load i32")));
+    assert!(!string_body.iter().any(|l| l.contains("call ")));
+    let (_, other_body) = block(&blocks, "pget.outline_length_other");
+    assert!(other_body
+        .iter()
+        .any(|l| l.contains("@js_value_length_property_f64(")));
+    let (answer_label, answer_body) = block(&blocks, "pget.outline_length_done");
+    let answer = answer_body
+        .iter()
+        .find(|l| l.contains(" = phi double "))
+        .unwrap();
+    assert!(answer.contains(&format!("[ {call_value}, %{call_label} ]")));
+    let answer_value = answer.split_once(" = ").map(|(v, _)| v).unwrap();
     let (load_label, load_body) = block(&blocks, "pget.array_length");
     let len_value = load_body
         .iter()
@@ -517,7 +537,7 @@ fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
         .expect("the outlined read merges its two answers");
     assert!(
         phi.contains(&format!("[ {len_value}, %{load_label} ]"))
-            && phi.contains(&format!("[ {call_value}, %{call_label} ]")),
+            && phi.contains(&format!("[ {answer_value}, %{answer_label} ]")),
         "{phi}"
     );
 }

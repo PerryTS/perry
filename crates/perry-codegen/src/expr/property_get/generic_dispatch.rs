@@ -461,10 +461,56 @@ fn lower_property_site(
         // `.length`: what reaches this call there is mostly a string or
         // another non-Array receiver no MRU word can serve, so the leaf call
         // would be a pure extra call in front of the helper (+0.65 %
-        // instructions on a string-`.length` loop, measured). It keeps the
-        // single call.
+        // instructions on a string-`.length` loop, measured). Flat strings
+        // read their header; other receivers retain a single helper call.
         let val = if property == "length" {
-            ctx.block().call(DOUBLE, "js_object_get_field_ic", &ic_args)
+            // Primitive/string reads cannot use an object slot cache. Retain
+            // the existing IC for object pointers and INT32 class references.
+            let object_idx = ctx.new_block("pget.outline_length_object");
+            let primitive_idx = ctx.new_block("pget.outline_length_primitive");
+            let string_idx = ctx.new_block("pget.outline_length_string");
+            let other_idx = ctx.new_block("pget.outline_length_other");
+            let done_idx = ctx.new_block("pget.outline_length_done");
+            let object_label = ctx.block_label(object_idx);
+            let primitive_label = ctx.block_label(primitive_idx);
+            let string_label = ctx.block_label(string_idx);
+            let other_label = ctx.block_label(other_idx);
+            let done_label = ctx.block_label(done_idx);
+            let tag = ctx.block().lshr(I64, &obj_bits, "48");
+            let object_tags = ctx.block().sub(I64, &tag, "32765");
+            let object_tag = ctx.block().icmp_ult(I64, &object_tags, "2");
+            ctx.block()
+                .cond_br(&object_tag, &object_label, &primitive_label);
+            ctx.current_block = object_idx;
+            let object_value = ctx.block().call(DOUBLE, "js_object_get_field_ic", &ic_args);
+            let object_end = ctx.block().label.clone();
+            ctx.block().br(&done_label);
+            ctx.current_block = primitive_idx;
+            let is_string = ctx.block().icmp_eq(I64, &tag, "32767"); // 0x7FFF
+            ctx.block().cond_br(&is_string, &string_label, &other_label);
+            ctx.current_block = string_idx;
+            // Same guarded leading UTF-16 word as the inline tower below.
+            let string_len = ctx.block().safe_load_i32_from_ptr(&entry_handle);
+            let string_value = ctx.block().uitofp(I32, &string_len, DOUBLE);
+            let string_end = ctx.block().label.clone();
+            ctx.block().br(&done_label);
+            ctx.current_block = other_idx;
+            let primitive_value = ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, &obj_box)],
+            );
+            let primitive_end = ctx.block().label.clone();
+            ctx.block().br(&done_label);
+            ctx.current_block = done_idx;
+            ctx.block().phi(
+                DOUBLE,
+                &[
+                    (&object_value, &object_end),
+                    (&string_value, &string_end),
+                    (&primitive_value, &primitive_end),
+                ],
+            )
         } else {
             crate::expr::ic_fast_split::emit_hole_declining_split(
                 ctx,
@@ -716,16 +762,24 @@ fn lower_property_site(
     }
     // The non-pointer exit: SSO / INT32 class ref / nullish throw / everything
     // else, in that order, behind one call that needs no cache.
-    let nonptr_key_handle = emit_key_handle(ctx, &key_handle_global);
-    let val_nonptr = ctx.block().call(
-        DOUBLE,
-        "js_object_get_field_ic_nonptr",
-        &[
-            (I64, &obj_bits),
-            (I64, &nonptr_key_handle),
-            (I64, &feedback_site_id),
-        ],
-    );
+    let val_nonptr = if inline_string_length {
+        ctx.block().call(
+            DOUBLE,
+            "js_value_length_property_f64",
+            &[(DOUBLE, &obj_box)],
+        )
+    } else {
+        let nonptr_key_handle = emit_key_handle(ctx, &key_handle_global);
+        ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_ic_nonptr",
+            &[
+                (I64, &obj_bits),
+                (I64, &nonptr_key_handle),
+                (I64, &feedback_site_id),
+            ],
+        )
+    };
     let nonptr_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

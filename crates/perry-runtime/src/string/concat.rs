@@ -264,9 +264,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     #[inline]
     fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<ConcatPart> {
         // Ordered finite bounds reject every NaN-boxed non-number too.
-        if (0.0..=999_999_999.0).contains(&bits_value)
-            && (bits_value as u32) as f64 == bits_value
-        {
+        if (0.0..=999_999_999.0).contains(&bits_value) && (bits_value as u32) as f64 == bits_value {
             let len = fast_itoa_u32(bits_value as u32, buf);
             Some(ConcatPart::ascii(buf.as_ptr(), len as u32))
         } else {
@@ -716,7 +714,7 @@ fn concat_byte_parts(mut l: ConcatPart, mut r: ConcatPart) -> f64 {
         }
         // Merge any surrogate pair newly formed across the join boundary
         // (no-op unless the result carries the lone-surrogate flag).
-        let ptr = canonicalize_surrogate_pairs(ptr);
+        let ptr = super::concat_boundary::canonicalize_concat_boundary(ptr, l.len);
         if memoizable && memo_admitted {
             // Publish only after the header and payload are fully written:
             // the memo is a GC root, so a half-built entry would be traced.
@@ -822,7 +820,7 @@ pub extern "C" fn js_string_concat(
             );
         }
 
-        canonicalize_surrogate_pairs(ptr)
+        super::concat_boundary::canonicalize_concat_boundary(ptr, blen_a)
     }
 }
 

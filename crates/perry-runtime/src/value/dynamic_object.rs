@@ -280,6 +280,33 @@ fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheS
         );
     }
 
+    if jsval.is_string() {
+        return crate::string::js_string_length(jsval.as_string_ptr()) as f64;
+    }
+    if jsval.is_number() || jsval.is_bool() {
+        // The live prototype shapes prove absence. A user-installed length
+        // or accessor still takes ordinary Get with the primitive as `this`.
+        let prototype = crate::array::primitive_wrapper_prototype_addr(value);
+        if prototype != 0 {
+            if let Some(value) = unsafe {
+                crate::object::native_get::try_data_lookup_bytes(
+                    JSValue::pointer(prototype as *mut u8),
+                    b"length",
+                )
+            } {
+                return f64::from_bits(value.unwrap_or_else(JSValue::undefined).bits());
+            }
+        }
+        // The dynamic-object dispatcher does not implement primitive
+        // prototype Get. Declined proofs must use the named getter, which
+        // preserves accessors and their original primitive `this` value.
+        let key = crate::string::intern_ascii_literal(b"length");
+        return crate::object::js_object_get_field_by_name_f64(
+            value.to_bits() as usize as *const crate::object::ObjectHeader,
+            key,
+        );
+    }
+
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
         if matches!(
             crate::builtins::boxed_primitive_to_string_tag(value),
@@ -297,7 +324,15 @@ fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheS
         return length;
     }
 
-    unsafe { js_dynamic_object_get_property(value, b"length".as_ptr() as *const i8, 6) }
+    // Preserve primitive prototypes (including BigInt/Symbol) and the same
+    // receiver ABI the property's ordinary IC miss uses. Interning may collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    let key = crate::string::intern_ascii_literal(b"length");
+    crate::object::js_object_get_field_by_name_f64(
+        receiver.get_nanbox_u64() as usize as *const crate::object::ObjectHeader,
+        key,
+    )
 }
 
 /// Unified object property access that handles both JS handle objects and native objects.
@@ -819,6 +854,42 @@ pub unsafe extern "C" fn js_get_property(object: f64, name_ptr: i64, name_len: i
 mod length_handle_band_tests {
     use super::*;
     use crate::value::addr_class;
+
+    #[test]
+    fn primitive_length_absence_uses_live_shapes_and_sees_mutations() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let prototype = scope
+            .root_raw_mut_ptr(crate::array::primitive_wrapper_prototype_addr(42.0)
+                as *mut crate::object::ObjectHeader);
+        let key = scope.root_string_ptr(crate::string::intern_ascii_literal(b"length"));
+        prototype.with_mut_ptr(|p: *mut crate::object::ObjectHeader| unsafe {
+            assert!(
+                matches!(
+                    crate::object::native_get::try_data_lookup_bytes(
+                        JSValue::pointer(p.cast()),
+                        b"length",
+                    ),
+                    Some(None)
+                ),
+                "the absent shape path must actually be live"
+            );
+        });
+        assert_eq!(js_value_length_property_f64(42.0).to_bits(), TAG_UNDEFINED);
+        prototype.with_mut_ptr(|p| {
+            key.with_const_ptr(|k| {
+                crate::object::js_object_set_field_by_name(p, k, 73.0);
+            })
+        });
+        assert_eq!(js_value_length_property_f64(42.0), 73.0);
+        prototype.with_mut_ptr(|p| {
+            key.with_const_ptr(|k| {
+                assert_eq!(crate::object::js_object_delete_field(p, k), 1);
+            })
+        });
+        assert_eq!(js_value_length_property_f64(42.0).to_bits(), TAG_UNDEFINED);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

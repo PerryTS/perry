@@ -100,6 +100,14 @@ fn declared_and_untyped_scanners_share_one_character_emitter() {
         let ir = scanner_ir(ty);
         assert!(ir.contains("cca.hdr") && ir.contains("cca.sso_fast"));
         assert!(
+            ir.contains("cca.oob"),
+            "numeric misses must return NaN directly"
+        );
+        assert!(
+            ir.contains("and i32") && ir.contains(", 4"),
+            "equal header lengths require the producer's encoding proof"
+        );
+        assert!(
             ir.contains("icmp ult i32"),
             "heap read must remain bounds checked"
         );

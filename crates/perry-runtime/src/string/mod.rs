@@ -110,6 +110,7 @@ mod compare;
 #[cfg(test)]
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
+mod concat_boundary;
 pub(crate) mod concat_site;
 mod format;
 mod html;
@@ -303,7 +304,8 @@ pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
 /// byte-level escape scan. String-producing mutations do not propagate this
 /// provenance bit unless they independently prove the resulting payload.
 pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
-/// This payload is valid generalized WTF-8 with an exact `utf16_len`.
+/// This payload is canonical WTF-8 with an exact `utf16_len`: adjacent
+/// lead/trail surrogate sequences have been paired into astral UTF-8.
 /// Constructors establish this proof at the raw-byte boundary or directly
 /// from typed encoders. Copies on code-unit boundaries preserve it; concat
 /// intersects its inputs' proof, and append recomputes it for the new payload.
@@ -318,18 +320,9 @@ pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 /// newly shared proof must certify that flag too before permitting `&str`.
 #[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn mark_wtf8_validated(s: *mut StringHeader) {
-    let lone = (*s).byte_len != (*s).utf16_len
-        && bytes_have_lone_surrogate(slice::from_raw_parts(
-            string_data(s),
-            (*s).byte_len as usize,
-        ));
-    (*s).flags = ((*s).flags & !STRING_FLAG_HAS_LONE_SURROGATES)
-        | STRING_FLAG_WTF8_VALIDATED
-        | if lone {
-            STRING_FLAG_HAS_LONE_SURROGATES
-        } else {
-            0
-        };
+    let (_, flags) = raw_string_metadata(string_data(s), (*s).byte_len);
+    (*s).flags =
+        ((*s).flags & !(STRING_FLAG_HAS_LONE_SURROGATES | STRING_FLAG_WTF8_VALIDATED)) | flags;
 }
 
 /// A static empty string that can be used as a safe fallback for null pointers.
@@ -547,6 +540,7 @@ const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
     assert!(std::mem::size_of::<StringHeader>() == 20);
     assert!(std::mem::offset_of!(StringHeader, utf16_len) == 0);
     assert!(std::mem::offset_of!(StringHeader, byte_len) == 4);
+    assert!(std::mem::offset_of!(StringHeader, flags) == 16);
 };
 const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
 
