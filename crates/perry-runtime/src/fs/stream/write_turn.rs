@@ -123,16 +123,16 @@ fn write_stream_open_step(id: usize) {
     });
     match fs_open_path_str_result(&path, &flags) {
         Ok(fd) => {
-            STREAM_REGISTRY.with(|registry| {
-                if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                    state.fd = Some(fd);
-                    state.opened = true;
-                    if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") {
-                        state.position = end_position_for_fd(fd);
-                    }
-                    update_common_props(state);
+            if let Some(((), props)) = with_stream_props_mut(id, |state| {
+                state.fd = Some(fd);
+                state.opened = true;
+                if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") {
+                    state.position = end_position_for_fd(fd);
                 }
-            });
+                Some(())
+            }) {
+                update_common_props(&props);
+            }
             emit_event1(id, "open", fd as f64);
             emit_event0(id, "ready");
             schedule_next_write_stream_step(id);
@@ -153,11 +153,7 @@ fn write_stream_fail(id: usize, error_value: f64, message: String) {
     let error_handle = scope.root_nanbox_f64(error_value);
     // The value goes into the state first — the registry is a GC root and the
     // callbacks below allocate.
-    let (writes, end_callback) = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (Vec::new(), undefined_value());
-        };
+    let result = with_stream_props_mut(id, |state| {
         state.errored = true;
         state.error_msg = Some(message);
         state.error_value = error_handle.get_nanbox_f64();
@@ -166,14 +162,17 @@ fn write_stream_fail(id: usize, error_value: f64, message: String) {
         state.writable_need_drain = false;
         let writes = std::mem::take(&mut state.pending_writes);
         let end_callback = std::mem::replace(&mut state.end_callback, undefined_value());
-        update_common_props(state);
-        (writes, end_callback)
+        Some((writes, end_callback))
     });
+    let Some(((writes, end_callback), props)) = result else {
+        return;
+    };
     let callbacks: Vec<_> = writes
         .iter()
         .map(|write| scope.root_nanbox_f64(write.callback))
         .collect();
     let end_handle = scope.root_nanbox_f64(end_callback);
+    update_common_props(&props);
     for callback in &callbacks {
         call_stream_callback1(callback.get_nanbox_f64(), error_handle.get_nanbox_f64());
     }
@@ -219,13 +218,9 @@ fn write_stream_drain_step(id: usize) {
             }
         }
     }
-    let (emit_drain, finish) = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (false, false);
-        };
+    let result = with_stream_props_mut(id, |state| {
         if state.destroyed {
-            return (false, false);
+            return None;
         }
         state.writable_length = 0;
         let emit_drain = state.writable_need_drain && !state.ended;
@@ -239,9 +234,12 @@ fn write_stream_drain_step(id: usize) {
                 state.destroyed = true;
             }
         }
-        update_common_props(state);
-        (emit_drain, finish)
+        Some((emit_drain, finish))
     });
+    let Some(((emit_drain, finish), props)) = result else {
+        return;
+    };
+    update_common_props(&props);
     if emit_drain {
         emit_event0(id, "drain");
     }

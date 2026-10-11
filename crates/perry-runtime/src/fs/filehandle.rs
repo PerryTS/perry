@@ -160,16 +160,17 @@ fn filehandle_field_fd(handle: f64) -> Option<i32> {
 }
 
 fn set_filehandle_field_fd(handle: f64, fd: i32) {
-    let ptr = crate::value::js_nanbox_get_pointer(handle);
-    if ptr < 0x1000 {
-        return;
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_f64(handle);
     let key = crate::string::js_string_from_bytes(b"fd".as_ptr(), 2);
-    crate::object::js_object_set_field_by_name(
-        ptr as *mut crate::object::ObjectHeader,
-        key,
-        fd as f64,
-    );
+    let ptr = crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64());
+    if ptr >= 0x1000 {
+        crate::object::js_object_set_field_by_name(
+            ptr as *mut crate::object::ObjectHeader,
+            key,
+            fd as f64,
+        );
+    }
 }
 
 fn filehandle_bool_field(handle: f64, name: &[u8]) -> bool {
@@ -237,10 +238,12 @@ fn live_filehandle_fd_or_ebadf(
 }
 
 pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_f64(handle);
     if fd >= 0 && crate::fs::fd_is_registered(fd) {
         let _ = js_fs_close_sync(fd as f64);
     }
-    set_filehandle_field_fd(handle, -1);
+    set_filehandle_field_fd(handle.get_nanbox_f64(), -1);
 }
 
 fn make_read_lines_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {

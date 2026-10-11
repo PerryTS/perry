@@ -135,6 +135,90 @@ pub(crate) struct Utf8StreamState {
     object_value: f64,
 }
 
+/// The scalar/string projection published on a classic fs stream object.
+/// Keeping this separate from StreamState avoids cloning listeners, buffers,
+/// and other state that must remain owned by the registry.
+#[derive(Clone)]
+struct CommonProps {
+    kind: StreamKind,
+    path: String,
+    fd: Option<i32>,
+    high_water_mark: usize,
+    opened: bool,
+    error_msg_is_none: bool,
+    ended: bool,
+    finished: bool,
+    closed: bool,
+    destroyed: bool,
+    writable_length: usize,
+    writable_need_drain: bool,
+    bytes_read: u64,
+    bytes_written: u64,
+    object_value: f64,
+}
+
+impl From<&StreamState> for CommonProps {
+    fn from(state: &StreamState) -> Self {
+        Self {
+            kind: state.kind,
+            path: state.path.clone(),
+            fd: state.fd,
+            high_water_mark: state.high_water_mark,
+            opened: state.opened,
+            error_msg_is_none: state.error_msg.is_none(),
+            ended: state.ended,
+            finished: state.finished,
+            closed: state.closed,
+            destroyed: state.destroyed,
+            writable_length: state.writable_length,
+            writable_need_drain: state.writable_need_drain,
+            bytes_read: state.bytes_read,
+            bytes_written: state.bytes_written,
+            object_value: state.object_value,
+        }
+    }
+}
+
+/// The small property projection published on fs.Utf8Stream objects.
+#[derive(Clone)]
+pub(super) struct Utf8Props {
+    fd: i32,
+    file: Option<String>,
+    append: bool,
+    content_mode: Utf8ContentMode,
+    fsync: bool,
+    max_length: usize,
+    min_length: usize,
+    mkdir: bool,
+    mode_value: f64,
+    periodic_flush: usize,
+    sync: bool,
+    writing: bool,
+    destroyed: bool,
+    object_value: f64,
+}
+
+impl From<&Utf8StreamState> for Utf8Props {
+    fn from(state: &Utf8StreamState) -> Self {
+        Self {
+            fd: state.fd,
+            file: state.file.clone(),
+            append: state.append,
+            content_mode: state.content_mode,
+            fsync: state.fsync,
+            max_length: state.max_length,
+            min_length: state.min_length,
+            mkdir: state.mkdir,
+            mode_value: state.mode_value,
+            periodic_flush: state.periodic_flush,
+            sync: state.sync,
+            writing: state.writing,
+            destroyed: state.destroyed,
+            object_value: state.object_value,
+        }
+    }
+}
+
 impl StreamState {
     fn new(kind: StreamKind) -> Self {
         Self {
@@ -183,6 +267,38 @@ thread_local! {
     static FS_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
     static UTF8_STREAM_REGISTRY: RefCell<StdHashMap<usize, Utf8StreamState>> = RefCell::new(StdHashMap::new());
     static FS_UTF8_STREAM_NEXT_ID: RefCell<usize> = const { RefCell::new(1) };
+    #[cfg(test)]
+    static STREAM_PROPERTY_HOOK: std::cell::Cell<Option<for<'a> fn(&crate::gc::RuntimeHandle<'a>)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_stream_property_hook_for_tests(
+    hook: Option<for<'a> fn(&crate::gc::RuntimeHandle<'a>)>,
+) {
+    STREAM_PROPERTY_HOOK.with(|slot| slot.set(hook));
+}
+
+#[cfg(test)]
+fn stream_property_allocation_point(receiver: &crate::gc::RuntimeHandle<'_>) {
+    if let Some(hook) = STREAM_PROPERTY_HOOK.with(|slot| slot.replace(None)) {
+        hook(receiver);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_stream_registries_available_for_tests() {
+    STREAM_REGISTRY.with(|registry| {
+        let guard = registry
+            .try_borrow_mut()
+            .expect("classic stream registry still borrowed");
+        drop(guard);
+    });
+    UTF8_STREAM_REGISTRY.with(|registry| {
+        let guard = registry
+            .try_borrow_mut()
+            .expect("UTF8 stream registry still borrowed");
+        drop(guard);
+    });
 }
 
 /// Allocate a new stream id and store the initial state.
@@ -431,15 +547,55 @@ fn current_receiver_value(this: crate::closure::JsThis) -> f64 {
     }
 }
 
-fn set_object_field(obj_value: f64, name: &[u8], value: f64) {
-    if let Some(obj) = object_ptr_from_value(obj_value) {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key, value);
+fn set_object_field_rooted(
+    scope: &crate::gc::RuntimeHandleScope,
+    obj: &crate::gc::RuntimeHandle<'_>,
+    name: &[u8],
+    value: f64,
+) {
+    let value = scope.root_nanbox_f64(value);
+    #[cfg(test)]
+    stream_property_allocation_point(obj);
+    let key_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
+    if let Some(obj) = object_ptr_from_value(obj.get_nanbox_f64()) {
+        let key_ptr = JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr();
+        crate::object::js_object_set_field_by_name(obj, key_ptr, value.get_nanbox_f64());
     }
 }
 
-fn set_object_field_str(obj_value: f64, name: &[u8], value: &str) {
-    set_object_field(obj_value, name, string_value_str(value));
+fn set_object_field_str_rooted(
+    scope: &crate::gc::RuntimeHandleScope,
+    obj: &crate::gc::RuntimeHandle<'_>,
+    name: &[u8],
+    value: &str,
+) {
+    let value = scope.root_nanbox_f64(string_value_str(value));
+    set_object_field_rooted(scope, obj, name, value.get_nanbox_f64());
+}
+
+fn with_stream_props_mut<R>(
+    id: usize,
+    mutate: impl FnOnce(&mut StreamState) -> Option<R>,
+) -> Option<(R, CommonProps)> {
+    STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
+        let result = mutate(state)?;
+        Some((result, CommonProps::from(&*state)))
+    })
+}
+
+fn with_utf8_props_mut<R>(
+    id: usize,
+    mutate: impl FnOnce(&mut Utf8StreamState) -> Option<R>,
+) -> Option<(R, Utf8Props)> {
+    UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
+        let result = mutate(state)?;
+        Some((result, Utf8Props::from(&*state)))
+    })
 }
 
 fn is_callable_value(value: f64) -> bool {
@@ -510,56 +666,80 @@ fn fd_append_mode(fd: i32) -> bool {
     FD_APPEND_MODE.with(|flags| flags.borrow().get(&fd).copied().unwrap_or(false))
 }
 
-fn update_common_props(state: &StreamState) {
-    let obj = state.object_value;
-    let fd_value = state.fd.map(|fd| fd as f64).unwrap_or_else(null_value);
-    set_object_field(obj, b"fd", fd_value);
-    set_object_field_str(obj, b"path", &state.path);
-    set_object_field(
-        obj,
+fn update_common_props(props: &CommonProps) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(props.object_value);
+    let fd_value = props.fd.map(|fd| fd as f64).unwrap_or_else(null_value);
+    set_object_field_rooted(&scope, &obj, b"fd", fd_value);
+    set_object_field_str_rooted(&scope, &obj, b"path", &props.path);
+    set_object_field_rooted(
+        &scope,
+        &obj,
         b"pending",
-        bool_value(!state.opened && state.error_msg.is_none()),
+        bool_value(!props.opened && props.error_msg_is_none),
     );
-    set_object_field(obj, b"closed", bool_value(state.closed));
-    set_object_field(obj, b"destroyed", bool_value(state.destroyed));
-    match state.kind {
+    set_object_field_rooted(&scope, &obj, b"closed", bool_value(props.closed));
+    set_object_field_rooted(&scope, &obj, b"destroyed", bool_value(props.destroyed));
+    match props.kind {
         StreamKind::Read => {
-            set_object_field(
-                obj,
+            set_object_field_rooted(
+                &scope,
+                &obj,
                 b"readable",
-                bool_value(!state.ended && !state.destroyed),
+                bool_value(!props.ended && !props.destroyed),
             );
-            set_object_field(obj, b"readableEnded", bool_value(state.ended));
-            set_object_field(obj, b"readableLength", 0.0);
-            set_object_field(obj, b"readableHighWaterMark", state.high_water_mark as f64);
-            set_object_field(obj, b"bytesRead", state.bytes_read as f64);
+            set_object_field_rooted(&scope, &obj, b"readableEnded", bool_value(props.ended));
+            set_object_field_rooted(&scope, &obj, b"readableLength", 0.0);
+            set_object_field_rooted(
+                &scope,
+                &obj,
+                b"readableHighWaterMark",
+                props.high_water_mark as f64,
+            );
+            set_object_field_rooted(&scope, &obj, b"bytesRead", props.bytes_read as f64);
         }
         StreamKind::Write => {
-            set_object_field(
-                obj,
+            set_object_field_rooted(
+                &scope,
+                &obj,
                 b"writable",
-                bool_value(!state.finished && !state.destroyed),
+                bool_value(!props.finished && !props.destroyed),
             );
-            set_object_field(obj, b"writableEnded", bool_value(state.ended));
-            set_object_field(obj, b"writableFinished", bool_value(state.finished));
-            set_object_field(obj, b"writableLength", state.writable_length as f64);
-            set_object_field(
-                obj,
+            set_object_field_rooted(&scope, &obj, b"writableEnded", bool_value(props.ended));
+            set_object_field_rooted(
+                &scope,
+                &obj,
+                b"writableFinished",
+                bool_value(props.finished),
+            );
+            set_object_field_rooted(
+                &scope,
+                &obj,
+                b"writableLength",
+                props.writable_length as f64,
+            );
+            set_object_field_rooted(
+                &scope,
+                &obj,
                 b"writableNeedDrain",
-                bool_value(state.writable_need_drain),
+                bool_value(props.writable_need_drain),
             );
-            set_object_field(obj, b"writableHighWaterMark", state.high_water_mark as f64);
-            set_object_field(obj, b"bytesWritten", state.bytes_written as f64);
+            set_object_field_rooted(
+                &scope,
+                &obj,
+                b"writableHighWaterMark",
+                props.high_water_mark as f64,
+            );
+            set_object_field_rooted(&scope, &obj, b"bytesWritten", props.bytes_written as f64);
         }
     }
 }
 
 fn refresh_props(id: usize) {
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow().get(&id) {
-            update_common_props(state);
-        }
-    });
+    let props = STREAM_REGISTRY.with(|registry| registry.borrow().get(&id).map(CommonProps::from));
+    if let Some(props) = props {
+        update_common_props(&props);
+    }
 }
 
 fn event_name(value: f64) -> String {
@@ -616,24 +796,36 @@ fn bridge_to_stream_listeners(id: usize, event: &str, args: &[f64], handled_loca
             .map(|state| state.object_value)
             .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
     });
-    if object_value.to_bits() == crate::value::TAG_UNDEFINED {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_value = scope.root_nanbox_f64(object_value);
+    let args = scope.root_nanbox_f64_slice(args);
+    if object_value.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
     if event == "error"
         && handled_locally
-        && !crate::node_stream::has_stream_listeners(object_value, event.as_bytes())
+        && !crate::node_stream::has_stream_listeners(
+            object_value.get_nanbox_f64(),
+            event.as_bytes(),
+        )
     {
         return;
     }
-    crate::node_stream::emit_to_stream_listeners(object_value, event.as_bytes(), args);
+    crate::node_stream::emit_to_stream_listeners(
+        object_value.get_nanbox_f64(),
+        event.as_bytes(),
+        &crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args),
+    );
 }
 
 fn emit_event0(id: usize, event: &str) {
     use crate::closure::js_closure_call0;
     let callbacks = callbacks_for_event(id, event);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callbacks = scope.root_nanbox_f64_slice(&callbacks);
     let handled_locally = !callbacks.is_empty();
-    for cb in callbacks {
-        let cb_ptr = extract_closure_ptr(cb);
+    for cb in &callbacks {
+        let cb_ptr = extract_closure_ptr(cb.get_nanbox_f64());
         if !cb_ptr.is_null() {
             js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
@@ -644,14 +836,21 @@ fn emit_event0(id: usize, event: &str) {
 fn emit_event1(id: usize, event: &str, arg: f64) {
     use crate::closure::js_closure_call1;
     let callbacks = callbacks_for_event(id, event);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callbacks = scope.root_nanbox_f64_slice(&callbacks);
+    let arg = scope.root_nanbox_f64(arg);
     let handled_locally = !callbacks.is_empty();
-    for cb in callbacks {
-        let cb_ptr = extract_closure_ptr(cb);
+    for cb in &callbacks {
+        let cb_ptr = extract_closure_ptr(cb.get_nanbox_f64());
         if !cb_ptr.is_null() {
-            js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
+            js_closure_call1(
+                cb_ptr,
+                crate::closure::plain_call_receiver(),
+                arg.get_nanbox_f64(),
+            );
         }
     }
-    bridge_to_stream_listeners(id, event, &[arg], handled_locally);
+    bridge_to_stream_listeners(id, event, &[arg.get_nanbox_f64()], handled_locally);
 }
 
 fn call_js_method0(receiver: f64, name: &[u8]) -> f64 {
@@ -692,43 +891,47 @@ fn call_js_method2(receiver: f64, name: &[u8], arg0: f64, arg1: f64) -> f64 {
     }
 }
 
-fn close_fd_for_state(state: &mut StreamState) {
+fn close_fd_for_state(state: &mut StreamState) -> Option<(i32, FdOwner)> {
     let Some(fd) = state.fd else {
         state.closed = true;
-        return;
+        return None;
     };
-    if fd_is_registered(fd) {
-        match state.owner {
-            FdOwner::FileHandle(handle) => close_filehandle_fd(fd, handle),
-            FdOwner::Path | FdOwner::External => {
-                let _ = js_fs_close_sync(fd as f64);
-            }
-        }
-    }
     state.fd = None;
     state.closed = true;
+    fd_is_registered(fd).then_some((fd, state.owner))
 }
 
 fn maybe_close_stream(id: usize, force: bool) {
     // `Some(emit_close)` when the stream transitioned to closed in THIS call.
-    let closed_now = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return None;
-        };
+    let closed_now = with_stream_props_mut(id, |state| {
         if state.closed {
             return None;
         }
         if !force && !state.auto_close {
             return None;
         }
-        close_fd_for_state(state);
-        update_common_props(state);
-        Some(state.emit_close)
+        let close = close_fd_for_state(state);
+        Some((state.emit_close, close))
     });
-    let Some(should_emit_close) = closed_now else {
+    let Some(((should_emit_close, close), _props)) = closed_now else {
         return;
     };
+    if let Some((fd, owner)) = close {
+        match owner {
+            FdOwner::FileHandle(handle) => {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let handle = scope.root_nanbox_f64(handle);
+                close_filehandle_fd(fd, handle.get_nanbox_f64());
+            }
+            FdOwner::Path | FdOwner::External => {
+                let _ = js_fs_close_sync(fd as f64);
+            }
+        }
+    }
+    // Closing a FileHandle can allocate while updating its JS `.fd` field.
+    // The state registry is the authoritative rooted copy of this receiver;
+    // refresh after the close so this snapshot cannot publish a stale address.
+    refresh_props(id);
     if should_emit_close {
         emit_event0(id, "close");
     }
@@ -858,9 +1061,7 @@ pub(crate) extern "C" fn write_stream_write_impl(
     // #9493: accept the chunk into the queue and answer the back-pressure
     // question from the queued length, as Node does; the write itself runs on
     // a later turn.
-    let accepted = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let state = registry.get_mut(&id)?;
+    let accepted = with_stream_props_mut(id, |state| {
         if state.kind != StreamKind::Write || state.ended || state.destroyed || state.closed {
             return None;
         }
@@ -873,12 +1074,12 @@ pub(crate) extern "C" fn write_stream_write_impl(
             bytes,
             callback: callback.get_nanbox_f64(),
         });
-        update_common_props(state);
         Some(!over_hwm)
     });
-    let Some(below_hwm) = accepted else {
+    let Some((below_hwm, props)) = accepted else {
         return bool_value(false);
     };
+    update_common_props(&props);
     schedule_write_stream_turn(id);
     bool_value(below_hwm)
 }
@@ -895,13 +1096,9 @@ pub(crate) extern "C" fn write_stream_end_impl(
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback.unwrap_or_else(undefined_value));
     let bytes = chunk_value.map(bytes_from_value);
-    let accepted = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
+    let accepted = with_stream_props_mut(id, |state| {
         if state.kind != StreamKind::Write || state.ended || state.destroyed || state.closed {
-            return false;
+            return None;
         }
         if let Some(bytes) = bytes {
             if !bytes.is_empty() {
@@ -914,10 +1111,10 @@ pub(crate) extern "C" fn write_stream_end_impl(
         }
         state.ended = true;
         state.end_callback = callback.get_nanbox_f64();
-        update_common_props(state);
-        true
+        Some(())
     });
-    if accepted {
+    if let Some(((), props)) = accepted {
+        update_common_props(&props);
         // #9493: `'finish'` and the callback land once the queue has drained,
         // on a later turn — `writableEnded` flips now, `writableFinished`
         // then, as in Node.
@@ -988,15 +1185,15 @@ pub(crate) extern "C" fn write_stream_close_impl(
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);
     }
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.destroyed = true;
-            state.pending_writes.clear();
-            state.writable_length = 0;
-            state.writable_need_drain = false;
-            update_common_props(state);
-        }
-    });
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.destroyed = true;
+        state.pending_writes.clear();
+        state.writable_length = 0;
+        state.writable_need_drain = false;
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
     maybe_close_stream(id, true);
     current_receiver_value(this)
 }
@@ -1053,31 +1250,27 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsRea
     if result.is_empty() {
         return Ok(None);
     }
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.position = state.position.saturating_add(result.len() as u64);
-            state.bytes_read = state.bytes_read.saturating_add(result.len() as u64);
-            update_common_props(state);
-        }
-    });
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.position = state.position.saturating_add(result.len() as u64);
+        state.bytes_read = state.bytes_read.saturating_add(result.len() as u64);
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
     Ok(Some((result, encoding)))
 }
 
 fn finish_read_stream(id: usize) {
-    let should_emit = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
+    let should_emit = with_stream_props_mut(id, |state| {
         if state.ended {
-            return false;
+            return None;
         }
         state.ended = true;
         state.paused = true;
-        update_common_props(state);
-        true
+        Some(true)
     });
-    if should_emit {
+    if let Some((true, props)) = should_emit {
+        update_common_props(&props);
         emit_event0(id, "end");
         maybe_close_stream(id, false);
     }
@@ -1324,13 +1517,13 @@ pub(crate) extern "C" fn read_stream_close_impl(
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);
     }
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.destroyed = true;
-            state.paused = true;
-            update_common_props(state);
-        }
-    });
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.destroyed = true;
+        state.paused = true;
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
     maybe_close_stream(id, true);
     current_receiver_value(this)
 }
@@ -1445,13 +1638,14 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
         ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_WRITE_STREAM, &method_funcs);
-    let value = object_value(obj);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.object_value = value;
-            update_common_props(state);
-        }
-    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(object_value(obj));
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.object_value = value.get_nanbox_f64();
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
     // #9493: a path-owned stream opens on the next turn. Scheduling allocates
     // the turn closure, so the object is re-read from its rooted slot rather
     // than from the local that created it.
@@ -1461,7 +1655,7 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
             .borrow()
             .get(&id)
             .map(|state| state.object_value)
-            .unwrap_or(value)
+            .unwrap_or_else(|| value.get_nanbox_f64())
     })
 }
 
@@ -1511,19 +1705,22 @@ fn create_read_stream_with_state(state: StreamState) -> f64 {
         ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
-    let value = object_value(obj);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.object_value = value;
-            update_common_props(state);
-        }
-    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(object_value(obj));
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.object_value = value.get_nanbox_f64();
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
     // Like Node's, a read stream must be async-iterable: `for await (const chunk of
     // fs.createReadStream(p))`, and the `typeof stream[Symbol.asyncIterator] ===
     // "function"` probe that stream-consuming libraries run before accepting a
     // stream at all. `emit_event0`/`emit_event1` forward to node:stream's listener
     // registry so the iterator this installs actually receives the chunks.
-    crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(value);
+    crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(
+        value.get_nanbox_f64(),
+    );
     let has_open_failure = STREAM_REGISTRY.with(|registry| {
         registry
             .borrow()
@@ -1533,7 +1730,7 @@ fn create_read_stream_with_state(state: StreamState) -> f64 {
     if has_open_failure {
         schedule_read_stream_turn(id);
     }
-    value
+    value.get_nanbox_f64()
 }
 
 fn install_utf8_stream_dispose_symbol(value: f64, method: f64) {
@@ -1601,17 +1798,24 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
         ("@@__perry_wk_dispose", destroy),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_UTF8_STREAM, &method_funcs);
-    let value = object_value(obj);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(object_value(obj));
     let dispose_name = b"@@__perry_wk_dispose";
     let dispose_key = js_string_from_bytes(dispose_name.as_ptr(), dispose_name.len() as u32);
-    let dispose_method = crate::object::js_object_get_field_by_name(obj, dispose_key);
-    install_utf8_stream_dispose_symbol(value, f64::from_bits(dispose_method.bits()));
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.object_value = value;
-            update_utf8_props(state);
-        }
-    });
+    let dispose_key =
+        scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(dispose_key).bits()));
+    let dispose_method = crate::object::js_object_get_field_by_name(
+        object_ptr_from_value(value.get_nanbox_f64()).expect("new UTF8 stream is an object"),
+        JSValue::from_bits(dispose_key.get_nanbox_f64().to_bits()).as_string_ptr(),
+    );
+    let dispose_method = scope.root_nanbox_f64(f64::from_bits(dispose_method.bits()));
+    install_utf8_stream_dispose_symbol(value.get_nanbox_f64(), dispose_method.get_nanbox_f64());
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        state.object_value = value.get_nanbox_f64();
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
     if schedule_open {
         utf8_start_async_open(id);
     }
@@ -1632,7 +1836,7 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
     if !schedule_open {
         utf8_emit_event0(id, "ready");
     }
-    value
+    value.get_nanbox_f64()
 }
 
 #[no_mangle]

@@ -9,6 +9,7 @@ mod callback_scanners;
 mod class_shape_expiry;
 mod explicit_this_forwarding;
 mod fs_options_object;
+mod fs_stream_registry;
 mod function_attrs_old_minor;
 mod generator_attach_prototype;
 mod generator_fixed_state;

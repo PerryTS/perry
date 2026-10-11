@@ -7,6 +7,7 @@
 //! `pub(crate)` and re-exported from `stream.rs`.
 
 use super::*;
+use crate::gc::RuntimeHandleScope;
 
 fn throw_utf8_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
     let message = format!(
@@ -237,12 +238,18 @@ fn utf8_stream_parent_dir(file: &str) -> Option<&Path> {
 }
 
 fn utf8_call_custom_method(custom_fs: f64, method: &[u8], args: &[f64]) -> Option<f64> {
-    if is_undefined_value(custom_fs) || !object_has_callable_field(custom_fs, method) {
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    let args = scope.root_nanbox_f64_slice(args);
+    if is_undefined_value(custom_fs.get_nanbox_f64())
+        || !object_has_callable_field(custom_fs.get_nanbox_f64(), method)
+    {
         return None;
     }
+    let args = RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     Some(unsafe {
         crate::object::js_native_call_method(
-            custom_fs,
+            custom_fs.get_nanbox_f64(),
             method.as_ptr() as *const i8,
             method.len(),
             args.as_ptr(),
@@ -272,16 +279,34 @@ fn utf8_open_path_result(
     mkdir: bool,
     custom_fs: f64,
 ) -> Result<i32, f64> {
+    let scope = RuntimeHandleScope::new();
+    let path_value = scope.root_nanbox_f64(path_value);
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
     if mkdir {
         if let Some(parent) = utf8_stream_parent_dir(file) {
             if let Some(parent_str) = parent.to_str() {
-                let parent_value = string_value_str(parent_str);
+                let parent_value = scope.root_nanbox_f64(string_value_str(parent_str));
                 let options_obj = crate::object::js_object_alloc(0, 1);
-                let key = js_string_from_bytes(b"recursive".as_ptr(), 9);
-                crate::object::js_object_set_field_by_name(options_obj, key, bool_value(true));
-                let options_value = object_value(options_obj);
-                if utf8_call_custom_method(custom_fs, b"mkdirSync", &[parent_value, options_value])
-                    .is_none()
+                let options_obj = scope.root_raw_mut_ptr(options_obj);
+                let key_ptr = js_string_from_bytes(b"recursive".as_ptr(), 9);
+                let key =
+                    scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
+                crate::object::js_object_set_field_by_name(
+                    options_obj.get_raw_mut_ptr(),
+                    JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
+                    bool_value(true),
+                );
+                let options_value =
+                    scope.root_nanbox_f64(object_value(options_obj.get_raw_mut_ptr()));
+                if utf8_call_custom_method(
+                    custom_fs.get_nanbox_f64(),
+                    b"mkdirSync",
+                    &[
+                        parent_value.get_nanbox_f64(),
+                        options_value.get_nanbox_f64(),
+                    ],
+                )
+                .is_none()
                 {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -290,17 +315,22 @@ fn utf8_open_path_result(
     }
 
     let flags = if append { "a" } else { "w" };
-    let flags_value = string_value_str(flags);
+    let flags_value = scope.root_nanbox_f64(string_value_str(flags));
     if let Some(value) = utf8_call_custom_method(
-        custom_fs,
+        custom_fs.get_nanbox_f64(),
         b"openSync",
-        &[path_value, flags_value, undefined_value()],
+        &[
+            path_value.get_nanbox_f64(),
+            flags_value.get_nanbox_f64(),
+            undefined_value(),
+        ],
     ) {
         if let Some(fd) = js_i32_number_value(value) {
             return Ok(fd);
         }
     }
-    match unsafe { fs_open_sync_result(path_value, flags_value) } {
+    match unsafe { fs_open_sync_result(path_value.get_nanbox_f64(), flags_value.get_nanbox_f64()) }
+    {
         Ok(fd) => Ok(fd),
         Err((err, path)) => Err(unsafe { build_fs_error_value(&err, "open", &path) }),
     }
@@ -426,28 +456,31 @@ fn utf8_content_mode_str(mode: Utf8ContentMode) -> &'static str {
     }
 }
 
-pub(crate) fn update_utf8_props(state: &Utf8StreamState) {
-    let obj = state.object_value;
-    set_object_field(obj, b"append", bool_value(state.append));
-    set_object_field_str(
-        obj,
+pub(super) fn update_utf8_props(props: &Utf8Props) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(props.object_value);
+    let mode_value = scope.root_nanbox_f64(props.mode_value);
+    set_object_field_rooted(&scope, &obj, b"append", bool_value(props.append));
+    set_object_field_str_rooted(
+        &scope,
+        &obj,
         b"contentMode",
-        utf8_content_mode_str(state.content_mode),
+        utf8_content_mode_str(props.content_mode),
     );
-    set_object_field(obj, b"fd", state.fd as f64);
-    match state.file.as_deref() {
-        Some(file) => set_object_field_str(obj, b"file", file),
-        None => set_object_field(obj, b"file", null_value()),
+    set_object_field_rooted(&scope, &obj, b"fd", props.fd as f64);
+    match props.file.as_deref() {
+        Some(file) => set_object_field_str_rooted(&scope, &obj, b"file", file),
+        None => set_object_field_rooted(&scope, &obj, b"file", null_value()),
     }
-    set_object_field(obj, b"fsync", bool_value(state.fsync));
-    set_object_field(obj, b"maxLength", state.max_length as f64);
-    set_object_field(obj, b"minLength", state.min_length as f64);
-    set_object_field(obj, b"mkdir", bool_value(state.mkdir));
-    set_object_field(obj, b"mode", state.mode_value);
-    set_object_field(obj, b"periodicFlush", state.periodic_flush as f64);
-    set_object_field(obj, b"sync", bool_value(state.sync));
-    set_object_field(obj, b"writing", bool_value(state.writing));
-    set_object_field(obj, b"destroyed", bool_value(state.destroyed));
+    set_object_field_rooted(&scope, &obj, b"fsync", bool_value(props.fsync));
+    set_object_field_rooted(&scope, &obj, b"maxLength", props.max_length as f64);
+    set_object_field_rooted(&scope, &obj, b"minLength", props.min_length as f64);
+    set_object_field_rooted(&scope, &obj, b"mkdir", bool_value(props.mkdir));
+    set_object_field_rooted(&scope, &obj, b"mode", mode_value.get_nanbox_f64());
+    set_object_field_rooted(&scope, &obj, b"periodicFlush", props.periodic_flush as f64);
+    set_object_field_rooted(&scope, &obj, b"sync", bool_value(props.sync));
+    set_object_field_rooted(&scope, &obj, b"writing", bool_value(props.writing));
+    set_object_field_rooted(&scope, &obj, b"destroyed", bool_value(props.destroyed));
 }
 
 fn utf8_callbacks_for_event(id: usize, event: &str) -> Vec<f64> {
@@ -467,8 +500,10 @@ fn utf8_callbacks_for_event(id: usize, event: &str) -> Vec<f64> {
 
 pub(crate) fn utf8_emit_event0(id: usize, event: &str) {
     let callbacks = utf8_callbacks_for_event(id, event);
-    for cb in callbacks {
-        let cb_ptr = extract_closure_ptr(cb);
+    let scope = RuntimeHandleScope::new();
+    let callbacks = scope.root_nanbox_f64_slice(&callbacks);
+    for cb in &callbacks {
+        let cb_ptr = extract_closure_ptr(cb.get_nanbox_f64());
         if !cb_ptr.is_null() {
             crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
@@ -477,10 +512,17 @@ pub(crate) fn utf8_emit_event0(id: usize, event: &str) {
 
 fn utf8_emit_event1(id: usize, event: &str, arg: f64) {
     let callbacks = utf8_callbacks_for_event(id, event);
-    for cb in callbacks {
-        let cb_ptr = extract_closure_ptr(cb);
+    let scope = RuntimeHandleScope::new();
+    let callbacks = scope.root_nanbox_f64_slice(&callbacks);
+    let arg = scope.root_nanbox_f64(arg);
+    for cb in &callbacks {
+        let cb_ptr = extract_closure_ptr(cb.get_nanbox_f64());
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
+            crate::closure::js_closure_call1(
+                cb_ptr,
+                crate::closure::plain_call_receiver(),
+                arg.get_nanbox_f64(),
+            );
         }
     }
 }
@@ -554,16 +596,31 @@ fn utf8_write_chunk(id: usize, bytes: &[u8]) -> Result<usize, f64> {
     if fd < 0 {
         return Err(crate::fs::validate::build_ebadf_error_value("write"));
     }
-    if !is_undefined_value(custom_fs) && object_has_callable_field(custom_fs, b"writeSync") {
-        let data = utf8_buffered_chunk_value(mode, bytes);
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    let custom_fs_value = custom_fs.get_nanbox_f64();
+    if !is_undefined_value(custom_fs_value)
+        && object_has_callable_field(custom_fs_value, b"writeSync")
+    {
+        let data = scope.root_nanbox_f64(utf8_buffered_chunk_value(mode, bytes));
+        let encoding =
+            (mode == Utf8ContentMode::Utf8).then(|| scope.root_nanbox_f64(string_value(b"utf8")));
         let result = if mode == Utf8ContentMode::Utf8 {
             utf8_call_custom_method(
-                custom_fs,
+                custom_fs.get_nanbox_f64(),
                 b"writeSync",
-                &[fd as f64, data, string_value(b"utf8")],
+                &[
+                    fd as f64,
+                    data.get_nanbox_f64(),
+                    encoding.unwrap().get_nanbox_f64(),
+                ],
             )
         } else {
-            utf8_call_custom_method(custom_fs, b"writeSync", &[fd as f64, data])
+            utf8_call_custom_method(
+                custom_fs.get_nanbox_f64(),
+                b"writeSync",
+                &[fd as f64, data.get_nanbox_f64()],
+            )
         };
         return Ok(result
             .and_then(js_number_value)
@@ -583,8 +640,12 @@ fn utf8_fsync(id: usize) {
     if fd < 0 {
         return;
     }
-    if !is_undefined_value(custom_fs) && object_has_callable_field(custom_fs, b"fsyncSync") {
-        let _ = utf8_call_custom_method(custom_fs, b"fsyncSync", &[fd as f64]);
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    if !is_undefined_value(custom_fs.get_nanbox_f64())
+        && object_has_callable_field(custom_fs.get_nanbox_f64(), b"fsyncSync")
+    {
+        let _ = utf8_call_custom_method(custom_fs.get_nanbox_f64(), b"fsyncSync", &[fd as f64]);
     } else if fd_is_registered(fd) {
         let _ = fsync_sync_inner(fd);
     }
@@ -602,58 +663,56 @@ fn utf8_close_fd(id: usize) {
     if let Some(timer) = timer {
         crate::timer::clearInterval(timer);
     }
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
     if fd >= 0 {
-        if !is_undefined_value(custom_fs) && object_has_callable_field(custom_fs, b"closeSync") {
-            let _ = utf8_call_custom_method(custom_fs, b"closeSync", &[fd as f64]);
+        if !is_undefined_value(custom_fs.get_nanbox_f64())
+            && object_has_callable_field(custom_fs.get_nanbox_f64(), b"closeSync")
+        {
+            let _ = utf8_call_custom_method(custom_fs.get_nanbox_f64(), b"closeSync", &[fd as f64]);
         } else if fd_is_registered(fd) {
             let _ = js_fs_close_sync(fd as f64);
         }
     }
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.closed = true;
-            update_utf8_props(state);
-        }
-    });
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        state.closed = true;
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
 }
 
 fn utf8_drain_buffers(id: usize) -> Result<(), f64> {
     loop {
-        let next = UTF8_STREAM_REGISTRY.with(|registry| {
-            let mut registry = registry.borrow_mut();
-            let Some(state) = registry.get_mut(&id) else {
-                return None;
-            };
+        let next = with_utf8_props_mut(id, |state| {
             if state.destroyed || state.buffers.is_empty() {
                 return None;
             }
             state.writing = true;
-            update_utf8_props(state);
             Some(state.buffers.remove(0))
         });
-        let Some(bytes) = next else {
+        let Some((bytes, props)) = next else {
             break;
         };
+        update_utf8_props(&props);
         let written = utf8_write_chunk(id, &bytes)?;
-        UTF8_STREAM_REGISTRY.with(|registry| {
-            if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                state.len = state.len.saturating_sub(written);
-                update_utf8_props(state);
-            }
-        });
+        if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+            state.len = state.len.saturating_sub(written);
+            Some(())
+        }) {
+            update_utf8_props(&props);
+        }
         utf8_emit_event1(id, "write", written as f64);
     }
-    let should_fsync = UTF8_STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
+    let should_fsync = with_utf8_props_mut(id, |state| {
         state.writing = false;
-        update_utf8_props(state);
-        state.fsync
+        Some(state.fsync)
     });
-    if should_fsync {
-        utf8_fsync(id);
+    if let Some((should_fsync, props)) = should_fsync {
+        update_utf8_props(&props);
+        if should_fsync {
+            utf8_fsync(id);
+        }
     }
     Ok(())
 }
@@ -728,21 +787,21 @@ fn utf8_stream_write_by_id(id: usize, data: f64) -> f64 {
         utf8_emit_event1(id, "drop", data);
         return bool_value(current_len < high_water_mark);
     }
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            if state
-                .buffers
-                .last()
-                .is_none_or(|last| last.len().saturating_add(bytes.len()) > max_write)
-            {
-                state.buffers.push(bytes);
-            } else if let Some(last) = state.buffers.last_mut() {
-                last.extend_from_slice(&bytes);
-            }
-            state.len = new_len;
-            update_utf8_props(state);
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        if state
+            .buffers
+            .last()
+            .is_none_or(|last| last.len().saturating_add(bytes.len()) > max_write)
+        {
+            state.buffers.push(bytes);
+        } else if let Some(last) = state.buffers.last_mut() {
+            last.extend_from_slice(&bytes);
         }
-    });
+        state.len = new_len;
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
     utf8_maybe_drain_after_write(id);
     let len_after = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
@@ -927,13 +986,9 @@ fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
 }
 
 fn utf8_finish_and_close(id: usize, emit_finish: bool) {
-    let (should_emit, sync) = UTF8_STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (false, true);
-        };
+    let result = with_utf8_props_mut(id, |state| {
         if state.destroyed {
-            return (false, state.sync);
+            return None;
         }
         let sync = state.sync;
         state.destroyed = true;
@@ -941,10 +996,10 @@ fn utf8_finish_and_close(id: usize, emit_finish: bool) {
         state.buffers.clear();
         state.len = 0;
         state.writing = false;
-        update_utf8_props(state);
-        (true, sync)
+        Some(sync)
     });
-    if should_emit {
+    if let Some((sync, props)) = result {
+        update_utf8_props(&props);
         utf8_close_fd(id);
         if sync {
             utf8_emit_close_events(id, emit_finish);
@@ -968,12 +1023,12 @@ fn utf8_stream_end_by_id(id: usize) -> f64 {
             "ERR_INVALID_STATE",
         );
     }
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.ending = true;
-            update_utf8_props(state);
-        }
-    });
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        state.ending = true;
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
     if opening {
         return undefined_value();
     }
@@ -1050,21 +1105,27 @@ fn utf8_stream_reopen_by_id(id: usize, file_value: f64) -> f64 {
             "ERR_INVALID_STATE",
         );
     }
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    let file_value = scope.root_nanbox_f64(file_value);
     let Some(mut file) = existing_file else {
         crate::fs::validate::throw_error_with_code(
             "Unable to reopen a file descriptor, you must pass a file to SonicBoom",
             "ERR_OPERATION_FAILED",
         );
     };
-    let new_path_value = if is_undefined_value(file_value) || is_undefined_or_null(file_value) {
+    let new_path_value = if is_undefined_value(file_value.get_nanbox_f64())
+        || is_undefined_or_null(file_value.get_nanbox_f64())
+    {
         string_value_str(&file)
     } else {
-        if !crate::fs::validate::is_path_like(file_value) {
-            validate::throw_invalid_path_arg("file", file_value);
+        if !crate::fs::validate::is_path_like(file_value.get_nanbox_f64()) {
+            validate::throw_invalid_path_arg("file", file_value.get_nanbox_f64());
         }
-        file = unsafe { decode_path_value(file_value).unwrap_or_default() };
-        file_value
+        file = unsafe { decode_path_value(file_value.get_nanbox_f64()).unwrap_or_default() };
+        file_value.get_nanbox_f64()
     };
+    let new_path_value = scope.root_nanbox_f64(new_path_value);
     let old_fd = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
             .borrow()
@@ -1073,29 +1134,35 @@ fn utf8_stream_reopen_by_id(id: usize, file_value: f64) -> f64 {
             .unwrap_or(-1)
     });
     if !sync {
-        UTF8_STREAM_REGISTRY.with(|registry| {
-            if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                state.file = Some(file.clone());
-                state.pending_file = Some(file);
-                state.opening = true;
-                state.writing = true;
-                state.reopen_old_fd = Some(old_fd);
-                state.closed = false;
-                update_utf8_props(state);
-            }
-        });
+        if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+            state.file = Some(file.clone());
+            state.pending_file = Some(file);
+            state.opening = true;
+            state.writing = true;
+            state.reopen_old_fd = Some(old_fd);
+            state.closed = false;
+            Some(())
+        }) {
+            update_utf8_props(&props);
+        }
         utf8_start_async_open(id);
         return undefined_value();
     }
-    let new_fd = utf8_open_path(new_path_value, &file, append, mkdir, custom_fs);
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.fd = new_fd;
-            state.file = Some(file);
-            state.closed = false;
-            update_utf8_props(state);
-        }
-    });
+    let new_fd = utf8_open_path(
+        new_path_value.get_nanbox_f64(),
+        &file,
+        append,
+        mkdir,
+        custom_fs.get_nanbox_f64(),
+    );
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        state.fd = new_fd;
+        state.file = Some(file);
+        state.closed = false;
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
     if old_fd >= 0 && old_fd != new_fd && fd_is_registered(old_fd) {
         let _ = js_fs_close_sync(old_fd as f64);
     }
@@ -1313,23 +1380,29 @@ fn utf8_close_raw_fd(fd: i32, custom_fs: f64) {
     if fd < 0 {
         return;
     }
-    if !is_undefined_value(custom_fs) && object_has_callable_field(custom_fs, b"closeSync") {
-        let _ = utf8_call_custom_method(custom_fs, b"closeSync", &[fd as f64]);
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    if !is_undefined_value(custom_fs.get_nanbox_f64())
+        && object_has_callable_field(custom_fs.get_nanbox_f64(), b"closeSync")
+    {
+        let _ = utf8_call_custom_method(custom_fs.get_nanbox_f64(), b"closeSync", &[fd as f64]);
     } else if fd_is_registered(fd) {
         let _ = js_fs_close_sync(fd as f64);
     }
 }
 
 fn utf8_async_open_error(id: usize, err: f64) {
-    UTF8_STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.opening = false;
-            state.writing = false;
-            state.reopen_old_fd = None;
-            update_utf8_props(state);
-        }
-    });
-    utf8_emit_event1(id, "error", err);
+    let scope = RuntimeHandleScope::new();
+    let err = scope.root_nanbox_f64(err);
+    if let Some(((), props)) = with_utf8_props_mut(id, |state| {
+        state.opening = false;
+        state.writing = false;
+        state.reopen_old_fd = None;
+        Some(())
+    }) {
+        update_utf8_props(&props);
+    }
+    utf8_emit_event1(id, "error", err.get_nanbox_f64());
 }
 
 fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
@@ -1347,41 +1420,44 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
         utf8_async_open_error(id, err);
         return undefined_value();
     };
-    let (destroyed, should_drain, should_end, old_fd, custom_fs) =
-        UTF8_STREAM_REGISTRY.with(|registry| {
-            let mut registry = registry.borrow_mut();
-            let Some(state) = registry.get_mut(&id) else {
-                return (true, false, false, None, undefined_value());
-            };
-            if state.destroyed {
-                return (
-                    true,
-                    false,
-                    false,
-                    state.reopen_old_fd.take(),
-                    state.custom_fs,
-                );
-            }
-            state.fd = fd;
-            state.file = state.pending_file.take();
-            state.opening = false;
-            state.writing = false;
-            state.closed = false;
-            let should_drain = state.len > state.min_length;
-            let should_end = state.ending;
-            let old_fd = state.reopen_old_fd.take();
-            let custom_fs = state.custom_fs;
-            update_utf8_props(state);
-            (false, should_drain, should_end, old_fd, custom_fs)
-        });
+    let result = with_utf8_props_mut(id, |state| {
+        if state.destroyed {
+            return Some((
+                true,
+                false,
+                false,
+                state.reopen_old_fd.take(),
+                state.custom_fs,
+            ));
+        }
+        state.fd = fd;
+        state.file = state.pending_file.take();
+        state.opening = false;
+        state.writing = false;
+        state.closed = false;
+        let should_drain = state.len > state.min_length;
+        let should_end = state.ending;
+        let old_fd = state.reopen_old_fd.take();
+        let custom_fs = state.custom_fs;
+        Some((false, should_drain, should_end, old_fd, custom_fs))
+    });
+    let Some(((destroyed, should_drain, should_end, old_fd, custom_fs), props)) = result else {
+        utf8_close_raw_fd(fd, undefined_value());
+        return undefined_value();
+    };
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    if !destroyed {
+        update_utf8_props(&props);
+    }
     if destroyed {
-        utf8_close_raw_fd(fd, custom_fs);
+        utf8_close_raw_fd(fd, custom_fs.get_nanbox_f64());
         return undefined_value();
     }
     utf8_emit_event0(id, "ready");
     if let Some(old_fd) = old_fd {
         if old_fd != fd {
-            utf8_close_raw_fd(old_fd, custom_fs);
+            utf8_close_raw_fd(old_fd, custom_fs.get_nanbox_f64());
         }
     }
     if should_drain || should_end {
@@ -1419,7 +1495,12 @@ fn utf8_custom_open(id: usize) -> bool {
     }) else {
         return true;
     };
-    if is_undefined_value(custom_fs) || !object_has_callable_field(custom_fs, b"open") {
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    let mode_value = scope.root_nanbox_f64(mode_value);
+    if is_undefined_value(custom_fs.get_nanbox_f64())
+        || !object_has_callable_field(custom_fs.get_nanbox_f64(), b"open")
+    {
         return false;
     }
     let cb = js_closure_alloc(
@@ -1427,13 +1508,18 @@ fn utf8_custom_open(id: usize) -> bool {
         1,
     );
     js_closure_set_capture_ptr(cb, 0, id as i64);
-    let cb_value = crate::value::js_nanbox_pointer(cb as i64);
-    let flags_value = string_value_str(if append { "a" } else { "w" });
-    let path_value = string_value_str(&file);
+    let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
+    let flags_value = scope.root_nanbox_f64(string_value_str(if append { "a" } else { "w" }));
+    let path_value = scope.root_nanbox_f64(string_value_str(&file));
     let _ = utf8_call_custom_method(
-        custom_fs,
+        custom_fs.get_nanbox_f64(),
         b"open",
-        &[path_value, flags_value, mode_value, cb_value],
+        &[
+            path_value.get_nanbox_f64(),
+            flags_value.get_nanbox_f64(),
+            mode_value.get_nanbox_f64(),
+            cb_value.get_nanbox_f64(),
+        ],
     );
     true
 }
@@ -1465,7 +1551,11 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
     }) else {
         return false;
     };
-    if is_undefined_value(custom_fs) || !object_has_callable_field(custom_fs, b"mkdir") {
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    if is_undefined_value(custom_fs.get_nanbox_f64())
+        || !object_has_callable_field(custom_fs.get_nanbox_f64(), b"mkdir")
+    {
         return false;
     }
     let Some(parent) = utf8_stream_parent_dir(&file) else {
@@ -1475,35 +1565,48 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
         return false;
     };
     let options_obj = crate::object::js_object_alloc(0, 1);
-    let key = js_string_from_bytes(b"recursive".as_ptr(), 9);
-    crate::object::js_object_set_field_by_name(options_obj, key, bool_value(true));
-    let options_value = object_value(options_obj);
+    let options_obj = scope.root_raw_mut_ptr(options_obj);
+    let key_ptr = js_string_from_bytes(b"recursive".as_ptr(), 9);
+    let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
+    crate::object::js_object_set_field_by_name(
+        options_obj.get_raw_mut_ptr(),
+        JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
+        bool_value(true),
+    );
+    let options_value = scope.root_nanbox_f64(object_value(options_obj.get_raw_mut_ptr()));
     let cb = js_closure_alloc(
         crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
         1,
     );
     js_closure_set_capture_ptr(cb, 0, id as i64);
-    let cb_value = crate::value::js_nanbox_pointer(cb as i64);
-    let parent_value = string_value_str(parent_str);
+    let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
+    let parent_value = scope.root_nanbox_f64(string_value_str(parent_str));
     let _ = utf8_call_custom_method(
-        custom_fs,
+        custom_fs.get_nanbox_f64(),
         b"mkdir",
-        &[parent_value, options_value, cb_value],
+        &[
+            parent_value.get_nanbox_f64(),
+            options_value.get_nanbox_f64(),
+            cb_value.get_nanbox_f64(),
+        ],
     );
     true
 }
 
 fn utf8_needs_native_mkdir_before_custom_open(id: usize) -> bool {
-    UTF8_STREAM_REGISTRY.with(|registry| {
+    let (mkdir, custom_fs) = UTF8_STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
-            return false;
+            return (false, undefined_value());
         };
-        state.mkdir
-            && !is_undefined_value(state.custom_fs)
-            && object_has_callable_field(state.custom_fs, b"open")
-            && !object_has_callable_field(state.custom_fs, b"mkdir")
-    })
+        (state.mkdir, state.custom_fs)
+    });
+    let scope = RuntimeHandleScope::new();
+    let custom_fs = scope.root_nanbox_f64(custom_fs);
+    mkdir
+        && !is_undefined_value(custom_fs.get_nanbox_f64())
+        && object_has_callable_field(custom_fs.get_nanbox_f64(), b"open")
+        && !object_has_callable_field(custom_fs.get_nanbox_f64(), b"mkdir")
 }
 
 fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
