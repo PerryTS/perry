@@ -1,72 +1,10 @@
-//! String literal pool with module-init hoisting + interning.
-//!
-//! ## Strategy
-//!
-//! Every string literal in the source program is allocated **once** at module
-//! startup, not at each use site. Use sites become a single `load`
-//! instruction. Identical literals share storage via interning, so
-//! `console.log("hi")` written 1000 times produces 1000 loads but only one
-//! `js_string_from_bytes` call at init time.
-//!
-//! ### What gets emitted per literal
-//!
-//! For each unique literal `"<value>"`, we emit two LLVM globals:
-//!
-//! ```llvm
-//! @.str.<idx>.bytes  = private unnamed_addr constant [<len+1> x i8] c"<value>\00"
-//! @.str.<idx>.handle = internal global double 0.0
-//! ```
-//!
-//! Static property/method names used by a `*_by_id` runtime ABI also receive
-//! an immutable `.str.<idx>.dispatch` descriptor. Descriptors are emitted only
-//! for entries that need them, avoiding binary/RSS overhead for ordinary
-//! literals.
-//!
-//! The `bytes` global lives in `.rodata` — it's static, immutable, and never
-//! touched by the GC. The `handle` global is mutable and holds the
-//! NaN-boxed string pointer that the runtime allocates at init time.
-//!
-//! ### Module init function
-//!
-//! The codegen also emits a `void __perry_init_strings()` function that runs
-//! once before user code and:
-//!
-//! 1. Calls `js_string_from_bytes(@.str.<idx>.bytes, <len>)` to allocate a
-//!    `StringHeader` on the GC heap with the literal's bytes copied in.
-//! 2. Calls `js_nanbox_string(handle)` to wrap the raw pointer with the
-//!    `STRING_TAG`.
-//! 3. Stores the NaN-boxed double into `@.str.<idx>.handle`.
-//! 4. Calls `js_gc_register_global_root(&@.str.<idx>.handle)` so the runtime
-//!    treats the global as a permanent root and never collects the string.
-//!
-//! Step 4 is the load-bearing one: without it, the next GC cycle would walk
-//! its `MALLOC_OBJECTS` Vec, find the string unreferenced from the stack,
-//! and free it — leaving every use site loading a dangling pointer.
-//! `js_gc_register_global_root` is defined in
-//! `crates/perry-runtime/src/gc.rs:233` and pushes the address into a
-//! `GLOBAL_ROOTS` Vec that the mark phase scans alongside the stack.
-//!
-//! ### Use site
-//!
-//! `Expr::String(s)` lowers to:
-//!
-//! ```llvm
-//! %r = load double, ptr @.str.<idx>.handle
-//! ```
-//!
-//! That's the entire codegen for a string literal at the use site. One
-//! instruction. No call, no allocation, no GC pressure. The literal cost
-//! is paid exactly once at process startup, no matter how often the literal
-//! appears in hot code.
-//!
-//! ### Why a pool instead of per-use-site allocation
-//!
-//! A naive approach would re-create every string literal at every use
-//! site: stack-allocate the bytes, call `js_string_from_bytes`, NaN-box
-//! the result. That's ~5 IR instructions per use, plus a heap allocation.
-//! For a literal used 1000 times in a loop, that's 1000 allocations and
-//! 1000 short-lived StringHeaders the GC has to sweep.
-//! The pool approach: 1 allocation, 1 root registration, 1000 loads.
+//! String literal pool. Executables emit complete immutable string objects
+//! and NaN-boxed handles in the code image. Short literals coalesce at link
+//! time by their complete byte spelling; use sites remain one handle load.
+//! No allocation, registration or per-literal loop runs at startup. Unloadable
+//! output retains owned materialization so escaping strings survive dlclose.
+//! Static dispatch descriptors point at separate image keys, preserving their
+//! existing interned-key eligibility without using the dynamic weak cache.
 
 use std::collections::HashMap;
 
@@ -113,12 +51,13 @@ pub struct StringEntry {
     pub idx: u32,
     pub value: String,
     pub byte_len: usize,
+    pub(crate) bytes: Vec<u8>,
     /// LLVM IR escaped form, e.g. `c"hello\00"`. Already includes the
     /// trailing null terminator and the surrounding `c"…"`.
     pub escaped_ir: String,
     /// Symbol name of the `.rodata` byte array (`.str.N.bytes`).
     pub bytes_global: String,
-    /// Symbol name of the mutable handle global (`.str.N.handle`).
+    /// Symbol name of the handle global (`.str.N.handle`); constant in executables.
     pub handle_global: String,
     /// Symbol name of the immutable static-dispatch descriptor
     /// (`.str.N.dispatch`). Property/method by-id ABIs use this instead of
@@ -261,6 +200,7 @@ impl StringPool {
             idx,
             value: value.to_string(),
             byte_len,
+            bytes: value.as_bytes().to_vec(),
             escaped_ir,
             bytes_global,
             handle_global,
@@ -303,6 +243,7 @@ impl StringPool {
             idx,
             value: key.clone(),
             byte_len,
+            bytes: bytes.to_vec(),
             escaped_ir,
             bytes_global,
             handle_global,

@@ -107,6 +107,7 @@ mod append;
 mod base64_codec;
 mod char_ops;
 mod compare;
+mod compare_value_eq;
 #[cfg(test)]
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
@@ -185,6 +186,7 @@ pub use compare::{
     js_string_normalize, js_string_search_value_to_string, js_string_starts_with,
     js_string_starts_with_at, js_string_to_well_formed,
 };
+pub use compare_value_eq::js_string_equals_value;
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
 // across object/.
@@ -214,10 +216,9 @@ pub(crate) use format::js_format_f64;
 ///
 /// This routes those literals through the intern table that already exists for
 /// exactly this purpose (`js_string_materialize_to_heap` uses it for computed
-/// property names): content-keyed, per-thread, allocated once, address-stable,
+/// property names): content-keyed, per-thread, reused until the next heap change,
 /// `refcount = 0` and `GC_FLAG_INTERNED` so nothing mutates it in place — and
-/// already covered by the intern-table root scanner, so it adds no new root
-/// surface. A key that is interned also makes the property-read and
+/// weak across heap changes, so it adds no root surface. A key that is interned also makes the property-read and
 /// property-write fast paths eligible, which the freshly minted copy never was.
 ///
 /// Use it only for names the runtime itself spells as a literal. A key built
@@ -243,17 +244,15 @@ pub use html::{
     js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,
     js_string_strike, js_string_sub, js_string_sup,
 };
+pub(crate) use intern::discard_weak_interns;
+pub use intern::js_string_intern;
 pub use intern::js_string_pool_atom;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 pub(crate) use intern::{atom_for_key, atom_lookup};
 #[cfg(test)]
 pub(crate) use intern::{is_atom_for_test, test_evict_interned};
-pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 #[cfg(test)]
-pub(crate) use intern::{
-    test_check_intern_young_logged, test_clear_intern_table, test_init_string_bytes,
-    test_intern_slot_ptr, test_write_intern_slot_without_logging,
-};
+pub(crate) use intern::{test_clear_intern_table, test_init_string_bytes, test_intern_slot_ptr};
 pub use io::{js_string_error, js_string_print, js_string_warn};
 pub(crate) use iter_object::dispatch_string_iterator_method_builtin;
 pub use iter_object::{
@@ -288,14 +287,21 @@ pub use split::{js_string_split_js, js_string_split_n};
 pub(crate) use intern::intern_lookup_bytes;
 
 #[cfg(test)]
-pub(crate) use intern::{
-    test_clear_intern_table_root, test_intern_table_root, test_seed_intern_table_root,
-};
-
-#[cfg(test)]
 pub(crate) use format::{
     test_clear_small_int_cache_root, test_seed_small_int_cache_root, test_small_int_cache_root,
 };
+
+/// Reserved-header spelling for immutable executable strings. Heap strings
+/// use these bits only for survival age and never acquire this marker.
+const STRING_IMAGE_MARKER: u16 = 0x494d;
+
+/// A string image owns its address for the life of the executable. This is
+/// separate from the intern bit, which also controls speculative own reads.
+#[inline]
+pub(crate) unsafe fn is_image_string(s: *const StringHeader) -> bool {
+    let gc = crate::gc::header_from_trusted_user_ptr(s.cast());
+    (*gc)._reserved == STRING_IMAGE_MARKER
+}
 
 /// Flag: string bytes contain WTF-8 lone-surrogate sequences (U+D800..U+DFFF).
 /// Set by js_string_from_wtf8_bytes. Checked by isWellFormed/toWellFormed.
@@ -320,6 +326,14 @@ pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 /// newly shared proof must certify that flag too before permitting `&str`.
 #[cfg(feature = "regex-engine")]
 pub(crate) unsafe fn mark_wtf8_validated(s: *mut StringHeader) {
+    if (*s).flags & STRING_FLAG_WTF8_VALIDATED != 0 {
+        return;
+    }
+    if is_image_string(s) {
+        // A noncanonical generalized-WTF8 literal cannot gain this proof.
+        // Its image header is immutable, including the absence of the bit.
+        return;
+    }
     let (_, flags) = raw_string_metadata(string_data(s), (*s).byte_len);
     (*s).flags =
         ((*s).flags & !(STRING_FLAG_HAS_LONE_SURROGATES | STRING_FLAG_WTF8_VALIDATED)) | flags;
@@ -386,6 +400,7 @@ struct StaticDispatchString {
 
 pub(crate) const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
 const STATIC_DISPATCH_FLAG_WTF8: u32 = 1;
+const STATIC_DISPATCH_FLAG_IMAGE: u32 = 2;
 
 /// Resolve a static property/method id into a byte view.
 ///
@@ -420,7 +435,12 @@ pub fn perry_string_ref_from_dispatch_id(
             return Some(PerryStringRef {
                 ptr: (*descriptor).bytes,
                 len: (*descriptor).byte_len as usize,
-                heap: std::ptr::null(),
+                heap: if (*descriptor).flags & STATIC_DISPATCH_FLAG_IMAGE != 0 {
+                    (*descriptor).bytes.sub(std::mem::size_of::<StringHeader>())
+                        as *const StringHeader
+                } else {
+                    std::ptr::null()
+                },
                 static_id: descriptor as usize,
                 hash: (*descriptor).hash,
                 is_wtf8: (*descriptor).flags & STATIC_DISPATCH_FLAG_WTF8 != 0,
@@ -468,10 +488,9 @@ pub fn perry_string_ref_from_dispatch_id(
     }
 }
 
-/// Return a current-thread heap key for an API that still consumes a
-/// `StringHeader*`. Static AOT descriptors are materialized at most once per
-/// content-hash slot and thread; subsequent accesses are allocation-free, and
-/// the existing intern-table root scanner keeps the pointer GC-safe.
+/// Return the descriptor's image key directly. Older/unloadable descriptors
+/// retain weak, current-thread materialization. Image keys never enter that
+/// cache and keep the same identity across collections and worker threads.
 #[inline]
 pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHeader {
     if !key.heap.is_null() {
@@ -481,13 +500,8 @@ pub(crate) fn materialize_dispatch_key(key: PerryStringRef) -> *const StringHead
     }
 }
 
-/// Intern a short ASCII literal into the current thread's intern table.
-///
-/// Allocates only on the first call per thread per content; afterwards it is a
-/// hash probe returning the canonical pointer, which the intern table's root
-/// scanner already keeps marked and rewritten. Used for runtime-owned constant
-/// property names (`"value"` / `"done"` — see [`crate::iter_result`]) so they
-/// are pointer-identical to the same literals elsewhere in the program.
+/// Weakly intern a runtime-owned short ASCII name in the current thread.
+/// This is runtime data, so its reuse lasts only until the next heap change.
 #[inline]
 pub(crate) fn intern_ascii_literal(bytes: &[u8]) -> *const StringHeader {
     let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());

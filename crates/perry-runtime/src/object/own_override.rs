@@ -314,7 +314,7 @@ unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize)
 /// `js_string_from_bytes` — a fresh string, i.e. an arena allocation and a
 /// copy, on every dispatched call that reached the own-override check, and
 /// again for the `Get` that followed. The interned header is allocated once
-/// per thread per name and is a registered root (`scan_intern_table_roots_mut`).
+/// per thread per name while the weak intern entry remains valid.
 ///
 /// # Safety
 /// `name_ptr`/`name_len` describe live UTF-8 bytes.

@@ -184,7 +184,9 @@ pub extern "C" fn js_string_builder_new(initial_capacity: u32) -> *mut StringHea
 pub extern "C" fn js_string_addref(s: *mut StringHeader) {
     if is_valid_string_ptr(s as *const StringHeader) {
         unsafe {
-            (*s).refcount = 0; // Mark as shared — prevent in-place mutation
+            if (*s).refcount != 0 {
+                (*s).refcount = 0; // Mark as shared — prevent in-place mutation
+            }
         }
     }
 }

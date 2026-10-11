@@ -665,6 +665,11 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
 
     let old_total = unsafe { (*old_header).size as usize };
     let obj_type = unsafe { (*old_header).obj_type };
+    if obj_type == GC_TYPE_STRING {
+        // Weak interns name StringHeaders, never an array/object's storage.
+        // Invalidate before realloc can release or move this string cell.
+        crate::string::discard_weak_interns();
+    }
     let new_total = GC_HEADER_SIZE + new_payload_size;
     let new_size_word = super::gc_header_size_word(new_total);
 

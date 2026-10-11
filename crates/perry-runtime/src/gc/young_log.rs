@@ -150,6 +150,7 @@ impl<K: Copy + Ord> YoungLog<K> {
     /// stale, and a walk that early-returns on that proof would otherwise
     /// carry them forward for ever (the table resets `test_clear_*` use it
     /// for the same reason).
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
         self.spare.clear();

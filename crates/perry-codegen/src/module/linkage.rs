@@ -216,6 +216,16 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     if line.contains(" = external ") {
         return line.to_string();
     }
+    // An explicit weak data definition is intended to coalesce across
+    // modules, not merely across this module's units. Keep that ownership
+    // contract; weak_odr is non-discardable even when the owner's references
+    // optimize away. Image strings carry no function/associative targets.
+    if line
+        .split_once(" = ")
+        .is_some_and(|(_, rhs)| rhs.starts_with("weak_odr constant "))
+    {
+        return line.to_string();
+    }
     match line.split_once(" = ") {
         Some((lhs, rhs)) => format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start())),
         None => line.to_string(),
@@ -241,6 +251,7 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     let (tls, rhs) = split_thread_local(rhs);
     // `unnamed_addr` describes the definition only; the declaration drops it.
     let (_, rhs) = take_keyword(rhs, &["unnamed_addr", "local_unnamed_addr"]);
+    let (initialized, rhs) = take_keyword(rhs, &["externally_initialized"]);
     let (kind, rest) = if let Some(rest) = rhs.strip_prefix("constant ") {
         ("constant", rest)
     } else if let Some(rest) = rhs.strip_prefix("global ") {
@@ -272,7 +283,7 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
         }
         _ => rest.find(char::is_whitespace).unwrap_or(rest.len()),
     };
-    let prefix: String = [preemption, visibility, tls]
+    let prefix: String = [preemption, visibility, tls, initialized]
         .iter()
         .filter(|keyword| !keyword.is_empty())
         .map(|keyword| format!("{keyword} "))

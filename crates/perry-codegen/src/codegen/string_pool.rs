@@ -13,6 +13,8 @@ use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
 mod class_birth_image;
+mod image;
+mod image_uses;
 
 /// Emits a long sequence of INDEPENDENT init operations (string allocation,
 /// closure/class/function registration) into a series of small chunk functions
@@ -111,16 +113,9 @@ impl<'a> InitChunker<'a> {
     }
 }
 
-/// Pool literals at most this long are minted as ATOMS. **Must equal
-/// `INTERN_MAX_BYTE_LEN` in `perry-runtime/src/string/intern.rs`**, the
-/// longest key the runtime interns; `js_string_pool_atom` falls back to a
-/// plain allocation past it, so a mismatch costs only the atom, never
-/// correctness.
-pub(crate) const POOL_ATOM_MAX_BYTE_LEN: usize = 64;
-
-/// Emit the string pool into the module: byte-array constants, handle
-/// globals, and the `__perry_init_strings_<prefix>` function that
-/// allocates + NaN-boxes + GC-roots each handle exactly once at startup.
+/// Emit executable literals and their handles directly into image data.
+/// Unloadable outputs retain the owned-string bootstrap. The init function
+/// also installs the module's function and class metadata.
 ///
 /// The string pool was constructed with a `module_prefix`, so every
 /// `entry.bytes_global` / `entry.handle_global` is already prefixed.
@@ -237,29 +232,39 @@ pub(super) fn emit_string_pool(
     // their static methods' entries run in the function object's home.
     fresh_class_templates: &std::collections::HashSet<String>,
 ) {
+    let image_literals = output_type != "dylib" && output_type != "staticlib";
     for entry in strings.iter() {
+        let image = image_literals.then(|| image::emit(llmod, entry));
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
         llmod.add_named_string_constant(&entry.bytes_global, entry.byte_len + 1, &entry.escaped_ir);
         if entry.dispatch_used {
-            // AOT-stable property/method dispatch id. Unlike `handle_global`,
-            // this descriptor never points into a thread-local GC arena, so
-            // compiled worker closures can resolve static names without
-            // sharing a main-thread StringHeader. Carrying the precomputed
-            // content hash lets the runtime's per-thread materialization cache
-            // avoid re-hashing the name on every property access.
+            let (bytes, flags) = if let Some(key) = &image {
+                (
+                    format!("getelementptr (i8, ptr {key}, i64 20)"),
+                    i32::from(entry.is_wtf8) | 2,
+                )
+            } else {
+                (format!("@{}", entry.bytes_global), i32::from(entry.is_wtf8))
+            };
             llmod.add_raw_global(format!(
-                "@{} = private unnamed_addr constant {{ i32, i32, i64, ptr }} \
-                 {{ i32 {}, i32 {}, i64 {}, ptr @{} }}",
-                entry.dispatch_global,
-                entry.byte_len,
-                i32::from(entry.is_wtf8),
-                crate::nanbox::i64_literal(entry.dispatch_hash),
-                entry.bytes_global
+                "@{} = private unnamed_addr constant {{ i32, i32, i64, ptr }} {{ i32 {}, i32 {}, i64 {}, ptr {} }}",
+                entry.dispatch_global, entry.byte_len, flags,
+                crate::nanbox::i64_literal(entry.dispatch_hash), bytes
             ));
         }
-        // Worker module init and perry/thread's explicit string bootstrap each
-        // populate this slot in the allocating agent's own arena.
-        if agent_strings_tls {
+        if let Some(literal) = &image {
+            let init = format!(
+                "bitcast (i64 add (i64 ptrtoint (ptr {literal} to i64), i64 {}) to double)",
+                crate::nanbox::i64_literal(0x7fff_0000_0000_0000)
+            );
+            llmod.add_raw_global(format!(
+                // Boxed consumers keep one preinitialized read. Raw consumers are
+                // folded to the image pointer below, avoiding tag work without
+                // making typed property reads depend on this opaque load.
+                "@{} = internal externally_initialized constant double {}",
+                entry.handle_global, init
+            ));
+        } else if agent_strings_tls {
             llmod.add_internal_thread_local_global(&entry.handle_global, DOUBLE, "0.0");
         } else {
             llmod.add_internal_global(&entry.handle_global, DOUBLE, "0.0");
@@ -481,77 +486,65 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
-    for entry in strings.iter() {
+    for entry in strings.iter().filter(|_| !image_literals) {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let bytes_ref = format!("@{}", entry.bytes_global);
         let handle_ref = format!("@{}", entry.handle_global);
         let len_str = entry.byte_len.to_string();
-        // A literal short enough to be a property key becomes its text's ATOM
-        // (`js_string_pool_atom`): one string object per key text for the
-        // whole agent, shared by every module's pool, every canonical shape
-        // key list and every intern hit — so a read site's key and the
-        // receiver's shape key compare by pointer (S3b). Longer literals, and
-        // WTF-8 ones (lone surrogates: never an identifier key), keep the
-        // plain allocation.
-        let atomize =
-            !entry.is_wtf8 && entry.byte_len > 0 && entry.byte_len <= POOL_ATOM_MAX_BYTE_LEN;
-        let handle = if atomize {
-            let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
-            blk.call(
-                I64,
-                "js_string_pool_atom",
-                &[(PTR, &bytes_ref), (I32, &len_str), (I64, &hash), (I32, "0")],
-            )
-        } else {
-            let from_bytes_fn = if entry.is_wtf8 {
-                "js_string_from_wtf8_bytes"
-            } else {
-                "js_string_from_bytes"
-            };
-            blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)])
-        };
+        // Every pool literal is an immortal image string. Short UTF-8 keys
+        // share the agent's atom identity; long, empty and WTF-8 literals use
+        // the same image allocation funnel without entering the atom index.
+        let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
+        let wtf8 = if entry.is_wtf8 { "1" } else { "0" };
+        let handle = blk.call(
+            I64,
+            "js_string_pool_atom",
+            &[
+                (PTR, &bytes_ref),
+                (I32, &len_str),
+                (I64, &hash),
+                (I32, wtf8),
+            ],
+        );
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
-        // Plain store, no remembered-set write barrier: the handle slot is
-        // registered as a permanent global root on the very next line (always
-        // scanned by every GC, minor and major), so a remembered-set entry is
-        // redundant. No allocation runs between the store and the registration,
-        // so the fresh string can't be collected in the gap. This is one-time
-        // module init; emitting `js_write_barrier_root_nanbox` here added one
-        // barrier per interned string for no GC benefit (and tripped the
-        // native-region-proof `write_barriers_static` budget — the barriers
-        // landed in `__perry_init_strings_*`, never the hot path).
+        // Immutable image leaf: no global-root registration or barrier.
         blk.store(DOUBLE, &nanboxed, &handle_ref);
-        let addr_i64 = blk.ptrtoint(&handle_ref, I64);
-        blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
 
     let [string_chunks, no_class_chunks] = chunker.finish();
     debug_assert!(no_class_chunks.is_empty());
     let agent_strings_name = format!("__perry_prepare_agent_strings_{}", module_prefix);
-    let ready = format!("__perry_agent_strings_ready_{}", module_prefix);
-    if agent_strings_tls {
-        llmod.add_internal_thread_local_global(&ready, I8, "0");
+    if image_literals {
+        llmod
+            .define_function(&agent_strings_name, VOID, vec![])
+            .create_block("entry")
+            .ret_void();
     } else {
-        llmod.add_internal_global(&ready, I8, "0");
+        let ready = format!("__perry_agent_strings_ready_{}", module_prefix);
+        if agent_strings_tls {
+            llmod.add_internal_thread_local_global(&ready, I8, "0");
+        } else {
+            llmod.add_internal_global(&ready, I8, "0");
+        }
+        let prepare_strings = llmod.define_function(&agent_strings_name, VOID, vec![]);
+        prepare_strings.create_block("entry");
+        prepare_strings.create_block("prepare");
+        prepare_strings.create_block("done");
+        let prepare_label = prepare_strings.block_mut(1).unwrap().label.clone();
+        let done_label = prepare_strings.block_mut(2).unwrap().label.clone();
+        let blk = prepare_strings.block_mut(0).unwrap();
+        let prepared = blk.load(I8, &format!("@{}", ready));
+        let prepared = blk.icmp_ne(I8, &prepared, "0");
+        blk.cond_br(&prepared, &done_label, &prepare_label);
+        let blk = prepare_strings.block_mut(1).unwrap();
+        for name in &string_chunks {
+            blk.call_void(name, &[]);
+        }
+        blk.store(I8, "1", &format!("@{}", ready));
+        blk.br(&done_label);
+        prepare_strings.block_mut(2).unwrap().ret_void();
     }
-    let prepare_strings = llmod.define_function(&agent_strings_name, VOID, vec![]);
-    prepare_strings.create_block("entry");
-    prepare_strings.create_block("prepare");
-    prepare_strings.create_block("done");
-    let prepare_label = prepare_strings.block_mut(1).unwrap().label.clone();
-    let done_label = prepare_strings.block_mut(2).unwrap().label.clone();
-    let blk = prepare_strings.block_mut(0).unwrap();
-    let prepared = blk.load(I8, &format!("@{}", ready));
-    let prepared = blk.icmp_ne(I8, &prepared, "0");
-    blk.cond_br(&prepared, &done_label, &prepare_label);
-    let blk = prepare_strings.block_mut(1).unwrap();
-    for name in &string_chunks {
-        blk.call_void(name, &[]);
-    }
-    blk.store(I8, "1", &format!("@{}", ready));
-    blk.br(&done_label);
-    prepare_strings.block_mut(2).unwrap().ret_void();
 
     let mut chunker = InitChunker::new(
         llmod,
@@ -1971,6 +1964,9 @@ pub(super) fn emit_string_pool(
         blk.call_void(cname, &[]);
     }
     blk.ret_void();
+    if image_literals {
+        image_uses::fold(llmod, strings);
+    }
 }
 
 #[path = "fn_info_facts.rs"]

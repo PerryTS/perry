@@ -309,6 +309,16 @@ fn pin_object_non_young_call_sites_are_never_young() {
              to Eden, pin_object_non_young there would become memory corruption"
         );
 
+        // `string/intern.rs` pins every code-image literal at birth.
+        let bytes = b"image-pin-site";
+        let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+        let image = crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0);
+        let image_header = header_from_user_ptr(image as *const u8) as *mut GcHeader;
+        assert!(!crate::gc::pin::pin_constrains_copying_minor_for_tests(
+            image_header
+        ));
+        assert_ne!((*image_header).gc_flags & GC_FLAG_PINNED, 0);
+
         // `thread.rs` pins MALLOC-resident promise state: no GC_FLAG_ARENA, so
         // the predicate short-circuits before any space classification.
         let mut synthetic = std::ptr::read(ll_header);

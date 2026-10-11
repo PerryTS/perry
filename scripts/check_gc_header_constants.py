@@ -74,6 +74,7 @@ REPO = Path(__file__).resolve().parent.parent
 RUNTIME_SOURCES = [
     "crates/perry-runtime/src/gc/types.rs",
     "crates/perry-runtime/src/gc/layout.rs",
+    "crates/perry-runtime/src/string/mod.rs",
 ]
 
 # Runtime constants this checker resolves. Anything a codegen restatement
@@ -81,6 +82,11 @@ RUNTIME_SOURCES = [
 # instead of leaving a restatement unanchored.
 RUNTIME_WANTED = {
     "GC_TYPE_ARRAY",
+    "GC_TYPE_STRING",
+    "GC_FLAG_PINNED",
+    "GC_FLAG_MARKED",
+    "GC_FLAG_INTERNED",
+    "STRING_IMAGE_MARKER",
     "GC_TYPE_OBJECT",
     "GC_TYPE_MAP",
     "GC_FLAG_ARENA",
@@ -109,6 +115,12 @@ RUNTIME_WANTED = {
 Restatement = tuple[str, str, str, str]  # (file, const, expr, why)
 
 REGISTRY: list[Restatement] = [
+    ("crates/perry-codegen/src/codegen/string_pool/image.rs", "GC_TYPE_STRING",
+     "GC_TYPE_STRING", "image leaf kind"),
+    ("crates/perry-codegen/src/codegen/string_pool/image.rs", "IMAGE_GC_FLAGS",
+     "GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_INTERNED", "immutable image literal/dispatch key shares one identity"),
+    ("crates/perry-codegen/src/codegen/string_pool/image.rs", "STRING_IMAGE_MARKER",
+     "STRING_IMAGE_MARKER", "immutable image header marker"),
     # --- the packed GcHeader word the inline `new` path bakes (#8122) --------
     ("crates/perry-codegen/src/target_layout.rs", "GC_TYPE_OBJECT",
      "GC_TYPE_OBJECT", "byte 0 of the baked header word"),
@@ -116,11 +128,6 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_ARENA", "byte 1 of the baked header word"),
     # `new_alloc.rs` re-derives the same word at the allocation site and
     # cross-checks it against the per-class table; both copies are pinned.
-    ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_TYPE_OBJECT",
-     "GC_TYPE_OBJECT", "allocation-site copy of the baked header word"),
-    ("crates/perry-codegen/src/lower_call/new_alloc.rs", "GC_FLAG_ARENA",
-     "GC_FLAG_ARENA", "allocation-site copy of the baked header word"),
-
     # --- the class-field inline guard ---------------------------------------
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs", "GC_FLAG_FORWARDED_I8",
      "GC_FLAG_FORWARDED - 256", "guard: gc_flags 0x80 spelled as a signed i8"),
@@ -130,8 +137,8 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_TENURED",
      "key-add hit: an old receiver needs the stamp funnel's carrier note"),
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
-     "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES",
-     "key-add hit: per-object flags refused before the stamp"),
+     "OBJ_FLAG_STABLE_TOMBSTONES",
+     "key-add hit: tombstones are refused; descriptors on other keys cannot intercept an absent key"),
     ("crates/perry-codegen/src/expr/class_field_inline_guard.rs",
      "OBJ_FLAG_WRITE_FAST_PATH_BLOCKED",
      "OBJ_FLAG_ARRAY_DESCRIPTORS | OBJ_FLAG_HAS_DESCRIPTORS"
@@ -173,10 +180,6 @@ REGISTRY: list[Restatement] = [
      "imported-object probe: second copy of the same fused mask"),
 
     # --- other single-bit restatements --------------------------------------
-    ("crates/perry-codegen/src/expr/in_presence_ic.rs", "GC_TYPE_OBJECT",
-     "GC_TYPE_OBJECT", "`in` presence IC: obj_type byte"),
-    ("crates/perry-codegen/src/expr/in_presence_ic.rs", "GC_FLAG_FORWARDED",
-     "GC_FLAG_FORWARDED", "`in` presence IC: not-forwarded"),
     ("crates/perry-codegen/src/expr/arrays_finds.rs", "GC_TYPE_MAP",
      "GC_TYPE_MAP", "Map find fast path: obj_type byte"),
     ("crates/perry-codegen/src/expr/arrays_finds.rs", "GC_FLAG_FORWARDED",

@@ -1186,7 +1186,6 @@ pub fn gc_init() {
     #[cfg(feature = "mod-dgram")]
     reg_scanner!(crate::dgram_reactor::scan_roots_mut);
     reg_scanner!(json_parse_mutable_root_scanner);
-    reg_scanner!(intern_table_mutable_root_scanner);
     reg_scanner!(crate::string::scan_utf16_index_roots_mut);
     // #7564: the per-thread `{ value, done }` / `{ done, value }` keys arrays
     // shared by every iterator result the runtime builds. Nothing else in the

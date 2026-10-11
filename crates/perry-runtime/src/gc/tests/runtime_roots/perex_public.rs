@@ -40,7 +40,6 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_current_new_target_root_mut);
     gc_register_mutable_root_scanner(crate::iter_result::scan_iter_result_keys_roots_mut);

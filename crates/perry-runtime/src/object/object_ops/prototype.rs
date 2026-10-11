@@ -22,8 +22,22 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
         Ok(s) => s,
         Err(_) => return f64::from_bits(crate::value::TAG_UNDEFINED),
     };
-    // Force the singleton init the first time so the lookup below has
-    // a populated field bag.
+    // The singleton's shape owns the installed key. Borrow its spelling for
+    // an ordinary data read instead of rematerializing a weak intern after
+    // every collection. This shared lookup consults the live shape; stores,
+    // deletions, accessors and prototype changes keep their ordinary semantics.
+    let global = js_get_global_this();
+    if let Some(value) = unsafe {
+        super::super::native_get::try_data_get_bytes(
+            crate::value::JSValue::from_bits(global.to_bits()),
+            name.as_bytes(),
+        )
+    } {
+        return f64::from_bits(value.bits());
+    }
+
+    // A read that can invoke user code still owns its materialized key and
+    // refreshes the registered global root across the allocating fallback.
     //
     // #7497: `globalThis` must be ROOTED across the key allocation, and its
     // address re-read AFTER it. `js_string_from_bytes` allocates a fresh
@@ -37,7 +51,7 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // so one 50 000-element `Promise.all` performs 50 000 of these lookups and
     // one of them straddles the collection.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let global_handle = scope.root_nanbox_f64(js_get_global_this());
+    let global_handle = scope.root_nanbox_f64(global);
     // #9761: this lookup used to MINT the name string on every call — the
     // comment below still records why that allocation is a collection point.
     // It is now the canonical interned header, so the allocation happens once

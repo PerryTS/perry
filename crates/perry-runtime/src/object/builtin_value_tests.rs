@@ -10,6 +10,44 @@ fn builtin(name: &str) -> f64 {
     js_get_global_this_builtin_value(name.as_ptr(), name.len())
 }
 
+#[test]
+fn builtin_data_reads_use_the_global_shape_after_weak_intern_death() {
+    let _copying = crate::gc::CopyingNurseryTestGuard::new(0);
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut original = builtin("String").to_bits();
+    let mut global_bits = js_get_global_this().to_bits();
+    crate::gc::js_gc_register_global_root(&mut original as *mut u64 as i64);
+    crate::gc::js_gc_register_global_root(&mut global_bits as *mut u64 as i64);
+    crate::string::discard_weak_interns();
+    for _ in 0..100 {
+        assert_eq!(builtin("String").to_bits(), original);
+    }
+    assert!(crate::string::intern_lookup_bytes(b"String").is_none());
+    crate::gc::js_gc_collect();
+    assert_eq!(builtin("String").to_bits(), original);
+
+    let global = scope.root_nanbox_f64(js_get_global_this());
+    let key = scope.root_string_ptr(crate::string::canonical_key(b"String"));
+    key.with_const_ptr(|key| unsafe {
+        js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
+            key,
+            7.0,
+        );
+    });
+    crate::string::discard_weak_interns();
+    assert_eq!(builtin("String"), 7.0);
+    assert!(crate::string::intern_lookup_bytes(b"String").is_none());
+    key.with_const_ptr(|key| unsafe {
+        js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
+            key,
+            f64::from_bits(original),
+        );
+    });
+}
+
 fn static_member(ctor: f64, name: &str) -> f64 {
     unsafe { crate::value::js_dynamic_object_get_property(ctor, name.as_ptr().cast(), name.len()) }
 }

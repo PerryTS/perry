@@ -72,7 +72,6 @@ fn object_create_retains_its_descriptor_bag_across_birth_collection() {
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     let proto = crate::object::js_object_alloc(0, 0);
     unsafe { crate::object::proto_validity::mark_object_as_prototype(proto as usize) };
     js_shadow_slot_set(0, ptr_bits(proto as usize));

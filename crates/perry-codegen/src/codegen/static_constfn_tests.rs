@@ -141,7 +141,14 @@ fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
         ..opts("executable")
     };
     let off = String::from_utf8(crate::compile_module(&m, off).unwrap()).unwrap();
-    let ordinary_atoms = off.matches("call i64 @js_string_pool_atom").count();
+    let image_literals = |text: &str| {
+        text.lines()
+            .filter(|line| {
+                line.starts_with("@perry_image_literal_") && line.contains(" = weak_odr constant ")
+            })
+            .count()
+    };
+    let ordinary_atoms = image_literals(&off);
     assert!(
         ordinary_atoms > 0,
         "the ordinary string pool must be exercised"

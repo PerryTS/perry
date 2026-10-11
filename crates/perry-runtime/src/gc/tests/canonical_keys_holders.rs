@@ -675,16 +675,14 @@ fn atom_bits(atom: usize) -> u64 {
 
 /// S3b: a key text has ONE string object in an agent — its atom — and every
 /// canonical list written after the atom exists holds it. The atom table holds
-/// its strings strongly and REWRITES them on a move (the intern-table root
-/// scanner), so after a moving minor the table, the list and a fresh pool mint
-/// all name the atom at its NEW address, and none names the address it moved
-/// away from. Interning is separate: the intern cache never hands out an atom.
+/// immortal image leaves without scanning or rewriting them. A moving minor
+/// moves the lists while every key and a fresh pool mint keep the same atom
+/// address. Interning is separate: the intern cache never hands out an atom.
 #[test]
-fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
+fn immortal_atom_keeps_its_identity_while_its_key_lists_move() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     let text = b"atom_mv_kind";
@@ -693,8 +691,8 @@ fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
         let atom =
             crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize;
         assert!(
-            crate::arena::pointer_in_nursery(atom),
-            "premise: the atom is young, so a minor can move it"
+            !crate::arena::pointer_in_nursery(atom),
+            "premise: the atom is born outside the nursery"
         );
         // A receiver grows the key through a DIFFERENT string with the text.
         let copy = nursery_key("atom_mv_kind");
@@ -715,7 +713,7 @@ fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
             "premise: the minor copied"
         );
         let moved = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
-        assert_ne!(moved, atom, "premise: the minor moved the atom");
+        assert_eq!(moved, atom, "INVARIANT: image atoms never move");
         let header = crate::value::addr_class::try_read_tracked_gc_header(moved)
             .expect("the moved atom is a tracked cell");
         assert_eq!(
@@ -748,22 +746,21 @@ fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
         assert_eq!(
             crate::array::js_array_get(keys_of(o2), 1).bits(),
             atom_bits(moved),
-            "INVARIANT: a list written after the move holds the moved atom"
+            "INVARIANT: a list written after collection holds the image atom"
         );
     }
 }
 
 /// S3b, a collection DURING the write: the canonical backing allocation that
-/// publishes a list holding an atom is itself the collection point, and moves
-/// the atom. The published list must hold the atom's LIVE address.
+/// publishes a list holding an atom is itself the collection point. The
+/// published list must hold the atom's immutable image address.
 #[test]
-fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
+fn a_list_written_across_collection_holds_the_immortal_atom() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
     let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     canonical_keys::reset_for_test();
     let text = b"atom_during_kind";
     let hash = atom_hash(text);
@@ -771,8 +768,8 @@ fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
         let atom =
             crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize;
         assert!(
-            crate::arena::pointer_in_nursery(atom),
-            "premise: the atom is young"
+            !crate::arena::pointer_in_nursery(atom),
+            "premise: the atom is born outside the nursery"
         );
         let scope = RuntimeHandleScope::new();
         let copy = scope.root_string_ptr(nursery_key("atom_during_kind"));
@@ -787,10 +784,9 @@ fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
             )
         });
         let live = crate::string::atom_lookup(text, hash).expect("the atom survives") as usize;
-        assert_ne!(
+        assert_eq!(
             live, atom,
-            "premise: the backing allocation did not move the atom, so this run proved \
-             nothing. Check the trigger arming."
+            "INVARIANT: collection preserves the image address"
         );
         assert_eq!(
             crate::array::js_array_get(list.as_ptr(), 0).bits(),
@@ -851,14 +847,14 @@ unsafe fn longlived_words_naming_minor_collectible() -> Vec<(usize, usize, usize
 
 /// Building a class keys list must leave no Longlived object naming a young
 /// key. A dynamically-parented class copies its parent's canonical list, whose
-/// keys are the parent's young atoms; the builder used to copy them into a
+/// keys can include dynamic young strings; the builder used to copy them into a
 /// Longlived temporary that canonicalization then dropped. Nothing traced or
 /// rewrote that immortal array, so after a moving minor it named the atoms'
 /// pre-move addresses — on OpenCode's TUI worker the evacuation verifier
 /// reported it at the first minor of every run (`stale forwarded pointer`,
 /// `parent_space=old_page`, `child_type=string`).
 ///
-/// Sabotage: allocate the builder's array with
+/// Negative control: allocate the builder's array with
 /// `js_array_alloc_with_length_longlived` again (object/alloc.rs,
 /// `build_keys_source_array`) and the INVARIANT below fails.
 #[test]
@@ -868,7 +864,6 @@ fn no_longlived_object_names_a_young_key_after_a_class_keys_build() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_object_model_scanners();
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     unsafe {
@@ -880,6 +875,12 @@ fn no_longlived_object_names_a_young_key_after_a_class_keys_build() {
             parent_packed.len() as u32,
             0,
         ));
+        // Literal atoms are image leaves now. Install an equal dynamic key to
+        // retain this witness's young-key premise for the prefix-copy path.
+        let young_key = nursery_key("llk_a");
+        parent.with_mut_ptr(|p: *mut ArrayHeader| {
+            crate::array::js_array_set(p, 0, crate::JSValue::string_ptr(young_key));
+        });
         let first_key =
             parent.with_const_ptr(|p: *const ArrayHeader| crate::array::js_array_get(p, 0).bits());
         let first_key_addr = (first_key & POINTER_MASK) as usize;

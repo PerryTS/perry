@@ -95,7 +95,7 @@ unsafe fn leaf_record_from_owned(bits: u64) -> Option<LeafRecord> {
                 .into_boxed_slice();
             // The binding is immutable and now visible to other agents: an
             // in-place append must never mutate the owner's copy.
-            (*header).refcount = 0;
+            crate::string::js_string_addref(header);
             Some(LeafRecord::String {
                 utf16_len: (*header).utf16_len,
                 flags: (*header).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES,

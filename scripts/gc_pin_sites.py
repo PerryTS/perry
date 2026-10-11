@@ -169,11 +169,37 @@ def statements(text: str):
         yield tail, line - tail.count("\n")
 
 
+def static_data_ranges(code: str) -> list[tuple[int, int]]:
+    """Immutable literal aggregates have an address in the image, not Eden.
+
+    Accept only `static NAME: Type = Type { ... }` without any call/macro in
+    the initializer. `const` is deliberately excluded: it can be copied into
+    an arena object. Runtime initializers and mutable writes still use the
+    ordinary custody rules.
+    """
+    ranges = []
+    for match in re.finditer(r"\bstatic\s+\w+\s*:\s*[\w:]+\s*=\s*[\w:]+\s*\{", code):
+        start = match.end() - 1
+        depth = 1
+        end = start + 1
+        while end < len(code) and depth:
+            depth += (code[end] == "{") - (code[end] == "}")
+            end += 1
+        if depth or re.search(r"[(!]", code[start:end]):
+            continue
+        ranges.append((match.start(), end))
+    return ranges
+
+
 def named_offenders(rel: str, text: str) -> tuple[list[tuple[str, int, str]], int]:
     """Rule A. Returns (offenders, tokens seen)."""
     offenders: list[tuple[str, int, str]] = []
     tokens = 0
     code = strip_strings(strip_comments(text))
+    data_ranges = static_data_ranges(code)
+    for lo, hi in reversed(data_ranges):
+        tokens += code[lo:hi].count(TOKEN)
+        code = code[:lo] + re.sub(r"[^\n]", " ", code[lo:hi]) + code[hi:]
     for chunk, lineno in statements(code):
         if TOKEN not in chunk:
             continue
@@ -295,7 +321,7 @@ def report(root: Path, quiet: bool = False) -> int:
             print(f"  {allow_path} | {needle} | {why}", file=sys.stderr)
     if status == 0 and not quiet:
         print(
-            f"gc_pin_sites: OK — every pin originates in gc::pin_object "
+            f"gc_pin_sites: OK — heap pins originate in gc::pin_object; immutable data pins classified "
             f"({len(sites)} allowlisted exception(s), {tokens} {TOKEN} tokens scanned)."
         )
     return status
@@ -342,6 +368,17 @@ def self_test() -> int:
     benign = _scan_source(BENIGN_PLANT)
     if benign:
         failures.append(f"scanner FALSE-POSITIVED on read/clear/preserve shapes: {benign}")
+    image = """static IMAGE: ImageString = ImageString {
+        gc: GcHeader { obj_type: GC_TYPE_STRING, gc_flags: GC_FLAG_PINNED, _reserved: 0, size: 32 },
+        bytes: [0; 4],
+    };"""
+    if _scan_source(image):
+        failures.append("scanner rejected a literal immutable image header")
+    for heap in [image.replace("static IMAGE", "let image"), image.replace("static IMAGE", "const IMAGE")]:
+        if not _scan_source(heap):
+            failures.append("scanner admitted a header that can be installed in the heap")
+    if not _scan_source(image + " unsafe fn f() { (*h).gc_flags |= GC_FLAG_PINNED; }"):
+        failures.append("image classification hid a subsequent heap write on the same line")
     missing = [
         entry
         for entry in ALLOWLIST

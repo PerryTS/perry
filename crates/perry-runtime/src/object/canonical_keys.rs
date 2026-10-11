@@ -47,7 +47,9 @@
 //! * a backing's prefix is immutable. The only in-place write to a backing
 //!   is this module's tip append, past every published count. Every other
 //!   writer refuses a `GC_FLAG_SHAPE_SHARED` array and copies first, and every
-//!   backing carries that flag from birth;
+//!   backing carries that flag from birth. A confirmed heap-string key may
+//!   substitute its equal immutable image header, just as relocation changes
+//!   its address without changing the prefix's string value;
 //! * the collector sees one ordinary array: its header length covers every
 //!   written slot, it is traced and moved as a whole, and nodes and
 //!   descriptors hold `(backing, count)` — never an interior pointer. A key
@@ -91,6 +93,39 @@ use std::collections::HashMap;
 use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
+
+/// Retain the image spelling of a confirmed equal key in its existing owner.
+/// This changes only a string's representation, never its value, position,
+/// attributes or layout. Heap-to-heap substitution preserves pointer masks.
+/// No registry or additional site state is needed; later reads compare words.
+///
+/// # Safety
+/// `keys[index]` and `key` are live, equal strings in a canonical backing.
+pub(crate) unsafe fn adopt_image_key(
+    keys: *mut ArrayHeader,
+    index: usize,
+    key: *const StringHeader,
+) {
+    if !crate::string::is_image_string(key) {
+        return;
+    }
+    let (slots, len) = crate::object::keys_array_dense_slots_resolved(keys);
+    debug_assert!(index < len);
+    let slot = slots.add(index);
+    let previous = JSValue::from_bits((*slot).to_bits());
+    if !previous.is_string() || previous.is_short_string() {
+        return;
+    }
+    if crate::string::is_image_string(previous.as_string_ptr()) {
+        return;
+    }
+    crate::gc::runtime_store_jsvalue_slot(
+        keys as usize,
+        slot as usize,
+        index,
+        JSValue::string_ptr(key as *mut StringHeader).bits(),
+    );
+}
 
 /// A canonical key list this table owns: a backing array and the list's own
 /// key count, a prefix of that backing.
@@ -676,12 +711,7 @@ impl Appended {
     /// # Safety
     /// The operand is live.
     unsafe fn edge_hash(self, entry: u8) -> u64 {
-        let h = self.slot_hash();
-        if entry == 0 {
-            h
-        } else {
-            (h ^ u64::from(entry).wrapping_mul(0x9E37_79B9_7F4A_7C15)).rotate_left(29)
-        }
+        edge_hash_with_entry(self.slot_hash(), entry)
     }
 
     /// # Safety
@@ -805,6 +835,15 @@ impl Appended {
     }
 }
 
+#[inline]
+fn edge_hash_with_entry(hash: u64, entry: u8) -> u64 {
+    if entry == 0 {
+        hash
+    } else {
+        (hash ^ u64::from(entry).wrapping_mul(0x9E37_79B9_7F4A_7C15)).rotate_left(29)
+    }
+}
+
 /// The node id of a canonical handle, or `None` when a death prune dropped it.
 fn node_of(t: &CanonicalTable, keys: CanonicalKeys) -> Option<u32> {
     if keys.is_empty() {
@@ -826,6 +865,23 @@ unsafe fn probe_node(
     entry: u8,
     h: u64,
 ) -> Option<u32> {
+    probe_matching_node(t, pnode, parent_len, entry, h, |stored| {
+        appended.matches(stored)
+    })
+}
+
+/// The existing owner validates an edge; probing never needs a newly interned
+/// representation of the incoming bytes. Specialization keeps the ordinary
+/// key probe unchanged and removes weak-cache custody from borrowed birth keys.
+#[inline]
+unsafe fn probe_matching_node(
+    t: &CanonicalTable,
+    pnode: u32,
+    parent_len: u32,
+    entry: u8,
+    h: u64,
+    matches: impl Fn(JSValue) -> bool,
+) -> Option<u32> {
     let mut cur = *t.edges.get(&(pnode, h))?;
     while cur != NO_NODE {
         let node = &t.nodes[cur as usize];
@@ -841,7 +897,7 @@ unsafe fn probe_node(
                     let stored = JSValue::from_bits((*slots.add(parent_len as usize)).to_bits());
                     // The attribute entry is half of the edge: the same key
                     // with other attributes is a different list.
-                    if appended.matches(stored)
+                    if matches(stored)
                         && crate::object::key_attrs::keys_entry(arr, parent_len) == entry
                     {
                         return Some(cur);
@@ -892,9 +948,13 @@ pub(crate) unsafe fn probe_born_layout(
     with_table_or(None, |t| {
         let mut parent = ROOT_NODE;
         for (i, (key, _)) in entries.iter().enumerate() {
-            let slot = Appended::Key(crate::string::intern_lookup_bytes(key.as_bytes())?);
+            let bytes = key.as_bytes();
             let entry = attrs.get(i).copied().unwrap_or(0);
-            parent = probe_node(t, parent, i as u32, slot, entry, slot.edge_hash(entry))?;
+            let h = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+            let h = edge_hash_with_entry(h, entry);
+            parent = probe_matching_node(t, parent, i as u32, entry, h, |stored| {
+                crate::string::js_string_key_matches_bytes(stored, bytes)
+            })?;
         }
         let node = &t.nodes[parent as usize];
         let hit = node

@@ -1,5 +1,8 @@
-//! Property-name string interning: hash table, FFI entry point, GC root
-//! scanners, and concat-time helpers used from `concat.rs`.
+//! Executable literals/dispatch keys are emitted image data, outside these
+//! tables. The remaining atom index serves runtime-created static key lists
+//! and unloadable output; its pinned Longlived leaves have agent lifetime.
+//! Dynamic reuse is weak and discarded before collections or string reallocations. Neither
+//! index needs a scanner or young-entry log.
 
 use super::*;
 
@@ -14,6 +17,8 @@ pub(crate) struct InternEntry {
 // SAFETY: integer fields only; `string_ptr == 0` is the empty slot (#11507).
 unsafe impl crate::zeroed_cache::ZeroEmpty for InternEntry {}
 
+// Static dispatch keys now live in their image descriptors. The remaining
+// table serves only short dynamic strings; collisions still compare bytes.
 pub(crate) const INTERN_TABLE_SIZE: usize = 8192;
 pub(crate) const INTERN_TABLE_MASK: usize = INTERN_TABLE_SIZE - 1;
 
@@ -32,49 +37,18 @@ crate::perry_thread_local! {
     // arm64_32 fix: HEAP-allocate this table instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.
-    pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<Box<[InternEntry]>> =
+    static INTERN_TABLE: std::cell::UnsafeCell<Box<[InternEntry]>> =
         std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(INTERN_TABLE_SIZE));
 }
 
-/// Property-key ATOMS: exactly one string object per key text among the
-/// program's pooled literals.
+/// Residual canonical index for runtime-created static keys and unloadable
+/// output. Executable literals are linker-coalesced image objects and do not
+/// enter this index. Runtime atoms are pinned Longlived leaves, bounded by
+/// static key vocabulary rather than runtime data.
 ///
-/// The direct-mapped table above is a CACHE — a collision evicts — so two
-/// strings with one text can both be "interned" at different moments, and a
-/// key compare can never conclude anything from pointer equality alone. That
-/// is why every runtime key match, and the megamorphic read's confirm against
-/// the receiver's key list, paid a byte compare: a canonical key list held the
-/// string its first grower happened to pass, and a read site holds its
-/// module's pooled literal, and the two were different objects with the same
-/// bytes.
-///
-/// An atom is the one string for its text in this agent, for the agent's
-/// lifetime. Atoms are minted only from the compiled program's string pools
-/// (`js_string_pool_atom`, at module init), so the table is bounded by the
-/// program TEXT, never by runtime data, and it can hold its strings strongly
-/// without a death prune: every atom is also the value of a registered pool
-/// handle, so the table keeps nothing alive that was not already live. The
-/// collector rewrites the entries on move through the intern-table root
-/// scanner (`scan_intern_table_roots_mut`), exactly like the cache's.
-///
-/// One funnel consults it: canonical key lists when they write a key
-/// (`canonical_keys::Appended::atomized`), so a read site's pooled key and the
-/// receiver's shape key are one pointer.
-///
-/// An atom is NOT an interned string. It is minted by a plain allocation and
-/// never carries `GC_FLAG_INTERNED`, and the intern cache neither adopts nor
-/// hands out atoms. `GC_FLAG_INTERNED` is an ELIGIBILITY bit: the own-property
-/// read lane, the set fast paths, the chain store and the proxy put paths
-/// admit only interned keys. Minting atoms as interned strings silently widened
-/// every one of those lanes to every pool-literal key, and on Zod the widened
-/// read lane MISSES (the key is inherited, not own) at ~330 instructions each:
-/// +0.3% instructions, measured, with the atom table itself inert. Identity is
-/// the atom's job; eligibility stays exactly what it was.
-///
-/// The table never decides an answer. A pointer match proves equal text; a
-/// pointer MISmatch proves nothing (a list written before its atom existed
-/// holds another string), so every consumer still falls back to bytes on a
-/// mismatch.
+/// Image literals are immutable interned keys at birth. Runtime atoms retain
+/// the existing learned eligibility, independently of their pinned lifetime.
+/// Pointer mismatch always falls back to comparing bytes.
 pub(crate) struct AtomTable {
     /// Open addressing, linear probe, power-of-two capacity; `string_ptr == 0`
     /// is an empty slot. Entries are never removed.
@@ -93,7 +67,7 @@ impl AtomTable {
     /// The atom for `bytes` (whose FNV-1a hash is `hash`), if any.
     ///
     /// # Safety
-    /// Every tabled pointer is a live string (the collector keeps them so).
+    /// Every tabled pointer is an immortal, non-moving string for this agent.
     unsafe fn lookup(&self, bytes: &[u8], hash: u64) -> Option<*const StringHeader> {
         self.lookup_from(0, bytes, hash)
     }
@@ -139,7 +113,6 @@ impl AtomTable {
     /// its text. Rust-heap only: never allocates on the GC heap.
     fn insert(&mut self, hash: u64, atom: *const StringHeader) {
         if (self.len + 1) * 4 > self.slots.len() * 3 {
-            let _ = ATOM_YOUNG.try_with(|log| log.borrow_mut().clear());
             let cap = (self.slots.len() * 2).max(256);
             let old = std::mem::replace(
                 &mut self.slots,
@@ -168,85 +141,8 @@ impl AtomTable {
         while self.slots[i].string_ptr != 0 {
             i = (i + 1) & mask;
         }
-        // Rule 1 of `gc/young_log.rs`: log the slot BEFORE it names the
-        // string. A rehash re-places every entry, so it re-logs from scratch.
-        arm_atom_young(i, entry.string_ptr);
         self.slots[i] = entry;
     }
-}
-
-crate::perry_thread_local! {
-    /// Atom-table slots that may hold a string a minor can act on. The atoms
-    /// are strong roots, but they are minted at module init (young) and
-    /// promoted soon after; a minor-scoped pass visits only these slots
-    /// instead of the whole table (`gc/young_log.rs`).
-    static ATOM_YOUNG: std::cell::RefCell<crate::gc::young_log::YoungLog<u32>> =
-        const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
-}
-
-const ATOM_YOUNG_LOG_NAME: &str = "string.atom_table";
-
-#[inline]
-fn arm_atom_young(slot: usize, string_ptr: usize) {
-    if crate::gc::young_log::addr_is_minor_relevant(string_ptr) {
-        let _ = ATOM_YOUNG.try_with(|log| log.borrow_mut().note(slot as u32));
-    }
-}
-
-/// The atoms are strong roots, rewritten on move (a key's hash is its
-/// content's, so a move never rehashes). Minor-scoped: only the logged slots;
-/// full: every slot, rebuilding the log.
-fn scan_atom_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let young = visitor.young_scope();
-    let _ = ATOMS.try_with(|t| unsafe {
-        let table = &mut *t.get();
-        let table_len = table.slots.len() as u64;
-        #[cfg(any(debug_assertions, test))]
-        if young {
-            let relevant: Vec<u32> = (0..table.slots.len())
-                .filter(|&i| {
-                    crate::gc::young_log::addr_is_minor_relevant(table.slots[i].string_ptr)
-                })
-                .map(|i| i as u32)
-                .collect();
-            ATOM_YOUNG.with(|log| {
-                log.borrow()
-                    .debug_assert_logged(ATOM_YOUNG_LOG_NAME, &relevant)
-            });
-        }
-        let mut kept = ATOM_YOUNG.with(|log| log.borrow_mut().take_spare());
-        let batch: Vec<u32> = if young {
-            ATOM_YOUNG.with(|log| log.borrow_mut().take_sorted())
-        } else {
-            let _ = ATOM_YOUNG.with(|log| log.borrow_mut().take_sorted());
-            (0..table.slots.len() as u32).collect()
-        };
-        let visited = batch.len() as u64;
-        for &slot in &batch {
-            let Some(entry) = table.slots.get_mut(slot as usize) else {
-                continue;
-            };
-            if entry.string_ptr == 0 {
-                continue;
-            }
-            visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
-            if crate::gc::young_log::addr_is_minor_relevant(entry.string_ptr) {
-                kept.push(slot);
-            }
-        }
-        let kept_len = kept.len() as u64;
-        ATOM_YOUNG.with(|log| log.borrow_mut().extend(kept));
-        crate::gc::young_log::note_walk(
-            ATOM_YOUNG_LOG_NAME,
-            crate::gc::young_log::YoungLogWalk {
-                partial: young,
-                logged: visited,
-                visited,
-                kept: kept_len,
-                table_len,
-            },
-        );
-    });
 }
 
 crate::perry_thread_local! {
@@ -278,6 +174,9 @@ pub(crate) unsafe fn atom_for_key(
     if key.is_null() || (*key).byte_len > INTERN_MAX_BYTE_LEN {
         return None;
     }
+    if is_image_string(key) {
+        return Some(key);
+    }
     let bytes = std::slice::from_raw_parts(string_data(key), (*key).byte_len as usize);
     ATOMS
         .try_with(|t| (*t.get()).lookup_from(key as usize, bytes, hash))
@@ -292,10 +191,10 @@ pub(crate) unsafe fn atom_for_key(
 /// precomputed FNV-1a hash of the bytes — the same function as every other
 /// key hash here.
 ///
-/// A plain allocation, exactly what the pool minted before atoms existed: the
-/// atom is not interned and does not adopt the intern cache's string (see
+/// An image allocation: the atom is not interned and does not adopt the
+/// weak intern cache's string (see
 /// `AtomTable`: identity, never eligibility). Longer literals are not keys
-/// worth an atom and take the plain allocation without a table entry.
+/// worth an atom entry use image space without a table entry.
 #[no_mangle]
 pub extern "C" fn js_string_pool_atom(
     bytes: *const u8,
@@ -303,12 +202,8 @@ pub extern "C" fn js_string_pool_atom(
     hash: u64,
     is_wtf8: i32,
 ) -> *mut StringHeader {
-    if len == 0 || len > INTERN_MAX_BYTE_LEN || bytes.is_null() {
-        return if is_wtf8 != 0 {
-            js_string_from_wtf8_bytes(bytes, len)
-        } else {
-            js_string_from_bytes(bytes, len)
-        };
+    if is_wtf8 != 0 || len == 0 || len > INTERN_MAX_BYTE_LEN || bytes.is_null() {
+        return image_string(bytes, len);
     }
     let input = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
     if let Some(atom) = atom_lookup(input, hash) {
@@ -316,13 +211,21 @@ pub extern "C" fn js_string_pool_atom(
     }
     // Nothing is held across the allocation: `bytes` is read-only data in the
     // compiled image. Shared (`refcount = 0`) like every pool literal.
-    let atom: *const StringHeader = if is_wtf8 != 0 {
-        js_string_from_wtf8_bytes(bytes, len)
-    } else {
-        js_string_from_bytes(bytes, len)
-    };
+    let atom: *const StringHeader = image_string(bytes, len);
     let _ = ATOMS.try_with(|t| unsafe { (*t.get()).insert(hash, atom) });
     atom as *mut StringHeader
+}
+
+/// I2 birth funnel. Longlived is an existing image space: never reset and
+/// never selected by old-page defrag or idle compaction. The leaf pin prevents
+/// full sweep from invalidating the header, without a root or pin-summary walk.
+fn image_string(bytes: *const u8, len: u32) -> *mut StringHeader {
+    let string = js_string_from_bytes_longlived(bytes, len);
+    unsafe {
+        let header = (string as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::pin_object_non_young(header);
+    }
+    string
 }
 
 /// Test hook: evict `bytes` from the intern CACHE (a collision would).
@@ -345,26 +248,17 @@ pub(crate) unsafe fn is_atom_for_test(p: *const StringHeader) -> bool {
     atom_lookup(bytes, hash) == Some(p)
 }
 
-crate::perry_thread_local! {
-    /// Intern-table slots that may hold a string a minor can act on
-    /// (`gc/young_log.rs`). A minor-scoped `scan_intern_table_roots_mut`
-    /// visits only these instead of all [`INTERN_TABLE_SIZE`] slots — on an
-    /// allocation-bound loop the full walk was ~200k instructions per pass,
-    /// two passes per copying minor, over a table that was usually empty.
-    static INTERN_YOUNG: std::cell::RefCell<crate::gc::young_log::YoungLog<u32>> =
-        const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
-}
-
-const INTERN_YOUNG_LOG_NAME: &str = "string.intern_table";
-
-/// Rule 1 of `gc/young_log.rs`: every writer of a slot calls this BEFORE the
-/// slot names `string_ptr`. An old string notes nothing — a minor can neither
-/// move nor free it, so visiting it would be a no-op.
-#[inline]
-fn arm_intern_young(slot: usize, string_ptr: usize) {
-    if crate::gc::young_log::addr_is_minor_relevant(string_ptr) {
-        INTERN_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
-    }
+/// Discard weak addresses before any object can move or its storage be reused.
+/// Called at collection scope entry and before a tracked string realloc.
+/// Unrelated reallocations cannot invalidate a StringHeader address. No entry
+/// keeps its string alive, and no heap-change scope may publish an entry.
+pub(crate) fn discard_weak_interns() {
+    let _ = INTERN_TABLE.try_with(|c| unsafe {
+        (*c.get()).fill(InternEntry {
+            hash: 0,
+            string_ptr: 0,
+        });
+    });
 }
 
 #[inline]
@@ -377,6 +271,22 @@ pub(crate) fn with_intern_table<R>(
     })
 }
 
+/// A heap change can move or free another object after a callback returns.
+/// Never publish an address inside that window. Collection entry and string
+/// realloc invalidation make ordinary lookups safe without checking the scope.
+#[inline]
+fn publish_intern_entry(hash: u64, key: *const StringHeader) {
+    if crate::gc::heap_generation::heap_change_open() {
+        return;
+    }
+    with_intern_table(|table| unsafe {
+        (*table)[(hash as usize) & INTERN_TABLE_MASK] = InternEntry {
+            hash,
+            string_ptr: key as usize,
+        };
+    });
+}
+
 /// Intern a property-name string. Returns the canonical pointer for
 /// the given content. `hash` is the pre-computed FNV-1a hash.
 #[no_mangle]
@@ -387,6 +297,15 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
     unsafe {
         let byte_len = (*key).byte_len;
         if byte_len > INTERN_MAX_BYTE_LEN {
+            return key;
+        }
+
+        // Executable image strings are shared immutable leaves. Their data
+        // header already carries the eligibility appropriate to that site;
+        // neither the weak table nor a mutator may write into the image.
+        let gc_header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        if (*gc_header)._reserved == STRING_IMAGE_MARKER {
             return key;
         }
 
@@ -409,13 +328,7 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
         }
 
         // Miss or collision — insert (evict on collision)
-        arm_intern_young(slot, key as usize);
-        with_intern_table(|table| {
-            (*table)[slot] = InternEntry {
-                hash,
-                string_ptr: key as usize,
-            };
-        });
+        publish_intern_entry(hash, key);
 
         // Mark as interned in GcHeader
         let gc_header =
@@ -463,7 +376,7 @@ pub(crate) fn intern_dispatch_bytes(
 
 /// One content probe with a hash already supplied by codegen or a caller.
 /// Separating hashing from this body lets runtime literal callers fold FNV at
-/// their call site, while using exactly the existing intern table and roots.
+/// their call site, while using the existing weak intern table.
 pub(super) fn intern_prehashed_bytes(
     bytes: *const u8,
     byte_len: usize,
@@ -509,13 +422,7 @@ pub(super) fn intern_prehashed_bytes(
         (*gc_header).gc_flags |= crate::gc::GC_FLAG_INTERNED;
         (*key).refcount = 0;
     }
-    arm_intern_young(slot, key as usize);
-    with_intern_table(|table| unsafe {
-        (*table)[slot] = InternEntry {
-            hash,
-            string_ptr: key as usize,
-        };
-    });
+    publish_intern_entry(hash, key);
     key
 }
 
@@ -590,103 +497,6 @@ pub(crate) unsafe fn concat_content_matches(
     true
 }
 
-/// GC root scanner for the intern table.
-///
-/// The intern table is `thread_local!` (issue: runtime thread-safety
-/// hardening), so this scans the *current* thread's table. Each thread's
-/// GC pass calls this from its own scanner registration, which is the
-/// correct partitioning — a thread's GC only walks its own arena, and
-/// only its own intern entries point into that arena.
-pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_intern_table_roots_mut(&mut visitor);
-}
-
-pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    // Interned strings can be relocated by this collection; pointer-identity
-    // verdicts in the store-plan cache would go stale — flush them. This is a
-    // relocation, NOT a property change, so it bumps only the pointer-identity
-    // epoch: a cache that re-derives its addresses every lookup (`#7910`'s
-    // `Object.prototype` `then` verdict) must not be flushed at loop-poll
-    // cadence by the incremental collector.
-    crate::object::prop_plan::prop_plan_gc_epoch_bump();
-    // A minor-scoped pass can act only on a slot that names a young string,
-    // and every such slot is in `INTERN_YOUNG` (rule 1), so it visits the log
-    // instead of the table. A full pass walks the table and rebuilds the log.
-    if visitor.young_scope() {
-        #[cfg(any(debug_assertions, test))]
-        debug_assert_intern_young_logged();
-        let mut kept = INTERN_YOUNG.with(|log| log.borrow_mut().take_spare());
-        let batch = INTERN_YOUNG.with(|log| log.borrow_mut().take_sorted());
-        let logged = batch.len() as u64;
-        with_intern_table(|table| unsafe {
-            for &slot in &batch {
-                let entry = &mut (*table)[slot as usize];
-                visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
-                if crate::gc::young_log::addr_is_minor_relevant(entry.string_ptr) {
-                    kept.push(slot);
-                }
-            }
-        });
-        let kept_len = kept.len() as u64;
-        INTERN_YOUNG.with(|log| log.borrow_mut().extend(kept));
-        crate::gc::young_log::note_walk(
-            INTERN_YOUNG_LOG_NAME,
-            crate::gc::young_log::YoungLogWalk {
-                partial: true,
-                logged,
-                visited: logged,
-                kept: kept_len,
-                table_len: INTERN_TABLE_SIZE as u64,
-            },
-        );
-        scan_atom_roots(visitor);
-        return;
-    }
-    let _ = INTERN_YOUNG.with(|log| log.borrow_mut().take_sorted());
-    let mut kept = Vec::new();
-    with_intern_table(|table| unsafe {
-        for i in 0..INTERN_TABLE_SIZE {
-            let entry = &mut (*table)[i];
-            visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
-            if crate::gc::young_log::addr_is_minor_relevant(entry.string_ptr) {
-                kept.push(i as u32);
-            }
-        }
-    });
-    scan_atom_roots(visitor);
-    let kept_len = kept.len() as u64;
-    INTERN_YOUNG.with(|log| log.borrow_mut().extend(kept));
-    crate::gc::young_log::note_walk(
-        INTERN_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: false,
-            logged: INTERN_TABLE_SIZE as u64,
-            visited: INTERN_TABLE_SIZE as u64,
-            kept: kept_len,
-            table_len: INTERN_TABLE_SIZE as u64,
-        },
-    );
-}
-
-/// Rule 2 of `gc/young_log.rs`: re-derive the minor-relevant slots from the
-/// table itself and require the log to name every one. A writer that
-/// publishes without [`arm_intern_young`] fails here on the next minor instead
-/// of leaving a from-space pointer in the table.
-#[cfg(any(debug_assertions, test))]
-fn debug_assert_intern_young_logged() {
-    let relevant: Vec<u32> = with_intern_table(|table| unsafe {
-        (0..INTERN_TABLE_SIZE)
-            .filter(|&i| crate::gc::young_log::addr_is_minor_relevant((*table)[i].string_ptr))
-            .map(|i| i as u32)
-            .collect()
-    });
-    INTERN_YOUNG.with(|log| {
-        log.borrow()
-            .debug_assert_logged(INTERN_YOUNG_LOG_NAME, &relevant)
-    });
-}
-
 /// #11507: the table is zero-allocated rather than filled, so a thread's first
 /// view of it must be an empty slot everywhere.
 #[cfg(test)]
@@ -703,22 +513,10 @@ fn fresh_thread_intern_table_reads_empty_everywhere() {
     .unwrap();
 }
 
-#[cfg(test)]
-pub(crate) fn test_seed_intern_table_root(string_ptr: usize) {
-    arm_intern_young(0, string_ptr);
-    with_intern_table(|table| unsafe {
-        (*table)[0] = InternEntry {
-            hash: 0xC0DEC0DE,
-            string_ptr,
-        };
-    });
-}
-
-/// Empty every slot and the young log: a test that asserts on the log's walk
-/// must not inherit another test's entries on a reused thread.
+/// Empty every slot so a test does not inherit another test's weak entries
+/// on a reused thread.
 #[cfg(test)]
 pub(crate) fn test_clear_intern_table() {
-    INTERN_YOUNG.with(|log| log.borrow_mut().clear());
     with_intern_table(|table| unsafe {
         for entry in (*table).iter_mut() {
             *entry = InternEntry {
@@ -733,23 +531,6 @@ pub(crate) fn test_clear_intern_table() {
 #[cfg(test)]
 pub(crate) fn test_intern_slot_ptr(hash: u64) -> usize {
     with_intern_table(|table| unsafe { (*table)[(hash as usize) & INTERN_TABLE_MASK].string_ptr })
-}
-
-/// A writer that forgets rule 1: publish without noting the slot.
-#[cfg(test)]
-pub(crate) fn test_write_intern_slot_without_logging(slot: usize, string_ptr: usize) {
-    with_intern_table(|table| unsafe {
-        (*table)[slot & INTERN_TABLE_MASK] = InternEntry {
-            hash: 0xC0DE,
-            string_ptr,
-        };
-    });
-}
-
-/// Run the rule-2 check the minor-scoped walk runs first.
-#[cfg(test)]
-pub(crate) fn test_check_intern_young_logged() {
-    debug_assert_intern_young_logged();
 }
 
 /// Initialise a raw string allocation (e.g. an old-generation one a test
@@ -768,21 +549,6 @@ pub(crate) unsafe fn test_init_string_bytes(ptr: *mut StringHeader, bytes: &[u8]
         0,
     );
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), string_data(ptr) as *mut u8, bytes.len());
-}
-
-#[cfg(test)]
-pub(crate) fn test_intern_table_root() -> usize {
-    with_intern_table(|table| unsafe { (*table)[0].string_ptr })
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_intern_table_root() {
-    with_intern_table(|table| unsafe {
-        (*table)[0] = InternEntry {
-            hash: 0,
-            string_ptr: 0,
-        };
-    });
 }
 
 /// Read-only intern-table probe: the canonical pointer for `bytes`, or `None`

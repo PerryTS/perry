@@ -45,6 +45,11 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             object, property, ..
         } if crate::type_analysis::scalar_replaced_field_is_number(ctx, object, property) => true,
         Expr::LocalGet(id) => {
+            // Module cells can be rebound by a callback. A scalar initializer
+            // proves neither the current value nor its lifetime across a call.
+            if ctx.module_globals.contains_key(id) {
+                return false;
+            }
             // Whole-function write analysis proves these locals numeric by
             // construction.  That proof does not depend on a TypeScript
             // annotation and remains valid at every read, including loop

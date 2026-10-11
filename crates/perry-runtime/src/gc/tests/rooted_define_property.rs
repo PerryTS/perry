@@ -67,7 +67,6 @@ fn register_descriptor_cache_scanners() {
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 }
 
 fn string_value(text: &str) -> f64 {
@@ -526,7 +525,6 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
     unsafe {
         for arguments in [false, true] {

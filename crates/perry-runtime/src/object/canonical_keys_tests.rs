@@ -14,6 +14,104 @@ fn key(name: &str) -> *mut StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
+#[test]
+fn born_layout_uses_owned_keys_after_weak_cache_clear_and_collection() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_register_mutable_root_scanner(scan_canonical_keys_roots_mut);
+    reset_for_test();
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proof = SharedLayout::shape_cache_entry();
+        let entries = [("name", 1.0), ("length", 2.0), ("prototype", 3.0)];
+        let attrs = [0, crate::object::key_attrs::ENTRY_NON_WRITABLE, 0];
+        let mut keys = CanonicalKeys::EMPTY;
+        for (i, (name, _)) in entries.iter().enumerate() {
+            keys = extend_key_with_entry(&proof, keys, key(name), attrs[i]);
+        }
+        let backing = scope.root_raw_mut_ptr(keys.as_ptr());
+        crate::string::discard_weak_interns();
+        assert!(crate::string::intern_lookup_bytes(b"name").is_none());
+        crate::gc::js_gc_collect();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let owned = backing.get_raw_mut_ptr::<ArrayHeader>();
+        let found = probe_born_layout(&proof, &entries, &attrs).expect("live owner, empty cache");
+        assert_eq!(found.as_ptr(), owned);
+        assert_eq!(found.len(), 3);
+        assert!(probe_born_layout(&proof, &entries, &[0, 0, 0]).is_none());
+        let reordered = [entries[1], entries[0], entries[2]];
+        assert!(probe_born_layout(&proof, &reordered, &attrs).is_none());
+        let other = [("name", 1.0), ("length", 2.0), ("prototype-other", 3.0)];
+        assert!(probe_born_layout(&proof, &other, &attrs).is_none());
+    }
+}
+
+#[test]
+fn image_adoption_preserves_shared_prefix_and_gc_layout() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_register_mutable_root_scanner(scan_canonical_keys_roots_mut);
+    reset_for_test();
+    #[repr(C, align(8))]
+    struct Image {
+        gc: crate::gc::GcHeader,
+        string: StringHeader,
+        bytes: [u8; 10],
+    }
+    static IMAGE: Image = Image {
+        gc: crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_STRING,
+            gc_flags: crate::gc::GC_FLAG_MARKED
+                | crate::gc::GC_FLAG_PINNED
+                | crate::gc::GC_FLAG_INTERNED,
+            _reserved: 0x494d,
+            size: 38,
+        },
+        string: StringHeader {
+            utf16_len: 9,
+            byte_len: 9,
+            capacity: 9,
+            refcount: 0,
+            flags: crate::string::STRING_FLAG_WTF8_VALIDATED,
+        },
+        bytes: *b"site-name\0",
+    };
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proof = SharedLayout::shape_cache_entry();
+        let prefix = extend_key(&proof, CanonicalKeys::EMPTY, key("site-name"));
+        let leaf = extend_key(&proof, prefix, key("tail"));
+        assert_eq!(prefix.addr(), leaf.addr(), "premise: one shared backing");
+        let backing = scope.root_raw_mut_ptr(leaf.addr() as *mut ArrayHeader);
+        let image = &IMAGE.string as *const StringHeader;
+        backing.with_mut_ptr(|a| {
+            let (slots, _) = crate::object::keys_array_dense_slots_resolved(a);
+            assert_ne!(
+                (*slots).to_bits(),
+                JSValue::string_ptr(image as *mut _).bits()
+            );
+            adopt_image_key(a, 0, image);
+        });
+        crate::gc::js_gc_collect();
+        backing.with_const_ptr(|a: *const ArrayHeader| {
+            let (slots, len) = crate::object::keys_array_dense_slots_resolved(a as *mut _);
+            assert_eq!(len, 2);
+            assert_eq!(
+                (*slots).to_bits(),
+                JSValue::string_ptr(image as *mut _).bits()
+            );
+            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+            assert_eq!(
+                crate::string::js_string_key_bytes(
+                    JSValue::from_bits((*slots.add(1)).to_bits()),
+                    &mut scratch,
+                ),
+                Some(b"tail".as_slice()),
+            );
+        });
+    }
+}
+
 /// A keys array built the way a producer that has NOT been funnelled
 /// would build one: its own allocation, its own address.
 unsafe fn raw_list(names: &[&str]) -> *mut ArrayHeader {

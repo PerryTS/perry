@@ -601,14 +601,23 @@ impl ShapeRecordRef {
         let bound = bound.min(len);
         let heap_bits = crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
         // The site's slot guess, confirmed by the receiver's own key.
-        if hint < bound && (*slots.add(hint)).to_bits() == heap_bits {
-            return Some(hint);
+        if hint < bound {
+            let bits = (*slots.add(hint)).to_bits();
+            if bits == heap_bits {
+                return Some(hint);
+            }
+            if stored_key_matches(key, bits) {
+                super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, hint, key);
+                return Some(hint);
+            }
         }
         // Identity over the whole list before any byte is compared.
         if let Some(i) = (0..bound).find(|&i| (*slots.add(i)).to_bits() == heap_bits) {
             return Some(i);
         }
-        (0..bound).find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))
+        let slot = (0..bound).find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))?;
+        super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, slot, key);
+        Some(slot)
     }
 
     /// The SPILL position at which this shape stores `key` as an own DATA
@@ -721,7 +730,17 @@ impl ShapeRecordRef {
             {
                 None
             }
-            Some(i) => Some(Some(i as u32)),
+            Some(i) => {
+                // A content-confirmed data key has the same owner as the
+                // positional read path. Retain its image spelling here too:
+                // literal-tail overwrites then use the ordinary identity
+                // proof instead of repeating this content lookup.
+                if (*slots.add(i)).to_bits() != key_bits && key_bits >> 48 == 0x7FFF {
+                    let key = crate::JSValue::from_bits(key_bits).as_string_ptr();
+                    super::canonical_keys::adopt_image_key(r.keys as *mut ArrayHeader, i, key);
+                }
+                Some(Some(i as u32))
+            }
         }
     }
 }

@@ -431,6 +431,9 @@ pub fn collect_pointer_typed_locals(
             } if module == "buffer" && method == "copyBytesFrom" => {
                 Some(Type::Named("Uint8Array".into()))
             }
+            // Member updates apply ToNumeric to an erased property value.
+            // They can return a heap BigInt despite HIR inferring Number.
+            Expr::PropertyUpdate { .. } | Expr::IndexUpdate { .. } => None,
             Expr::Void(_) => Some(Type::Void),
             _ => {
                 let facts = PointerAnalysisFacts { local_value_types };
@@ -1163,6 +1166,35 @@ mod tests {
             slots.contains_key(&1),
             "a declared scalar type cannot suppress rooting for an actual object"
         );
+    }
+
+    #[test]
+    fn member_updates_keep_a_root_for_possible_bigint_results() {
+        for init in [
+            Expr::PropertyUpdate {
+                object: Box::new(Expr::This),
+                property: "i".into(),
+                op: BinaryOp::Add,
+                prefix: true,
+                strict: true,
+            },
+            Expr::IndexUpdate {
+                object: Box::new(Expr::This),
+                index: Box::new(Expr::Integer(0)),
+                op: BinaryOp::Add,
+                prefix: true,
+                strict: true,
+            },
+        ] {
+            let stmts = vec![Stmt::Let {
+                id: 1,
+                name: "updated".into(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(init),
+            }];
+            assert!(collect_pointer_typed_locals(&[], &stmts, &HashSet::new()).contains_key(&1));
+        }
     }
 
     #[test]

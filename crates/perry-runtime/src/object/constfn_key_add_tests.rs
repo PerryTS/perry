@@ -194,7 +194,6 @@ fn moving_roundtrip(method_key: &str, expected_cached_stamps: u64) {
     let _triggers = gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _forced = gc::knob_overrides::ForcedEvacuationTestGuard::on();
     gc::register_runtime_handle_root_scanner_for_tests();
-    gc::gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_object_cache_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_shape_cache_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_transition_cache_roots_mut);
@@ -411,7 +410,6 @@ fn slow_key_add_with_collections(method_key: &str, collections: u32) {
     let _forced = gc::knob_overrides::ForcedEvacuationTestGuard::on();
     let _verify = gc::knob_overrides::VerifyEvacuationTestGuard::on();
     gc::register_runtime_handle_root_scanner_for_tests();
-    gc::gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_object_cache_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_shape_cache_roots_mut);
     gc::gc_register_mutable_root_scanner(object::scan_transition_cache_roots_mut);

@@ -307,7 +307,7 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
 //    init_prelude`)
 // ---------------------------------------------------------------------------
 
-/// `main` runs an init prelude — `js_gc_init`, then the module's string table —
+/// `main` runs an init prelude — `js_gc_init`, then the static shape seeds —
 /// before any user code. The shadow lowering expresses "no root before that" by
 /// pushing the frame after the prelude. Native roots have no frame, so the
 /// property has to be stated directly: **no safepoint at or before `js_gc_init`
@@ -319,14 +319,9 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
 /// exactly what a broken entry lowering produces. So the test also requires a
 /// non-empty live set to appear later in the same function.
 ///
-/// **Sabotage 1** — `codegen/entry.rs`, the `js_gc_init` call deleted from
-/// `main`: RED ("entry `main` must initialize the GC"). Proves the anchor is
-/// real rather than assumed.
-///
-/// **Sabotage 2** — the module's `__perry_init_strings_*` call moved from the
-/// prelude to a pre-return call, so it runs after user code: RED, "a root is
-/// live before `__perry_init_strings_*` (#32 vs #4)". Both reddened only this
-/// test.
+/// Negative controls: deleting `js_gc_init` or moving static-shape seeding
+/// after the first live-root safepoint must fail its ordering assertion.
+/// Literal headers are now image data and need no collecting initializer.
 #[test]
 fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
     for target in NATIVE_TARGETS {
@@ -336,10 +331,7 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
             vec![
                 let_stmt(1, "a", Expr::MapNew),
                 let_stmt(2, "b", Expr::MapNew),
-                // Keep the string initializer non-empty: #8596 can prove an
-                // empty initializer transitively leaf, in which case it is an
-                // ordinary call rather than a statepoint and this test would
-                // stop observing the boundary whose ordering it verifies.
+                // Exercise a complete image literal alongside live heap roots.
                 console_log(vec![
                     Expr::LocalGet(1),
                     Expr::LocalGet(2),
@@ -383,12 +375,16 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
                 -1
             }
         };
-        let strings_init = points
+        assert!(
+            ir.contains("@perry_image_literal_"),
+            "[{target}] image literal missing"
+        );
+        let shape_init = points
             .iter()
-            .position(|sp| sp.callee.starts_with("__perry_init_strings_"))
+            .position(|sp| sp.callee == "js_shape_run_static_seed")
             .unwrap_or_else(|| {
                 panic!(
-                    "[{target}] entry `main` must run the module string table \
+                    "[{target}] entry `main` must seed static shapes \
                      before user code: {:?}",
                     callees()
                 )
@@ -417,9 +413,9 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
             callees()
         );
         assert!(
-            strings_init < first_rooted,
-            "[{target}] a root is live before `__perry_init_strings_*` \
-             (#{strings_init} vs #{first_rooted}) — the shadow lowering states \
+            shape_init < first_rooted,
+            "[{target}] a root is live before `js_shape_run_static_seed` \
+             (#{shape_init} vs #{first_rooted}) — the shadow lowering states \
              this by pushing its frame after the prelude; native roots have no \
              frame, so it has to be stated here: {:?}",
             callees()

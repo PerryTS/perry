@@ -49,7 +49,6 @@ fn generator_fixed_state_record_and_capture_follow_a_copying_minor() {
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc_register_mutable_root_scanner(crate::array::scan_prototype_addr_cache_roots_mut);
     let value = make_generator();
     js_shadow_slot_set(0, value.to_bits());

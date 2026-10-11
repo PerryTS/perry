@@ -1067,11 +1067,10 @@ fn lower_short_heap_string_eq(
 ///
 /// The remaining representation arms are exactly what each caller emitted
 /// before, so this is behaviour-preserving. That matters most for
-/// `legacy_unified`, whose fallback keeps the
-/// `js_get_string_pointer_unified` composition — including its number-coercing
-/// behaviour for operands whose `string` annotation lies. Note that
-/// composition *materializes* an SSO operand onto the heap, so routing SSO x
-/// SSO around it removes two allocations per comparison as well as the calls.
+/// `legacy_unified`, whose shared boxed helper retains the unified pointer
+/// composition for non-string operands, including its number coercion when
+/// a string annotation lies. Actual strings compare borrowed bytes without
+/// materializing inline operands into weakly interned heap headers.
 ///
 /// Returns an `i32` that is 1 iff the operands are `===`.
 fn lower_string_strict_eq_inline(
@@ -1140,14 +1139,8 @@ fn lower_string_strict_eq_inline(
 
     ctx.current_block = boxed_idx;
     let boxed_res = if legacy_unified {
-        let lu = ctx
-            .block()
-            .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, l)]);
-        let ru = ctx
-            .block()
-            .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, r)]);
         ctx.block()
-            .call(I32, "js_string_equals", &[(I64, &lu), (I64, &ru)])
+            .call(I32, "js_string_equals_value", &[(DOUBLE, l), (DOUBLE, r)])
     } else {
         ctx.block()
             .call(I32, "js_jsvalue_equals", &[(DOUBLE, l), (DOUBLE, r)])

@@ -26,7 +26,6 @@ fn scanners() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 }
 
 unsafe fn object(names: &[&str], value: f64) -> *mut crate::object::ObjectHeader {

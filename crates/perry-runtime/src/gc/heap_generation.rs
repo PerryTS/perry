@@ -92,6 +92,14 @@ pub(crate) struct HeapChange {
 impl HeapChange {
     #[inline]
     pub(crate) fn begin(kind: HeapChangeKind) -> Self {
+        // Collections can move or reclaim any weak string. A malloc realloc
+        // affects only its one cell; gc_realloc invalidates string entries
+        // after validating that cell's kind, before its address can change.
+        // Publication is forbidden throughout every open scope, so a second
+        // clear at close cannot invalidate anything not cleared at entry.
+        if kind != HeapChangeKind::Realloc {
+            crate::string::discard_weak_interns();
+        }
         advance();
         let _ = OPEN_HEAP_CHANGES.try_with(|n| n.set(n.get() + 1));
         #[cfg(test)]

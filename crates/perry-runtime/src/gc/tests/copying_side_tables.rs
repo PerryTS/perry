@@ -97,7 +97,6 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
 
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     let func = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::closure::ClosureHeader>(),
         std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -175,7 +174,6 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 
     // Array symbols and class symbols both live in owned holder slots.
     let owner = crate::array::js_array_alloc(0) as usize;

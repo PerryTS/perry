@@ -36,11 +36,11 @@ pub use scanner_shims::{
     async_context_mutable_root_scanner, async_context_root_scanner,
     async_hooks_mutable_root_scanner, async_hooks_root_scanner, concat_memo_mutable_root_scanner,
     concat_memo_root_scanner, exception_mutable_root_scanner, exception_root_scanner,
-    intern_table_mutable_root_scanner, intern_table_root_scanner, json_parse_mutable_root_scanner,
-    json_parse_root_scanner, promise_mutable_root_scanner, promise_root_scanner,
-    shadow_stack_root_scanner, shape_cache_mutable_root_scanner, shape_cache_root_scanner,
-    small_int_cache_mutable_root_scanner, small_int_cache_root_scanner, timer_mutable_root_scanner,
-    timer_root_scanner, transition_cache_mutable_root_scanner, transition_cache_root_scanner,
+    json_parse_mutable_root_scanner, json_parse_root_scanner, promise_mutable_root_scanner,
+    promise_root_scanner, shadow_stack_root_scanner, shape_cache_mutable_root_scanner,
+    shape_cache_root_scanner, small_int_cache_mutable_root_scanner, small_int_cache_root_scanner,
+    timer_mutable_root_scanner, timer_root_scanner, transition_cache_mutable_root_scanner,
+    transition_cache_root_scanner,
 };
 pub(crate) use stack_roots::with_stack_roots;
 // The conservative-scan mode lives in `roots/scan_mode.rs` (split out in #7148

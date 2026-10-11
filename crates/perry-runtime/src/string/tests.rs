@@ -277,6 +277,70 @@ fn static_dispatch_key_materialization_is_cached_per_thread() {
 }
 
 #[test]
+fn image_dispatch_identity_survives_heap_changes_without_weak_entries() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    #[repr(C, align(8))]
+    struct ImageString {
+        gc: crate::gc::GcHeader,
+        string: StringHeader,
+        bytes: [u8; 8],
+    }
+    static IMAGE: ImageString = ImageString {
+        gc: crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_STRING,
+            gc_flags: crate::gc::GC_FLAG_MARKED
+                | crate::gc::GC_FLAG_PINNED
+                | crate::gc::GC_FLAG_INTERNED,
+            _reserved: STRING_IMAGE_MARKER,
+            size: 36,
+        },
+        string: StringHeader {
+            utf16_len: 7,
+            byte_len: 7,
+            capacity: 7,
+            refcount: 0,
+            flags: STRING_FLAG_WTF8_VALIDATED,
+        },
+        bytes: *b"publish\0",
+    };
+    intern::test_clear_intern_table();
+    let hash = fnv1a_for_test(b"publish");
+    let descriptor = StaticDispatchString {
+        byte_len: 7,
+        flags: STATIC_DISPATCH_FLAG_IMAGE,
+        hash,
+        bytes: IMAGE.bytes.as_ptr(),
+    };
+    let id = STATIC_DISPATCH_TAG | &descriptor as *const _ as u64;
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let key = perry_string_ref_from_dispatch_id(id as i64, &mut scratch).unwrap();
+    let expected = &IMAGE.string as *const StringHeader;
+    assert_eq!(materialize_dispatch_key(key), expected);
+    assert_eq!(js_string_intern(expected, hash), expected);
+    assert_ne!(IMAGE.gc.gc_flags & crate::gc::GC_FLAG_INTERNED, 0);
+    js_string_addref(expected as *mut StringHeader);
+    #[cfg(feature = "regex-engine")]
+    unsafe {
+        mark_wtf8_validated(expected as *mut StringHeader)
+    };
+    {
+        let _change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::Sweep,
+        );
+        assert_eq!(materialize_dispatch_key(key), expected);
+    }
+    // Global slots are always scanned, including in this isolated runtime
+    // test where the executable's scanner bootstrap has not run.
+    let mut bits = crate::value::STRING_TAG | expected as u64;
+    crate::gc::js_gc_register_global_root(&mut bits as *mut u64 as i64);
+    crate::gc::js_gc_collect();
+    assert_eq!(bits, crate::value::STRING_TAG | expected as u64);
+    assert_eq!(materialize_dispatch_key(key), expected);
+    assert_eq!(intern::test_intern_slot_ptr(hash), 0);
+    assert_eq!(unsafe { header_str_checked(expected) }, Some("publish"));
+}
+
+#[test]
 fn static_dispatch_key_materialization_preserves_wtf8_flag() {
     let bytes = b"\xED\xA0\x80";
     let descriptor = StaticDispatchString {
@@ -342,7 +406,7 @@ fn large_heap_strings_use_old_gc_pages_without_malloc_tracking() {
 }
 
 #[test]
-fn interned_strings_remain_scannable_and_content_equal() {
+fn weak_interned_strings_reuse_content_until_a_heap_change() {
     let key = b"gc-managed-intern-key";
     let hash = fnv1a_for_test(key);
     let slot = (hash as usize) & INTERN_TABLE_MASK;
@@ -357,17 +421,6 @@ fn interned_strings_remain_scannable_and_content_equal() {
     assert_eq!(reinterned, canonical);
     assert_eq!(js_string_equals(canonical, second), 1);
 
-    let mut scanned = false;
-    scan_intern_table_roots(&mut |value| {
-        let bits = value.to_bits();
-        if (bits & !crate::value::POINTER_MASK) == crate::value::STRING_TAG
-            && (bits & crate::value::POINTER_MASK) as usize == canonical as usize
-        {
-            scanned = true;
-        }
-    });
-    assert!(scanned);
-
     unsafe {
         let header = gc_header_for_string(canonical);
         assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_INTERNED, 0);
@@ -375,6 +428,82 @@ fn interned_strings_remain_scannable_and_content_equal() {
     with_intern_table(|t| unsafe {
         (*t)[slot] = old_entry;
     });
+}
+
+#[test]
+fn weak_intern_publication_waits_for_all_heap_changes_to_close() {
+    use crate::gc::heap_generation::{HeapChange, HeapChangeKind};
+    let bytes = b"weak-open-window";
+    let hash = fnv1a_for_test(bytes);
+    super::intern::test_clear_intern_table();
+    let make = || js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    let first = js_string_intern(make(), hash);
+    assert_eq!(super::intern::intern_lookup_bytes(bytes), Some(first));
+    {
+        let _outer = HeapChange::begin(HeapChangeKind::Sweep);
+        assert!(super::intern::intern_lookup_bytes(bytes).is_none());
+        let during = js_string_intern(make(), hash);
+        assert_eq!(super::intern::test_intern_slot_ptr(hash), 0);
+        {
+            let _inner = HeapChange::begin(HeapChangeKind::Sweep);
+            let second =
+                super::intern::intern_prehashed_bytes(bytes.as_ptr(), bytes.len(), hash, false);
+            assert_ne!(second, during);
+            assert_eq!(super::intern::test_intern_slot_ptr(hash), 0);
+        }
+        js_string_intern(make(), hash);
+        assert_eq!(super::intern::test_intern_slot_ptr(hash), 0);
+    }
+    let published = js_string_intern(make(), hash);
+    assert_eq!(
+        super::intern::test_intern_slot_ptr(hash),
+        published as usize
+    );
+    assert_eq!(js_string_intern(make(), hash), published);
+    super::intern::test_clear_intern_table();
+}
+
+#[test]
+fn weak_intern_identity_survives_unrelated_realloc_but_not_string_realloc() {
+    let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+    let bytes = b"weak-resize-owner";
+    let hash = fnv1a_for_test(bytes);
+    super::intern::test_clear_intern_table();
+    let first = js_string_intern(
+        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32),
+        hash,
+    );
+    // Realloc a real tracked cell, rather than only opening an empty scope.
+    let unrelated = crate::gc::gc_malloc(64, crate::gc::GC_TYPE_OBJECT);
+    let _grown = crate::gc::gc_realloc(unrelated, 4096);
+    assert_eq!(super::intern::intern_lookup_bytes(bytes), Some(first));
+    // Build a real malloc-backed StringHeader and publish it weakly, then
+    // force that exact allocation through the raw realloc boundary.
+    let key = crate::gc::gc_malloc(
+        std::mem::size_of::<StringHeader>() + bytes.len(),
+        crate::gc::GC_TYPE_STRING,
+    ) as *mut StringHeader;
+    unsafe {
+        init_string_header(
+            key,
+            bytes.len() as u32,
+            bytes.len() as u32,
+            bytes.len() as u32,
+            0,
+            STRING_FLAG_WTF8_VALIDATED,
+        );
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), string_data(key) as *mut u8, bytes.len());
+    }
+    super::intern::test_clear_intern_table();
+    assert_eq!(js_string_intern(key, hash), key);
+    assert_eq!(
+        super::intern::intern_lookup_bytes(bytes),
+        Some(key as *const _)
+    );
+    let moved = crate::gc::gc_realloc(key.cast(), 1024 * 1024);
+    assert!(!moved.is_null());
+    assert!(super::intern::intern_lookup_bytes(bytes).is_none());
+    super::intern::test_clear_intern_table();
 }
 
 #[test]

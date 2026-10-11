@@ -550,7 +550,6 @@ fn builtin_closure_length_bag_survives_a_copying_minor() {
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 
     let scope = RuntimeHandleScope::new();
     let owner =

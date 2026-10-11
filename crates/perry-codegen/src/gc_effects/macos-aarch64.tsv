@@ -3073,6 +3073,7 @@ js_string_end_index_to_i32	Reenters
 js_string_ends_with	Leaf
 js_string_ends_with_at	Leaf
 js_string_equals	Leaf
+js_string_equals_value	Reenters
 js_string_error	Leaf
 js_string_fixed	AllocOnly
 js_string_fontcolor	AllocOnly

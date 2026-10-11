@@ -1340,7 +1340,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         fixture.nursery_value(),
         fixture.nursery_user as *const crate::string::StringHeader,
     );
-    crate::string::test_seed_intern_table_root(fixture.nursery_addr());
     crate::string::test_seed_small_int_cache_root(7, fixture.nursery_addr());
     crate::builtins::test_set_console_log_singleton(fixture.nursery_i64());
     crate::node_submodules::test_seed_node_submodule_roots(
@@ -1395,7 +1394,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::object::scan_object_cache_roots_mut(&mut visitor);
     crate::object::scan_class_side_table_roots_mut(&mut visitor);
     json_parse_mutable_root_scanner(&mut visitor);
-    intern_table_mutable_root_scanner(&mut visitor);
     small_int_cache_mutable_root_scanner(&mut visitor);
     crate::builtins::scan_console_log_singleton_roots_mut(&mut visitor);
     crate::node_submodules::scan_node_submodule_singleton_roots_mut(&mut visitor);
@@ -1488,7 +1486,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         crate::json::test_parse_roots_snapshot(),
         (fixture.old_bits, fixture.old_addr())
     );
-    assert_eq!(crate::string::test_intern_table_root(), fixture.old_addr());
     assert_eq!(
         crate::string::test_small_int_cache_root(7),
         fixture.old_addr()
@@ -1575,7 +1572,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::object::test_clear_transition_cache_root();
     crate::object::test_clear_object_cache_roots();
     crate::set::test_clear_set_roots();
-    crate::string::test_clear_intern_table_root();
     crate::string::test_clear_small_int_cache_root(7);
     crate::builtins::test_set_console_log_singleton(0);
     crate::async_hooks::reset_for_tests();

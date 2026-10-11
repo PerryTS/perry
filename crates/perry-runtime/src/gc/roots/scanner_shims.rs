@@ -86,16 +86,6 @@ pub fn shadow_stack_root_scanner(mark: &mut dyn FnMut(f64)) {
     });
 }
 
-/// Initialize GC root scanners. Called once at runtime startup.
-
-pub fn intern_table_root_scanner(mark: &mut dyn FnMut(f64)) {
-    crate::string::scan_intern_table_roots(mark);
-}
-
-pub fn intern_table_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
-    crate::string::scan_intern_table_roots_mut(visitor);
-}
-
 pub fn small_int_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
     crate::string::scan_small_int_cache_roots(mark);
 }

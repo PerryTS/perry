@@ -24,6 +24,52 @@ fn empty_prefix() -> f64 {
 }
 
 #[test]
+fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    #[repr(C, align(8))]
+    struct Image {
+        gc: crate::gc::GcHeader,
+        string: crate::StringHeader,
+        bytes: [u8; 2],
+    }
+    static IMAGE: Image = Image {
+        gc: crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_STRING,
+            gc_flags: crate::gc::GC_FLAG_MARKED
+                | crate::gc::GC_FLAG_PINNED
+                | crate::gc::GC_FLAG_INTERNED,
+            _reserved: 0x494d,
+            size: 30,
+        },
+        string: crate::StringHeader {
+            utf16_len: 1,
+            byte_len: 1,
+            capacity: 1,
+            refcount: 0,
+            flags: crate::string::STRING_FLAG_WTF8_VALIDATED,
+        },
+        bytes: *b"x\0",
+    };
+    unsafe {
+        let source = object(&[("x", 3.0), ("y", 5.0), ("z", 7.0)]);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source);
+        let id = shapes::object_shape_stamp(receiver(result));
+        let record = shapes::shape_record_by_id(id).unwrap();
+        let key = crate::JSValue::string_ptr(&IMAGE.string as *const _ as *mut _);
+        assert_eq!(record.plain_own_identity_slot(key.bits()), None);
+        js_object_literal_define(result, f64::from_bits(key.bits()), 9.0);
+        assert_eq!(record.plain_own_identity_slot(key.bits()), Some(0));
+        assert_eq!(shapes::object_shape_stamp(receiver(result)), id);
+        assert_eq!(record.summary(), 0);
+        assert_eq!(get(result, "x"), 9.0);
+        assert_eq!(get(result, "y"), 5.0);
+        assert_eq!(get(result, "z"), 7.0);
+        assert_eq!(get(source, "x"), 3.0);
+    }
+}
+
+#[test]
 fn spread_birth_reuses_shape_and_keeps_all_values_inline() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _suppress = crate::gc::GcSuppressScope::new();

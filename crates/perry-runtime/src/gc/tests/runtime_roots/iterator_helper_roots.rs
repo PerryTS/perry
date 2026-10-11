@@ -38,7 +38,6 @@ fn prepare() {
     gc_register_mutable_root_scanner(crate::object::scan_class_keys_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     gc_register_mutable_root_scanner(crate::iter_result::scan_iter_result_keys_roots_mut);
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     assert!(crate::object::iterator_prototype_for_class_id(

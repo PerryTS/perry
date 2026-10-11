@@ -431,14 +431,39 @@ unsafe fn shape_read(slot: *mut *mut KeyedCache, obj_bits: u64, bits: u64) -> Op
         Some(bytes) => KeyRef::Name { word: bits, bytes },
         None => KeyRef::Symbol(bits),
     };
-    // Publication already uses the atom identity when one exists. A runtime
+    // Immutable image keys already have their own stable word. Publish that
+    // word so the site's next input matches without consulting a global index.
+    // Other strings use the atom identity when one exists. A runtime
     // string (for example typeof's result) can have the same contents but a
     // different word: consume that existing entry before rebuilding its proof.
     let canonical = match bytes {
-        Some(bytes) if tag != 0x7FF9 => {
-            let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
-            crate::string::atom_lookup(bytes, hash)
-                .map_or(bits, |a| crate::value::STRING_TAG | a as u64)
+        Some(bytes)
+            if tag != 0x7FF9
+                && !crate::string::is_image_string(
+                    (bits & crate::value::POINTER_MASK) as *const crate::StringHeader,
+                ) =>
+        {
+            // A dynamic intern can be rematerialized while this site's existing,
+            // traced key remains live. Reuse that owner before consulting the residual
+            // atom index; equal strings do not consume extra ways or saturate a site.
+            let retained = if cache.is_null() {
+                None
+            } else {
+                let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+                (*cache).entries.iter().find_map(|entry| {
+                    if entry.token == 0 {
+                        return None;
+                    }
+                    let value = crate::JSValue::from_bits(entry.identity_key);
+                    let owned = crate::string::js_string_key_bytes(value, &mut scratch)?;
+                    (owned == bytes).then_some(entry.identity_key)
+                })
+            };
+            retained.unwrap_or_else(|| {
+                let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+                crate::string::atom_lookup(bytes, hash)
+                    .map_or(bits, |a| crate::value::STRING_TAG | a as u64)
+            })
         }
         _ => bits,
     };

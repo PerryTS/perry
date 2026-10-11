@@ -770,6 +770,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_replace_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_string", I64, &[I64, I64, I64]);
     module.declare_function("js_string_equals", I32, &[I64, I64]);
+    module.declare_function("js_string_equals_value", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_compare", I32, &[I64, I64]);
     // Repsel Phase 3a (canonical-Str locals): boxed-operand variants for the
     // non-proven-heap compare arms. `js_jsvalue_equals` content-compares
