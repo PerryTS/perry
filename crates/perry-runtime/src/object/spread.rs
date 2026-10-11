@@ -439,6 +439,7 @@ unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
         rep,
         &[],
         None,
+        0,
     ))
 }
 
