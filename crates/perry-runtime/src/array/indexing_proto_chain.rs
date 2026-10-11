@@ -12,7 +12,10 @@ use std::sync::atomic::Ordering;
 
 /// The receiver is the live real Array admitted by the indexing entry.
 /// Runtime and compiled misses share one receiver-preserving indexed walk.
-#[inline]
+// Keep prototype misses out of the ordinary runtime element-read body too.
+// Inlining the walk preparation adds index saves to dense reads.
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     array_miss_index_get(receiver as *const ArrayHeader, index)
 }
@@ -282,6 +285,25 @@ pub(super) unsafe fn array_miss_index_get(arr: *const ArrayHeader, index: u32) -
     )
 }
 
+/// One exact descriptor read for both runtime own reads and the indexed walk.
+/// Ordinary dense reads skip its key formatting, getter dispatch and frame.
+/// A missing descriptor cannot collect; a getter returns before either caller
+/// uses the raw holder again and the invocation roots its original receiver.
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn array_index_accessor_get(
+    arr: *const ArrayHeader,
+    index: u32,
+    receiver: f64,
+) -> Option<f64> {
+    let acc = crate::object::get_accessor_descriptor(arr as usize, &index.to_string())?;
+    Some(if acc.get == 0 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(crate::object::invoke_accessor_getter(acc.get, receiver).bits())
+    })
+}
+
 /// One rooted walk for own and inherited Array index GETs. A compiled miss
 /// skips the already-tested own slots. Every later holder uses the canonical
 /// descriptor/dense/sparse order and retains the original receiver.
@@ -296,7 +318,6 @@ unsafe fn array_index_get_walk(
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let holder = scope.root_raw_const_ptr(arr);
-    let key = index.to_string();
     loop {
         // Growth and collector forwarding retain array identity. The holder
         // is already an admitted real Array, so use the existing resolver.
@@ -306,15 +327,8 @@ unsafe fn array_index_get_walk(
         holder.set_raw_const_ptr(arr);
         let flags = array_object_flags_resolved(arr);
         if check_own && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-            if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
-                return if acc.get == 0 {
-                    undefined
-                } else {
-                    f64::from_bits(
-                        crate::object::invoke_accessor_getter(acc.get, receiver.get_nanbox_f64())
-                            .bits(),
-                    )
-                };
+            if let Some(value) = array_index_accessor_get(arr, index, receiver.get_nanbox_f64()) {
+                return value;
             }
         }
         if check_own && index < (*arr).length {

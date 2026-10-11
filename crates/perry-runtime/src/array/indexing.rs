@@ -711,15 +711,12 @@ pub(super) unsafe fn array_get_resolved(arr: *const ArrayHeader, index: u32, fla
     // checked element read once any descriptor existed process-wide, which
     // taxed every internal keys_array walk (`in`, defineProperty, Object.keys).
     if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-        let key = index.to_string();
-        if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
-            if acc.get != 0 {
-                let receiver = crate::value::js_nanbox_pointer(arr as i64);
-                return f64::from_bits(
-                    unsafe { crate::object::invoke_accessor_getter(acc.get, receiver) }.bits(),
-                );
-            }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        if let Some(value) = proto_chain::array_index_accessor_get(
+            arr,
+            index,
+            crate::value::js_nanbox_pointer(arr as i64),
+        ) {
+            return value;
         }
     }
     // JS spec: out-of-bounds array access returns `undefined`, not NaN.

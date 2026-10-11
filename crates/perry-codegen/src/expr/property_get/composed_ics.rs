@@ -520,7 +520,7 @@ pub(super) fn emit_record_length(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     recv_bits: &str,
-    _recv_handle: &str,
+    recv_handle: &str,
 ) -> String {
     // The ordinary Array arm needs only POINTER_TAG. Preserve strings and
     // every other receiver through the shared exact length helper.
@@ -541,11 +541,9 @@ pub(super) fn emit_record_length(
     let ml = ctx.block_label(merge);
     ctx.block().cond_br(&valid, &cl, &sl);
     ctx.current_block = check;
-    let handle = ctx.block().add(
-        I64,
-        &offset,
-        crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
-    );
+    // Consume the caller materialization. Reconstructing it from the band
+    // offset prevents reuse with adjacent checked array operations.
+    let handle = recv_handle.to_owned();
     let header = ctx.block().sub(I64, &handle, "8");
     let header = ctx.block().inttoptr(I64, &header);
     let word = ctx.block().load(crate::types::I16, &header);
