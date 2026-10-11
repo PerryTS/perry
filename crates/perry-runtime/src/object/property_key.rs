@@ -329,14 +329,48 @@ unsafe fn object_super_prototype_value(home: f64) -> Option<f64> {
 }
 
 /// Resolve `super[key]` for object-literal methods using the method's captured
-/// home object. The actual prototype is read at call time so
-/// `Object.setPrototypeOf(home, proto)` after literal creation is observed.
+/// home object and original receiver. The actual prototype is read at call
+/// time so `Object.setPrototypeOf(home, proto)` after literal creation is
+/// observed.
 #[no_mangle]
-pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receiver: f64) -> f64 {
-    let Some(proto) = object_super_prototype_value(home) else {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    };
-    js_object_get_property_key(proto, key_value)
+pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, receiver: f64) -> f64 {
+    // ToPropertyKey can call user code and collect. Keep the lexical home
+    // object and dynamic receiver live while it runs, then look up the home
+    // object's current prototype and preserve the original receiver through
+    // the inherited getter or Proxy get trap.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let home_handle = scope.root_nanbox_u64(home.to_bits());
+    let receiver_handle = scope.root_nanbox_u64(receiver.to_bits());
+    let key_input = scope.root_nanbox_f64(key_value);
+    let key_handle = scope.root_nanbox_f64(js_to_property_key(key_input.get_nanbox_f64()));
+    let base =
+        crate::object::js_object_get_prototype_of(f64::from_bits(home_handle.get_nanbox_u64()));
+    let base_handle = scope.root_nanbox_f64(base);
+    let base_value = crate::value::JSValue::from_bits(base.to_bits());
+    if base_value.is_null() || base_value.is_undefined() {
+        let key_value = key_handle.get_nanbox_f64();
+        let (name_ptr, name_len) = if crate::symbol::js_is_symbol(key_value) != 0 {
+            (std::ptr::null(), 0)
+        } else {
+            let name = crate::builtins::js_string_coerce(key_value);
+            if name.is_null() {
+                (std::ptr::null(), 0)
+            } else {
+                let data = crate::string::string_data(name);
+                (data, (*name).byte_len as usize)
+            }
+        };
+        crate::error::js_throw_type_error_property_access(
+            base_value.is_null() as u32,
+            name_ptr,
+            name_len,
+        );
+    }
+    crate::proxy::js_reflect_get_with_explicit_receiver(
+        base_handle.get_nanbox_f64(),
+        key_handle.get_nanbox_f64(),
+        f64::from_bits(receiver_handle.get_nanbox_u64()),
+    )
 }
 
 /// `super.prop` GET for class methods whose home object belongs to class
@@ -445,6 +479,11 @@ pub unsafe extern "C" fn js_object_super_call(
 #[cfg(test)]
 mod property_key_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    per_test_global! {
+        static SUPER_GET_KEY_CONVERSIONS: AtomicUsize = AtomicUsize::new(0);
+    }
 
     extern "C" fn accessor_getter(
         _closure: *const crate::closure::ClosureHeader,
@@ -528,6 +567,331 @@ mod property_key_tests {
             assert_eq!(js_object_get_property_key(obj_value, sym), 123.0);
 
             crate::symbol::test_clear_symbol_side_table_roots();
+        }
+    }
+
+    extern "C" fn receiver_tag_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        let receiver =
+            crate::value::JSValue::from_bits(this.as_f64().to_bits()).as_pointer::<ObjectHeader>();
+        let tag = crate::string::canonical_key(b"tag");
+        unsafe { f64::from_bits(js_object_get_field_by_name(receiver, tag).bits()) }
+    }
+
+    extern "C" fn proxy_get_returns_receiver(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _target: f64,
+        _key: f64,
+        receiver: f64,
+    ) -> f64 {
+        receiver
+    }
+
+    extern "C" fn receiver_value_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        this.as_f64()
+    }
+
+    extern "C" fn converting_key_once(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _hint: f64,
+    ) -> f64 {
+        SUPER_GET_KEY_CONVERSIONS.fetch_add(1, Ordering::Relaxed);
+        string_value("value")
+    }
+
+    fn string_value(text: &str) -> f64 {
+        let string = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        crate::value::js_nanbox_string(string as i64)
+    }
+
+    fn define_receiver_tag_getter(base: f64, key: f64) {
+        let getter = crate::closure::js_closure_alloc(crate::fn_info!(receiver_tag_getter, 0), 0);
+        crate::object::js_object_define_accessor(
+            base,
+            key,
+            crate::value::js_nanbox_pointer(getter as i64),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+
+    #[test]
+    fn object_super_get_uses_original_receiver_and_live_home_prototype() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let home = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let base = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let borrowed = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let key = scope.root_nanbox_f64(string_value("value"));
+            let tag = crate::string::canonical_key(b"tag");
+            crate::object::js_object_set_field_by_name(
+                crate::value::JSValue::from_bits(receiver.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>() as *mut ObjectHeader,
+                tag,
+                string_value("original"),
+            );
+            crate::object::js_object_set_field_by_name(
+                crate::value::JSValue::from_bits(borrowed.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>() as *mut ObjectHeader,
+                tag,
+                string_value("borrowed"),
+            );
+            define_receiver_tag_getter(base.get_nanbox_f64(), key.get_nanbox_f64());
+            crate::object::js_object_set_prototype_of(home.get_nanbox_f64(), base.get_nanbox_f64());
+
+            assert_eq!(
+                string_value_to_rust(js_object_super_get(
+                    home.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                )),
+                "original"
+            );
+            assert_eq!(
+                string_value_to_rust(js_object_super_get(
+                    home.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    borrowed.get_nanbox_f64(),
+                )),
+                "borrowed",
+                "a borrowed method must keep its call-site receiver"
+            );
+
+            let relinked = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let relinked_key = crate::string::canonical_key(b"value");
+            crate::object::js_object_set_field_by_name(
+                crate::value::JSValue::from_bits(relinked.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>() as *mut ObjectHeader,
+                relinked_key,
+                string_value("relinked"),
+            );
+            crate::object::js_object_set_prototype_of(
+                home.get_nanbox_f64(),
+                relinked.get_nanbox_f64(),
+            );
+            assert_eq!(
+                string_value_to_rust(js_object_super_get(
+                    home.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                )),
+                "relinked",
+                "super must read the home object's current prototype"
+            );
+
+            let default_home = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let constructor_key = string_value("constructor");
+            let constructor = js_object_super_get(
+                default_home.get_nanbox_f64(),
+                constructor_key,
+                receiver.get_nanbox_f64(),
+            );
+            assert_ne!(
+                constructor.to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "ordinary object literals inherit Object.prototype by default"
+            );
+        }
+    }
+
+    #[test]
+    fn object_super_get_preserves_symbol_proxy_and_key_coercion_semantics() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        SUPER_GET_KEY_CONVERSIONS.store(0, Ordering::Relaxed);
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let home = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let base = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+
+            let tag = crate::string::canonical_key(b"tag");
+            crate::object::js_object_set_field_by_name(
+                crate::value::JSValue::from_bits(receiver.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>() as *mut ObjectHeader,
+                tag,
+                string_value("symbol receiver"),
+            );
+            let symbol = crate::symbol::js_symbol_new_empty();
+            define_receiver_tag_getter(base.get_nanbox_f64(), symbol);
+            crate::object::js_object_set_prototype_of(home.get_nanbox_f64(), base.get_nanbox_f64());
+            assert_eq!(
+                string_value_to_rust(js_object_super_get(
+                    home.get_nanbox_f64(),
+                    symbol,
+                    receiver.get_nanbox_f64(),
+                )),
+                "symbol receiver",
+                "a Symbol accessor receives the original super receiver"
+            );
+
+            let target = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let handler = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let trap = crate::closure::js_closure_alloc(
+                crate::fn_info!(proxy_get_returns_receiver, 3; with_declared(3)),
+                0,
+            );
+            crate::object::js_object_set_field_by_name(
+                crate::value::JSValue::from_bits(handler.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>() as *mut ObjectHeader,
+                crate::string::canonical_key(b"get"),
+                crate::value::js_nanbox_pointer(trap as i64),
+            );
+            let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+                target.get_nanbox_f64(),
+                handler.get_nanbox_f64(),
+            ));
+            crate::object::js_object_set_prototype_of(
+                home.get_nanbox_f64(),
+                proxy.get_nanbox_f64(),
+            );
+            let proxy_result = js_object_super_get(
+                home.get_nanbox_f64(),
+                string_value("probe"),
+                receiver.get_nanbox_f64(),
+            );
+            assert_eq!(
+                proxy_result.to_bits(),
+                receiver.get_nanbox_f64().to_bits(),
+                "the Proxy get trap receives the original super receiver"
+            );
+
+            let converter_object = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let converter = crate::closure::js_closure_alloc(
+                crate::fn_info!(converting_key_once, 1; with_declared(1)),
+                0,
+            );
+            let to_primitive = crate::symbol::well_known_symbol("toPrimitive");
+            crate::symbol::js_object_set_symbol_property(
+                converter_object.get_nanbox_f64(),
+                crate::value::js_nanbox_pointer(to_primitive as i64),
+                crate::value::js_nanbox_pointer(converter as i64),
+            );
+            define_receiver_tag_getter(base.get_nanbox_f64(), string_value("value"));
+            crate::object::js_object_set_prototype_of(home.get_nanbox_f64(), base.get_nanbox_f64());
+            let converted_result = js_object_super_get(
+                home.get_nanbox_f64(),
+                converter_object.get_nanbox_f64(),
+                receiver.get_nanbox_f64(),
+            );
+            assert_eq!(
+                SUPER_GET_KEY_CONVERSIONS.load(Ordering::Relaxed),
+                1,
+                "computed super converts an object key once"
+            );
+            assert_eq!(string_value_to_rust(converted_result), "symbol receiver");
+        }
+    }
+
+    #[test]
+    fn object_super_get_with_null_home_prototype_throws_type_error() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let home = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            crate::object::js_object_set_prototype_of(
+                home.get_nanbox_f64(),
+                f64::from_bits(crate::value::TAG_NULL),
+            );
+            let thrown = crate::exception::catch_js_throw(|| {
+                js_object_super_get(
+                    home.get_nanbox_f64(),
+                    string_value("missing-property-name-long-enough-to-check-string-data"),
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+            })
+            .expect_err("a null home prototype must throw");
+            let error = crate::value::JSValue::from_bits(thrown.to_bits())
+                .as_pointer::<crate::error::ErrorHeader>()
+                as *mut crate::error::ErrorHeader;
+            let message = crate::error::js_error_to_string(error);
+            assert_eq!(
+                string_value_to_rust(crate::value::js_nanbox_string(message as i64)),
+                "TypeError: Cannot read properties of null (reading 'missing-property-name-long-enough-to-check-string-data')",
+                "the null super base throws with the complete property name"
+            );
+        }
+    }
+
+    #[test]
+    fn object_super_get_preserves_undefined_receiver() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let home = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let base = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::object::js_object_alloc(0, 0) as i64,
+            ));
+            let key = string_value("value");
+            let getter =
+                crate::closure::js_closure_alloc(crate::fn_info!(receiver_value_getter, 0), 0);
+            crate::object::js_object_define_accessor(
+                base.get_nanbox_f64(),
+                key,
+                crate::value::js_nanbox_pointer(getter as i64),
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+            crate::object::js_object_set_prototype_of(home.get_nanbox_f64(), base.get_nanbox_f64());
+
+            assert_eq!(
+                js_object_super_get(
+                    home.get_nanbox_f64(),
+                    key,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+                .to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "super preserves an explicitly undefined receiver"
+            );
+            assert_eq!(
+                crate::proxy::js_reflect_get(
+                    base.get_nanbox_f64(),
+                    key,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+                .to_bits(),
+                base.get_nanbox_f64().to_bits(),
+                "public Reflect.get retains its target-default behavior"
+            );
         }
     }
 

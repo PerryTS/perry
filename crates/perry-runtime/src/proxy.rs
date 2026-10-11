@@ -66,6 +66,7 @@ pub use prototype::js_reflect_set_prototype_of;
 pub(crate) use json::{
     js_proxy_checked_target, js_proxy_checked_target_for_is_array, js_proxy_own_keys_for_json,
 };
+pub(crate) use reflect::js_reflect_get_with_explicit_receiver;
 pub use reflect::{
     js_reflect_delete, js_reflect_get, js_reflect_get_own_property_descriptor, js_reflect_has,
     js_reflect_set,

@@ -17,6 +17,16 @@ use super::{
 /// as "use target".
 #[no_mangle]
 pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
+    js_reflect_get_impl(target, key, receiver, true)
+}
+
+/// Internal Reflect-style lookup where `receiver` is already explicit, so an
+/// `undefined` receiver must remain undefined instead of defaulting to target.
+pub(crate) fn js_reflect_get_with_explicit_receiver(target: f64, key: f64, receiver: f64) -> f64 {
+    js_reflect_get_impl(target, key, receiver, false)
+}
+
+fn js_reflect_get_impl(target: f64, key: f64, receiver: f64, default_undefined: bool) -> f64 {
     // A data read has no observable receiver binding or key conversion. The
     // classifier accepts only already-string keys and proves every traversed
     // object ordinary before returning, so no handles are needed on a hit.
@@ -41,7 +51,7 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
     let property_key = property_key_handle.get_nanbox_f64();
     // Default receiver to target when undefined.
     let receiver = receiver_handle.get_nanbox_f64();
-    let recv = if receiver.to_bits() == TAG_UNDEFINED {
+    let recv = if default_undefined && receiver.to_bits() == TAG_UNDEFINED {
         target
     } else {
         receiver
@@ -67,7 +77,9 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
                 return f64::from_bits(TAG_UNDEFINED);
             }
             let getter = scope.root_nanbox_f64(f64::from_bits(getter_bits));
-            let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+            let recv = if default_undefined
+                && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED
+            {
                 target_handle.get_nanbox_f64()
             } else {
                 receiver_handle.get_nanbox_f64()
@@ -78,7 +90,9 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
             if !closure.is_null() {
                 // Also pass the receiver as the `this` parameter for
                 // free-function getters that read it rather than a slot.
-                let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+                let recv = if default_undefined
+                    && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED
+                {
                     target_handle.get_nanbox_f64()
                 } else {
                     receiver_handle.get_nanbox_f64()
@@ -90,7 +104,7 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
             }
         }
     }
-    let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
+    let recv = if default_undefined && receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
         target_handle.get_nanbox_f64()
     } else {
         receiver_handle.get_nanbox_f64()

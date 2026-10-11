@@ -96,6 +96,7 @@ mod root_words;
 mod rooted_container_values;
 mod rooted_define_property;
 mod rooted_for_in;
+mod rooted_object_super_get;
 mod roots;
 mod runtime_roots;
 mod scan_fallback;
