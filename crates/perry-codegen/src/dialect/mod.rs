@@ -909,6 +909,28 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if preserve_none {
             site.set_call_convention(LLVM_CC_PRESERVE_NONE);
         }
+        // Pure numeric helpers use the same callsite effects on the text
+        // and native construction paths, including in split codegen units.
+        let mut trailing_attr = trailing_attr;
+        loop {
+            let (attr, rest) = trailing_attr
+                .split_once(char::is_whitespace)
+                .unwrap_or((trailing_attr, ""));
+            let (kind, value) = match attr {
+                "nounwind" | "willreturn" => (attr, 0),
+                "memory(none)" => ("memory", 0),
+                _ => break,
+            };
+            let id = inkwell::attributes::Attribute::get_named_enum_kind_id(kind);
+            if id == 0 {
+                bail!("LLVM has no callsite attribute `{kind}`");
+            }
+            site.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.ctx.create_enum_attribute(id, value),
+            );
+            trailing_attr = rest.trim_start();
+        }
         match trailing_attr {
             "" => {}
             // `"gc-leaf-function"` (#7982): RS4GC reads it to decide the call

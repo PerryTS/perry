@@ -49,13 +49,14 @@ pub(super) fn lower_array_index_get_via_runtime_key(
 /// the guarded element load. Recognize the profitable subset at runtime and
 /// leave every rejected value on the existing exact helper.
 ///
-/// The `select` of `0.0` is load-bearing: LLVM `fptosi` is poison for NaN and
-/// out-of-range inputs, so conversion must consume the range-sanitized value,
-/// not merely be followed by a range branch.
+/// Admission reuses native integer provenance or the shared normalizer. Its
+/// ordered range branch dominates `fptosi`; rejected keys retain their
+/// original boxed value for exact property-key handling.
 pub(super) fn lower_array_index_get_via_canonical_i32_split(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
     idx_double: &str,
+    index: &perry_hir::Expr,
     require_numeric_layout: bool,
     coerce_numeric_fallback: bool,
     preserve_claimed_receiver_fallback: bool,
@@ -68,34 +69,8 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     let runtime_label = ctx.block_label(runtime_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let (idx_i32, is_canonical_i32) = {
-        let blk = ctx.block();
-
-        // Ordinary JS numbers are raw IEEE doubles. Comparisons reject NaN
-        // (including Perry's tagged values) and infinities before conversion.
-        let raw_ge_zero = blk.fcmp("oge", idx_double, "0.0");
-        let raw_le_i32_max = blk.fcmp("ole", idx_double, "2147483647.0");
-        let raw_in_range = blk.and(I1, &raw_ge_zero, &raw_le_i32_max);
-        let safe_raw = blk.select(I1, &raw_in_range, DOUBLE, idx_double, "0.0");
-        let raw_i32 = blk.fptosi(DOUBLE, &safe_raw, I32);
-        let raw_round_trip = blk.sitofp(I32, &raw_i32, DOUBLE);
-        let raw_is_integral = blk.fcmp("oeq", &raw_round_trip, idx_double);
-        let raw_is_canonical = blk.and(I1, &raw_in_range, &raw_is_integral);
-
-        // Runtime-produced integer values may use Perry's INT32 NaN-box. This
-        // is the same tag test used by `js_array_get_index_or_string`; negative
-        // payloads remain named-property keys and therefore take the fallback.
-        let bits = blk.bitcast_double_to_i64(idx_double);
-        let top16 = blk.lshr(I64, &bits, "48");
-        let is_boxed_i32 = blk.icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
-        let boxed_i32 = blk.trunc(I64, &bits, I32);
-        let boxed_nonnegative = blk.icmp_sge(I32, &boxed_i32, "0");
-        let boxed_is_canonical = blk.and(I1, &is_boxed_i32, &boxed_nonnegative);
-
-        let canonical = blk.or(I1, &raw_is_canonical, &boxed_is_canonical);
-        let value = blk.select(I1, &is_boxed_i32, I32, &boxed_i32, &raw_i32);
-        (value, canonical)
-    };
+    let idx_i32 = crate::expr::index_key::normalize(ctx, idx_double, Some(index));
+    let is_canonical_i32 = ctx.block().icmp_sge(I32, &idx_i32, "0");
     ctx.block()
         .cond_br(&is_canonical_i32, &element_label, &runtime_label);
 

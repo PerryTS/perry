@@ -46,7 +46,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::{Expr, Module, Stmt};
+use perry_hir::{Expr, Module, Param, Stmt};
 
 /// Per-parameter representation for a specialized entry. `Boxed` slots keep
 /// the NaN-boxed `double` ABI; the others receive raw machine values.
@@ -134,6 +134,37 @@ pub(crate) fn reassigned_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut scan = ModuleScan::default();
     walk_stmts(stmts, 0, &mut scan);
     scan.writes
+}
+
+/// Explicit value writers of uncaptured local bindings. Parameters/catches,
+/// implicit updates, with-fallback writes and boxes cannot supply this proof.
+/// Hoisted undefined values must still be declined by the consumer.
+pub(crate) fn index_alias_writers(stmts: &[Stmt], params: &[Param]) -> HashMap<u32, Vec<Expr>> {
+    let mut scan = ModuleScan::default();
+    walk_stmts(stmts, 0, &mut scan);
+    let parameters: HashSet<u32> = params.iter().map(|p| p.id).collect();
+    let mut writes = HashMap::new();
+    let mut candidates = HashSet::new();
+    super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut candidates);
+    writes
+        .into_iter()
+        .filter_map(|(id, values)| {
+            (candidates.contains(&id)
+                && values.iter().flatten().any(|value| match value {
+                    Expr::LocalGet(_) => true,
+                    Expr::Call { callee, .. } => matches!(callee.as_ref(),
+                        Expr::PropertyGet { property, .. } if property == "charCodeAt"),
+                    _ => false,
+                })
+                && !scan.other_bindings.contains(&id)
+                && !scan.closure_refs.contains(&id)
+                && !scan.boxed_prealloc.contains(&id)
+                && !scan.with_fallback_writes.contains(&id)
+                && !scan.index_unknown_writers.contains(&id)
+                && !parameters.contains(&id))
+            .then(|| (id, values.into_iter().flatten().cloned().collect()))
+        })
+        .collect()
 }
 
 /// Every local whose slot `stmts` can make hold anything other than the value
@@ -272,6 +303,7 @@ pub(crate) fn single_binding_closure_locals(hir: &Module) -> HashMap<u32, u32> {
 struct ModuleScan {
     /// Reassignment targets (`LocalSet` / `GlobalSet` / `Update`), any depth.
     writes: HashSet<u32>,
+    index_unknown_writers: HashSet<u32>,
     /// Locals referenced (read or written) inside any closure body, plus every
     /// closure capture list entry.
     closure_refs: HashSet<u32>,
@@ -371,6 +403,9 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::LocalSet(id, value) | Expr::GlobalSet(id, value) => {
             scan.writes.insert(*id);
+            if matches!(e, Expr::GlobalSet(..)) {
+                scan.index_unknown_writers.insert(*id);
+            }
             if matches!(e, Expr::LocalSet(..)) {
                 if is_string_literal(value) {
                     scan.string_literal_writes.insert(*id);
@@ -392,6 +427,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::Update { id, .. } => {
             scan.writes.insert(*id);
+            scan.index_unknown_writers.insert(*id);
             if depth > 0 {
                 scan.closure_refs.insert(*id);
             }

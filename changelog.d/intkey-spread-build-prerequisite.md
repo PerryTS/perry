@@ -1,0 +1,1 @@
+Restore the missing integrity-flags argument when interning a fresh object-spread result. Spread creates an extensible ordinary object, so its flags are zero. This build prerequisite is applied identically to both index-normalization measurement arms.

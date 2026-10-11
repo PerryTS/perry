@@ -1191,6 +1191,9 @@ pub(super) fn compile_function(
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals: crate::collectors::reassigned_locals(&f.body),
+        index_alias_writers: crate::collectors::spec_abi_sites::index_alias_writers(
+            &f.body, &f.params,
+        ),
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
         current_block: 0,

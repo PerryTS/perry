@@ -323,8 +323,7 @@ fn lower_array_index_set_via_runtime_key(
             // side has done this since #7286 (`aidx.canonical`). A rejected key
             // becomes index -1, which the guarded in-bounds store declines
             // onto the same helper arm, so the helper is emitted once.
-            let guard_idx_i32 =
-                super::index_set_guarded::emit_canonical_element_index_i32(ctx, &idx_double);
+            let guard_idx_i32 = super::index_key::normalize(ctx, &idx_double, Some(index));
             super::index_set_guarded::emit_guarded_inbounds_array_store(
                 ctx,
                 &arr_box,

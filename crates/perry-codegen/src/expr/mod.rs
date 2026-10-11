@@ -405,6 +405,8 @@ pub(crate) struct FnCtx<'a> {
     /// class. Class-keyed lowering must therefore ignore `local_types` for
     /// these ids and use runtime dispatch (#6906).
     pub reassigned_locals: std::collections::HashSet<u32>,
+    /// Compiler-only complete writer values for index-producing local aliases.
+    pub index_alias_writers: std::collections::HashMap<u32, Vec<Expr>>,
     /// Immutable locals whose initializer is a string literal. These values
     /// can be resolved to the module's interned string global at a use site;
     /// unlike a runtime dynamic-key cache, this does not retain a movable
@@ -3137,6 +3139,7 @@ mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
 mod index_get;
+mod index_key;
 #[cfg(test)]
 mod index_get_claim_tests;
 pub(crate) mod masked_window;

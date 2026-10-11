@@ -504,7 +504,10 @@ pub(crate) fn record_int_facts_for_let(
         return;
     };
     let range = int_range_expr(ctx, init_expr);
-    if !mutable && range.is_some() {
+    if !mutable && range.is_some()
+        || ctx.index_alias_writers.contains_key(&id)
+            && super::index_key::is_char_code(ctx, init_expr)
+    {
         ctx.int_range_aliases.insert(id, init_expr.clone());
     } else {
         ctx.int_range_aliases.remove(&id);

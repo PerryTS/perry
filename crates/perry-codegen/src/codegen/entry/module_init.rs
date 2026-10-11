@@ -265,6 +265,10 @@ pub(super) fn compile_module_init(
         module_global_proven_types: &cross_module.module_global_proven_types,
         module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals: crate::collectors::reassigned_locals(&hir.init),
+        index_alias_writers: crate::collectors::spec_abi_sites::index_alias_writers(
+            &hir.init,
+            &[],
+        ),
         const_string_locals: HashMap::new(),
         const_number_locals: HashMap::new(),
         current_block: 0,
