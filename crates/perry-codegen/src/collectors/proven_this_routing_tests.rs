@@ -1671,3 +1671,166 @@ fn is_dynamic_method_fallback(line: &str) -> bool {
     line.contains("@js_native_call_method_by_id(")
         || line.contains("@js_native_call_method_by_id_learn(")
 }
+
+fn polymorphic_array_site_module() -> Module {
+    let mut m = guarded_site_module();
+    let mut own = bump_method();
+    own.body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(this_get("value")),
+        right: Box::new(Expr::Number(1.0)),
+    }))];
+    m.classes[0]
+        .methods
+        .iter_mut()
+        .find(|f| f.name == "bump")
+        .unwrap()
+        .body = own.body.clone();
+    own.return_type = Type::Number;
+    own.id = 192;
+    let mut derived = class(102, "Derived", Vec::new(), vec![own]);
+    derived.extends = Some(101);
+    derived.extends_name = Some("Counter".into());
+    let mut inherited = class(
+        103,
+        "Inherited",
+        vec![field("extra", Type::Any)],
+        Vec::new(),
+    );
+    inherited.extends = Some(101);
+    inherited.extends_name = Some("Counter".into());
+    m.classes.extend([derived, inherited]);
+    m.functions[0].params[0].ty = Type::Array(Box::new(Type::Named("Counter".into())));
+    m.functions[0].body = vec![Stmt::Expr(call(
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(2)),
+            index: Box::new(Expr::Integer(0)),
+        },
+        "bump",
+        Vec::new(),
+    ))];
+    m
+}
+
+#[test]
+fn class_array_dispatch_consumes_own_subclass_shape_without_a_second_tower() {
+    let ir = emit_static(&polymorphic_array_site_module(), false);
+    let caller = function_body(&ir, "__probe(");
+    assert!(caller.contains("method_direct.subtest0") && caller.contains("holder.shape"));
+    assert!(!caller.contains("idispatch.") && !caller.contains("msite."));
+    let subclass = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_direct.sub0."))
+        .expect("the subclass arm must be live");
+    assert!(subclass
+        .1
+        .iter()
+        .any(|line| line.contains("__Derived__bump$pshape(")));
+    assert!(!subclass
+        .1
+        .iter()
+        .any(|line| line.contains("__Derived__bump(")));
+    let inherited = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_direct.sub1."))
+        .expect("the inherited arm must be live");
+    assert!(inherited
+        .1
+        .iter()
+        .any(|line| line.contains("__Counter__bump(")));
+    assert!(!inherited.1.iter().any(|line| line.contains("$pshape(")));
+    assert!(caller.contains("@js_native_call_method_by_id_learn("));
+}
+
+#[test]
+fn class_array_annotation_is_only_a_guard_candidate() {
+    let mut m = polymorphic_array_site_module();
+    m.functions[0].params[0].ty = Type::Array(Box::new(Type::Any));
+    let ir = emit_static(&m, false);
+    let caller = function_body(&ir, "__probe(");
+    assert!(caller.contains("idispatch.") && !caller.contains("method_direct.sub0."));
+}
+
+#[test]
+fn class_array_observable_args_keep_lookup_before_call() {
+    let mut m = polymorphic_array_site_module();
+    if let Stmt::Expr(Expr::Call { args, .. }) = &mut m.functions[0].body[0] {
+        args.push(call(Expr::LocalGet(2), "shift", Vec::new()));
+    } else {
+        panic!("fixture must contain an actual indexed call");
+    }
+    let ir = emit_static(&m, false);
+    let caller = function_body(&ir, "__probe(");
+    assert!(caller.contains("@js_method_site_lookup") && caller.contains("idisp.split_call"));
+    assert!(!caller.contains("method_direct.sub0."));
+}
+
+#[test]
+fn class_array_object_args_do_not_reuse_receiver_proof() {
+    let mut m = polymorphic_array_site_module();
+    m.functions[0].params.push(param(3, "x", Type::Any));
+    if let Stmt::Expr(Expr::Call { args, .. }) = &mut m.functions[0].body[0] {
+        args.push(Expr::LocalGet(3));
+    } else {
+        panic!("fixture must contain an indexed call");
+    }
+    let ir = emit_static(&m, false);
+    let caller = function_body(&ir, "__probe(");
+    assert!(!caller.contains("method_direct.sub0."));
+    assert!(caller.contains("idispatch."));
+}
+
+#[test]
+fn class_array_field_coercion_before_later_read_keeps_old_dispatch() {
+    let mut m = polymorphic_array_site_module();
+    m.classes[0]
+        .methods
+        .iter_mut()
+        .find(|f| f.name == "bump")
+        .unwrap()
+        .body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::Binary {
+            op: BinaryOp::Mul,
+            left: Box::new(this_get("value")),
+            right: Box::new(Expr::Integer(3)),
+        }),
+        right: Box::new(this_get("value")),
+    }))];
+    let ir = emit_static(&m, false);
+    let caller = function_body(&ir, "__probe(");
+    assert!(!caller.contains("method_direct.sub0."));
+    assert!(caller.contains("idispatch."));
+}
+
+#[test]
+fn class_array_subclass_callback_keeps_its_public_body() {
+    let mut m = polymorphic_array_site_module();
+    m.functions.push(func(
+        901,
+        "tick",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Return(None)],
+    ));
+    m.classes[1].methods[0].body.insert(
+        0,
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(901)),
+            args: Vec::new(),
+            byte_offset: 0,
+            type_args: Vec::new(),
+        }),
+    );
+    let ir = emit_static(&m, false);
+    let caller = function_body(&ir, "__probe(");
+    let subclass = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_direct.sub0."))
+        .expect("the existing guard must remain");
+    assert!(subclass
+        .1
+        .iter()
+        .any(|line| line.contains("__Derived__bump(")));
+    assert!(!subclass.1.iter().any(|line| line.contains("$pshape(")));
+}

@@ -1798,7 +1798,20 @@ pub(super) fn emit_guarded_direct_method_call(
     let mut sub_truthy_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
     for (i, arm) in subclass_arms.iter().enumerate() {
         ctx.current_block = sub_case_idxs[i];
-        let value = ctx.block().call(DOUBLE, &arm.target_fn, direct_arg_slices);
+        // Consume an own declaration's proof only while body evaluation
+        // cannot invalidate it before a later receiver read or store.
+        // An inherited body was compiled for its parent layout and keeps its
+        // ordinary receiver guards. No extra emitted guard or dispatch arm.
+        let target = ctx.class_ids.iter().find_map(|(name, &cid)| {
+            let key = (name.clone(), property.to_string());
+            (cid == arm.class_id
+                && ctx.methods.get(&key) == Some(&arm.target_fn)
+                && ctx.pshape_methods.contains_key(&key)
+                && super::method_shape_proof::can_consume(ctx, name, property, source_args))
+            .then(|| crate::collectors::pshape_method_name(&arm.target_fn))
+        });
+        let target = target.as_deref().unwrap_or(&arm.target_fn);
+        let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
         let truthy = truthy_result_kind.map(|_| {
             if let Some(kind) = constructive_method_truthiness(ctx, &arm.target_fn) {
                 constructive_truthy(ctx, kind, &value)

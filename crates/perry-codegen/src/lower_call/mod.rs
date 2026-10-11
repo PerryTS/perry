@@ -87,6 +87,7 @@ pub(crate) mod lookup_first;
 #[cfg(test)]
 mod method_order_tests;
 pub(crate) mod method_override;
+mod method_shape_proof;
 pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
 #[cfg(test)]
 mod args_sweep_tests;

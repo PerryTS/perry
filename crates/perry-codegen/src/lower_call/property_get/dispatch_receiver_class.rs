@@ -53,13 +53,37 @@ pub(super) fn canonical_shape_excludes_own_property(
 pub(super) fn guarded_declared_receiver_class_candidate(
     ctx: &FnCtx<'_>,
     object: &Expr,
+    property: &str,
+    args: &[Expr],
 ) -> Option<String> {
-    let Expr::LocalGet(id) = object else {
-        return None;
+    use perry_hir::types::Type;
+    let ty = match object {
+        Expr::LocalGet(id) => ctx.local_type_hint(id)?,
+        Expr::IndexGet { object, .. }
+            if args
+                .iter()
+                .all(|arg| crate::rooting::expr_is_inert_primitive(ctx, arg)) =>
+        {
+            // Coercion of an object argument can invalidate the receiver proof
+            // inside the callee. Admit only runtime-proven primitive arguments.
+            // An erased element annotation selects a candidate, never a proof.
+            // Reuse the live class/shape/holder guard used for named locals.
+            let Expr::LocalGet(id) = object.as_ref() else {
+                return None;
+            };
+            let Type::Array(element) = ctx.local_type_hint(id)? else {
+                return None;
+            };
+            element.as_ref()
+        }
+        _ => return None,
     };
-    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
+    let Type::Named(name) = ty else { return None };
+    if matches!(object, Expr::IndexGet { .. })
+        && !crate::lower_call::method_shape_proof::can_consume(ctx, name, property, args)
+    {
         return None;
-    };
+    }
     ctx.classes.contains_key(name).then(|| name.clone())
 }
 

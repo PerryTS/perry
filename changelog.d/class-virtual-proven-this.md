@@ -1,0 +1,3 @@
+Route class-array method calls through the existing live class/shape/holder guard when primitive arguments and evaluation order preserve the receiver proof. This replaces the generic class tower and method-site sequence. Own subclass arms consume the existing proven-`this` capability; inherited bodies and calls with reentrant effects retain their existing guards. No new cache, side table, or runtime dispatch mechanism.
+
+Adds IR routing tests and Node-parity coverage for prototype replacement, own methods, four classes, getters, inheritance, `super`, changed layouts, nonnumeric fields, argument coercions, and callbacks inside methods.

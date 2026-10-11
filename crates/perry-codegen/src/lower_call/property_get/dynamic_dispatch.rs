@@ -164,7 +164,7 @@ pub(crate) fn try_lower_instance_method_call(
     // local class is weaker: it may only select the later direct-method guard,
     // whose miss path preserves dynamic JavaScript dispatch.
     let receiver_class = receiver_class_name(ctx, object)
-        .or_else(|| guarded_declared_receiver_class_candidate(ctx, object));
+        .or_else(|| guarded_declared_receiver_class_candidate(ctx, object, property, args));
     // Globals use their builtin dispatch even when a class shares the name.
     let is_global = matches!(object, Expr::GlobalGet(_));
     // If the receiver's static type is a well-known built-in with its own
