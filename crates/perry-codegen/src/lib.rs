@@ -95,7 +95,8 @@ pub mod workers;
 pub use codegen::{
     assign_static_shape_ids, compile_module, context_free_ctor_abi, context_free_ctor_param_count,
     decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
-    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
+    namespace_member_func_key, namespace_member_var_key, resolve_target_triple, target_os_of,
+    TARGET_NAMES,
     short_spread_method_capabilities, take_module_static_seeds, user_function_symbol, AppMetadata,
     BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth, ConstructorContracts,
     CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,

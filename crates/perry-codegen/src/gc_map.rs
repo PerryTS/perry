@@ -1189,9 +1189,12 @@ enum ObjectFormat {
 }
 
 fn format_for(target: &str) -> ObjectFormat {
-    if target.contains("apple") || target.contains("darwin") {
+    if matches!(
+        crate::codegen::target_os_of(target),
+        Some("macos" | "ios" | "tvos" | "watchos" | "visionos")
+    ) {
         ObjectFormat::MachO
-    } else if target.contains("windows") || target.contains("msvc") {
+    } else if crate::codegen::target_os_of(target) == Some("windows") {
         ObjectFormat::Coff
     } else {
         ObjectFormat::Elf

@@ -219,14 +219,25 @@ fn is_classic_stream_instance_method(ctx: &FnCtx<'_>, object: &Expr, property: &
 }
 
 fn fs_lchmod_callable_on_target(target_triple: &str) -> bool {
-    let target = target_triple.to_ascii_lowercase();
-    target.contains("darwin")
-        || target.contains("macos")
-        || target.contains("ios")
-        || target.contains("freebsd")
-        || target.contains("netbsd")
-        || target.contains("openbsd")
-        || target.contains("dragonfly")
+    matches!(
+        crate::codegen::target_os_of(target_triple),
+        Some("macos" | "ios" | "freebsd" | "netbsd" | "openbsd" | "dragonfly")
+    )
+}
+
+#[cfg(test)]
+mod target_os_tests {
+    use super::fs_lchmod_callable_on_target;
+
+    #[test]
+    fn lchmod_availability_uses_the_classified_target_os() {
+        for target in ["aarch64-apple-darwin", "arm64-apple-macosx15.0.0", "x86_64-unknown-freebsd"] {
+            assert!(fs_lchmod_callable_on_target(target), "{target}");
+        }
+        for target in ["aarch64-unknown-linux-android", "x86_64-pc-windows-msvc"] {
+            assert!(!fs_lchmod_callable_on_target(target), "{target}");
+        }
+    }
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {

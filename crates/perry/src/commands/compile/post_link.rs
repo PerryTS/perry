@@ -6,6 +6,7 @@
 //! verbatim copy of an inline block from `run_with_parse_cache`.
 
 use crate::OutputFormat;
+use perry_codegen::target_os_of;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +85,7 @@ fn emit_macos_dsym(exe_path: &Path, target: Option<&str>) {
     if !cfg!(target_os = "macos") || std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
         return;
     }
-    if target.is_some_and(|t| !(t.contains("macos") || t.contains("darwin"))) {
+    if target.is_some_and(|t| target_os_of(t) != Some("macos")) {
         return;
     }
     match std::process::Command::new("dsymutil")

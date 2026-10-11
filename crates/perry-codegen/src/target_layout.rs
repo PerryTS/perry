@@ -95,11 +95,12 @@ pub fn wasm32_lowering(target_triple: &str) -> bool {
 pub(crate) fn heap_addr_upper_bound_exclusive(target_triple: &str) -> u64 {
     let triple = target_triple.to_ascii_lowercase();
     let is_aarch64 = triple.starts_with("aarch64") || triple.starts_with("arm64");
-    // HarmonyOS triples contain the spelling `linux-ohos`, but Rust exposes
-    // them as `target_os = "ohos"`; the runtime therefore keeps the 47-bit
-    // ceiling there. Android is explicitly in the full-range arm.
-    let is_linux_family =
-        triple.contains("android") || (triple.contains("linux") && !triple.contains("ohos"));
+    // HarmonyOS triples contain `linux-ohos`, but Rust exposes `target_os =
+    // "ohos"`; keep the 47-bit ceiling there. Android uses the full range.
+    let is_linux_family = matches!(
+        crate::codegen::target_os_of(target_triple),
+        Some("linux" | "android")
+    );
     if is_aarch64 && is_linux_family {
         0x1_0000_0000_0000
     } else {
@@ -109,27 +110,24 @@ pub(crate) fn heap_addr_upper_bound_exclusive(target_triple: &str) -> u64 {
 
 /// Inclusive lower bound for a candidate GC address after excluding Perry's
 /// small-handle band. Mainstream hosted targets accept low virtual addresses,
-/// so the handle ceiling (`RECEIVER_HANDLE_FLOOR`) is the effective floor. Other targets use the
-/// runtime's conservative 2 TiB floor before any `GcHeader` dereference.
+/// so the handle ceiling (`RECEIVER_HANDLE_FLOOR`) is the effective floor.
+/// Other targets use the runtime's conservative 2 TiB floor before any
+/// `GcHeader` dereference.
 pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
-    let triple = target_triple.to_ascii_lowercase();
-    // Codegen sees LLVM spellings, not only rustc ones: the macOS host triple
-    // is `arm64-apple-macosx15.0.0` and visionOS is `arm64-apple-xros1.0`.
-    // Missing them put macOS on the 2 TiB floor, so every inline guard missed
-    // for heap objects below 2 TiB (mimalloc's arenas happen to sit above it).
-    let mainstream_os = triple.contains("android")
-        || triple.contains("darwin")
-        || triple.contains("macos")
-        || (triple.contains("linux") && !triple.contains("ohos"))
-        || triple.contains("windows")
-        || triple.contains("ios")
-        || triple.contains("tvos")
-        || triple.contains("watchos")
-        || triple.contains("visionos")
-        || triple.contains("xros")
-        // wasm32 WASI (#11378): must match perry-runtime's `is_valid_obj_ptr`
-        // floor for `target_os = "wasi"`.
-        || triple.contains("wasi");
+    let mainstream_os = matches!(
+        crate::codegen::target_os_of(target_triple),
+        Some(
+            "android"
+                | "macos"
+                | "linux"
+                | "windows"
+                | "ios"
+                | "tvos"
+                | "watchos"
+                | "visionos"
+                | "wasi"
+        )
+    );
     if mainstream_os {
         crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64
     } else {
@@ -462,32 +460,22 @@ mod tests {
     #[test]
     fn heap_address_floor_covers_emitted_triples() {
         let mut triples = vec![crate::codegen::default_target_triple()];
-        for name in [
-            "macos",
-            "macos-x86_64",
-            "ios",
-            "ios-simulator",
-            "visionos",
-            "visionos-simulator",
-            "watchos",
-            "watchos-simulator",
-            "tvos",
-            "tvos-simulator",
-            "android",
-            "android-x86_64",
-            "linux",
-            "linux-aarch64",
-            "linux-musl",
-            "linux-aarch64-musl",
-            "windows",
-            "windows-aarch64",
-        ] {
-            triples.push(crate::codegen::resolve_target_triple(name).expect(name));
+        for name in crate::codegen::TARGET_NAMES {
+            if let Some(triple) = crate::codegen::resolve_target_triple(name) {
+                triples.push(triple);
+            }
         }
         for triple in triples {
+            let expected = match crate::codegen::target_os_of(&triple) {
+                Some(
+                    "android" | "macos" | "linux" | "windows" | "ios" | "tvos" | "watchos"
+                    | "visionos" | "wasi",
+                ) => crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64,
+                _ => 0x200_0000_0000,
+            };
             assert_eq!(
                 heap_addr_lower_bound_inclusive(&triple),
-                crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64,
+                expected,
                 "{triple}"
             );
         }

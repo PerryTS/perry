@@ -5,6 +5,19 @@
 
 use super::*;
 
+#[test]
+fn object_format_tracks_target_os_across_triple_spellings() {
+    for target in ["aarch64-apple-darwin", "arm64-apple-macosx15.0.0"] {
+        assert!(matches!(format_for(target), ObjectFormat::MachO), "{target}");
+    }
+    for target in ["x86_64-pc-windows-msvc", "windows-arm64"] {
+        assert!(matches!(format_for(target), ObjectFormat::Coff), "{target}");
+    }
+    for target in ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-gnu"] {
+        assert!(matches!(format_for(target), ObjectFormat::Elf), "{target}");
+    }
+}
+
 /// Build a minimal but structurally real v3 block: one function, one
 /// record, two roots of which the second is the base/derived duplicate.
 fn sample_asm() -> String {

@@ -283,7 +283,7 @@ mod unknown_func_tests;
 
 pub(crate) use closure::emit_typed_capture_guard;
 pub(crate) use function::arena_threaded_function_body_name;
-pub use helpers::resolve_target_triple;
+pub use helpers::{resolve_target_triple, target_os_of, TARGET_NAMES};
 pub(crate) use helpers::{
     decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
     module_callable_count, set_full_outline_ic, write_barriers_enabled,

@@ -1,0 +1,1 @@
+Centralize Rust target OS detection for rustc and LLVM target triples, including Apple OS spellings, Android and OpenHarmony aliases, Windows, Linux musl, WASI, and mobile targets. Share the supported `--target` names with the resolver and cover them in target-layout and classifier tests.

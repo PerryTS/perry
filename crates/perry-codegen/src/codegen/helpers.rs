@@ -148,14 +148,14 @@ pub(crate) fn set_native_roots_for_target(triple: &str) {
     // Windows has a walker only on x86-64 (#7354): ARM64 Windows passes the
     // arch check and is COFF, but its CONTEXT layout and register model differ,
     // so no frame would ever be visited.
-    let windows_ok = !triple.contains("windows") || triple.starts_with("x86_64");
+    let windows_ok = target_os_of(triple) != Some("windows") || triple.starts_with("x86_64");
     // Match the runtime section locator and walker, not merely the ELF format.
-    // Android has a distinct target_os and no native map reader. OpenHarmony
-    // exposes target_os=linux and uses the Linux reader.
-    let reader_ok = triple.contains("apple")
-        || triple.contains("darwin")
-        || triple.contains("windows")
-        || (triple.contains("linux") && !triple.contains("android"));
+    // Android and OpenHarmony have distinct target_os values and no native
+    // map reader.
+    let reader_ok = matches!(
+        target_os_of(triple),
+        Some("macos" | "ios" | "tvos" | "watchos" | "visionos" | "windows" | "linux")
+    );
     NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok && reader_ok));
 }
 
@@ -485,7 +485,7 @@ pub(crate) fn set_jscvt_for_target(triple: &str) {
         Ok("0") | Ok("off") | Ok("false")
     );
     let target_has_jscvt = (triple.starts_with("arm64") || triple.starts_with("aarch64"))
-        && (triple.contains("apple-macosx") || triple.contains("apple-darwin"));
+        && target_os_of(triple) == Some("macos");
     JSCVT.with(|c| c.set(target_has_jscvt && !env_off));
 }
 
@@ -1041,6 +1041,192 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
     }
 }
 
+/// Public `--target` aliases accepted by [`resolve_target_triple`]. Includes
+/// feature-gated targets, which the resolver may reject when disabled. Keep
+/// this beside the resolver so target coverage cannot drift.
+pub const TARGET_NAMES: &[&str] = &[
+    "ios",
+    "ios-simulator",
+    "visionos",
+    "visionos-simulator",
+    "watchos",
+    "watchos-simulator",
+    "wasi",
+    "tvos",
+    "tvos-simulator",
+    "harmonyos",
+    "harmonyos-simulator",
+    "android",
+    "android-x86_64",
+    "wearos",
+    "linux",
+    "linux-aarch64",
+    "linux-musl",
+    "linux-x86_64-musl",
+    "linux-aarch64-musl",
+    "macos",
+    "macos-x86_64",
+    "windows",
+    "windows-winui",
+    "windows-x86_64",
+    "windows-aarch64",
+    "windows-arm64",
+];
+
+/// Return rustc's `target_os` value for a rustc or LLVM triple, or an accepted
+/// Perry target name. LLVM spells several Apple OSes differently (`darwin`,
+/// `macosx`, `xros`), and Android/HarmonyOS triples include a `linux` ABI token.
+/// Unrecognized OS components stay `None` so target consumers take their
+/// conservative fallback.
+pub fn target_os_of(triple: &str) -> Option<&'static str> {
+    let triple = triple.to_ascii_lowercase();
+    let components: Vec<&str> = triple.split('-').collect();
+
+    // These must precede `linux`: their triples commonly include that token.
+    if components.contains(&"ohos") || components.contains(&"harmonyos") {
+        return Some("ohos");
+    }
+    if components.contains(&"android")
+        || components.contains(&"androideabi")
+        || components.contains(&"wearos")
+    {
+        return Some("android");
+    }
+
+    for component in components {
+        let os = if component == "darwin"
+            || has_numeric_version_suffix(component, "darwin")
+            || component == "macos"
+            || component == "macosx"
+            || has_numeric_version_suffix(component, "macosx")
+        {
+            Some("macos")
+        } else if component == "visionos"
+            || component == "xros"
+            || has_numeric_version_suffix(component, "xros")
+        {
+            Some("visionos")
+        } else if component == "ios" || has_numeric_version_suffix(component, "ios") {
+            Some("ios")
+        } else if component == "tvos" || has_numeric_version_suffix(component, "tvos") {
+            Some("tvos")
+        } else if component == "watchos" || has_numeric_version_suffix(component, "watchos") {
+            Some("watchos")
+        } else if component == "windows" {
+            Some("windows")
+        } else if component == "linux" {
+            Some("linux")
+        } else if component == "wasi"
+            || component.strip_prefix("wasip").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            })
+        {
+            Some("wasi")
+        } else {
+            match component {
+                "freebsd" => Some("freebsd"),
+                "netbsd" => Some("netbsd"),
+                "openbsd" => Some("openbsd"),
+                "dragonfly" => Some("dragonfly"),
+                _ => None,
+            }
+        };
+        if os.is_some() {
+            return os;
+        }
+    }
+    None
+}
+
+fn has_numeric_version_suffix(component: &str, prefix: &str) -> bool {
+    component.strip_prefix(prefix).is_some_and(|suffix| {
+        suffix
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_digit())
+    })
+}
+
+#[cfg(test)]
+mod target_os_tests {
+    use super::{TARGET_NAMES, default_target_triple, resolve_target_triple, target_os_of};
+
+    #[test]
+    fn target_aliases_resolve_and_classify_to_the_rust_target_os() {
+        for name in TARGET_NAMES {
+            let expected = match *name {
+                "ios" | "ios-simulator" => "ios",
+                "visionos" | "visionos-simulator" => "visionos",
+                "watchos" | "watchos-simulator" => "watchos",
+                "wasi" => "wasi",
+                "tvos" | "tvos-simulator" => "tvos",
+                "harmonyos" | "harmonyos-simulator" => "ohos",
+                "android" | "android-x86_64" | "wearos" => "android",
+                "linux" | "linux-aarch64" | "linux-musl" | "linux-x86_64-musl"
+                | "linux-aarch64-musl" => "linux",
+                "macos" | "macos-x86_64" => "macos",
+                "windows" | "windows-winui" | "windows-x86_64" | "windows-aarch64"
+                | "windows-arm64" => "windows",
+                _ => panic!("unclassified target alias {name}"),
+            };
+            assert_eq!(target_os_of(name), Some(expected), "alias {name}");
+            let Some(triple) = resolve_target_triple(name) else {
+                // WASI is deliberately available only in target-wasi builds.
+                assert_eq!(*name, "wasi");
+                assert_eq!(target_os_of(name), Some(expected));
+                continue;
+            };
+            assert_eq!(target_os_of(&triple), Some(expected), "{name}: {triple}");
+        }
+    }
+
+    #[test]
+    fn target_os_classifier_handles_rustc_and_llvm_spellings() {
+        let cases = [
+            ("aarch64-apple-darwin", "macos"),
+            ("x86_64-apple-darwin23.0.0", "macos"),
+            ("arm64-apple-macosx15.0.0", "macos"),
+            ("aarch64-pc-windows-msvc", "windows"),
+            ("x86_64-unknown-linux-musl", "linux"),
+            ("wasm32-unknown-wasip2", "wasi"),
+            ("aarch64-apple-ios", "ios"),
+            ("arm64-apple-tvos17.0-simulator", "tvos"),
+            ("arm64-apple-watchos10.0-simulator", "watchos"),
+            ("arm64-apple-xros1.0-simulator", "visionos"),
+            ("aarch64-apple-visionos", "visionos"),
+            ("aarch64-unknown-linux-android", "android"),
+            ("armv7-linux-androideabi", "android"),
+            ("aarch64-unknown-linux-ohos", "ohos"),
+            ("macos", "macos"),
+            ("visionos", "visionos"),
+        ];
+        for (triple, expected) in cases {
+            assert_eq!(target_os_of(triple), Some(expected), "{triple}");
+        }
+        for non_triple in [
+            "x86_64-unknown-notlinux",
+            "x86_64-apple-darwinish",
+            "x86_64-pc-windowsish-msvc",
+        ] {
+            assert_eq!(target_os_of(non_triple), None, "{non_triple}");
+        }
+    }
+
+    #[test]
+    fn default_target_os_matches_this_compilers_cfg() {
+        let expected = if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "linux") {
+            "linux"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            std::env::consts::OS
+        };
+        assert_eq!(target_os_of(&default_target_triple()), Some(expected));
+    }
+}
+
 /// True for macOS triples only (`*-apple-macosx*` LLVM-style, or
 /// `*-apple-darwin*` rustc-style when a raw triple is passed through).
 /// Deliberately false for every other Apple platform (`apple-ios`,
@@ -1049,7 +1235,7 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
 /// non-macOS targets makes their links depend on the runtime archive
 /// carrying a macOS-only symbol (#4856).
 pub(super) fn is_macos_triple(triple: &str) -> bool {
-    triple.contains("apple-macosx") || triple.contains("apple-darwin")
+    target_os_of(triple) == Some("macos")
 }
 
 pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
@@ -1469,6 +1655,9 @@ mod native_roots_target_tests {
             // COFF + ARM64: no Windows walker for that register model, so no
             // frame would ever be visited.
             "aarch64-pc-windows-msvc",
+            // Although the LLVM triple contains `linux`, rustc exposes OHOS as
+            // `target_os = ohos`, and Perry has no native-map reader for it.
+            "aarch64-unknown-linux-ohos",
             // Architectures with no walker at all.
             "riscv64gc-unknown-linux-gnu",
             "wasm32-unknown-unknown",

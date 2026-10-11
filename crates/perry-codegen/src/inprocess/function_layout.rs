@@ -17,9 +17,7 @@ pub(crate) fn apply(module: &Module<'_>, layout: &FunctionLayout, effective_targ
             if elf_target(effective_target) {
                 place_listed_functions(module, order);
                 if !order.is_empty()
-                    && effective_target.contains("linux")
-                    && !effective_target.contains("android")
-                    && !effective_target.contains("ohos")
+                    && crate::codegen::target_os_of(effective_target) == Some("linux")
                 {
                     back_hot_text(module);
                 }
@@ -31,10 +29,10 @@ pub(crate) fn apply(module: &Module<'_>, layout: &FunctionLayout, effective_targ
 /// Mach-O links order through ld64's `-order_file` and need no sections;
 /// COFF and wasm keep the default layout.
 fn elf_target(triple: &str) -> bool {
-    !(triple.contains("apple")
-        || triple.contains("darwin")
-        || triple.contains("windows")
-        || triple.contains("wasm"))
+    !matches!(
+        crate::codegen::target_os_of(triple),
+        Some("macos" | "ios" | "tvos" | "watchos" | "visionos" | "windows")
+    ) && !triple.contains("wasm")
 }
 
 fn defined_functions<'ctx>(module: &Module<'ctx>) -> Vec<FunctionValue<'ctx>> {
