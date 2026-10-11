@@ -467,7 +467,9 @@ fn take_pending_fetch_body_stream_id() -> Option<usize> {
     let iterable = PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.replace(0));
     stream.or_else(|| {
         (iterable != 0).then(|| unsafe {
-            crate::streams::js_readable_stream_from_iterable(f64::from_bits(iterable)) as usize
+            crate::streams::stream_id(crate::streams::js_readable_stream_from_iterable(
+                f64::from_bits(iterable),
+            ))
         })
     })
 }

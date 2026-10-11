@@ -816,20 +816,6 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         // Date is now a NaN-boxed `DateCell` pointer (#2089), handled in the
         // `is_pointer()` arm above — it no longer reaches this numeric
         // fallthrough.
-        // #1650: Web Streams handles (ReadableStream / WritableStream /
-        // reader / writer) are returned as a raw `id as f64` whole number in
-        // a high id range (#1545), so they reach this fallthrough and would
-        // otherwise report "number". Consult the stdlib kind-probe — the same
-        // side-channel `instanceof ReadableStream` uses — so `typeof
-        // res.body === "object"` matches the spec (Response.body is a
-        // ReadableStream object).
-        if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
-            if let Some(probe) = crate::object::stream_handle_kind_probe() {
-                if unsafe { probe(value as usize) } != 0 {
-                    return ValueTypeofTag::Object;
-                }
-            }
-        }
         // Regular f64 number
         ValueTypeofTag::Number
     }

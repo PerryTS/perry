@@ -297,32 +297,29 @@ pub extern "C" fn js_put_value_set(
         ) {
             return v;
         }
-        // #5437: a live Web Stream handle (raw finite f64 id in the stream
+        // #5437: a live Web Stream handle (a `POINTER_TAG` id in the stream
         // band). React's `renderToReadableStream` attaches its shell-ready
         // promise as an expando (`stream.allReady = ...`); without a store the
         // write was dropped (sloppy) or threw read-only (strict), which killed
         // the Next.js dynamic-SSR render. Route the write to the stdlib
         // per-stream expando table (GC-traced there).
-        if target.is_finite() && target > 0.0 && target.fract() == 0.0 {
-            let id = target as usize;
-            if crate::value::addr_class::is_stream_id_band(id) {
-                if let (Some(probe), Some(setter)) = (
-                    crate::object::stream_handle_probe(),
-                    crate::object::stream_expando_set(),
-                ) {
-                    if unsafe { probe(id) } {
-                        if let Some(name) = key_to_rust_string(property_key) {
-                            unsafe { setter(id, name.as_ptr(), name.len(), value) };
-                        }
+        if let Some(id) = crate::object::stream_handle_id(target) {
+            if let (Some(probe), Some(setter)) = (
+                crate::object::stream_handle_probe(),
+                crate::object::stream_expando_set(),
+            ) {
+                if unsafe { probe(id) } {
+                    if let Some(name) = key_to_rust_string(property_key) {
+                        unsafe { setter(id, name.as_ptr(), name.len(), value) };
                     }
                 }
-                // A stream-band id is a reserved handle, never a settable
-                // object — stop here rather than falling through to the
-                // ordinary `[[Set]]` walk, even when the expando write was a
-                // no-op (dead handle / hooks absent / non-UTF-8 key). Mirrors
-                // the `js_object_set_field_by_name` stream guard.
-                return value;
             }
+            // A stream-band id is a reserved handle, never a settable
+            // object — stop here rather than falling through to the
+            // ordinary `[[Set]]` walk, even when the expando write was a
+            // no-op (dead handle / hooks absent / non-UTF-8 key). Mirrors
+            // the `js_object_set_field_by_name` stream guard.
+            return value;
         }
         if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {
             // #7574: `sub.length = n` on a `class X extends Array` instance.

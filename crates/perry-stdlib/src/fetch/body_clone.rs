@@ -33,17 +33,15 @@ pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let bytes = blob_bytes_clone(id).unwrap_or_default();
-    // Streams are still a Phase 2 subsystem — keep their handle in the legacy
-    // raw-float form (`as f64`) so streams.rs's accessors continue to round-trip.
-    crate::streams::alloc_readable_from_bytes(bytes) as f64
+    crate::streams::stream_value(crate::streams::alloc_readable_from_bytes(bytes))
 }
 
 /// Shared `response.body` resolver used by both the typed codegen path
 /// (`js_response_body`) and the untyped property dispatcher
 /// (`dispatch_response_property`). Returns a single-chunk ReadableStream
 /// handle over the buffered body, or `null` when the response carries no
-/// body (`Response.body: ReadableStream | null`). The handle is a raw
-/// `id as f64` in the shared Web Streams id range (#1545), so the runtime
+/// body (`Response.body: ReadableStream | null`). The handle is a stream-band
+/// registry handle (`streams::stream_value`), so the runtime
 /// machinery answers `typeof` (`"object"`), `instanceof ReadableStream`,
 /// and `.getReader()` / `reader.read()`. The stream id is cached on the
 /// FetchResponse so `.body` is stable across reads — the spec mandates a
@@ -64,7 +62,7 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         .get(&resp_id)
         .and_then(|r| r.body_stream_id)
     {
-        return id as f64;
+        return crate::streams::stream_value(id);
     }
     if let Some(id) = FETCH_RESPONSES
         .lock()
@@ -72,7 +70,7 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         .get(&resp_id)
         .and_then(|r| r.cached_body_stream_id)
     {
-        return id as f64;
+        return crate::streams::stream_value(id);
     }
     let bytes = match FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
         Some(r) if r.body_present => std::mem::take(&mut r.body),
@@ -84,11 +82,11 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
         resp.cached_body_stream_id = Some(stream_id);
         resp.body_stream_id = Some(stream_id);
     }
-    stream_id as f64
+    crate::streams::stream_value(stream_id)
 }
 
 /// `response.body` — `ReadableStream | null` per the Web Fetch spec. The
-/// returned handle is a raw `id as f64` in the shared Web Streams id range
+/// returned handle is a stream-band registry handle (`streams::stream_value`)
 /// so the #1545 runtime machinery answers `typeof`/`instanceof`/method
 /// dispatch; `null` when the response has no body. (#1650)
 #[no_mangle]
@@ -231,7 +229,7 @@ mod storage_tests {
             true,
         );
         let stream = response_body_stream(id);
-        assert_eq!(stream, response_body_stream(id));
+        assert_eq!(stream.to_bits(), response_body_stream(id).to_bits());
         let retained = FETCH_RESPONSES.lock().unwrap()[&id].body.capacity();
         assert_eq!(retained, 0);
         assert_eq!(consume_response_body(handle_to_f64(id)).unwrap(), expected);

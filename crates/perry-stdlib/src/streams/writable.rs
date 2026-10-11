@@ -56,10 +56,10 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
         js_closure_call1(
             start_cb as *const ClosureHeader,
             perry_runtime::closure::plain_call_receiver(),
-            id as f64,
+            stream_value(id),
         );
     }
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
@@ -86,10 +86,10 @@ pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm:
         js_closure_call1(
             start_cb as *const ClosureHeader,
             perry_runtime::closure::plain_call_receiver(),
-            id as f64,
+            stream_value(id),
         );
     }
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f64 {
     ensure_gc_registered();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let mut g = WRITABLE_STREAMS.lock().unwrap();
     let s = match g.get_mut(&id) {
         Some(s) => s,
@@ -124,12 +124,12 @@ pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f6
             ready_promise: ready_p,
         },
     );
-    writer_id as f64
+    stream_value(writer_id)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = WRITABLE_STREAMS.lock().unwrap();
     let locked = g
         .get(&id)
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn js_writable_stream_locked(stream_handle: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Promise {
     let promise = js_promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let start_close = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
@@ -190,7 +190,7 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
     allow_locked: bool,
 ) -> *mut Promise {
     let promise = js_promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let reason_bits = reason.to_bits();
     let mut locked_reject = false;
     let (cb, closed_p, close_request) = {
@@ -745,7 +745,7 @@ unsafe fn finish_writable_write_error(stream_id: usize, promise: *mut Promise, r
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) if w.locked => w.stream_handle,
         _ => {
@@ -759,7 +759,7 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => return 0.0,
@@ -774,7 +774,7 @@ pub unsafe extern "C" fn js_writer_desired_size(writer_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => {
@@ -786,12 +786,12 @@ pub unsafe extern "C" fn js_writer_close(writer_handle: f64) -> *mut Promise {
     if TRANSFORM_PAIRS.lock().unwrap().contains_key(&stream_id) {
         return transform_close(stream_id);
     }
-    js_writable_stream_close(stream_id as f64)
+    js_writable_stream_close(stream_value(stream_id))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.stream_handle,
         None => {
@@ -800,12 +800,12 @@ pub unsafe extern "C" fn js_writer_abort(writer_handle: f64, reason: f64) -> *mu
             return p;
         }
     };
-    js_writable_stream_abort_inner(stream_id as f64, reason, true)
+    js_writable_stream_abort_inner(stream_value(stream_id), reason, true)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     let stream_id = {
         let mut g = WRITERS.lock().unwrap();
         match g.get_mut(&writer_id) {
@@ -828,7 +828,7 @@ pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.closed_promise,
         None => {
@@ -841,7 +841,7 @@ pub unsafe extern "C" fn js_writer_closed(writer_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_writer_ready(writer_handle: f64) -> *mut Promise {
-    let writer_id = writer_handle as usize;
+    let writer_id = stream_id(writer_handle);
     match WRITERS.lock().unwrap().get(&writer_id) {
         Some(w) => w.ready_promise,
         None => {

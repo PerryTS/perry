@@ -149,17 +149,17 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// `value::addr_class` (`PROXY_ID_BAND_START`).
 const PROXY_TAG_BASE: u64 = crate::value::addr_class::PROXY_ID_BAND_START as u64;
 
-/// Number of ids the revocable-Proxy band can encode: `HANDLE_BAND_MAX -
+/// Number of ids the revocable-Proxy band can encode: `PROXY_ID_BAND_END -
 /// PROXY_ID_BAND_START`, i.e. **65,536**, of which id 0 is reserved so a
 /// handle is never the bare band base.
 ///
 /// This is a hard ceiling, not a soft one. `encode_proxy_id` maps id `n` to
 /// `PROXY_TAG_BASE + n`, so the first id at or above this length encodes to
-/// `HANDLE_BAND_MAX` — a payload that `addr_class::is_proxy_id_band` rejects
-/// and `addr_class::is_above_handle_band` **accepts as a dereferenceable heap
-/// address**. Minting one is therefore a memory-safety bug rather than a lost
-/// proxy: the 65,536th `new Proxy(...)` in a thread used to hand back a value
-/// that the very next property read dereferenced, SIGSEGV (#8213).
+/// `PROXY_ID_BAND_END` — a payload that `addr_class::is_proxy_id_band` rejects
+/// and that names a Web Streams id. Before the stream band joined the handle
+/// band that payload was a **dereferenceable heap address**: the 65,536th
+/// `new Proxy(...)` in a thread used to hand back a value that the very next
+/// property read dereferenced, SIGSEGV (#8213). Minting one stays refused.
 ///
 /// Every other handle band already refuses to allocate past its end
 /// (`common/handle.rs`, `fetch/mod.rs` both panic). The Proxy band was the
@@ -168,7 +168,7 @@ const PROXY_TAG_BASE: u64 = crate::value::addr_class::PROXY_ID_BAND_START as u64
 /// long-running program reaches by simply staying up (#8213 measured ~4
 /// proxies per HTTP request on a warm Next.js App Route, i.e. this ceiling
 /// lands after roughly 16k requests).
-const PROXY_ID_BAND_LEN: u64 = (crate::value::addr_class::HANDLE_BAND_MAX
+const PROXY_ID_BAND_LEN: u64 = (crate::value::addr_class::PROXY_ID_BAND_END
     - crate::value::addr_class::PROXY_ID_BAND_START) as u64;
 
 #[cfg(test)]
@@ -234,7 +234,7 @@ fn decode_proxy_id(raw: i64) -> Option<u64> {
     // every addr-class consumer read the same payload as a heap address
     // (#8213). `reserve_proxy_id` makes such an id unmintable; this keeps the
     // two classifications from drifting apart again.
-    if raw >= crate::value::addr_class::HANDLE_BAND_MAX as u64 {
+    if raw >= crate::value::addr_class::PROXY_ID_BAND_END as u64 {
         return None;
     }
     let id = raw - PROXY_TAG_BASE;
@@ -846,9 +846,7 @@ pub(crate) fn reflect_value_is_object(value: f64) -> bool {
         // threw `TypeError: Reflect.get called on non-object`. Next's app-route
         // runtime wraps the request in a Proxy whose `get` trap forwards through
         // `Reflect.get(target, …)`, so every authenticated route 500'd.
-        if crate::value::addr_class::is_handle_band(lower48 as usize)
-            || crate::value::addr_class::is_stream_id_band(lower48 as usize)
-        {
+        if crate::value::addr_class::is_handle_band(lower48 as usize) {
             return lower48 != 0;
         }
         // The wasm32 heap is entirely below 4 GiB. Its handle-band guard
@@ -2686,15 +2684,15 @@ mod tests {
             );
         }
 
-        // The first refused id, and why refusing it is a memory-safety fix
-        // rather than a tidiness one.
+        // The first refused id, and why refusing it matters: it would name
+        // another subsystem's handle (the Web Streams band follows the proxy
+        // band), so a proxy minted there would be dispatched as a stream.
         assert_eq!(reserve_proxy_id(PROXY_ID_BAND_LEN as usize), None);
         let out_of_band = encode_proxy_id(PROXY_ID_BAND_LEN) as usize;
         assert!(!addr_class::is_proxy_id_band(out_of_band));
         assert!(
-            addr_class::is_above_handle_band(out_of_band),
-            "an out-of-band proxy id is classified as a heap address to be \
-             dereferenced — that is the SIGSEGV this guard prevents"
+            addr_class::is_stream_id_band(out_of_band),
+            "an out-of-band proxy id lands in the Web Streams band"
         );
     }
 
@@ -2717,12 +2715,12 @@ mod tests {
             "below band"
         );
         assert_eq!(
-            decode_proxy_id((addr_class::HANDLE_BAND_MAX - 1) as i64),
+            decode_proxy_id((addr_class::PROXY_ID_BAND_END - 1) as i64),
             Some(PROXY_ID_BAND_LEN - 1),
             "the last in-band payload still decodes"
         );
         assert_eq!(
-            decode_proxy_id(addr_class::HANDLE_BAND_MAX as i64),
+            decode_proxy_id(addr_class::PROXY_ID_BAND_END as i64),
             None,
             "the first payload past the band is not a proxy id"
         );

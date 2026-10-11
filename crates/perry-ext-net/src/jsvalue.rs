@@ -16,11 +16,11 @@ use perry_ffi::{
 
 pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
     let p = ptr as usize;
-    // Small-handle cutoff: a POINTER-tagged payload below 0x100000 is a
+    // Small-handle cutoff: a POINTER-tagged payload below RECEIVER_HANDLE_FLOOR is a
     // registry handle (fetch/zlib/proxy/...), not a heap StringHeader. Reject
-    // it before the dereference. See the project guideline on `value < 0x100000`
+    // it before the dereference. See the project guideline on `value < RECEIVER_HANDLE_FLOOR`
     // handle detection.
-    if p < 0x100000 {
+    if p < perry_ffi::RECEIVER_HANDLE_FLOOR as _ {
         return None;
     }
     let handle = JsString::from_raw(ptr as *mut StringHeader);
@@ -115,9 +115,9 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
     // identify it; anything else must NOT be reinterpreted as bytes.
     if v.is_pointer() {
         let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-        // Small-handle cutoff: a sub-0x100000 payload is a registry handle, not
-        // a heap pointer — never dereference it. (`value < 0x100000` guideline.)
-        if (raw as u64) < 0x100000 {
+        // Small-handle cutoff: a sub-RECEIVER_HANDLE_FLOOR payload is a registry handle, not
+        // a heap pointer — never dereference it. (`value < RECEIVER_HANDLE_FLOOR` guideline.)
+        if (raw as u64) < perry_ffi::RECEIVER_HANDLE_FLOOR as u64 {
             return None;
         }
         if js_buffer_is_buffer(raw) != 0 {
@@ -185,10 +185,10 @@ pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> 
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
     // Small-handle cutoff before dereferencing: `is_nanboxed_pointer` only
-    // checks the POINTER_TAG, so a sub-0x100000 payload (a registry handle, not
-    // a heap object) would otherwise be read as an ObjectHeader. `< 0x100000`
-    // also subsumes the null check. See the `value < 0x100000` handle guideline.
-    if (obj_ptr as usize) < 0x100000 {
+    // checks the POINTER_TAG, so a sub-RECEIVER_HANDLE_FLOOR payload (a registry handle, not
+    // a heap object) would otherwise be read as an ObjectHeader. `< RECEIVER_HANDLE_FLOOR`
+    // also subsumes the null check. See the `value < RECEIVER_HANDLE_FLOOR` handle guideline.
+    if (obj_ptr as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
         return None;
     }
     let roots = perry_ffi::TransientRootScope::enter();
@@ -214,7 +214,7 @@ pub(crate) unsafe fn get_object_value_field(obj_f64: f64, field_name: &str) -> O
         return None;
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
-    if (obj_ptr as usize) < 0x100000 {
+    if (obj_ptr as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
         return None;
     }
     let roots = perry_ffi::TransientRootScope::enter();
@@ -230,10 +230,10 @@ pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> 
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
     // Small-handle cutoff before dereferencing: `is_nanboxed_pointer` only
-    // checks the POINTER_TAG, so a sub-0x100000 payload (a registry handle, not
-    // a heap object) would otherwise be read as an ObjectHeader. `< 0x100000`
-    // also subsumes the null check. See the `value < 0x100000` handle guideline.
-    if (obj_ptr as usize) < 0x100000 {
+    // checks the POINTER_TAG, so a sub-RECEIVER_HANDLE_FLOOR payload (a registry handle, not
+    // a heap object) would otherwise be read as an ObjectHeader. `< RECEIVER_HANDLE_FLOOR`
+    // also subsumes the null check. See the `value < RECEIVER_HANDLE_FLOOR` handle guideline.
+    if (obj_ptr as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
         return None;
     }
     let roots = perry_ffi::TransientRootScope::enter();
@@ -268,10 +268,10 @@ pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Op
     }
     let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
     // Small-handle cutoff before dereferencing: `is_nanboxed_pointer` only
-    // checks the POINTER_TAG, so a sub-0x100000 payload (a registry handle, not
-    // a heap object) would otherwise be read as an ObjectHeader. `< 0x100000`
-    // also subsumes the null check. See the `value < 0x100000` handle guideline.
-    if (obj_ptr as usize) < 0x100000 {
+    // checks the POINTER_TAG, so a sub-RECEIVER_HANDLE_FLOOR payload (a registry handle, not
+    // a heap object) would otherwise be read as an ObjectHeader. `< RECEIVER_HANDLE_FLOOR`
+    // also subsumes the null check. See the `value < RECEIVER_HANDLE_FLOOR` handle guideline.
+    if (obj_ptr as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
         return None;
     }
     let roots = perry_ffi::TransientRootScope::enter();

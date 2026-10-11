@@ -41,7 +41,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         let tag = blk.lshr(I64, &bits, "48");
         let pointer = blk.icmp_eq(I64, &tag, "32765");
         let handle = blk.and(I64, &bits, "281474976710655");
-        let above = blk.icmp_ugt(I64, &handle, "1048575");
+        let above = blk.icmp_ugt(
+            I64,
+            &handle,
+            crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+        );
         let below = blk.icmp_ult(I64, &handle, "140737488355328");
         let range = blk.and(I1, &above, &below);
         let heap = blk.and(I1, &pointer, &range);

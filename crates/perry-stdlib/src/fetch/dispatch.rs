@@ -69,15 +69,9 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             }
         }
     }
-    // A non-integral or out-of-range value can't be a stream, so skip the
-    // registry probe for the common cases.
-    if value.is_finite()
-        && value.fract() == 0.0
-        && ((crate::streams::STREAM_HANDLE_ID_START as f64)
-            ..(crate::streams::STREAM_HANDLE_ID_END as f64))
-            .contains(&value)
-    {
-        let id = value as usize;
+    // Only a stream-band handle can be a stream; skip the registry probe for
+    // everything else.
+    if let Some(id) = perry_runtime::object::stream_handle_id(value) {
         // kind == 1 ⇒ live ReadableStream. Stash it for the constructor that
         // requested the body-init conversion: Request drains it to bytes, while
         // Response preserves it lazily because transformed SSR streams often

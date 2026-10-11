@@ -112,7 +112,7 @@ fn lower_map_entry_at_inline(
 ) -> Result<String> {
     use crate::nanbox::POINTER_TAG_TOP16_I64;
     use crate::types::{I1, I8};
-    const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — heap objects are above
+    const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
     const GC_TYPE_MAP: &str = "8";
     const GC_FLAG_FORWARDED: &str = "128";
     let stem = if value_slot {

@@ -97,7 +97,7 @@ pub(crate) unsafe fn native_enqueue(id: usize, bytes: &[u8]) {
     }
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let chunk = scope.root_nanbox_u64(alloc_uint8array_from_bytes(bytes));
-    js_readable_stream_controller_enqueue(id as f64, f64::from_bits(chunk.get_nanbox_u64()));
+    js_readable_stream_controller_enqueue(stream_value(id), f64::from_bits(chunk.get_nanbox_u64()));
 }
 
 pub(super) fn collect_bytes(id: usize, bytes: &[u8]) -> bool {

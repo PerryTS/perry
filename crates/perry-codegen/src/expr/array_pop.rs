@@ -33,7 +33,7 @@ use super::{unbox_to_i64, FnCtx};
 /// `_reserved` word (0x407) — the same mask `js_array_pop_f64` tests.
 const POP_BLOCKING_FLAGS_I16: &str = "1031";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — heap objects are above
+const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HEAP_LIMIT: &str = "140737488355328"; // 2^47
 const GC_TYPE_ARRAY_I8: &str = "1";
 const GC_TYPE_OBJECT_I8: &str = "2";

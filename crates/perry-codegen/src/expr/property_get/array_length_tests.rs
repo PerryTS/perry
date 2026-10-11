@@ -237,7 +237,7 @@ fn assert_plain_array_arm(
     assert_eq!(def(follow_body, top), format!("lshr i64 {target}, 48"));
     assert_eq!(
         def(follow_body, parts[1]),
-        format!("icmp ugt i64 {target}, 1048575"),
+        format!("icmp ugt i64 {target}, 2097151"),
         "the destination must clear the handle band before its header is read"
     );
 
@@ -491,7 +491,7 @@ fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
     );
     assert!(
         def(entry_body, operands[1]).starts_with("icmp ugt i64 ")
-            && def(entry_body, operands[1]).ends_with(", 1048575"),
+            && def(entry_body, operands[1]).ends_with(", 2097151"),
         "the small-handle band test: {}",
         def(entry_body, operands[1])
     );

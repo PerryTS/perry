@@ -134,8 +134,16 @@ pub(crate) fn emit_private_site_guard(
     let bits = blk.bitcast_double_to_i64(obj);
     // `bits - (POINTER_TAG + 0x100000) < 2^48 - 0x100000`: POINTER-tagged and
     // above the small-handle band, in one compare.
-    let biased = blk.sub(I64, &bits, "9222527611925692416");
-    let in_range = blk.icmp_ult(I64, &biased, "281474975662080");
+    let biased = blk.sub(
+        I64,
+        &bits,
+        crate::expr::receiver_range::RECEIVER_BIAS_LITERAL,
+    );
+    let in_range = blk.icmp_ult(
+        I64,
+        &biased,
+        crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
+    );
     let inert = emit_private_template_inert(blk, class_id);
     let ready = blk.and(crate::types::I1, &in_range, &inert);
     let ready = if static_id.is_some() {

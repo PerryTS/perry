@@ -838,31 +838,6 @@ pub(super) unsafe fn dispatch_primitive(
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
 
-    // #1545: Web Streams handles are returned as `id as f64` (a normal float),
-    // so their `to_bits()` is large and the raw-handle check above misses them.
-    // When the receiver is a finite whole number and the stdlib probe confirms
-    // it's a live stream handle, route the call through the same handle
-    // dispatcher (which carries the stream method arms). Gating on the probe
-    // means a genuine numeric receiver calling an unknown method still falls
-    // through to the `(number).x is not a function` TypeError below.
-    if object.is_finite() && object > 0.0 && object.fract() == 0.0 {
-        let id = object as usize;
-        if let Some(probe) = stream_handle_probe() {
-            if probe(id) {
-                if let Some(dispatch) = handle_method_dispatch() {
-                    let args = refreshed_args();
-                    return Some(dispatch(
-                        id as i64,
-                        method_name.as_ptr(),
-                        method_name.len(),
-                        args.as_ptr(),
-                        args.len(),
-                    ));
-                }
-            }
-        }
-    }
-
     // Issue #654: typed-array method dispatch. The codegen for
     // `new Float64Array(...)` (and the other typed-array constructors)
     // returns the raw heap pointer bitcast to f64 — no POINTER_TAG —

@@ -70,10 +70,10 @@ use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
     emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
     emit_may_carry_heap_pointer_check, emit_root_nanbox_store_on_block,
-    emit_typed_feedback_register_site,
-    emit_write_barrier_slot_generation_tested, expr_has_numeric_pointer_free_array_layout,
-    lower_expr, lower_expr_native, nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_typed_feedback_register_site, emit_write_barrier_slot_generation_tested,
+    expr_has_numeric_pointer_free_array_layout, lower_expr, lower_expr_native,
+    nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 /// Metadata may admit the #7839 append tier because that tier tests the live
@@ -655,7 +655,7 @@ fn lower_array_push_spread_spec_order(
 /// forwarding stub as it always did.
 const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — objects are above
+const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
 const GC_TYPE_OBJECT_I8: &str = "2";
 

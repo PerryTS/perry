@@ -1,9 +1,9 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::{
-    box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, transform_close,
-    writable_stream_write, ReadableState, WritableState, READABLE_STREAMS, TAG_UNDEFINED,
-    TRANSFORM_PAIRS, WRITABLE_STREAMS,
+    box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, stream_id,
+    stream_value, transform_close, writable_stream_write, ReadableState, WritableState,
+    READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS, WRITABLE_STREAMS,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -272,13 +272,19 @@ extern "C" fn readable_stream_pipe_to_aborted(
         let mut actions = [std::ptr::null_mut(); 2];
         let mut action_count = 0;
         if !state.prevent_abort && writable_can_abort(w_id) {
-            actions[action_count] =
-                super::js_writable_stream_abort_inner(w_id as f64, f64::from_bits(reason), true);
+            actions[action_count] = super::js_writable_stream_abort_inner(
+                stream_value(w_id),
+                f64::from_bits(reason),
+                true,
+            );
             action_count += 1;
         }
         if !state.prevent_cancel && readable_can_cancel(r_id) {
-            actions[action_count] =
-                super::js_readable_stream_cancel_inner(r_id as f64, f64::from_bits(reason), true);
+            actions[action_count] = super::js_readable_stream_cancel_inner(
+                stream_value(r_id),
+                f64::from_bits(reason),
+                true,
+            );
             action_count += 1;
         }
         wait_for_shutdown_actions(r_id, w_id, promise, state, reason, &actions[..action_count]);
@@ -362,7 +368,7 @@ unsafe fn finish_pipe(
     let close_promise = if TRANSFORM_PAIRS.lock().unwrap().contains_key(&writable_id) {
         transform_close(writable_id)
     } else {
-        js_writable_stream_close(writable_id as f64)
+        js_writable_stream_close(stream_value(writable_id))
     };
     let fulfilled = pipe_closure(
         perry_runtime::fn_info!(readable_stream_pipe_to_close_fulfilled, 1; with_declared(1)),
@@ -401,8 +407,11 @@ unsafe fn abort_destination_and_reject(
     reason: u64,
 ) {
     if !state.prevent_abort && writable_can_abort(writable_id) {
-        let action =
-            super::js_writable_stream_abort_inner(writable_id as f64, f64::from_bits(reason), true);
+        let action = super::js_writable_stream_abort_inner(
+            stream_value(writable_id),
+            f64::from_bits(reason),
+            true,
+        );
         wait_for_shutdown_actions(readable_id, writable_id, promise, state, reason, &[action]);
         return;
     }
@@ -418,7 +427,7 @@ unsafe fn cancel_source_and_reject(
 ) {
     if !state.prevent_cancel && readable_can_cancel(readable_id) {
         let action = super::js_readable_stream_cancel_inner(
-            readable_id as f64,
+            stream_value(readable_id),
             f64::from_bits(reason),
             true,
         );
@@ -791,8 +800,8 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     options: f64,
 ) -> *mut Promise {
     let promise = js_promise_new();
-    let r_id = readable_handle as usize;
-    let w_id = writable_handle as usize;
+    let r_id = stream_id(readable_handle);
+    let w_id = stream_id(writable_handle);
     let signal = pipe_option_value(options, b"signal");
 
     if signal.to_bits() != TAG_UNDEFINED && pipe_signal_ptr(signal).is_none() {

@@ -429,7 +429,7 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
             !check.contains("load i16"),
             "a packed guard changes indexed-loop register allocation"
         );
-        assert!(ll.contains("icmp ugt i64") && ll.contains("1048575"));
+        assert!(ll.contains("icmp ugt i64") && ll.contains("2097151"));
         assert!(
             !ll.contains("call double @perry_length_cold_")
                 && ll.contains("call double @js_value_length_property_key_ic_f64("),

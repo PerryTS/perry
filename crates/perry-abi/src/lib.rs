@@ -33,7 +33,7 @@ pub const AGENT_PTR_SHAPE_DIR: usize = 0;
 /// miss front (`js_object_get_field_ic_front`) takes the receiver in exactly
 /// that form: the front adds the floor back inside its load displacements,
 /// and the site passes the value its test already holds.
-pub const RECEIVER_HANDLE_FLOOR: usize = 0x10_0000;
+pub const RECEIVER_HANDLE_FLOOR: usize = 0x20_0000;
 /// Slot 2: this agent's stack limit (#10812) — not a pointer to anything, the
 /// lowest frame address a compiled prologue accepts before it throws
 /// `RangeError: Maximum call stack size exceeded`. Null means unchecked.

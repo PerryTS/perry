@@ -42,12 +42,12 @@ use swc_ecma_transforms_typescript::{tsx, typescript, Config as TypeScriptConfig
 use swc_ecma_visit::{Visit, VisitWith};
 
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-/// Mirror of `perry_runtime::value::addr_class::HANDLE_BAND_MAX` — this crate
-/// links only `perry-ffi`, so the constant cannot be imported. #9219: a bare
+/// `perry_runtime::value::addr_class::HANDLE_BAND_MAX`, through perry-ffi's
+/// re-export of the shared ABI floor. #9219: a bare
 /// `>= 0x10000` floor admits the fetch/zlib/proxy handle bands, which are real
 /// addresses on Linux (macOS happens to hide it), so anything below the band
 /// top must not be treated as a heap pointer.
-const HANDLE_BAND_MAX: usize = 0x100000;
+const HANDLE_BAND_MAX: usize = perry_ffi::RECEIVER_HANDLE_FLOOR;
 const PLUGIN_FILE_PREFIX: &str = "perry-bun-plugin:";
 
 extern "C" {

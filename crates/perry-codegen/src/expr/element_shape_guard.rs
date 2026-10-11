@@ -58,7 +58,7 @@ use super::FnCtx;
 /// `0x7FFD` — NaN-box tag for heap pointers.
 const POINTER_TAG_HI16: &str = "32765";
 /// `0x0FFFFF` — handles are <= this; real objects are above.
-const HANDLE_BAND_TOP: &str = "1048575";
+const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 /// `GC_TYPE_ARRAY`. The subclass brand (#7573/#7603): a `class X extends
 /// Array` instance is a plain `ObjectHeader` and must never reach the clone.
 const GC_TYPE_ARRAY: &str = "1";
@@ -701,7 +701,10 @@ mod tests {
     #[test]
     fn constants_match_the_runtime() {
         assert_eq!(POINTER_TAG_HI16, (0x7FFDu64).to_string());
-        assert_eq!(HANDLE_BAND_TOP, (0x0F_FFFFu64).to_string());
+        assert_eq!(
+            HANDLE_BAND_TOP,
+            (crate::expr::receiver_range::HANDLE_FLOOR - 1).to_string()
+        );
         assert_eq!(GC_TYPE_ARRAY, "1");
 
         // Reconstruct the header mask from the individual runtime constants,

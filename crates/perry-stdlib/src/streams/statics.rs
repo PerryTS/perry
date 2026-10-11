@@ -58,7 +58,7 @@ mod tests {
                 perry_runtime::JSValue::bool(true).bits()
             );
             let id = source;
-            assert!(js_stream_handle_is_registered(id as usize));
+            assert!(js_stream_handle_is_registered(stream_id(id)));
             let reader = js_readable_stream_get_reader(id);
             let result = js_reader_read(reader);
             assert!(!result.is_null());

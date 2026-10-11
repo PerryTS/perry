@@ -290,7 +290,11 @@ fn emit_nonintrinsic_length_body(
     let tag = ctx.block().lshr(I64, recv_bits, "48");
     let tag = ctx.block().and(I64, &tag, "65533");
     let valid_tag = ctx.block().icmp_eq(I64, &tag, "32765");
-    let above_band = ctx.block().icmp_ugt(I64, recv_handle, "1048575");
+    let above_band = ctx.block().icmp_ugt(
+        I64,
+        recv_handle,
+        crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+    );
     let valid = ctx.block().and(I1, &valid_tag, &above_band);
     ctx.block().cond_br(&valid, &header_label, &slow_label);
     ctx.current_block = header_idx;
@@ -708,9 +712,13 @@ pub(super) fn emit_record_length(
     let tagged = ctx
         .block()
         .and(I64, recv_bits, &crate::nanbox::i64_literal(!(1u64 << 49)));
-    let base = crate::nanbox::i64_literal((0x7ffdu64 << 48) | 1048576);
+    let base = crate::nanbox::i64_literal(crate::expr::receiver_range::RECEIVER_BIAS);
     let offset = ctx.block().sub(I64, &tagged, &base);
-    let valid = ctx.block().icmp_ult(I64, &offset, "281474975662080");
+    let valid = ctx.block().icmp_ult(
+        I64,
+        &offset,
+        crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
+    );
     let check = ctx.new_block("plen.check_gc");
     let fast = ctx.new_block("plen.fast");
     let slow = ctx.new_block("plen.slow");

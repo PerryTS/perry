@@ -3307,7 +3307,11 @@ fn emit_packed_range_receiver_forwarding_repair(ctx: &mut FnCtx<'_>, array_id: u
         let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
         let tag = blk.lshr(I64, &bits, "48");
         let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_TOP16_I64);
-        let above_band = blk.icmp_ugt(I64, &handle, "1048575");
+        let above_band = blk.icmp_ugt(
+            I64,
+            &handle,
+            crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+        );
         let below_limit = blk.icmp_ult(I64, &handle, "140737488355328");
         let ok = blk.and(I1, &is_pointer, &above_band);
         let ok = blk.and(I1, &ok, &below_limit);

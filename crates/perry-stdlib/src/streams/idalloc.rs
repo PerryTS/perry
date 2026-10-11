@@ -3,8 +3,7 @@
 //! Ids for streams, readers, writers and transform streams all come from the
 //! fixed band `[STREAM_HANDLE_ID_START, STREAM_HANDLE_ID_END)` owned by
 //! `perry_runtime::value::addr_class`. The band is only `0x100000` wide and
-//! every band-gated classification path stops recognizing a handle past its
-//! end, so the old monotonic never-reused counter exhausted it after ~21k
+//! the runtime stops recognizing a stream handle past its end, so the old monotonic never-reused counter exhausted it after ~21k
 //! requests on a server that mints ~48 stream-family ids per request.
 //!
 //! Lifecycle: an id is RETIRED when its object reaches a terminal state —

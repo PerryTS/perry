@@ -224,7 +224,11 @@ pub(super) fn try_emit_cached_field_index_return(
     let array_is_pointer = ctx
         .block()
         .icmp_eq(I64, &array_tag, crate::nanbox::POINTER_TAG_I64);
-    let array_above_handles = ctx.block().icmp_ugt(I64, &array_raw, "1048575");
+    let array_above_handles = ctx.block().icmp_ugt(
+        I64,
+        &array_raw,
+        crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+    );
     let array_address_ok = ctx.block().and(I1, &array_is_pointer, &array_above_handles);
     ctx.block()
         .cond_br(&array_address_ok, &array_header_label, &normal_label);

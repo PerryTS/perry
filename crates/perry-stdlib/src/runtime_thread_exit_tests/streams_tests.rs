@@ -52,14 +52,28 @@ mod web_streams {
     fn thread_exit_releases_readable_streams_and_their_readers() {
         let ((with_cb, linked, reader, plain), alive) = std::thread::spawn(|| unsafe {
             // Seeded directly: holds the thread's cancel closure.
-            let with_cb =
-                s::js_readable_stream_new(undef(), undef(), closure_value(), f64::NAN) as usize;
+            let with_cb = s::stream_id(s::js_readable_stream_new(
+                undef(),
+                undef(),
+                closure_value(),
+                f64::NAN,
+            ));
             // Holds nothing of the thread's heap itself; dies through the
             // link to its reader, whose `closed` promise is the thread's.
-            let linked = s::js_readable_stream_new(undef(), undef(), undef(), f64::NAN) as usize;
-            let reader = s::js_readable_stream_get_reader(linked as f64) as usize;
+            let linked = s::stream_id(s::js_readable_stream_new(
+                undef(),
+                undef(),
+                undef(),
+                f64::NAN,
+            ));
+            let reader = s::stream_id(s::js_readable_stream_get_reader(s::stream_value(linked)));
             // Holds no heap address and has no links: must survive.
-            let plain = s::js_readable_stream_new(undef(), undef(), undef(), f64::NAN) as usize;
+            let plain = s::stream_id(s::js_readable_stream_new(
+                undef(),
+                undef(),
+                undef(),
+                f64::NAN,
+            ));
             let alive = s::stream_registry_presence_for_test(with_cb) == READABLE
                 && s::stream_registry_presence_for_test(linked) == READABLE
                 && s::stream_registry_presence_for_test(reader) == READER
@@ -95,10 +109,14 @@ mod web_streams {
     #[test]
     fn thread_exit_releases_writable_streams_and_their_writers() {
         let ((writable, writer), alive) = std::thread::spawn(|| unsafe {
-            let writable =
-                s::js_writable_stream_new(undef(), closure_value(), undef(), undef(), f64::NAN)
-                    as usize;
-            let writer = s::js_writable_stream_get_writer(writable as f64) as usize;
+            let writable = s::stream_id(s::js_writable_stream_new(
+                undef(),
+                closure_value(),
+                undef(),
+                undef(),
+                f64::NAN,
+            ));
+            let writer = s::stream_id(s::js_writable_stream_get_writer(s::stream_value(writable)));
             let alive = s::stream_registry_presence_for_test(writable) == WRITABLE
                 && s::stream_registry_presence_for_test(writer) == WRITER;
             ((writable, writer), alive)
@@ -124,14 +142,14 @@ mod web_streams {
         let ((transform, readable, writable), alive) = std::thread::spawn(|| unsafe {
             let transform =
                 s::js_transform_stream_new(undef(), closure_value(), undef(), undef(), undef());
-            let readable = s::js_transform_stream_readable(transform) as usize;
-            let writable = s::js_transform_stream_writable(transform) as usize;
+            let readable = s::stream_id(s::js_transform_stream_readable(transform));
+            let writable = s::stream_id(s::js_transform_stream_writable(transform));
             // readableStrategy undefined => highWaterMark 0 => initial
             // backpressure: the write job parks in TRANSFORM_BACKPRESSURED_JOBS
             // (keyed by the readable) and counts in TRANSFORM_PENDING_WRITES.
-            let writer = s::js_writable_stream_get_writer(writable as f64);
+            let writer = s::js_writable_stream_get_writer(s::stream_value(writable));
             s::js_writer_write(writer, string_value("chunk-11471"));
-            let transform = transform as usize;
+            let transform = s::stream_id(transform);
             let alive = s::stream_registry_presence_for_test(transform) == TRANSFORM
                 && s::stream_registry_presence_for_test(readable) == READABLE
                 && s::stream_registry_presence_for_test(writable) == WRITABLE
@@ -174,7 +192,7 @@ mod web_streams {
             let view = perry_runtime::buffer::js_uint8array_alloc(8);
             let view = f64::from_bits(perry_runtime::JSValue::pointer(view as *const u8).bits());
             s::js_reader_read_with_view(reader, view);
-            let stream = stream as usize;
+            let stream = s::stream_id(stream);
             (stream, s::byob_pending_for_test(stream))
         })
         .join()
@@ -192,7 +210,12 @@ mod web_streams {
     fn thread_exit_releases_stream_expando_values() {
         const KEY: &str = "__perry_11471_expando_probe";
         let (stream, alive) = std::thread::spawn(|| unsafe {
-            let stream = s::js_readable_stream_new(undef(), undef(), undef(), f64::NAN) as usize;
+            let stream = s::stream_id(s::js_readable_stream_new(
+                undef(),
+                undef(),
+                undef(),
+                f64::NAN,
+            ));
             let value = f64::from_bits(
                 perry_runtime::JSValue::pointer(perry_runtime::js_array_alloc(0) as *const u8)
                     .bits(),

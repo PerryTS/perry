@@ -544,7 +544,11 @@ fn lower_put_value_dyn_ic_inline(
     let t_handle = ctx.block().and(I64, &t_bits, POINTER_MASK_I64);
     let t_tag = ctx.block().lshr(I64, &t_bits, "48");
     let is_ptr = ctx.block().icmp_eq(I64, &t_tag, "32765");
-    let above = ctx.block().icmp_ugt(I64, &t_handle, "1048575");
+    let above = ctx.block().icmp_ugt(
+        I64,
+        &t_handle,
+        crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+    );
     // Value tag: reference-creating stores (pointer 0x7FFD, string 0x7FFF,
     // bigint 0x7FFA) need the layout note / string-alias / write-barrier
     // bookkeeping, so they SELECT the barriered store arm below rather than
@@ -759,7 +763,11 @@ fn lower_put_value_dyn_ic_inline(
         let k_tag = blk.lshr(I64, &k_bits, "48");
         let k_is_str = blk.icmp_eq(I64, &k_tag, "32767");
         let k_handle = blk.and(I64, &k_bits, POINTER_MASK_I64);
-        let k_above = blk.icmp_ugt(I64, &k_handle, "1048575");
+        let k_above = blk.icmp_ugt(
+            I64,
+            &k_handle,
+            crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+        );
         // ShapeId guards and owner store handling must be sufficient for the hit to
         // skip it: layout state 0 means no side-table entry and no typed
         // descriptor. Anything else takes the ordinary path, which calls it.

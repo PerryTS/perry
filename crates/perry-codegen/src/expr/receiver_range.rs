@@ -41,8 +41,23 @@ pub(crate) const RECEIVER_BIAS: u64 = crate::nanbox::POINTER_TAG | HANDLE_FLOOR;
 /// `2^48 - HANDLE_FLOOR`.
 pub(crate) const RECEIVER_SPAN: u64 = (1u64 << 48) - HANDLE_FLOOR;
 
-const _: () = assert!(RECEIVER_BIAS == 0x7FFD_0000_0010_0000);
-const _: () = assert!(RECEIVER_SPAN == 0x0000_FFFF_FFF0_0000);
+const _: () = assert!(RECEIVER_BIAS == 0x7FFD_0000_0020_0000);
+const _: () = assert!(RECEIVER_SPAN == 0x0000_FFFF_FFE0_0000);
+/// `2^47 - HANDLE_FLOOR`: the user-address span above the handle band.
+pub(crate) const STORE_SPAN: u64 = (1u64 << 47) - HANDLE_FLOOR;
+
+/// The emitted decimal spellings of the handle floor and the values derived
+/// from it. Every IR literal that tests "payload above the handle band" uses
+/// one of these; `literals_match_the_floor` ties them to `HANDLE_FLOOR`.
+pub(crate) const HANDLE_FLOOR_LITERAL: &str = "2097152";
+/// `HANDLE_FLOOR - 1`, the operand of an `icmp ugt` "above the band" test.
+pub(crate) const HANDLE_BAND_TOP_LITERAL: &str = "2097151";
+/// `RECEIVER_BIAS` as a signed i64 literal.
+pub(crate) const RECEIVER_BIAS_LITERAL: &str = "9222527611926740992";
+/// `RECEIVER_SPAN` as a signed i64 literal.
+pub(crate) const RECEIVER_SPAN_LITERAL: &str = "281474974613504";
+/// `STORE_SPAN` as a signed i64 literal.
+pub(crate) const STORE_SPAN_LITERAL: &str = "140737486258176";
 
 /// The receiver test's two outputs: the biased value (`bits - RECEIVER_BIAS`)
 /// every address on the pointer edge is derived from, and the `i1` that is
@@ -151,12 +166,6 @@ pub(crate) fn emit_route_note(blk: &mut LlBlock, route: Route) {
     }
 }
 
-/// The emitted constants, for the IR-level tests of each route.
-#[cfg(test)]
-pub(crate) const RECEIVER_BIAS_LITERAL: &str = "9222527611925692416";
-#[cfg(test)]
-pub(crate) const RECEIVER_SPAN_LITERAL: &str = "281474975662080";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +236,8 @@ mod tests {
     fn emitted_literals_are_the_constants() {
         assert_eq!(RECEIVER_BIAS_LITERAL, (RECEIVER_BIAS as i64).to_string());
         assert_eq!(RECEIVER_SPAN_LITERAL, (RECEIVER_SPAN as i64).to_string());
+        assert_eq!(STORE_SPAN_LITERAL, (STORE_SPAN as i64).to_string());
+        assert_eq!(HANDLE_FLOOR_LITERAL, HANDLE_FLOOR.to_string());
+        assert_eq!(HANDLE_BAND_TOP_LITERAL, (HANDLE_FLOOR - 1).to_string());
     }
 }

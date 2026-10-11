@@ -276,7 +276,11 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     let live_deref_label = ctx.block_label(live_deref_idx);
     let (arr_handle, deref_end) = {
         let blk = ctx.block();
-        let arr_handle = blk.add(I64, &band_offset, "1048576");
+        let arr_handle = blk.add(
+            I64,
+            &band_offset,
+            crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
+        );
         let word = emit_array_guard_word(blk, &arr_handle);
         let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
         let word_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
@@ -316,7 +320,11 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
         // band: never read the destination header speculatively.
         let target_top = blk.lshr(I64, &target, "48");
         let target_top_clear = blk.icmp_eq(I64, &target_top, "0");
-        let target_above_band = blk.icmp_ugt(I64, &target, "1048575");
+        let target_above_band = blk.icmp_ugt(
+            I64,
+            &target,
+            crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+        );
         let target_ok = blk.and(I1, &target_top_clear, &target_above_band);
         blk.cond_br(&target_ok, &follow_check_label, &slow_label);
         target

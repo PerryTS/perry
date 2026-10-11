@@ -123,7 +123,11 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
             let tag = blk.lshr(I64, &arr_bits, "48");
             let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
                                                               // The same heap band the receiver-unknown tiers dereference in.
-            let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
+            let above_handle_band = blk.icmp_ugt(
+                I64,
+                &arr_handle,
+                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+            );
             let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
             let in_heap = blk.and(I1, &above_handle_band, &below_heap_limit);
             let heap_candidate = blk.and(I1, &is_pointer, &in_heap);

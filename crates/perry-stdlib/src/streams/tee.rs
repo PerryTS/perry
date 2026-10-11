@@ -9,7 +9,8 @@
 
 use super::{
     build_iter_result, byob, close_pending, error_pending, idalloc, js_promise_resolve,
-    next_stream_id, throw_type_error, ReadableState, ReadableStreamData, READABLE_STREAMS,
+    next_stream_id, stream_id, stream_value, throw_type_error, ReadableState, ReadableStreamData,
+    READABLE_STREAMS,
 };
 use perry_runtime::array::{js_array_alloc, js_array_push};
 use perry_runtime::closure::ClosureHeader;
@@ -611,10 +612,10 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
-    let (id_a, id_b) = tee_readable_stream_ids(stream_handle as usize);
+    let (id_a, id_b) = tee_readable_stream_ids(stream_id(stream_handle));
     let arr = js_array_alloc(2);
-    js_array_push(arr, JSValue::from_bits(f64::to_bits(id_a as f64)));
-    js_array_push(arr, JSValue::from_bits(f64::to_bits(id_b as f64)));
+    js_array_push(arr, JSValue::from_bits(stream_value(id_a).to_bits()));
+    js_array_push(arr, JSValue::from_bits(stream_value(id_b).to_bits()));
     f64::from_bits(JSValue::object_ptr(arr as *mut u8).bits())
 }
 
@@ -675,11 +676,15 @@ mod tests {
             let transform = super::super::js_transform_stream_new(
                 undefined, undefined, undefined, undefined, undefined,
             );
-            let source = super::super::js_transform_stream_readable(transform) as usize;
-            let writable = super::super::js_transform_stream_writable(transform) as usize;
+            let source =
+                super::super::stream_id(super::super::js_transform_stream_readable(transform));
+            let writable =
+                super::super::stream_id(super::super::js_transform_stream_writable(transform));
             let (first, second) = tee_readable_stream_ids(source);
-            let first = super::super::js_readable_stream_get_reader(first as f64);
-            let second = super::super::js_readable_stream_get_reader(second as f64);
+            let first =
+                super::super::js_readable_stream_get_reader(super::super::stream_value(first));
+            let second =
+                super::super::js_readable_stream_get_reader(super::super::stream_value(second));
 
             let write = super::super::transform::transform_write(writable, 1.0);
             perry_runtime::promise::js_promise_run_microtasks();

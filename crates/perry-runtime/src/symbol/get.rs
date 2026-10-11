@@ -573,11 +573,9 @@ unsafe fn symbol_prototype_word(owner: usize) -> Option<u64> {
 }
 
 unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
-    if !obj_f64.is_finite() || obj_f64 <= 0.0 || obj_f64.fract() != 0.0 {
-        return None;
-    }
+    let id = crate::object::stream_handle_id(obj_f64)?;
     let kind_probe = crate::object::stream_handle_kind_probe()?;
-    let kind = kind_probe(obj_f64 as usize);
+    let kind = kind_probe(id);
     if kind == 0 {
         return None;
     }
@@ -888,9 +886,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // #1545: Web Stream handles are normal finite numbers, not heap objects.
-    // Resolve their well-known symbol surface before pointer-oriented fallback
-    // paths reinterpret the raw f64 bits as an address. ReadableStream is
+    // #1545: Web Stream handles are registry ids, not heap objects. Resolve
+    // their well-known symbol surface before pointer-oriented fallback paths
+    // treat the payload as an address. ReadableStream is
     // async-iterable only; none of the Web Stream handles expose
     // `Symbol.iterator`.
     if let Some(v) = web_stream_symbol_property(obj_f64, sym_f64) {

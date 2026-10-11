@@ -24,14 +24,15 @@
 //! | `[0xE0000, 0xF0000)`   | unallocated (former zlib ids, now ordinary payload objects)     |
 //! | `[0xF0000, 0x100000)`  | revocable Proxy ids, perry-runtime `proxy.rs` `PROXY_TAG_BASE`   |
 //! |                        | (#2846 crash cluster)                                            |
-//! | `>= 0x100000`          | plausible heap addresses (see [`is_valid_obj_ptr`] for the       |
+//! | `[0x100000, 0x200000)` | Web Streams ids (perry-stdlib `streams.rs`), `POINTER_TAG`-boxed |
+//! |                        | like every other registry handle. They used to travel as raw     |
+//! |                        | numeric `f64`s (#1545), which made the NUMBER 1048576 a stream   |
+//! |                        | whenever stream id 0x100000 was live. A number is always a       |
+//! |                        | Number; only the tag says "handle".                              |
+//! | `>= 0x200000`          | plausible heap addresses (see [`is_valid_obj_ptr`] for the       |
 //! |                        | platform heap floor/ceiling)                                     |
-//! | `[0x100000, 0x200000)` | EXCEPTION: Web Streams ids (perry-stdlib `streams.rs`) are RAW   |
-//! |                        | NUMERIC `f64` values — never `POINTER_TAG`-boxed — deliberately  |
-//! |                        | placed above the pointer-tagged handle band (#1545). Only probe  |
-//! |                        | this band on values that arrived as plain finite numbers.        |
 //!
-//! The `0x100000` ceiling was established by #1843 (zlib handle deref'd as
+//! The handle ceiling (`0x100000` before the stream band joined it) was established by #1843 (zlib handle deref'd as
 //! heap object), #4004 (fetch handles moved to 0x40000), and #4800
 //! (`is_builtin_iterator_class_id` used an 0x1008 floor and deref'd a Headers
 //! handle on every hono response). All allocated sub-bands must stay below
@@ -44,7 +45,7 @@ use crate::gc::{GcHeader, GC_HEADER_SIZE};
 /// registry handles (or null/garbage), never dereferenceable heap pointers.
 /// Raising any sub-band past this value requires auditing every
 /// `is_handle_band` caller.
-pub const HANDLE_BAND_MAX: usize = 0x100000;
+pub const HANDLE_BAND_MAX: usize = 0x200000;
 // Emitted receiver tests and the read miss front share this floor.
 const _: () = assert!(HANDLE_BAND_MAX == perry_abi::RECEIVER_HANDLE_FLOOR);
 
@@ -63,11 +64,12 @@ pub const FETCH_HANDLE_BAND_END: usize = 0xE0000;
 /// perry-runtime `proxy.rs` (`PROXY_TAG_BASE`). Kept at the top of the handle
 /// band so fetch ids below never collide with a proxy id (#2846).
 pub const PROXY_ID_BAND_START: usize = 0xF0000;
+/// Exclusive end of the revocable Proxy id band; the Web Streams band follows.
+pub const PROXY_ID_BAND_END: usize = 0x100000;
 
 /// Web Streams id band `[STREAM_ID_BAND_START, STREAM_ID_BAND_END)`, owned by
-/// perry-stdlib `streams.rs`. NOT part of the pointer-tagged handle band:
-/// stream ids travel as raw numeric `f64`s (#1545), so they sit just above
-/// `HANDLE_BAND_MAX` and only number-typed probe paths may classify into it.
+/// perry-stdlib `streams.rs`: the top sub-band of the pointer-tagged handle
+/// band. A stream is a `POINTER_TAG` payload in this band, never a number.
 pub const STREAM_ID_BAND_START: usize = 0x100000;
 pub const STREAM_ID_BAND_END: usize = 0x200000;
 
@@ -80,7 +82,7 @@ pub fn is_handle_band(addr: usize) -> bool {
 }
 
 /// True for a plausible *live* handle id: non-zero and inside the handle
-/// band. Mirrors the widespread `addr > 0 && addr < 0x100000` shape (0 is
+/// band. Mirrors the widespread `addr > 0 && addr < HANDLE_BAND_MAX` shape (0 is
 /// null / INVALID_HANDLE, not a handle).
 #[inline(always)]
 pub fn is_small_handle(addr: usize) -> bool {
@@ -111,45 +113,22 @@ pub fn is_above_handle_band(addr: usize) -> bool {
 /// check, so do it before any dereference.
 #[inline(always)]
 pub fn is_proxy_id_band(addr: usize) -> bool {
-    (PROXY_ID_BAND_START..HANDLE_BAND_MAX).contains(&addr)
+    (PROXY_ID_BAND_START..PROXY_ID_BAND_END).contains(&addr)
 }
 
-/// True when `id` is in the raw-numeric Web Streams id band. A stream id is
-/// only ever a STREAM when it arrived as a plain finite number; a
-/// `POINTER_TAG` payload in this band is a stream id that some path boxed (a
-/// handle dispatcher re-boxing the `i64` handle it was given), never a heap
-/// object. See [`is_id_band`].
+/// True when `id` is in the Web Streams sub-band of the handle band. Only a
+/// `POINTER_TAG` payload can be a stream id; callers classify the tag first
+/// (see `object::stream_handle_id`). No GC allocation lives in this band (it
+/// is inside [`is_handle_band`]), so it is never dereferenced either.
 #[inline(always)]
 pub fn is_stream_id_band(id: usize) -> bool {
     (STREAM_ID_BAND_START..STREAM_ID_BAND_END).contains(&id)
 }
-
-/// True when `addr` lies in ANY id band: the pointer-tagged handle band
-/// `[0, HANDLE_BAND_MAX)` (registry handles, fetch, Proxy ids, null) or the
-/// numeric Web Streams band `[STREAM_ID_BAND_START, STREAM_ID_BAND_END)`.
-/// No GC allocation lives in either band on any supported target (the
-/// native heaps start far above 2 MiB; the WASI link puts an 8 MiB stack
-/// first), so an address in an id band must never be dereferenced, whatever
-/// tag it arrived with. Every "may I read this header" gate in this module
-/// ([`is_plausible_heap_addr`], [`try_read_gc_header`],
-/// [`try_read_tracked_gc_header`]) rejects it first, so a caller that boxes
-/// a dispatcher's `i64` handle as a pointer cannot turn a stream id into a
-/// header read (the OpenCode TUI crash: `"x" in readableStream` reached the
-/// TLS arm, which read a header at `0x100000 - 8`).
-///
-/// The two bands are contiguous (asserted below), so this is ONE compare
-/// against [`STREAM_ID_BAND_END`] — the same cost as the old
-/// `addr < HANDLE_BAND_MAX` floor. The two-range spelling
-/// (`is_handle_band(addr) || is_stream_id_band(addr)`) measured +0.39%
-/// instructions on tsc through these gates.
-#[inline(always)]
-pub fn is_id_band(addr: usize) -> bool {
-    addr < STREAM_ID_BAND_END
-}
-const _: () = assert!(HANDLE_BAND_MAX == STREAM_ID_BAND_START);
+const _: () = assert!(PROXY_ID_BAND_END == STREAM_ID_BAND_START);
+const _: () = assert!(HANDLE_BAND_MAX == STREAM_ID_BAND_END);
 
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
-/// Values below 0x100000 (1MB) are likely INT32_TAG extracts, small handles,
+/// Values below `HANDLE_BAND_MAX` (2 MiB) are likely INT32_TAG extracts, small handles,
 /// or null. The upper bound filters out NaN-box tag bits that leaked through.
 /// Linux-family AArch64 targets can map userspace arenas anywhere in the full
 /// low 48-bit VA range, including addresses with bit 47 set (observed under
@@ -237,12 +216,12 @@ pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     (HEAP_MIN..HEAP_MAX).contains(&addr)
 }
 
-/// True when `addr` is outside every id band ([`is_id_band`]: the handle band
+/// True when `addr` is outside every id band ([`is_handle_band`]: the handle band
 /// AND the Web Streams band) and inside the platform heap range — i.e.
 /// plausible to dereference as a GC allocation.
 #[inline(always)]
 pub(crate) fn is_plausible_heap_addr(addr: usize) -> bool {
-    !is_id_band(addr) && is_valid_obj_ptr(addr as *const u8)
+    !is_handle_band(addr) && is_valid_obj_ptr(addr as *const u8)
 }
 
 /// Validated GcHeader read: magnitude-classify FIRST (reject the handle band
@@ -376,7 +355,7 @@ fn classify_tracked_gc_header_with(
     arena_range_base: impl FnOnce(usize) -> Option<usize>,
     malloc_header_is_tracked: impl FnOnce(*const GcHeader) -> bool,
 ) -> Option<(usize, TrackedGcStorage)> {
-    if is_id_band(addr) {
+    if is_handle_band(addr) {
         return None;
     }
     let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
@@ -480,8 +459,9 @@ mod tests {
         assert!(COMMON_HANDLE_BAND_END <= FETCH_HANDLE_BAND_START);
         assert!(FETCH_HANDLE_BAND_START < FETCH_HANDLE_BAND_END);
         assert!(FETCH_HANDLE_BAND_END <= PROXY_ID_BAND_START);
-        assert!(PROXY_ID_BAND_START < HANDLE_BAND_MAX);
-        assert!(STREAM_ID_BAND_START >= HANDLE_BAND_MAX);
+        assert!(PROXY_ID_BAND_START < PROXY_ID_BAND_END);
+        assert!(PROXY_ID_BAND_END <= STREAM_ID_BAND_START);
+        assert!(STREAM_ID_BAND_END <= HANDLE_BAND_MAX);
     }
 
     #[test]
@@ -647,7 +627,7 @@ mod tests {
         for (start, end) in [
             (1, COMMON_HANDLE_BAND_END),
             (FETCH_HANDLE_BAND_START, FETCH_HANDLE_BAND_END),
-            (PROXY_ID_BAND_START, HANDLE_BAND_MAX),
+            (PROXY_ID_BAND_START, PROXY_ID_BAND_END),
             (STREAM_ID_BAND_START, STREAM_ID_BAND_END),
         ] {
             ids.extend([start, start + 8, ((start + end) / 2) & !7, end - 8, end - 1]);
@@ -658,7 +638,7 @@ mod tests {
     #[test]
     fn pointer_gates_reject_every_id_band() {
         for id in id_band_samples() {
-            assert!(is_id_band(id), "{id:#x} must classify as an id");
+            assert!(is_handle_band(id), "{id:#x} must classify as an id");
             assert!(!is_plausible_heap_addr(id), "{id:#x} passed the heap gate");
             assert!(
                 unsafe { try_read_gc_header(id) }.is_none(),
@@ -675,15 +655,18 @@ mod tests {
             assert!(unsafe { try_read_tracked_gc_header(id) }.is_none());
         }
         // The first address past the stream band is a candidate again.
-        assert!(!is_id_band(STREAM_ID_BAND_END));
+        assert!(!is_handle_band(STREAM_ID_BAND_END));
         assert!(is_plausible_heap_addr(STREAM_ID_BAND_END));
     }
 
     #[test]
-    fn stream_id_band_is_above_pointer_handles() {
+    fn stream_id_band_is_the_top_of_the_handle_band() {
         assert!(is_stream_id_band(STREAM_ID_BAND_START));
-        assert!(!is_stream_id_band(HANDLE_BAND_MAX - 1));
-        assert!(!is_handle_band(STREAM_ID_BAND_START));
+        assert!(is_stream_id_band(HANDLE_BAND_MAX - 1));
+        assert!(!is_stream_id_band(PROXY_ID_BAND_END - 1));
+        assert!(is_handle_band(STREAM_ID_BAND_START));
+        assert!(is_small_handle(STREAM_ID_BAND_START));
+        assert!(!is_proxy_id_band(STREAM_ID_BAND_START));
     }
 
     #[cfg(target_os = "macos")]

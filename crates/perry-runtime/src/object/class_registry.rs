@@ -27,10 +27,11 @@ pub use super::class_handles::{
     js_register_net_socket_handle_probe, js_register_stream_expando_set,
     js_register_stream_handle_kind_probe, js_register_stream_handle_probe,
     js_register_tls_handle_kind_probe, net_socket_handle_probe, stream_expando_set,
-    stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe, FetchHandleKindProbeFn,
-    HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn, HandlePropertyDispatchFn,
-    HandlePropertySetDispatchFn, HandlePrototypeDispatchFn, HttpAgentHandleProbeFn,
-    NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn, TlsHandleKindProbeFn,
+    stream_handle_id, stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe,
+    FetchHandleKindProbeFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
+    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
+    HttpAgentHandleProbeFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
+    TlsHandleKindProbeFn,
 };
 use super::*;
 
@@ -164,8 +165,9 @@ pub(crate) use construct::{
     nm_ctor_wasi, promise_parent_in_chain,
 };
 pub use construct::{
-    js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,
-    js_class_value_super_construct_site, js_new_function_construct_site, js_new_function_construct_with_new_target, js_new_target_value,
+    js_class_value_super_construct_site, js_ctor_return_override, js_new_function_construct,
+    js_new_function_construct_apply, js_new_function_construct_site,
+    js_new_function_construct_with_new_target, js_new_target_value,
 };
 pub use function_prototype::js_function_prototype_value_for_read;
 pub(crate) use function_prototype::{

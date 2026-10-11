@@ -248,7 +248,11 @@ fn emit_plain_array_length_arm(
             let target = blk.load(I64, &stub_ptr);
             let top = blk.lshr(I64, &target, "48");
             let top_clear = blk.icmp_eq(I64, &top, "0");
-            let above_band = blk.icmp_ugt(I64, &target, "1048575"); // 0x100000
+            let above_band = blk.icmp_ugt(
+                I64,
+                &target,
+                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+            );
             let heap_candidate = blk.and(I1, &top_clear, &above_band);
             blk.cond_br(&heap_candidate, &target_label, other_label);
             target
@@ -435,7 +439,11 @@ fn lower_property_site(
                 let blk = ctx.block();
                 let tag = blk.lshr(I64, &obj_bits, "48");
                 let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // 0x7FFD
-                let above_band = blk.icmp_ugt(I64, &entry_handle, "1048575"); // 0x100000
+                let above_band = blk.icmp_ugt(
+                    I64,
+                    &entry_handle,
+                    crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+                );
                 let candidate = blk.and(I1, &is_pointer, &above_band);
                 blk.cond_br(&candidate, &header_label, &call_label);
                 ctx.current_block = header_idx;
@@ -801,9 +809,13 @@ fn lower_property_site(
     // Under the fused receiver test (every key but `.length`) this fact is
     // already proven on every edge into `pget.recv_ok`, so no second branch
     // is emitted for it.
-    let is_real_ptr = fused_recv
-        .is_none()
-        .then(|| ctx.block().icmp_ugt(I64, &entry_handle, "1048575")); // 0x100000
+    let is_real_ptr = fused_recv.is_none().then(|| {
+        ctx.block().icmp_ugt(
+            I64,
+            &entry_handle,
+            crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+        )
+    }); // 0x100000
 
     // #7883: the guard chain BRANCHES OUT to the slow exit on the first
     // failing predicate instead of AND-ing eight of them into one flat `hit`.

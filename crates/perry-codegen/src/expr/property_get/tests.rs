@@ -1153,16 +1153,16 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     }
 
     for (needle, what) in [
-        // The fused receiver test: `bits - (POINTER_TAG | 0x10_0000)`
-        // compared unsigned below `2^48 - 0x10_0000` — the tag test and the
+        // The fused receiver test: `bits - (POINTER_TAG | 0x20_0000)`
+        // compared unsigned below `2^48 - 0x20_0000` — the tag test and the
         // small-handle test in one compare.
         (
             crate::expr::receiver_range::RECEIVER_BIAS_LITERAL,
-            "the fused receiver test's bias (POINTER_TAG | 0x10_0000)",
+            "the fused receiver test's bias (POINTER_TAG | 0x20_0000)",
         ),
         (
             crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
-            "the fused receiver test's span (2^48 - 0x10_0000)",
+            "the fused receiver test's span (2^48 - 0x20_0000)",
         ),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
@@ -1335,8 +1335,8 @@ fn generic_non_length_read_keeps_the_whole_tower() {
     // The receiver test is the one test that decides whether the receiver
     // may be dereferenced at all, and for every key but `.length` it is the
     // fused range compare (`receiver_range`): POINTER tag AND a payload above
-    // the native-handle band, spelled `bits - (POINTER_TAG | 0x10_0000) <u
-    // 2^48 - 0x10_0000`. Its false edge must be the NON-POINTER exit — a
+    // the native-handle band, spelled `bits - (POINTER_TAG | 0x20_0000) <u
+    // 2^48 - 0x20_0000`. Its false edge must be the NON-POINTER exit — a
     // distinct block with a distinct callee, which is what stops SimplifyCFG
     // folding this guard into the next one.
     let branch = ir
@@ -1367,7 +1367,7 @@ fn generic_non_length_read_keeps_the_whole_tower() {
                 ", {}",
                 crate::expr::receiver_range::RECEIVER_BIAS_LITERAL
             )),
-        "the biased value must be `bits - (POINTER_TAG | 0x10_0000)`:\n{ir}"
+        "the biased value must be `bits - (POINTER_TAG | 0x20_0000)`:\n{ir}"
     );
     // A small native handle fails the fused test too. It must still reach the
     // OBJECT exit (its registry dispatch lives in the slow entry), split off in

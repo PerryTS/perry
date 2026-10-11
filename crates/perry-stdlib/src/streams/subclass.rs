@@ -35,7 +35,7 @@ unsafe fn this_object_ptr(this_bits: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let raw = (bits & POINTER_MASK) as *mut ObjectHeader;
-    if raw.is_null() || (raw as usize) < 0x10000 {
+    if !perry_runtime::value::addr_class::is_above_handle_band(raw as usize) {
         return None;
     }
     Some(raw)
@@ -44,16 +44,16 @@ unsafe fn this_object_ptr(this_bits: f64) -> Option<*mut ObjectHeader> {
 unsafe fn attach_handle_to_this(this_bits: f64, handle_id: usize) {
     if let Some(obj) = this_object_ptr(this_bits) {
         let key = subclass_handle_key();
-        // Stored as plain f64 numeric — same ABI the rest of the stream
-        // FFIs use for handles. `js_stream_unwrap_handle` reads it back.
-        js_object_set_field_by_name(obj, key, handle_id as f64);
+        // Stored as the handle's JS value; `js_stream_unwrap_handle` reads
+        // it back.
+        js_object_set_field_by_name(obj, key, stream_value(handle_id));
     }
 }
 
-/// Resolve a stream receiver / argument to a numeric registry handle.
+/// Resolve a stream receiver / argument to its registry handle value.
 ///
-/// For raw numeric handles (the value `js_writable_stream_new` etc.
-/// return) the input is returned unchanged. For NaN-boxed pointer-tagged
+/// For stream handles (the value `js_writable_stream_new` etc. return) the
+/// input is returned unchanged. For NaN-boxed pointer-tagged
 /// JS objects (subclass instances), reads the hidden
 /// `__perry_stream_handle__` field. Falls back to the input when the
 /// field is missing — caller's downstream FFI will then no-op on a
@@ -122,7 +122,7 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
     js_stream_handle_kind(id) != 0
 }
 
-/// #1545: classify a numeric Web Streams handle for `instanceof`, dispatch,
+/// #1545: classify a Web Streams registry id for `instanceof`, dispatch,
 /// and `Object.prototype.toString` tags.
 /// 0 = not a stream, 1 = ReadableStream, 2 = WritableStream, 3 = reader,
 /// 4 = writer, 5 = TransformStream.
@@ -168,7 +168,7 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
 /// type — e.g. `src.pipeThrough(ts).getReader()`, `ts.readable.getReader()`,
 /// `rs.tee()[0].getReader()`, `const r = rs.getReader(); r.read()` — and lower
 /// to a generic method call that reaches `js_native_call_method` →
-/// `js_handle_method_dispatch` with a bare numeric handle.
+/// `js_handle_method_dispatch` with the stream handle.
 ///
 /// Because every Web Streams handle now lives in one shared id space based at
 /// `STREAM_HANDLE_ID_START` (see `idalloc::next_stream_id`), the handle is (a)
@@ -183,7 +183,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     method: &str,
     args: &[f64],
 ) -> Option<f64> {
-    let id = handle as usize;
+    let id = stream_id(handle);
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return None;
     }
@@ -252,9 +252,7 @@ pub(crate) unsafe fn dispatch_stream_method(
                 // Non-object pairs with default options need no scoped roots
                 // or getter conversion. Preserve the legacy endpoint sequence;
                 // the registry lookups and validation reject invalid handles.
-                if arg1.to_bits() == TAG_UNDEFINED
-                    && !JSValue::from_bits(arg0.to_bits()).is_pointer()
-                {
+                if arg1.to_bits() == TAG_UNDEFINED && !is_object_value(arg0) {
                     let transform = js_stream_unwrap_handle(arg0);
                     let writable = js_transform_stream_writable(transform);
                     let readable = js_transform_stream_readable(transform);
@@ -278,7 +276,7 @@ pub(crate) unsafe fn dispatch_stream_method(
                     let reason = f64::from_bits(make_type_error_with_message(
                         "Invalid state: TransformStream has been terminated",
                     ));
-                    let _ = js_writable_stream_abort_inner(writable_id as f64, reason, true);
+                    let _ = js_writable_stream_abort_inner(stream_value(writable_id), reason, true);
                 }
                 return Some(result);
             }
@@ -299,18 +297,18 @@ pub(crate) unsafe fn dispatch_stream_method(
     None
 }
 
-/// #1670: property reads on a numeric Web Streams handle that reached the
+/// #1670: property reads on a Web Streams handle that reached the
 /// generic field-get path (e.g. inline `res.body.locked`, where the
 /// intermediate stream id never became a typed local). Returns the WHATWG
 /// getter property value, a bound-method closure for callable members (so
 /// `typeof rs.getReader === "function"` and a subsequent call routes back
 /// through `js_native_call_method`'s #1545 stream branch → `dispatch_stream_method`),
 /// or `undefined` for any other property. Crucially this NEVER dereferences
-/// the float id as a pointer — the pre-#1670 generic field-get segfaulted on
+/// the id as a pointer — the pre-#1670 generic field-get segfaulted on
 /// `res.body.locked`. Gated by the caller on stream-registry membership.
 pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     let undefined = f64::from_bits(TAG_UNDEFINED);
-    let id = handle as usize;
+    let id = stream_id(handle);
     // Kind: 1=ReadableStream, 2=WritableStream, 3=reader, 4=writer.
     let kind = js_stream_handle_kind(id);
     if kind == 0 {
@@ -442,7 +440,7 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
         hwm,
         hwm,
     );
-    attach_handle_to_this(this_bits, handle as usize);
+    attach_handle_to_this(this_bits, stream_id(handle));
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -471,7 +469,7 @@ pub(super) unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
 pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
     unsafe {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let reader = js_readable_stream_get_reader(stream_id as f64);
+        let reader = js_readable_stream_get_reader(stream_value(stream_id));
         let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
         let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
         let mut out = Vec::new();

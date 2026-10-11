@@ -172,7 +172,6 @@ pub extern "C" fn js_object_set_field_by_name(
         };
         if raw >= crate::gc::GC_HEADER_SIZE + 0x1000
             && !crate::value::addr_class::is_small_handle(raw)
-            && !crate::value::addr_class::is_stream_id_band(raw)
             && crate::value::addr_class::is_above_handle_band(key as usize)
         {
             let key_gc =
@@ -361,37 +360,34 @@ pub extern "C" fn js_object_set_field_by_name(
                 }
             }
         }
-        // #5437: a live Web Stream handle arrives here as its raw id in the
-        // stream band (the `stream.prop = v` codegen path). React's
+        // #5437: a live Web Stream handle (a `POINTER_TAG` id in the stream
+        // band; the `stream.prop = v` codegen path). React's
         // `renderToReadableStream` attaches its shell-ready promise as an
         // expando (`stream.allReady = ...`); without a store the write was
         // dropped, which stalled the Next.js dynamic-SSR render. Route to the
         // stdlib per-stream expando table (GC-traced there).
-        {
-            let addr = obj as usize;
-            if crate::value::addr_class::is_stream_id_band(addr) {
-                if !key.is_null() {
-                    if let (Some(probe), Some(setter)) = (
-                        crate::object::stream_handle_probe(),
-                        crate::object::stream_expando_set(),
-                    ) {
-                        if unsafe { probe(addr) } {
-                            if let Some(name) =
-                                unsafe { super::has_own_helpers::str_from_string_header(key) }
-                            {
-                                unsafe { setter(addr, name.as_ptr(), name.len(), value) };
-                            }
+        if let Some(addr) = crate::object::stream_handle_id(f64::from_bits(obj as u64)) {
+            if !key.is_null() {
+                if let (Some(probe), Some(setter)) = (
+                    crate::object::stream_handle_probe(),
+                    crate::object::stream_expando_set(),
+                ) {
+                    if unsafe { probe(addr) } {
+                        if let Some(name) =
+                            unsafe { super::has_own_helpers::str_from_string_header(key) }
+                        {
+                            unsafe { setter(addr, name.as_ptr(), name.len(), value) };
                         }
                     }
                 }
-                // A stream-band address is a reserved handle id, never a real
-                // `ObjectHeader`. Stop unconditionally — even when the expando
-                // write was a no-op (dead/unregistered handle, hooks absent, or a
-                // non-UTF-8 key). Falling through would reach the ObjectHeader
-                // path below and deref `addr - GC_HEADER_SIZE` (unmapped) → crash.
-                // Mirrors the reserved small-handle early-return further down.
-                return;
             }
+            // A stream-band address is a reserved handle id, never a real
+            // `ObjectHeader`. Stop unconditionally — even when the expando
+            // write was a no-op (dead/unregistered handle, hooks absent, or a
+            // non-UTF-8 key). Falling through would reach the ObjectHeader
+            // path below and deref `addr - GC_HEADER_SIZE` (unmapped) → crash.
+            // Mirrors the reserved small-handle early-return further down.
+            return;
         }
         // A `Temporal.*` value is an opaque, immutable NaN-boxed cell that is NOT
         // an `ObjectHeader` — writing an arbitrary property (e.g. test262's

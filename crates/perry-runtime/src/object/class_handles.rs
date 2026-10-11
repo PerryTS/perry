@@ -65,13 +65,9 @@ pub type HandleOwnPropertyNamesDispatchFn = unsafe extern "C" fn(handle: i64) ->
 /// custom prototype.
 pub type HandlePrototypeDispatchFn = unsafe extern "C" fn(handle: i64) -> f64;
 
-/// #1545: probe for whether a numeric receiver is a live Web Streams handle.
-/// Web Streams handles are returned as `id as f64` (a normal float), not the
-/// subnormal bit-cast other handle subsystems use, so `js_native_call_method`
-/// can't recognise them by bit pattern. This probe (registered by the stdlib)
-/// lets it confirm a numeric whole-number receiver really is a stream handle
-/// before routing the call to `handle_method_dispatch` — non-stream numbers
-/// fall through to the normal `(number).x is not a function` TypeError.
+/// #1545: probe for whether a stream-band id (see [`stream_handle_id`]) is a
+/// live Web Streams handle. Registered by the stdlib; callers classify the
+/// value by its tag first, so a number never reaches it.
 pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 /// #5437: stdlib hook that stores an expando property on a live Web Stream
 /// handle (React's `renderToReadableStream` attaches `allReady` to the
@@ -80,11 +76,11 @@ pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
 pub type StreamExpandoSetFn =
     unsafe extern "C" fn(id: usize, key_ptr: *const u8, key_len: usize, value: f64) -> i32;
 
-/// #1545: classify a numeric Web Streams handle for `instanceof` and tags.
+/// #1545: classify a stream-band id for `instanceof` and tags.
 /// Returns 0 = not a stream, 1 = ReadableStream, 2 = WritableStream,
 /// 3 = reader, 4 = writer, 5 = TransformStream. Lets `x instanceof
-/// ReadableStream` / `instanceof WritableStream` resolve for numeric stream
-/// handles (`ts.readable`, `rs.pipeThrough(ts)`, …), and lets
+/// ReadableStream` / `instanceof WritableStream` resolve for stream handles
+/// (`ts.readable`, `rs.pipeThrough(ts)`, …), and lets
 /// `Object.prototype.toString.call(handle)` recover Web stream tags.
 pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
@@ -454,23 +450,25 @@ pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
     }
 }
 
-/// The JS value a handle dispatcher's `i64` receiver stands for. Handle
-/// dispatch flattens two representations into one `i64`: a `POINTER_TAG`
-/// payload (a heap object or a registry handle) and a raw numeric Web Streams
-/// id (#1545). A live stream id answers as the plain number it arrived as;
-/// everything else re-boxes under `POINTER_TAG`. Every consumer that needs
-/// the receiver as a value again (a GC root, a payload or TLS state probe)
-/// goes through here, so a stream id is never re-boxed as a pointer. Header
-/// reads stay behind `addr_class`'s gates, which reject every id band anyway.
+/// The JS value a handle dispatcher's `i64` receiver stands for: every
+/// registry handle, Web Streams ids included, is a `POINTER_TAG` payload in
+/// the handle band, so the receiver re-boxes under `POINTER_TAG`.
 pub fn handle_receiver_value(handle: i64) -> f64 {
-    let id = handle as usize;
-    if crate::value::addr_class::is_stream_id_band(id)
-        && stream_handle_probe().is_some_and(|probe| unsafe { probe(id) })
-    {
-        handle as f64
-    } else {
-        crate::value::js_nanbox_pointer(handle)
+    crate::value::js_nanbox_pointer(handle)
+}
+
+/// The Web Streams registry id a JS value carries, if it carries one: a
+/// `POINTER_TAG` payload inside the stream sub-band of the handle band. This
+/// classifies by TAG — a number is never a stream, whatever its value — and
+/// does not prove the id is live; callers ask the registered probe for that.
+#[inline]
+pub fn stream_handle_id(value: f64) -> Option<usize> {
+    let bits = value.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return None;
     }
+    let id = (bits & crate::value::POINTER_MASK) as usize;
+    crate::value::addr_class::is_stream_id_band(id).then_some(id)
 }
 
 /// #1545: register the Web Streams handle probe (called by the stdlib at init).

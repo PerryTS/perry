@@ -186,9 +186,11 @@ pub(super) fn lower_region_validated_array_index_get(
 
 /// `POINTER_TAG << 48 | 1 MiB`: subtracted from a NaN-boxed receiver, a heap
 /// array handle lands in `[0, HEAP_POINTER_BAND_SPAN)`.
-pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str =
+    crate::expr::receiver_range::RECEIVER_BIAS_LITERAL;
 /// `2^48 - 1 MiB`: the handles above the runtime-id band.
-pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str =
+    crate::expr::receiver_range::RECEIVER_SPAN_LITERAL;
 /// The array read's guard mask over the header word `[h-8]` read as an i32:
 /// the type byte, `GC_FLAG_FORWARDED` (0x80 in byte 1) and
 /// `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400 in `_reserved`, bytes 2..3).
@@ -201,7 +203,8 @@ pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "67600639"; // 0x04
 /// The STORE's band: `is_valid_obj_ptr`'s 2^47 ceiling, less the 1 MiB the
 /// band is measured from. A store keeps the ceiling the runtime guard applies
 /// before it dereferences anything (#7396), at no extra instruction.
-pub(in crate::expr) const HEAP_POINTER_STORE_BAND_SPAN_I64: &str = "140737487306752"; // 2^47 - 1 MiB
+pub(in crate::expr) const HEAP_POINTER_STORE_BAND_SPAN_I64: &str =
+    crate::expr::receiver_range::STORE_SPAN_LITERAL;
 /// The masked word of a writable array (the read's expectation).
 pub(in crate::expr) const ARRAY_STORE_GUARD_EXPECT_I32: &str = ARRAY_READ_GUARD_EXPECT_I32;
 
@@ -280,7 +283,11 @@ pub(crate) fn emit_array_region_guard(
     ctx.current_block = deref_idx;
     let handle = {
         let blk = ctx.block();
-        let handle = blk.add(I64, &band_offset, "1048576");
+        let handle = blk.add(
+            I64,
+            &band_offset,
+            crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
+        );
         let word = emit_array_guard_word(blk, &handle);
         let word_ok = match dense {
             None => emit_array_guard_word_ok(blk, &word),
@@ -404,7 +411,11 @@ pub(crate) fn emit_typed_f64_region_guard(
     ctx.current_block = deref_idx;
     let (handle, word) = {
         let blk = ctx.block();
-        let handle = blk.add(I64, &band_offset, "1048576");
+        let handle = blk.add(
+            I64,
+            &band_offset,
+            crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
+        );
         let word = emit_array_guard_word(blk, &handle);
         let masked = blk.and(I32, &word, &(0xffu32 | (1 << 15)).to_string());
         let ok = blk.icmp_eq(
@@ -641,7 +652,11 @@ fn lower_guarded_array_index_get_with_index(
             let blk = ctx.block();
             // In the band the tag is POINTER_TAG, so the handle is the band
             // offset plus the 1 MiB it was measured from.
-            let arr_handle = blk.add(I64, &band_offset, "1048576");
+            let arr_handle = blk.add(
+                I64,
+                &band_offset,
+                crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
+            );
             let word = emit_array_guard_word(blk, &arr_handle);
             let word_ok = emit_array_guard_word_ok(blk, &word);
             blk.cond_br(&word_ok, &range_label, &follow_label);
@@ -668,7 +683,11 @@ fn lower_guarded_array_index_get_with_index(
                 blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
             let live_top = blk.lshr(I64, &live_handle, "48");
             let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
-            let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
+            let live_above_handle_band = blk.icmp_ugt(
+                I64,
+                &live_handle,
+                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+            );
             let live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
             // A forwarding word is not trusted until its address is in the
             // heap band: never dereference a malformed target.

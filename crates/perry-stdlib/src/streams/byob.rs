@@ -226,7 +226,7 @@ unsafe fn reject_with_type_error(promise: *mut Promise, message: &str) -> *mut P
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) -> f64 {
     let stream_handle = js_stream_unwrap_handle(stream_handle);
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let is_byte_stream = {
         let g = READABLE_STREAMS.lock().unwrap();
         match g.get(&id) {
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn js_readable_stream_get_byob_reader(stream_handle: f64) 
     // Reuse the lock/closed-promise bookkeeping in the shared path; the
     // mode check above already proved this is a byte stream.
     let reader = get_reader_for_stream(id, true);
-    reader as f64
+    stream_value(reader)
 }
 
 /// Shared reader-minting path used by `js_readable_stream_get_reader_with_options`
@@ -288,7 +288,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64) -> *mut Promise {
     let unwrapped = js_stream_unwrap_handle(reader_handle);
-    let reader_id = unwrapped as usize;
+    let reader_id = stream_id(unwrapped);
     let (stream_id, is_byob) = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) if r.locked => (r.stream_handle, r.is_byob),
         Some(_) => {
@@ -400,7 +400,7 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
 /// outstanding on this byte stream.
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handle: f64) -> f64 {
-    let id = js_stream_unwrap_handle(stream_handle) as usize;
+    let id = stream_id(js_stream_unwrap_handle(stream_handle));
     let view_bits = {
         let g = BYOB_PENDING.lock().unwrap();
         match g.get(&id).and_then(|q| q.front()) {

@@ -521,7 +521,7 @@ fn emit_receiver_kind_branch(
         // same helpers the unguarded pre-#10476 fold called on every receiver.)
         ReceiverKind::Array => {
             const POINTER_TAG_TOP16: &str = "32765"; // 0x7FFD
-            const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF
+            const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
             const HEAP_LIMIT: &str = "140737488355328"; // 2^47
             const GC_TYPE_ARRAY_I8: &str = "1";
             const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8

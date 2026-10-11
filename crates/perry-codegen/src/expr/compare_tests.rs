@@ -800,9 +800,8 @@ fn local_typeof_number_literal_is_decided_inline_for_plain_doubles() {
         "the tag-range test must be the single unsigned range compare:\n{ir}"
     );
     assert!(
-        (ir.contains("fcmp olt double") && ir.contains("1048576.0"))
-            || ir.contains("0x4130000000000000"),
-        "the stream id band must be excluded inline:\n{ir}"
+        !ir.contains("1048576.0") && !ir.contains("0x4130000000000000"),
+        "no double value may be carved out of the inline Number test:\n{ir}"
     );
     assert!(
         !ir.contains("call i64 @js_value_typeof(") && !ir.contains("call i32 @js_string_equals("),

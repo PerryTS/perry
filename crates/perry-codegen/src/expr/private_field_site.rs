@@ -51,8 +51,8 @@ const PRIVATE_FIELD_SITE_SLOT_MASK: &str = "65535";
 /// `POINTER_TAG + 0x10_0000`: with the unsigned compare below, "a POINTER
 /// NaN-box above the native-handle band" in one test (as
 /// `emit_private_site_guard`).
-const POINTER_BAND_BIAS: &str = "9222527611925692416";
-const POINTER_BAND_SPAN: &str = "281474975662080";
+const POINTER_BAND_BIAS: &str = crate::expr::receiver_range::RECEIVER_BIAS_LITERAL;
+const POINTER_BAND_SPAN: &str = crate::expr::receiver_range::RECEIVER_SPAN_LITERAL;
 
 /// The parts of an instance private FIELD access this module compiles.
 pub(crate) struct PrivateFieldSite<'e> {
@@ -182,7 +182,11 @@ fn emit_site_probe(
 
     ctx.current_block = shape_idx;
     let blk = ctx.block();
-    let payload = blk.add(I64, &biased, "1048576");
+    let payload = blk.add(
+        I64,
+        &biased,
+        crate::expr::receiver_range::HANDLE_FLOOR_LITERAL,
+    );
     let shape_addr = blk.add(I64, &payload, "4");
     let shape_ptr = blk.inttoptr(I64, &shape_addr);
     let shape = blk.load(I32, &shape_ptr);

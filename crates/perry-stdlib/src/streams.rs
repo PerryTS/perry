@@ -569,6 +569,32 @@ pub(crate) const STREAM_HANDLE_ID_START: usize =
     perry_runtime::value::addr_class::STREAM_ID_BAND_START;
 pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
 
+/// The JS value of a stream-family registry id (stream, reader, writer,
+/// transform): a `POINTER_TAG` handle in the stream band, like every other
+/// registry handle. Never a number — a number is always a Number, so
+/// `typeof 1048576` cannot depend on whether stream 0x100000 is live.
+#[inline]
+pub(crate) fn stream_value(id: usize) -> f64 {
+    perry_runtime::value::js_nanbox_pointer(id as i64)
+}
+
+/// True for a JS object (a heap `POINTER_TAG` value), false for a stream
+/// handle and for every primitive. pipeThrough's pair/options decoding keeps
+/// handles on the direct endpoint getters and roots only real objects.
+#[inline]
+pub(crate) fn is_object_value(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_pointer()
+        && perry_runtime::object::stream_handle_id(value).is_none()
+}
+
+/// The registry id a JS value names: the payload of a stream-band
+/// `POINTER_TAG` handle, else 0 (which no registry holds). Every stream FFI
+/// decodes its handle arguments here.
+#[inline]
+pub(crate) fn stream_id(value: f64) -> usize {
+    perry_runtime::object::stream_handle_id(value).unwrap_or(0)
+}
+
 static READABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, ReadableStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 /// The error a readable stream ended with, if any. A stream built from an
@@ -789,12 +815,12 @@ pub(crate) fn stream_registry_presence_for_test(id: usize) -> u32 {
 }
 
 // #1545: ONE id allocator shared across all five Web Streams registries.
-// Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
-// so they live just above the runtime's `< 0x100000` small-handle band. That
-// keeps them disjoint from Fetch/native/proxy pointer-tagged ids while the
-// runtime's finite-number stream probes still route dynamic calls like
-// `src.pipeThrough(ts).getReader()`. #6602: ids of terminal objects recycle
-// through `idalloc` so the finite band survives long-running servers.
+// Stream handles are `POINTER_TAG` registry handles in their own sub-band of
+// the handle band (`stream_value` / `stream_id`), disjoint from the
+// Fetch/native/proxy ids, so the runtime's small-handle dispatch routes
+// dynamic calls like `src.pipeThrough(ts).getReader()`. #6602: ids of
+// terminal objects recycle through `idalloc` so the finite band survives
+// long-running servers.
 use self::idalloc::next_stream_id;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1080,7 +1106,7 @@ unsafe fn invoke_start(stream_id: usize) {
         match g.get_mut(&stream_id) {
             Some(s) if !s.started => {
                 s.started = true;
-                (s.start_cb, stream_id as f64)
+                (s.start_cb, stream_value(stream_id))
             }
             _ => return,
         }
@@ -1131,7 +1157,7 @@ extern "C" fn readable_pull_microtask(
                     js_closure_call1(
                         cb as *const ClosureHeader,
                         perry_runtime::closure::plain_call_receiver(),
-                        stream_id as f64,
+                        stream_value(stream_id),
                     )
                 }
             });
@@ -1304,9 +1330,9 @@ unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
         perry_runtime::closure::plain_call_receiver(),
     );
     if chunk.to_bits() == TAG_UNDEFINED {
-        let _ = js_readable_stream_controller_close(stream_id as f64);
+        let _ = js_readable_stream_controller_close(stream_value(stream_id));
     } else {
-        let _ = js_readable_stream_controller_enqueue(stream_id as f64, chunk);
+        let _ = js_readable_stream_controller_enqueue(stream_value(stream_id), chunk);
     }
 }
 
@@ -1403,7 +1429,7 @@ pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
     );
     invoke_start(id);
     maybe_pull(id);
-    id as f64
+    stream_value(id)
 }
 
 /// Runtime registration target for APIs like
@@ -1429,7 +1455,7 @@ pub unsafe extern "C" fn js_readable_stream_deferred_byte_source(
         s.started = true;
         s.pull_returns_byte_chunk = true;
     }
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
@@ -1457,7 +1483,7 @@ pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
     );
     invoke_start(id);
     maybe_pull(id);
-    id as f64
+    stream_value(id)
 }
 
 #[no_mangle]
@@ -1483,7 +1509,7 @@ pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
     );
     invoke_start(id);
     maybe_pull(id);
-    id as f64
+    stream_value(id)
 }
 
 /// Internal helper: build a single-chunk readable stream from an owned
@@ -1525,7 +1551,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
     }
     let stream_handle = js_stream_unwrap_handle(stream_handle);
     let byob_requested = option_string_equals(options, b"mode", b"byob");
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     if byob_requested {
         let is_non_byte_stream = {
             let g = READABLE_STREAMS.lock().unwrap();
@@ -1537,7 +1563,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
     }
 
     ensure_gc_registered();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let was_locked = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         let s = match g.get_mut(&id) {
@@ -1564,7 +1590,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
                     is_byob: byob_requested,
                 },
             );
-            return reader_id as f64;
+            return stream_value(reader_id);
         }
     };
     if was_locked {
@@ -1621,7 +1647,7 @@ unsafe fn js_string_value_to_string(value: f64, coerce: bool) -> Option<String> 
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_locked(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     let locked = g
         .get(&id)
@@ -1644,7 +1670,7 @@ unsafe fn js_readable_stream_cancel_inner(
     allow_locked: bool,
 ) -> *mut Promise {
     let promise = js_promise_new();
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let mut locked_reject = false;
     let cb = {
         let mut g = READABLE_STREAMS.lock().unwrap();
@@ -1673,7 +1699,8 @@ unsafe fn js_readable_stream_cancel_inner(
     let mut actions = [std::ptr::null_mut(); 2];
     let mut action_count = 0;
     if let Some(writable_id) = transform_writable_for_readable(id) {
-        actions[action_count] = js_writable_stream_abort_inner(writable_id as f64, reason, true);
+        actions[action_count] =
+            js_writable_stream_abort_inner(stream_value(writable_id), reason, true);
         action_count += 1;
     }
     if cb != 0 {
@@ -1991,7 +2018,7 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
             }
         }
     }
-    id as f64
+    stream_value(id)
 }
 
 /// #1671: `renderToReadableStream` stream backend. Builds a closed
@@ -2079,12 +2106,12 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
         if N.fetch_add(1, Ordering::Relaxed) < 40 {
             eprintln!(
                 "[STREAM] enqueue stream={:#x} chunk_bits={:#018x}",
-                (stream_handle as usize),
+                stream_id(stream_handle),
                 chunk.to_bits()
             );
         }
     }
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     if let Some(message) = readable_controller_enqueue_error(id) {
         throw_type_error_with_code(message, "ERR_INVALID_STATE");
     }
@@ -2160,7 +2187,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -2218,7 +2245,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     stream_handle: f64,
     reason: f64,
 ) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     // #5989: erroring a tee'd source errors both branches.
     if tee_branches_of(id).is_some() {
         tee_error_branches(id, reason.to_bits());
@@ -2230,7 +2257,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
+    let id = stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     match g.get(&id) {
         Some(s) if s.state == ReadableState::Readable => s.high_water_mark - s.queue_total_size,
@@ -2343,7 +2370,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let promise = scope.root_raw_mut_ptr(js_promise_new());
     let reader_handle = js_stream_unwrap_handle(reader_handle);
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -2548,7 +2575,7 @@ pub unsafe extern "C" fn js_readable_stream_values(stream_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     let stream_id = {
         let mut g = READERS.lock().unwrap();
         match g.get_mut(&reader_id) {
@@ -2571,7 +2598,7 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_closed(reader_handle: f64) -> *mut Promise {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     match READERS.lock().unwrap().get(&reader_id) {
         Some(r) => r.closed_promise,
         None => {
@@ -2584,7 +2611,7 @@ pub unsafe extern "C" fn js_reader_closed(reader_handle: f64) -> *mut Promise {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *mut Promise {
-    let reader_id = reader_handle as usize;
+    let reader_id = stream_id(reader_handle);
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) => r.stream_handle,
         None => {
@@ -2593,7 +2620,7 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
             return p;
         }
     };
-    js_readable_stream_cancel_inner(stream_id as f64, reason, true)
+    js_readable_stream_cancel_inner(stream_value(stream_id), reason, true)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2641,9 +2668,9 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_validate(
     options: f64,
 ) -> f64 {
     if let Some(message) = pipe_through_validation_error(
-        readable_handle as usize,
-        transform_writable_handle as usize,
-        transform_readable_handle as usize,
+        stream_id(readable_handle),
+        stream_id(transform_writable_handle),
+        stream_id(transform_readable_handle),
     ) {
         throw_type_error(message);
     }
@@ -2684,9 +2711,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
     pair: f64,
     options: f64,
 ) -> f64 {
-    if JSValue::from_bits(pair.to_bits()).is_pointer()
-        || JSValue::from_bits(options.to_bits()).is_pointer()
-    {
+    if is_object_value(pair) || is_object_value(options) {
         return pipe_through_rooted_pair(readable_handle, pair, options);
     }
     let transform = js_stream_unwrap_handle(pair);
@@ -2699,13 +2724,13 @@ pub unsafe extern "C" fn js_readable_stream_pipe_through_pair(
     output
 }
 
-// Keep the scoped-root frame out of the numeric handle path. The object path
-// needs those roots across arbitrary getter callbacks; numeric streams do not.
+// Keep the scoped-root frame out of the stream-handle path. The object path
+// needs those roots across arbitrary getter callbacks; stream handles do not.
 #[cold]
 #[inline(never)]
 unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64) -> f64 {
-    let pair_is_object = JSValue::from_bits(pair.to_bits()).is_pointer();
-    let options_is_object = JSValue::from_bits(options.to_bits()).is_pointer();
+    let pair_is_object = is_object_value(pair);
+    let options_is_object = is_object_value(options);
     // The caller enters this cold helper only for object-backed pairs or
     // options. The scope always exists here; individual numeric values need
     // no handle slots.
@@ -2716,16 +2741,14 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         Some(root) => subclass::unwrap_rooted_pair_stream_handle(root),
         None => pair,
     };
-    let transform_root = JSValue::from_bits(transform.to_bits())
-        .is_pointer()
-        .then(|| {
-            // Unwrapping can move the receiver. Compare with the root only
-            // after it returns, and reuse its slot when the pair is itself
-            // the transform. A distinct object still needs its own root.
-            pair_root
-                .filter(|root| root.get_nanbox_f64().to_bits() == transform.to_bits())
-                .unwrap_or_else(|| scope.root_nanbox_f64(transform))
-        });
+    let transform_root = is_object_value(transform).then(|| {
+        // Unwrapping can move the receiver. Compare with the root only
+        // after it returns, and reuse its slot when the pair is itself
+        // the transform. A distinct object still needs its own root.
+        pair_root
+            .filter(|root| root.get_nanbox_f64().to_bits() == transform.to_bits())
+            .unwrap_or_else(|| scope.root_nanbox_f64(transform))
+    });
     let transform_value = || {
         transform_root
             .as_ref()
@@ -2745,7 +2768,7 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
         let object = js_nanbox_get_pointer(transform_value()) as *const ObjectHeader;
         f64::from_bits(js_object_get_field_by_name(object, key).bits())
     };
-    let (readable, writable) = if JSValue::from_bits(transform.to_bits()).is_pointer() {
+    let (readable, writable) = if is_object_value(transform) {
         // Keep object-specific property dispatch out of the numeric endpoint
         // getters, so merely reading TransformStream endpoints does not link
         // the generic object-property machinery into an otherwise lean binary.

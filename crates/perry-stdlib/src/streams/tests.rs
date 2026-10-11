@@ -28,11 +28,13 @@ fn stream_ids_live_outside_pointer_tag_small_handle_band() {
     let id = next_stream_id();
     assert!(
         (STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id),
-        "stream id {id:#x} must stay in the raw numeric stream band"
+        "stream id {id:#x} must stay in the stream band"
     );
     assert!(
-        id >= perry_runtime::value::addr_class::HANDLE_BAND_MAX,
-        "stream id {id:#x} must not overlap pointer-tagged small handles"
+        perry_runtime::value::addr_class::is_stream_id_band(id)
+            && !perry_runtime::value::addr_class::is_proxy_id_band(id)
+            && !perry_runtime::value::addr_class::is_fetch_handle_band(id),
+        "stream id {id:#x} must not overlap the other handle sub-bands"
     );
 }
 
@@ -317,7 +319,7 @@ fn transform_terminate_closes_readable_and_errors_writable() {
         READABLE_STREAMS
             .lock()
             .unwrap()
-            .get(&(readable as usize))
+            .get(&stream_id(readable))
             .unwrap()
             .state,
         ReadableState::Closed
@@ -326,7 +328,7 @@ fn transform_terminate_closes_readable_and_errors_writable() {
         WRITABLE_STREAMS
             .lock()
             .unwrap()
-            .get(&(writable as usize))
+            .get(&stream_id(writable))
             .unwrap()
             .state,
         WritableState::Errored
@@ -594,7 +596,7 @@ fn pipe_through_pair_survives_a_moving_getter() {
         );
         let options = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
         let pair_before = pair.get_raw_mut_ptr::<ObjectHeader>();
-        let source = alloc_closed_readable() as f64;
+        let source = stream_value(alloc_closed_readable());
         let output = js_readable_stream_pipe_through_pair(
             source,
             f64::from_bits(
@@ -604,7 +606,7 @@ fn pipe_through_pair_survives_a_moving_getter() {
                 JSValue::pointer(options.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits(),
             ),
         );
-        assert_eq!(output, readable);
+        assert_eq!(output.to_bits(), readable.to_bits());
         assert_ne!(
             pair.get_raw_mut_ptr::<ObjectHeader>(),
             pair_before,
@@ -660,7 +662,7 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
             READABLE_STREAMS
                 .lock()
                 .unwrap()
-                .get(&(readable as usize))
+                .get(&stream_id(readable))
                 .unwrap()
                 .state,
             ReadableState::Closed

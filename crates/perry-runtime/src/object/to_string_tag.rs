@@ -4,11 +4,9 @@
 use super::*;
 
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
-    if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 {
-        return None;
-    }
+    let id = stream_handle_id(value)?;
     let kind_probe = stream_handle_kind_probe()?;
-    match unsafe { kind_probe(value as usize) } {
+    match unsafe { kind_probe(id) } {
         1 => Some("ReadableStream"),
         2 => Some("WritableStream"),
         5 => Some("TransformStream"),

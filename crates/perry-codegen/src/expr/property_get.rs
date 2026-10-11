@@ -538,7 +538,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                                                       // path, which classifies it by registry without dereferencing the
                                                                       // raw id. `HANDLE_BAND_TOP` = 0xFFFFF (addr_class::HANDLE_BAND_MAX
                                                                       // - 1).
-            let above_band = blk.icmp_ugt(I64, &recv_handle, "1048575"); // 0xFFFFF
+            let above_band = blk.icmp_ugt(
+                I64,
+                &recv_handle,
+                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+            );
             let handle_ok = blk.and(I1, &tag_ok, &above_band);
             // SSO receivers fail this guard → route to slow path
             // `js_value_length_f64` which has an SSO branch (reads

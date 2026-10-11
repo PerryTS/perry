@@ -114,8 +114,8 @@ unsafe fn prop_tls(handle: i64, property_name: &str) -> Option<f64> {
 
 #[cfg(feature = "bundled-streams")]
 unsafe fn prop_streams(handle: i64, property_name: &str) -> Option<f64> {
-    // #1670: Web Streams handle property reads. A numeric stream id reaches
-    // here via `js_object_get_field_by_name`'s stream probe (inline
+    // #1670: Web Streams handle property reads. A stream id reaches here
+    // through the generic small-handle property dispatch (inline
     // `res.body.locked`). Route getter properties to their accessors, return
     // a bound-method closure for callable members, and undefined for anything
     // else — never a deref of the float id as a pointer. Gated on stream
@@ -126,7 +126,7 @@ unsafe fn prop_streams(handle: i64, property_name: &str) -> Option<f64> {
         && crate::streams::js_stream_handle_is_registered(handle as usize)
     {
         return Some(crate::streams::dispatch_stream_property(
-            handle as f64,
+            crate::streams::stream_value(handle as usize),
             property_name,
         ));
     }

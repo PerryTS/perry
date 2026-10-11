@@ -659,7 +659,11 @@ pub fn try_lower_closure_typed_local_call(
                             // Above the small-handle id band: a real closure is
                             // a GC allocation, and the band's ids are unmapped
                             // low addresses the probe must never dereference.
-                            let above_band = blk.icmp_ugt(I64, &handle, "1048575");
+                            let above_band = blk.icmp_ugt(
+                                I64,
+                                &handle,
+                                crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL,
+                            );
                             let plausible = blk.and(I1, &is_pointer, &above_band);
                             blk.cond_br(&plausible, &probe_label, &guard_call_label);
                         }

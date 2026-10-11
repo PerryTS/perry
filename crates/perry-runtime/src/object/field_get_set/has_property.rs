@@ -134,29 +134,16 @@ fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
 ///     proxies, and every handle-band registry id (Headers/Request/streams/…) —
 ///     **except** Symbols, which are pointer-tagged but are primitives;
 ///   * INT32-tagged *registered* class refs (a class used as a value is its
-///     constructor object — `"prototype" in SomeClass`);
-///   * Web Streams handles — raw finite-integer f64 ids in the stream-id band
-///     (`"closed" in reader`).
+///     constructor object — `"prototype" in SomeClass`).
 ///
 /// Everything else (number, boolean, string, BigInt, null, undefined, Symbol,
-/// and any unregistered INT32) is a primitive and makes `in` throw. A numeric
-/// literal that happens to land inside the stream-id band is treated as
-/// object-like here — a deliberately conservative false-negative that avoids
-/// ever regressing a real stream handle; test262's primitive-RHS cases use
-/// small literals well below that band.
+/// and any unregistered INT32) is a primitive and makes `in` throw.
 pub(super) fn in_rhs_is_object(obj: f64) -> bool {
     let jv = JSValue::from_bits(obj.to_bits());
     if jv.is_pointer() {
         return unsafe { crate::symbol::js_is_symbol(obj) } == 0;
     }
-    if crate::object::class_ref_id(obj).is_some() {
-        return true;
-    }
-    let f = f64::from_bits(obj.to_bits());
-    f.is_finite()
-        && f > 0.0
-        && f.fract() == 0.0
-        && crate::value::addr_class::is_stream_id_band(f as usize)
+    crate::object::class_ref_id(obj).is_some()
 }
 
 /// Presence-only counterpart of the inherited static DATA-field read in
@@ -507,35 +494,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     }
 
     if !obj_val.is_pointer() {
-        // Web Streams handles are raw finite f64 ids, not NaN-boxed pointers.
-        // Property reads already route these through the stdlib handle
-        // dispatcher; mirror that for the `in` operator so `"closed" in reader`
-        // observes getter-backed handle properties without dereferencing the id.
-        let f = f64::from_bits(obj.to_bits());
-        if key_val.is_any_string() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
-            let id = f as usize;
-            if crate::value::addr_class::is_stream_id_band(id) {
-                if let Some(probe) = crate::object::stream_handle_probe() {
-                    unsafe {
-                        if probe(id) {
-                            if let Some(dispatch) =
-                                super::super::class_registry::handle_property_dispatch()
-                            {
-                                let key_ptr = crate::value::js_get_string_pointer_unified(key)
-                                    as *const crate::StringHeader;
-                                let name_ptr = (key_ptr as *const u8)
-                                    .add(std::mem::size_of::<crate::StringHeader>());
-                                let name_len = (*key_ptr).byte_len as usize;
-                                let result = dispatch(id as i64, name_ptr, name_len);
-                                if result.to_bits() != crate::value::TAG_UNDEFINED {
-                                    return nanbox_true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
         return nanbox_false;
     }
 

@@ -109,7 +109,7 @@ pub(crate) fn heap_addr_upper_bound_exclusive(target_triple: &str) -> u64 {
 
 /// Inclusive lower bound for a candidate GC address after excluding Perry's
 /// small-handle band. Mainstream hosted targets accept low virtual addresses,
-/// so the 1 MiB handle ceiling is the effective floor. Other targets use the
+/// so the handle ceiling (`RECEIVER_HANDLE_FLOOR`) is the effective floor. Other targets use the
 /// runtime's conservative 2 TiB floor before any `GcHeader` dereference.
 pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
     let triple = target_triple.to_ascii_lowercase();
@@ -131,7 +131,7 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
         // floor for `target_os = "wasi"`.
         || triple.contains("wasi");
     if mainstream_os {
-        0x10_0000
+        crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64
     } else {
         0x200_0000_0000
     }
@@ -443,7 +443,10 @@ mod tests {
             "x86_64-pc-windows-msvc",
             "wasm32-unknown-wasip2",
         ] {
-            assert_eq!(heap_addr_lower_bound_inclusive(triple), 0x10_0000);
+            assert_eq!(
+                heap_addr_lower_bound_inclusive(triple),
+                crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64
+            );
         }
         for triple in ["aarch64-unknown-linux-ohos", "riscv64gc-unknown-none-elf"] {
             assert_eq!(
@@ -484,7 +487,7 @@ mod tests {
         for triple in triples {
             assert_eq!(
                 heap_addr_lower_bound_inclusive(&triple),
-                0x10_0000,
+                crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64,
                 "{triple}"
             );
         }
