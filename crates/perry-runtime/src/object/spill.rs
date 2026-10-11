@@ -1,5 +1,4 @@
-//! Object-owned overflow storage ("spill") and the legacy thread-local
-//! overflow side table.
+//! Object-owned overflow storage ("spill").
 //!
 //! Split out of `object/mod.rs` (which had grown past the 2000-line CI cap).
 //! Contents are unchanged; only item visibility was widened to `pub(crate)`
@@ -13,46 +12,9 @@ thread_local! {
     pub(crate) static TEST_LAYOUT_NOTE_SLOT_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-// Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
-// Skips the outer HashMap lookup on consecutive writes to the same
-// object (exactly the row-build pattern: a single object gets its
-// overflow slots filled back-to-back). Refreshed on every slow-path
-// HashMap access; invalidated by `clear_overflow_for_ptr` when GC
-// sweep frees the corresponding object.
-//
-// Safety: the cached pointer references the `Vec<u64>` struct stored
-// inside a HashMap bucket. That struct only moves when the HashMap
-// resizes, which only happens on `entry().or_default()` inserting a
-// fresh key. The slow path below does both the potentially-resizing
-// call and the cache refresh while holding the `overflow_fields`
-// borrow, so no other thread-local mutation can interleave between
-// obtaining `&mut Vec` and caching its address.
-// (Storage: `ObjectHotTables::overflow_last`.)
-
-// ---------------------------------------------------------------------------
-// #6812: object-owned overflow storage ("spill").
-//
-// Default-on replacement for the thread-local `overflow_fields` side table:
-// values past the inline alloc_limit live in a `GC_TYPE_ARRAY` buffer hung
-// off the object's `ObjectMeta` record ([`ObjectMeta::spill`]). Reads are two
-// dependent loads instead of a TLS fetch + RefCell + PtrHashMap probe, and
-// GC integration is structural — the buffer is a traced child edge (object →
-// meta → buffer → elements), so marking, evacuation rewriting, owner moves,
-// and death all ride the ordinary object graph. The legacy side-table code
-// below stays compiled for one release as a bisection escape hatch
-// (`PERRY_OBJECT_SPILL=0`/`off`/`false`); its GC hooks are no-ops while the
-// map stays empty.
-
-#[inline]
-pub(crate) fn object_spill_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *crate::once_init::get_or_init(&ON, || {
-        !matches!(
-            std::env::var("PERRY_OBJECT_SPILL").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
+// Values past the inline bound live in a traced array on ObjectMeta::spill.
+// The object graph owns marking, rewriting, movement and death; no address
+// registry or alternate storage mode is needed.
 
 /// Raw in-range element access for the spill buffer. The buffer is a plain
 /// `GC_TYPE_ARRAY` this module allocated itself, so the user-facing
@@ -117,8 +79,7 @@ unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, 
 
 /// Only genuine shaped objects carry a meta record at the ObjectHeader offset.
 /// Every other GC type (RegExp, errors, maps, ...) has unrelated bytes there —
-/// the legacy side table was address-keyed and safe for ANY owner, so those
-/// owners keep it instead of dereferencing garbage. Classification uses the
+/// those owners use their own expando bags. Classification uses the
 /// canonical GcHeader kind, mirroring `gc_object_meta_slot`.
 #[inline]
 pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
@@ -134,20 +95,17 @@ pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
 /// The stored bits of a spill-located key, INCLUDING a stored `undefined`,
 /// or `None` when the position has no storage (no meta record, no buffer,
 /// past its length, a `TAG_HOLE`) or the value does not live in object-owned
-/// spill storage at all (spill disabled, index past
+/// spill storage at all (index past
 /// [`SPILL_MAX_FIELD_INDEX`], an exotic owner).
 ///
 /// This is the read the emitted `pic.spill.hit` performs, with its checks
 /// spelled out: `Some` here is exactly "the compact word may name this
-/// receiver's ShapeId flipped". [`overflow_get`] keeps the legacy table's
+/// receiver's ShapeId flipped". [`overflow_get`] keeps the spill helper's
 /// convention that `undefined` reads as absent, which cost every read of an
 /// own spill key holding `undefined` the full by-name walk — its site could
 /// never prime.
 pub(crate) fn spill_get_present(obj_ptr: usize, field_index: usize) -> Option<u64> {
-    if !object_spill_enabled()
-        || field_index >= SPILL_MAX_FIELD_INDEX
-        || unsafe { !spill_capable_owner(obj_ptr) }
-    {
+    if field_index >= SPILL_MAX_FIELD_INDEX || unsafe { !spill_capable_owner(obj_ptr) } {
         return None;
     }
     unsafe {
@@ -182,17 +140,14 @@ pub(crate) fn spill_get_present(obj_ptr: usize, field_index: usize) -> Option<u6
 /// shape and no storage.
 ///
 /// No-op when the position already has storage, and when the key's value
-/// does not live in spill storage (spill disabled, an exotic owner): the
+/// does not live in spill storage (an exotic owner): the
 /// prime never publishes a spill entry for those (see
 /// [`spill_get_present`]).
 ///
 /// May allocate (meta record, buffer): the caller must hold `obj_ptr` in a
 /// handle and re-read it afterwards.
 pub(crate) fn spill_reserve_claimed(obj_ptr: usize, field_index: usize) {
-    if !object_spill_enabled()
-        || field_index >= SPILL_MAX_FIELD_INDEX
-        || unsafe { !spill_capable_owner(obj_ptr) }
-    {
+    if field_index >= SPILL_MAX_FIELD_INDEX || unsafe { !spill_capable_owner(obj_ptr) } {
         return;
     }
     if spill_get_present(obj_ptr, field_index).is_none() {
@@ -219,8 +174,7 @@ pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64
         }
         let bits = *spill_elements(spill).add(field_index);
         // Never-written positions are TAG_HOLE from allocation (or
-        // TAG_UNDEFINED via the legacy-parity fillers); both report as
-        // absent, matching the side-table Vec's TAG_UNDEFINED semantics.
+        // TAG_UNDEFINED via explicit reservation); both report as absent.
         (bits != crate::value::TAG_UNDEFINED && bits != crate::value::TAG_HOLE).then_some(bits)
     }
 }
@@ -259,7 +213,7 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
             let spill = (*meta).spill as *mut crate::array::ArrayHeader;
             if !spill.is_null() && ((*spill).capacity as usize) > field_index {
                 // Learn the class's true width so FUTURE instances allocate
-                // it inline (same hook as the legacy path) — on the FIRST
+                // it inline — on the FIRST
                 // store of each position, i.e. when the slot held no value.
                 // Steady-state overwrites (the round-robin update pattern
                 // this fast path exists for) skip the probe.
@@ -298,10 +252,7 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
 /// widening every object, while an exact spill avoids padding every record's
 /// side allocation to [`crate::array::MIN_ARRAY_CAPACITY`].
 pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
-    if !object_spill_enabled()
-        || field_count as usize > SPILL_MAX_FIELD_INDEX
-        || unsafe { !spill_capable_owner(obj_ptr) }
-    {
+    if field_count as usize > SPILL_MAX_FIELD_INDEX || unsafe { !spill_capable_owner(obj_ptr) } {
         return;
     }
 
@@ -414,12 +365,10 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         let needed = field_index + 1;
         if spill.is_null() || ((*spill).capacity as usize) < needed {
-            // In range by the SPILL_MAX_FIELD_INDEX dispatch gate, so the
-            // conversion is exact (2^24 max); arena allocation panics on
-            // genuine OOM (after one emergency reclaim) and never returns
-            // null, so the store below always has a live buffer.
-            let new_cap =
-                u32::try_from(needed.next_power_of_two().max(8)).expect("bounded by dispatch gate");
+            // Lengths are u32. Keep ordinary power-of-two growth, falling
+            // back to exact capacity when rounding would exceed that range.
+            let new_cap = u32::try_from(needed.next_power_of_two().max(8))
+                .unwrap_or_else(|_| u32::try_from(needed).expect("spill index checked"));
             // length == capacity and every slot TAG_HOLE from birth, so the
             // GC element range covers the whole buffer and in-range
             // `js_array_set` can never trigger array growth/forwarding —
@@ -464,44 +413,21 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
     }
 }
 
-/// Read the u64 bits stored at `field_index` for `obj`, or `None` if absent.
-/// Positions never written are stored as `TAG_UNDEFINED`; this helper reports
-/// them as `None` so callers can return JS `undefined` uniformly with the
-/// "no Vec entry at all" case.
-/// Spill indices share the runtime's canonical 16M field ceiling (the
-/// same cap `layout_note_slot` and the write-loop guard enforce); a larger
-/// index would need a >128MB buffer for one property, so it stays on the
-/// address-keyed legacy table like exotic owners do.
+/// Upper bound for compact spill entries and eager reservation. Larger
+/// indices use the ordinary spill helper without publishing a compact entry.
 pub(crate) const SPILL_MAX_FIELD_INDEX: usize = 16_000_000;
 
 #[inline]
 pub(crate) fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
-    if object_spill_enabled()
-        && field_index < SPILL_MAX_FIELD_INDEX
-        && unsafe { spill_capable_owner(obj_ptr) }
-    {
-        return spill_get(obj_ptr, field_index);
+    if unsafe { !spill_capable_owner(obj_ptr) } {
+        return None;
     }
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .get(&obj_ptr)
-        .and_then(|v| v.get(field_index).copied())
-        .filter(|&bits| bits != crate::value::TAG_UNDEFINED)
+    spill_get(obj_ptr, field_index)
 }
 
-/// Write `vbits` to the overflow slot `field_index` for `obj`. Grows the
-/// per-object `Vec` to `field_index + 1` with `TAG_UNDEFINED` fillers if
-/// needed (filler slots correspond to the object's inline region and are
-/// never read).
-///
-/// Fast path skips the outer HashMap when `obj_ptr` matches the last-
 /// Learned per-class inline sizing: the dynamic-construct path allocates 8
 /// inline slots (it cannot see the constructor body), so a 23-field
-/// ES5-pattern object keeps 15 fields in [`OVERFLOW_FIELDS`] — a `Vec<u64>`
-/// plus map entry per object (~250B, more than the object payload), visited,
-/// rekeyed and finalized by every GC cycle. The FIRST instance that
+/// ES5-pattern object needs 15 spilled fields. The FIRST instance that
 /// overflows records its class's high-water field index here; every LATER
 /// `new` of the same (synthetic or registered) class right-sizes its
 /// allocation so all fields land inline. Capped so a pathological dynamic
@@ -602,64 +528,21 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
     }
 }
 
-/// accessed Vec — the common row-build pattern where an object's
-/// overflow slots fill in sequence.
+/// Store into the owner's traced spill array. Exotic expandos use their
+/// own property bags before reaching shaped-object field storage.
 #[inline]
 pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if object_spill_enabled()
-        && field_index < SPILL_MAX_FIELD_INDEX
-        && unsafe { spill_capable_owner(obj_ptr) }
-    {
-        return spill_set(obj_ptr, field_index, vbits);
-    }
-    // A fallback overflow Vec is owned by this object, not by an Array
-    // buffer; retire a proof before its direct external-slot write.
-    if unsafe { spill_capable_owner(obj_ptr) } {
-        unsafe {
-            crate::array::clear_packed_subclass_numeric_proof(obj_ptr as *mut ObjectHeader);
-        }
-    }
-    // Learn the class's true width so FUTURE instances allocate it inline.
-    unsafe {
-        let hdr = obj_ptr as *const ObjectHeader;
-        note_learned_inline_fields(
-            obj_ptr,
-            (*hdr).class_id,
-            (field_index as u32).saturating_add(1),
-        );
-    }
-    let st = crate::state::state();
-    let cached_slot = unsafe {
-        let (cached_obj, cached_vec) = st.object_hot.overflow_last.get();
-        if cached_obj == obj_ptr && !cached_vec.is_null() {
-            let v = &mut *cached_vec;
-            if v.len() <= field_index {
-                v.resize(field_index + 1, crate::value::TAG_UNDEFINED);
-            }
-            let slot = v.get_unchecked_mut(field_index);
-            *slot = vbits;
-            Some(slot as *mut u64 as usize)
-        } else {
-            None
-        }
-    };
-    if let Some(slot_addr) = cached_slot {
-        crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, vbits);
-        return;
-    }
-    let slot_addr;
-    {
-        let mut map = st.object_hot.overflow_fields.borrow_mut();
-        let v = map.entry(obj_ptr).or_default();
-        if v.len() <= field_index {
-            v.resize(field_index + 1, crate::value::TAG_UNDEFINED);
-        }
-        v[field_index] = vbits;
-        slot_addr = (&mut v[field_index]) as *mut u64 as usize;
-        let vec_ptr = v as *mut Vec<u64>;
-        st.object_hot.overflow_last.set((obj_ptr, vec_ptr));
-    }
-    crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, vbits);
+    assert!(
+        unsafe { spill_capable_owner(obj_ptr) },
+        "spill owner must be a shaped object"
+    );
+    // ArrayHeader uses u32 lengths. Reject an unrepresentable internal index
+    // before the slow path's capacity conversion.
+    assert!(
+        field_index < u32::MAX as usize,
+        "spill index exceeds array length"
+    );
+    spill_set(obj_ptr, field_index, vbits);
 }
 
 #[cfg(test)]

@@ -23,7 +23,6 @@ pub(super) fn register_host_roots() {
     // registry, so restore the intrinsic-address rewrites before callbacks
     // access arrays/objects after a protected copying collection.
     gc_register_mutable_root_scanner(crate::array::scan_prototype_addr_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_overflow_fields_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
 

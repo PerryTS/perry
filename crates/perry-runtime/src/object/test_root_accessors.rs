@@ -72,79 +72,6 @@ pub(crate) fn test_clear_transition_cache_root() {
         }
     });
 }
-
-#[cfg(test)]
-pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
-    let st = crate::state::state();
-    {
-        let mut m = st.object_hot.overflow_fields.borrow_mut();
-        m.clear();
-        m.insert(owner, vec![value_bits]);
-    }
-    crate::gc::layout_note_slot(owner, 0, value_bits);
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .get(&owner)
-        .map(|v| v.len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_overflow_fields_vec(owner: usize, values: Vec<u64>) {
-    let st = crate::state::state();
-    st.object_hot
-        .overflow_fields
-        .borrow_mut()
-        .insert(owner, values);
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_overflow_fields_root() {
-    let st = crate::state::state();
-    st.object_hot.overflow_fields.borrow_mut().clear();
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
-    let m = crate::state::state().object_hot.overflow_fields.borrow();
-    let Some((&owner, fields)) = m.iter().next() else {
-        return (0, 0);
-    };
-    (owner, fields.first().copied().unwrap_or(0))
-}
-
-#[cfg(test)]
-pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
-    // Mode-aware probe: overflow values live in the spill buffer by default
-    // and in the legacy side table under PERRY_OBJECT_SPILL=0.
-    if object_spill_enabled()
-        && index < SPILL_MAX_FIELD_INDEX
-        && unsafe { spill_capable_owner(owner) }
-    {
-        return spill_get(owner, index).unwrap_or(0);
-    }
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .get(&owner)
-        .and_then(|fields| fields.get(index).copied())
-        .unwrap_or(0)
-}
-
-#[cfg(test)]
-pub(crate) fn test_object_spill_enabled() -> bool {
-    object_spill_enabled()
-}
-
 /// Test probe: address of the owner's spill buffer allocation (0 = none).
 #[cfg(test)]
 pub(crate) fn test_spill_buffer_addr(owner: usize) -> usize {
@@ -155,4 +82,9 @@ pub(crate) fn test_spill_buffer_addr(owner: usize) -> usize {
         }
         (*(*obj).meta).spill as usize
     }
+}
+
+/// Read object-owned spill storage in GC tests.
+pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
+    overflow_get(owner, index).unwrap_or(0)
 }

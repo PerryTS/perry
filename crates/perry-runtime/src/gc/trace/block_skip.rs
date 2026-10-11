@@ -28,8 +28,8 @@
 //!    hook (Map/Set side allocations, promises, native owners and views,
 //!    typed-array view metadata, Temporal cells, errors, RegExps, lazy tapes),
 //!    is an array whose raw-f64 layout bits would fire a typed-feedback
-//!    invalidation, or is an object while the legacy overflow table or the
-//!    wasm module-wrapper registry holds entries. What remains of
+//!    invalidation, or is an object while the wasm module-wrapper registry
+//!    holds entries. What remains of
 //!    `finalize_dead_arena_payload` for the other objects is address-keyed
 //!    side-table removal that the full trace's dead-owner fan-out has already
 //!    performed at sweep entry (`ELEMENT_SHAPES`, per-object layouts, closure
@@ -105,10 +105,9 @@ impl BlockCensus {
 
     /// A census that records blocks. The type obligations are fixed here:
     /// nothing a synchronous cycle runs between the census and the sweep can
-    /// populate the legacy overflow table or the module-wrapper registry.
+    /// populate the module-wrapper registry.
     pub(crate) fn armed() -> Self {
-        let object_side_tables_live = !crate::object::overflow_fields_is_empty()
-            || crate::object::module_wrapper_registry_ever_used();
+        let object_side_tables_live = crate::object::module_wrapper_registry_ever_used();
         let mut obligation_by_type = [true; 256];
         for (obj_type, slot) in obligation_by_type.iter_mut().enumerate() {
             *slot = type_needs_per_object_sweep(obj_type as u8, object_side_tables_live);
@@ -342,9 +341,9 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live:
         return true;
     }
     match info.move_hook_kind {
-        // `clear_overflow_for_ptr` / `clear_module_wrapper_for_dead_ptr` are
+        // `clear_module_wrapper_for_dead_ptr` are
         // no-ops while their tables are empty; neither is in the fan-out.
-        GcMoveHookKind::ObjectOverflowFields => object_side_tables_live,
+        GcMoveHookKind::ObjectModuleWrapper => object_side_tables_live,
         // Pruned post-trace by `closure::prune_dead_closure_side_table_owners`.
         GcMoveHookKind::ClosureDynamicProps => false,
         GcMoveHookKind::ErrorSideTables | GcMoveHookKind::LazyArrayTape => true,

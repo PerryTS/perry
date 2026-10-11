@@ -437,7 +437,7 @@ pub(crate) enum GcLargeObjectPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcMoveHookKind {
     None,
-    ObjectOverflowFields,
+    ObjectModuleWrapper,
     ClosureDynamicProps,
     MapForeachStack,
     SetSideTables,
@@ -572,7 +572,7 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::ObjectOverflowFields,
+        GcMoveHookKind::ObjectModuleWrapper,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
@@ -1171,8 +1171,7 @@ pub(crate) fn run_gc_rewrite_hook(obj_type: u8, user_ptr: usize) {
 pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user: usize) {
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
         GcMoveHookKind::None => {}
-        GcMoveHookKind::ObjectOverflowFields => {
-            crate::object::overflow_fields_owner_moved(old_user, new_user);
+        GcMoveHookKind::ObjectModuleWrapper => {
             // The residual `Object.setPrototypeOf` registry is rekeyed by the
             // relocation funnel for every owner kind (`gc/layout/transfer.rs`),
             // which runs before this hook on every move.
@@ -1204,8 +1203,7 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
 
 pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usize) {
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
-        GcMoveHookKind::ObjectOverflowFields => {
-            crate::object::clear_overflow_for_ptr(user_ptr);
+        GcMoveHookKind::ObjectModuleWrapper => {
             crate::object::clear_module_wrapper_for_dead_ptr(user_ptr);
             // The old per-object KEYS_INDEX prune is gone (#6759 C1): key
             // indexes are shape records keyed on keys_array identity now,

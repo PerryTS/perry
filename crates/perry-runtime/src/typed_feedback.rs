@@ -156,10 +156,11 @@ enum ObservationSource {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// Observations retain scalar facts only. Every shaped receiver supplies a
+// non-reused ShapeId; no observation keeps an arena address alive.
 struct Observation {
     source: ObservationSource,
-    object_addr: usize,
-    shape_addr: usize,
+    shape_id: u32,
     key_hash: u64,
     class_id: u32,
     heap_type: u16,
@@ -174,14 +175,14 @@ impl Observation {
         }
         match self.source {
             ObservationSource::Property | ObservationSource::Method => {
-                self.shape_addr == other.shape_addr
+                self.shape_id == other.shape_id
                     && self.key_hash == other.key_hash
                     && self.class_id == other.class_id
                     && self.heap_type == other.heap_type
                     && self.value_tag == other.value_tag
             }
             ObservationSource::NumericWrite => {
-                self.shape_addr == other.shape_addr
+                self.shape_id == other.shape_id
                     && self.class_id == other.class_id
                     && self.heap_type == other.heap_type
                     && self.aux == other.aux
@@ -193,7 +194,7 @@ impl Observation {
                     && self.value_tag == other.value_tag
             }
             ObservationSource::Array | ObservationSource::HelperReturn => {
-                self.shape_addr == other.shape_addr
+                self.shape_id == other.shape_id
                     && self.class_id == other.class_id
                     && self.heap_type == other.heap_type
                     && self.aux == other.aux
@@ -211,46 +212,12 @@ impl Observation {
         ) || (self.source == ObservationSource::HelperReturn
             && self.heap_type == crate::gc::GC_TYPE_OBJECT as u16)
     }
-
-    fn roots_object_addr(&self) -> bool {
-        false
-    }
-
-    fn roots_shape_addr(&self) -> bool {
-        // #6804: an id token is NOT a heap address — visiting it would let
-        // the GC mark garbage or, worse, rewrite the token if a moved
-        // object's from-space address numerically collided with the id
-        // range. Address tokens (class instances' keys arrays) keep the
-        // visit; a skipped low-address token can only go stale, which the
-        // equality-only usage reads as a benign mismatch.
-        self.is_shape_keyed()
-            && self.shape_addr != 0
-            && !crate::object::shapes::is_shape_id_token(self.shape_addr)
-    }
-
-    // #854: in-progress typed-feedback shape-change tracking
-    #[allow(dead_code)]
-    fn affected_by_shape_change(&self, old_shape: usize, new_shape: usize, class_id: u32) -> bool {
-        if !self.is_shape_keyed() {
-            return false;
-        }
-        (old_shape != 0 && self.shape_addr == old_shape)
-            || (new_shape != 0 && self.shape_addr == new_shape)
-            || (old_shape == 0
-                && self.shape_addr == 0
-                && (class_id == 0 || self.class_id == 0 || self.class_id == class_id))
-    }
-
     fn affected_by_representation_change(
         &self,
-        obj_addr: usize,
-        shape_addr: usize,
+        shape_id: u32,
         class_id: u32,
         heap_type: u16,
     ) -> bool {
-        if self.object_addr == obj_addr {
-            return true;
-        }
         if self.source == ObservationSource::Array {
             return heap_type != 0
                 && self.heap_type == heap_type
@@ -259,10 +226,10 @@ impl Observation {
         if !self.is_shape_keyed() {
             return false;
         }
-        if shape_addr != 0 {
-            return self.shape_addr == shape_addr;
+        if shape_id != 0 {
+            return self.shape_id == shape_id;
         }
-        self.shape_addr == 0
+        self.shape_id == 0
             && (class_id == 0 || self.class_id == 0 || self.class_id == class_id)
             && (heap_type == 0 || self.heap_type == 0 || self.heap_type == heap_type)
     }
@@ -727,7 +694,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
     }
 }
 
-fn helper_return_facts(bits: u64) -> (usize, u32, u16, u64, u16) {
+fn helper_return_facts(bits: u64) -> (u32, u32, u16, u64, u16) {
     let value_kind = stable_value_kind(bits);
     let addr = value_pointer(bits);
     if addr == 0 {
@@ -747,8 +714,8 @@ fn helper_return_facts(bits: u64) -> (usize, u32, u16, u64, u16) {
             (0, class_id, heap_type, aux, element_kind)
         }
         crate::gc::GC_TYPE_OBJECT => {
-            let (shape_addr, class_id, heap_type) = object_shape(addr);
-            (shape_addr, class_id, heap_type, 0, value_kind)
+            let (shape_id, class_id, heap_type) = object_shape(addr);
+            (shape_id, class_id, heap_type, 0, value_kind)
         }
         heap_type => (0, 0, heap_type as u16, 0, value_kind),
     }
@@ -786,7 +753,7 @@ fn normalize_raw_object_addr(bits: u64) -> usize {
     }
 }
 
-fn object_shape(addr: usize) -> (usize, u32, u16) {
+fn object_shape(addr: usize) -> (u32, u32, u16) {
     if addr == 0 {
         return (0, 0, 0);
     }
@@ -814,13 +781,13 @@ fn object_shape(addr: usize) -> (usize, u32, u16) {
         // Nothing is expected to reach here unstamped: every allocator in
         // `object/alloc.rs` birth-publishes, and the inline-`new` path stamps a
         // module-init ShapeId.
-        let shape = crate::object::shapes::object_shape_id(ptr) as usize;
+        let shape = crate::object::shapes::object_shape_id(ptr);
         (shape, class_id, gc_type)
     }
 }
 
 #[cfg(test)]
-pub(crate) fn test_object_shape_token(addr: usize) -> usize {
+pub(crate) fn test_object_shape_token(addr: usize) -> u32 {
     object_shape(addr).0
 }
 
@@ -949,14 +916,13 @@ fn observe_property(
         return;
     }
     let object_addr = normalize_raw_object_addr(obj_bits);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     observe(
         site_id,
         kind,
         Observation {
             source: ObservationSource::Property,
-            object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
-            shape_addr,
+            shape_id,
             key_hash: key_hash(key),
             class_id,
             heap_type: gc_type,
@@ -1069,11 +1035,10 @@ pub extern "C" fn js_typed_feedback_object_get_field_by_name_f64(
     }
 
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let observation = Observation {
         source: ObservationSource::Property,
-        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -1111,11 +1076,10 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name(
         return;
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let observation = Observation {
         source: ObservationSource::Property,
-        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -1148,12 +1112,11 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
         return;
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let handled = crate::object::js_object_set_field_by_name_transition_fast(obj, key, value) != 0;
     let observation = Observation {
         source: ObservationSource::Property,
-        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -1649,8 +1612,8 @@ fn packed_f64_range_dense_guard_impl(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -1767,8 +1730,8 @@ pub extern "C" fn js_typed_feedback_masked_window_ta_kind(
         let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
         let observation = Observation {
             source: ObservationSource::Array,
-            object_addr: 0,
-            shape_addr: 0,
+
+            shape_id: 0,
             key_hash: 0,
             class_id,
             heap_type,
@@ -1893,8 +1856,8 @@ fn object_key_matches_field(
         return false;
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_addr == 0 {
+    let (shape_id, _, heap_type) = object_shape(object_addr);
+    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == 0 {
         return false;
     }
     unsafe {
@@ -1920,18 +1883,6 @@ fn object_key_matches_field(
             && crate::string::js_string_equals(key, stored.as_string_ptr()) != 0
     }
 }
-
-fn shape_keyed_object_addr(source: ObservationSource, object_addr: usize) -> usize {
-    if matches!(
-        source,
-        ObservationSource::Property | ObservationSource::Method | ObservationSource::NumericWrite
-    ) {
-        0
-    } else {
-        object_addr
-    }
-}
-
 fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {
     // #5094: recording-only helper. When typed-feedback is off (the default),
     // `observe` records nothing, so the whole body is dead work — and
@@ -1950,8 +1901,8 @@ fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {
         TypedFeedbackSiteKind::ArrayElement,
         Observation {
             source: ObservationSource::Array,
-            object_addr: 0,
-            shape_addr: 0,
+
+            shape_id: 0,
             key_hash: 0,
             class_id,
             heap_type,
@@ -1982,8 +1933,8 @@ pub extern "C" fn js_typed_feedback_array_get_f64(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2035,8 +1986,8 @@ fn plain_array_index_get_guard_impl(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2101,8 +2052,8 @@ fn numeric_array_index_get_guard_impl(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2141,8 +2092,8 @@ pub extern "C" fn js_typed_feedback_packed_f64_array_loop_guard(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2184,8 +2135,8 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2230,8 +2181,8 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2268,8 +2219,8 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2465,8 +2416,8 @@ pub extern "C" fn js_typed_feedback_array_set_f64(
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2502,8 +2453,8 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2546,8 +2497,8 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2595,8 +2546,8 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2647,8 +2598,8 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(push_index));
     let observation = Observation {
         source: ObservationSource::Array,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2907,11 +2858,10 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
         return;
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let observation = Observation {
         source: ObservationSource::NumericWrite,
-        object_addr: shape_keyed_object_addr(ObservationSource::NumericWrite, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -2946,11 +2896,10 @@ pub extern "C" fn js_typed_feedback_observe_helper_return(site_id: u64, value: f
         return value;
     }
     let bits = value.to_bits();
-    let (shape_addr, class_id, heap_type, aux, value_kind) = helper_return_facts(bits);
+    let (shape_id, class_id, heap_type, aux, value_kind) = helper_return_facts(bits);
     let observation = Observation {
         source: ObservationSource::HelperReturn,
-        object_addr: 0,
-        shape_addr,
+        shape_id,
         key_hash: 0,
         class_id,
         heap_type,
@@ -2968,34 +2917,6 @@ pub extern "C" fn js_typed_feedback_observe_helper_return(site_id: u64, value: f
     }
     value
 }
-
-// #854: in-progress typed-feedback shape-change tracking
-#[allow(dead_code)]
-pub(crate) fn invalidate_shape_change(
-    obj: *mut ObjectHeader,
-    old_shape: *mut ArrayHeader,
-    new_shape: *mut ArrayHeader,
-) {
-    if old_shape == new_shape {
-        return;
-    }
-    let obj_addr = obj as usize;
-    let (_, class_id, _) = object_shape(obj_addr);
-    let old_addr = old_shape as usize;
-    let new_addr = new_shape as usize;
-    let mut reg = registry();
-    reg.shape_invalidations = reg.shape_invalidations.saturating_add(1);
-    for site in reg.sites.values_mut() {
-        let affected = site
-            .observations
-            .iter()
-            .any(|obs| obs.affected_by_shape_change(old_addr, new_addr, class_id));
-        if affected {
-            site.shape_invalidations = site.shape_invalidations.saturating_add(1);
-        }
-    }
-}
-
 pub(crate) fn invalidate_method_change(class_id: u32) {
     let mut reg = registry();
     reg.method_invalidations = reg.method_invalidations.saturating_add(1);
@@ -3045,7 +2966,7 @@ fn invalidate_representation_change_when(obj_addr: usize, feedback_on: bool) {
     if reg.sites.is_empty() {
         return;
     }
-    let (shape_addr, class_id, heap_type) = object_shape(obj_addr);
+    let (shape_id, class_id, heap_type) = object_shape(obj_addr);
     // `representation_invalidations * sites` upper-bounds the cumulative scan
     // work; past the budget, skip the scan (see the const docs above).
     if reg
@@ -3056,85 +2977,15 @@ fn invalidate_representation_change_when(obj_addr: usize, feedback_on: bool) {
         return;
     }
     for site in reg.sites.values_mut() {
-        if site.observations.iter().any(|obs| {
-            obs.affected_by_representation_change(obj_addr, shape_addr, class_id, heap_type)
-        }) {
+        if site
+            .observations
+            .iter()
+            .any(|obs| obs.affected_by_representation_change(shape_id, class_id, heap_type))
+        {
             site.representation_invalidations = site.representation_invalidations.saturating_add(1);
         }
     }
 }
-
-/// #11471: forget every observation whose object or shape address lies in an
-/// exiting thread's arena.
-///
-/// Sites are process-global and record raw `object_addr`/`shape_addr` from
-/// whichever thread executes them; [`scan_typed_feedback_roots_mut`] roots
-/// the shape addresses and the invalidation paths compare both by equality.
-/// Left behind, later collections would mark/rewrite memory another arena
-/// may have reused, and an unrelated object allocated there would read as
-/// this site's observed receiver. Only the observation goes: the site, its
-/// metadata, its counters and a `megamorphic` verdict (a statement about the
-/// past, not an address) stay.
-///
-/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`):
-/// the plain registry lock, poison-tolerant — NOT `registry()`, whose
-/// GC-root-lock depth is a thread-local.
-pub(crate) fn release_typed_feedback_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    let mut reg = REGISTRY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for site in reg.sites.values_mut() {
-        site.observations
-            .retain(|obs| !freed.contains(obs.object_addr) && !freed.contains(obs.shape_addr));
-    }
-}
-
-/// Test probe (#11471): record an array observation of `addr` at `site_id`,
-/// as an instrumented array site does (bypassing the env-var gate, which a
-/// test process cannot flip after first read).
-#[doc(hidden)]
-pub fn observe_array_address_for_test(site_id: u64, addr: usize) {
-    observe(
-        site_id,
-        TypedFeedbackSiteKind::ArrayElement,
-        Observation {
-            source: ObservationSource::Array,
-            object_addr: addr,
-            shape_addr: 0,
-            key_hash: 0,
-            class_id: 0,
-            heap_type: 0,
-            aux: 0,
-            value_tag: 0,
-        },
-    );
-}
-
-/// Test probe (#11471): how many observations site `site_id` holds.
-#[doc(hidden)]
-pub fn site_observation_count_for_test(site_id: u64) -> usize {
-    registry()
-        .sites
-        .get(&site_id)
-        .map_or(0, |site| site.observations.len())
-}
-
-pub fn scan_typed_feedback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut reg = registry();
-    for site in reg.sites.values_mut() {
-        for obs in &mut site.observations {
-            if obs.roots_object_addr() {
-                visitor.visit_usize_slot(&mut obs.object_addr);
-            }
-            if obs.roots_shape_addr() {
-                visitor.visit_usize_slot(&mut obs.shape_addr);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn reset_typed_feedback_for_tests() {
     TRACE_DUMPED.store(false, Ordering::Release);

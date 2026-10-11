@@ -329,9 +329,11 @@ impl ShapeRecordRef {
             if words.is_null() || len < r.logical_key_count as usize {
                 return None;
             }
-            return Some((0..r.logical_key_count as usize).rev().find(|&i| {
-                stored_key_matches(key, (*words.add(i)).to_bits())
-            }));
+            return Some(
+                (0..r.logical_key_count as usize)
+                    .rev()
+                    .find(|&i| stored_key_matches(key, (*words.add(i)).to_bits())),
+            );
         }
         let bytes = crate::string::header_str_checked(key)?.as_bytes();
         let hash = super::key_bytes_hash(bytes.as_ptr(), bytes.len());
@@ -1096,7 +1098,10 @@ impl ShapeObjectKind {
     pub(crate) fn is_function_layout(self) -> bool {
         matches!(
             self,
-            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply | Self::FunctionBound
+            Self::Function
+                | Self::FunctionBoundCall
+                | Self::FunctionBoundApply
+                | Self::FunctionBound
         )
     }
 
@@ -1572,15 +1577,6 @@ pub(crate) fn is_dictionary_shape_id(v: u32) -> bool {
 #[inline]
 pub(crate) fn is_exotic_shape_id(v: u32) -> bool {
     (EXOTIC_SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
-}
-
-/// #6804: classify a WIDENED shape token (`object_shape()`'s usize). Ids
-/// stored as usize carry no high bits, so the full-width range test never
-/// misclassifies a real heap address whose LOW 32 bits merely fall in the
-/// id range (`is_shape_id(v as u32)` would).
-#[inline]
-pub(crate) fn is_shape_id_token(v: usize) -> bool {
-    v >= SHAPE_ID_BASE as usize && v < SHAPE_ID_END as usize
 }
 
 /// Lifts a ShapeId into the per-site PIC token space. MUST match the literal
@@ -3295,7 +3291,7 @@ fn region_loop_pack(
             if stored_mask & (1 << i) != 0 {
                 return Err(SpillStored);
             }
-            if !super::object_spill_enabled() || position >= super::SPILL_MAX_FIELD_INDEX {
+            if position >= super::SPILL_MAX_FIELD_INDEX {
                 return Err(SpillUnservable);
             }
             any_spill = true;
@@ -6324,11 +6320,19 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
         rows.push((name, count, 0));
     }
     rows.push(("shapes.proto.distinct_identities", distinct.len(), 0));
-    rows.push(("shapes.extensions(native owned)", extensions.0, extensions.1));
+    rows.push((
+        "shapes.extensions(native owned)",
+        extensions.0,
+        extensions.1,
+    ));
     // A subset of extension bytes, so this informational row adds no bytes
     // to the census total a second time.
     rows.push(("shapes.store_chain(facts)", extensions.2, 0));
-    rows.push(("shapes.store_chain(bytes included in extensions)", extensions.3, 0));
+    rows.push((
+        "shapes.store_chain(bytes included in extensions)",
+        extensions.3,
+        0,
+    ));
     rows
 }
 

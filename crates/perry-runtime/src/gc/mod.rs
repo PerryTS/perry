@@ -1117,7 +1117,6 @@ pub fn gc_init() {
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
-    reg_scanner!(crate::typed_feedback::scan_typed_feedback_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
     reg_scanner!(crate::object::scan_arguments_object_roots_mut);

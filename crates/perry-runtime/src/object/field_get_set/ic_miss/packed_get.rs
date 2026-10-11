@@ -66,9 +66,7 @@ pub(super) unsafe fn prime_get(
         // while that is where every carrier's value lives: object-owned spill
         // storage (not the legacy side table) at an index it can address.
         let index = raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT;
-        if !crate::object::object_spill_enabled()
-            || index as usize >= crate::object::SPILL_MAX_FIELD_INDEX
-        {
+        if index as usize >= crate::object::SPILL_MAX_FIELD_INDEX {
             return;
         }
         (
@@ -86,8 +84,8 @@ mod tests {
     use super::*;
 
     /// A spill entry is published only at an index the emitted load can
-    /// address: past `SPILL_MAX_FIELD_INDEX` the value lives in the legacy
-    /// side table and the compact word stays empty.
+    /// address: past `SPILL_MAX_FIELD_INDEX` the compact word stays empty and reads
+    /// use the ordinary object-owned spill helper.
     #[test]
     fn no_spill_entry_is_published_past_the_spill_index_ceiling() {
         let mut cache: PicCache = [0; super::super::PIC_CACHE_WORDS];

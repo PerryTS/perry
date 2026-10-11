@@ -228,19 +228,13 @@ impl CopyingNurseryCollector {
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
             changed |= slot.read() != before;
         }
-        // The generic walk's last Object-arm edge, from the same side table.
-        crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| {
-            let before = *slot;
-            self.visit_side_slot(slot, header, weak, remembering);
-            changed |= *slot != before;
-        });
         if changed {
             run_gc_rewrite_hook(GC_TYPE_OBJECT, user_ptr);
         }
         true
     }
 
-    /// Side-table edges (residual prototype, overflow fields) are rare; keep
+    /// Residual prototype edges are rare; keep
     /// their visit out of the hot loop's code.
     #[inline(never)]
     unsafe fn visit_side_slot(
@@ -279,10 +273,6 @@ unsafe fn assert_matches_generic_walk(
     while let Some(slot) = replay.next_slot() {
         expected.push((slot.slot as usize, slot.is_parent_owned()));
     }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
-    crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| {
-        expected.push((slot as usize, true))
-    });
     assert!(
         generic.len() == residual_slots + expected.len()
             && generic[residual_slots..] == expected[..],

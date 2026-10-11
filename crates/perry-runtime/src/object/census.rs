@@ -10,16 +10,9 @@
 use super::*;
 
 /// `PERRY_GC_CENSUS`: per-thread object tables (`RuntimeState`): the fixed
-/// caches, the overflow-field vectors and the descriptor tables.
+/// shape and transition caches.
 pub(crate) fn object_tables_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::{map_bytes, vec_bytes};
-    let st = crate::state::state();
     let mut rows: Vec<crate::gc::census::SideTableRow> = Vec::new();
-    {
-        let m = st.object_hot.overflow_fields.borrow();
-        let inner: usize = m.values().map(vec_bytes).sum();
-        rows.push(("object.overflow_fields", m.len(), map_bytes(&m) + inner));
-    }
     rows.push((
         "object.transition_cache(fixed)",
         TRANSITION_CACHE_SIZE,

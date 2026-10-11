@@ -200,10 +200,8 @@ fn weak_read_after_final_remark_survives_full_budgeted_cycle() {
 
     // ---- mutator window ----
     let (slot, bits, addr) = mutator_weak_read(HOLDERS);
-    // Observability: a swept owner has its OVERFLOW_FIELDS entry cleared by the
-    // dead-payload sweep arm, exactly how the production shape of this bug
-    // (lost side-table fields) presented.
-    crate::object::test_seed_overflow_fields_root(addr, 42f64.to_bits());
+    // Check the actual mark before sweep, without adding an owner side table.
+
     assert!(
         crate::weakref::test_support::weak_read_barrier_shades() >= 1,
         "SUBJECT-LIVE CHECK: the weak read must have shaded an unmarked target. \
@@ -211,14 +209,16 @@ fn weak_read_after_final_remark_survives_full_budgeted_cycle() {
     );
     // ---- collector resumes ----
 
-    run_cycle_in_single_unit_steps(&mut state);
-    let _ = state.take_outcome().expect("cycle should complete");
-
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
     assert!(
-        crate::object::debug_overflow_entry_len(addr).is_some(),
+        unsafe { (*header_from_user_ptr(addr as *const u8)).gc_flags & GC_FLAG_MARKED != 0 },
         "#7900: a target handed to the mutator by WeakRef.deref() after the final \
          root remark was SWEPT while the mutator still held it"
     );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+
     let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
     assert_eq!(
         crate::weakref::js_weakref_deref(weak_ref).to_bits(),
@@ -226,7 +226,6 @@ fn weak_read_after_final_remark_survives_full_budgeted_cycle() {
         "#7900: a target the mutator strongly acquired through deref() was \
          tombstoned by a later weak slice"
     );
-    crate::object::test_clear_overflow_fields_root();
 }
 
 /// #7900, budgeted MINOR ordering (BarrierSeedDrain → FinalRootRemark →
@@ -249,26 +248,27 @@ fn weak_read_after_final_remark_survives_budgeted_minor_cycle() {
     park_inside_weak_processing(&mut state, HOLDERS, witness, HOLDERS);
 
     let (slot, bits, addr) = mutator_weak_read(HOLDERS);
-    crate::object::test_seed_overflow_fields_root(addr, 42f64.to_bits());
+
     assert!(
         crate::weakref::test_support::weak_read_barrier_shades() >= 1,
         "SUBJECT-LIVE CHECK: the weak read must have shaded an unmarked target"
     );
 
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
+    assert!(
+        unsafe { (*header_from_user_ptr(addr as *const u8)).gc_flags & GC_FLAG_MARKED != 0 },
+        "#7900 (minor ordering): a deref()'d target was swept while the mutator held it"
+    );
+
     run_cycle_in_single_unit_steps(&mut state);
     let _ = state.take_outcome().expect("cycle should complete");
 
-    assert!(
-        crate::object::debug_overflow_entry_len(addr).is_some(),
-        "#7900 (minor ordering): a deref()'d target was swept while the mutator held it"
-    );
     let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
     assert_eq!(
         crate::weakref::js_weakref_deref(weak_ref).to_bits(),
         bits,
         "#7900 (minor ordering): a deref()'d target was tombstoned by a later weak slice"
     );
-    crate::object::test_clear_overflow_fields_root();
 }
 
 /// The same race reaching a `WeakMap`: the key the mutator presents to
@@ -361,7 +361,7 @@ fn weak_map_read_after_remark(key_only: bool) {
          must still be pending — the race was not set up",
     );
     let key_addr = (key_bits & POINTER_MASK) as usize;
-    crate::object::test_seed_overflow_fields_root(key_addr, 42f64.to_bits());
+
     assert!(
         crate::weakref::test_support::weak_read_barrier_shades() >= 1,
         "SUBJECT-LIVE CHECK: the weak reads must have shaded at least one white value"
@@ -377,14 +377,16 @@ fn weak_map_read_after_remark(key_only: bool) {
         );
     }
 
-    run_cycle_in_single_unit_steps(&mut state);
-    let _ = state.take_outcome().expect("cycle should complete");
-
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
     assert!(
-        crate::object::debug_overflow_entry_len(key_addr).is_some(),
+        unsafe { (*header_from_user_ptr(key_addr as *const u8)).gc_flags & GC_FLAG_MARKED != 0 },
         "#7900: a WeakMap key the mutator strongly acquired in a post-remark \
          window was swept while it still held it"
     );
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+
     assert_eq!(
         crate::weakref::js_weakmap_get(
             f64::from_bits(js_shadow_slot_get(MAP_SLOT)),
@@ -394,7 +396,6 @@ fn weak_map_read_after_remark(key_only: bool) {
         value_bits,
         "#7900: a WeakMap entry the mutator read in the window was tombstoned"
     );
-    crate::object::test_clear_overflow_fields_root();
 }
 
 #[test]

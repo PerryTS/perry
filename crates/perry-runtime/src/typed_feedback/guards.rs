@@ -5,8 +5,8 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
         return false;
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
-    let (shape_addr, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_addr == 0 {
+    let (shape_id, _, heap_type) = object_shape(object_addr);
+    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == 0 {
         return false;
     }
     unsafe {
@@ -72,20 +72,14 @@ fn method_direct_call_contract(
     method_name_ptr: *const i8,
     method_name_len: usize,
     expected_func_ptr: *const u8,
-) -> (usize, u32, u16, u64, bool) {
+) -> (u32, u32, u16, u64, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let Some(method_bytes) = method_name_bytes(method_name_ptr, method_name_len) else {
-        return (shape_addr, class_id, gc_type, 0, false);
+        return (shape_id, class_id, gc_type, 0, false);
     };
     let Some(method_name) = method_name_str(method_name_ptr, method_name_len) else {
-        return (
-            shape_addr,
-            class_id,
-            gc_type,
-            hash_bytes(method_bytes),
-            false,
-        );
+        return (shape_id, class_id, gc_type, hash_bytes(method_bytes), false);
     };
     let name_hash = hash_bytes(method_bytes);
     if object_addr == 0
@@ -93,37 +87,37 @@ fn method_direct_call_contract(
         || !crate::object::shapes::is_shape_id(expected_shape_id)
         || expected_func_ptr.is_null()
     {
-        return (shape_addr, class_id, gc_type, name_hash, false);
+        return (shape_id, class_id, gc_type, name_hash, false);
     }
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
-        return (shape_addr, class_id, gc_type, name_hash, false);
+        return (shape_id, class_id, gc_type, name_hash, false);
     };
     unsafe {
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || (*gc_header)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
         {
-            return (shape_addr, class_id, gc_type, name_hash, false);
+            return (shape_id, class_id, gc_type, name_hash, false);
         }
         let obj = object_addr as *const ObjectHeader;
         if !crate::object::object_is_regular(obj) {
-            return (shape_addr, class_id, gc_type, name_hash, false);
+            return (shape_id, class_id, gc_type, name_hash, false);
         }
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (*obj).class_id != expected_class_id
             || crate::object::shapes::object_shape_id(obj) != expected_shape_id
-            || shape_addr != expected_shape_id as usize
+            || shape_id != expected_shape_id
         {
-            return (shape_addr, class_id, gc_type, name_hash, false);
+            return (shape_id, class_id, gc_type, name_hash, false);
         }
         if object_has_own_key_bytes(obj, method_bytes) {
-            return (shape_addr, class_id, gc_type, name_hash, false);
+            return (shape_id, class_id, gc_type, name_hash, false);
         }
     }
 
     let expected_func = expected_func_ptr as usize;
     let valid = declared_method_resolves_to(class_id, method_name, expected_func);
-    (shape_addr, class_id, gc_type, name_hash, valid)
+    (shape_id, class_id, gc_type, name_hash, valid)
 }
 
 /// Borrow the key text for the guard's side-table lookups. Every consumer
@@ -162,7 +156,7 @@ fn class_field_get_contract(
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: bool,
-) -> (usize, u32, u16, bool) {
+) -> (u32, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
@@ -187,13 +181,12 @@ fn class_field_get_contract(
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
         let shape_id = crate::object::shapes::object_shape_id(obj);
-        let shape_addr = shape_id as usize;
         let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
-            return (shape_addr, class_id, gc_type, false);
+            return (shape_id, class_id, gc_type, false);
         };
         let key_name = match key_as_str(key) {
             Some(name) => name,
-            None => return (shape_addr, class_id, gc_type, false),
+            None => return (shape_id, class_id, gc_type, false),
         };
         let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = crate::object::object_is_regular(obj)
@@ -212,7 +205,7 @@ fn class_field_get_contract(
                 require_raw_f64,
             )
             && !descriptor_blocks_class_field_get(object_addr, class_id, key_name);
-        (shape_addr, class_id, gc_type, valid)
+        (shape_id, class_id, gc_type, valid)
     }
 }
 
@@ -283,7 +276,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
             require_raw_f64 != 0,
         ) as i32;
     }
-    let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
+    let (shape_id, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
         expected_class_id,
         expected_shape_id,
@@ -291,11 +284,9 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
         expected_field_index,
         require_raw_f64 != 0,
     );
-    let object_addr = normalize_raw_object_addr(receiver.to_bits());
     let observation = Observation {
         source: ObservationSource::Property,
-        object_addr: shape_keyed_object_addr(ObservationSource::Property, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -371,7 +362,7 @@ fn class_field_set_contract(
     expected_field_index: u32,
     require_raw_f64: bool,
     value_bits: u64,
-) -> (usize, u32, u16, bool) {
+) -> (u32, u32, u16, bool) {
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
     if object_addr == 0
         || expected_class_id == 0
@@ -396,7 +387,7 @@ fn class_field_set_contract(
         {
             let obj = object_addr as *mut ObjectHeader;
             return (
-                crate::object::shapes::object_shape_id(obj) as usize,
+                crate::object::shapes::object_shape_id(obj),
                 (*obj).class_id,
                 gc_type,
                 false,
@@ -406,16 +397,15 @@ fn class_field_set_contract(
         let obj = object_addr as *mut ObjectHeader;
         let class_id = (*obj).class_id;
         let shape_id = crate::object::shapes::object_shape_id(obj);
-        let shape_addr = shape_id as usize;
         if receiver_has_numeric_proof_shape(obj) {
-            return (shape_addr, class_id, gc_type, false);
+            return (shape_id, class_id, gc_type, false);
         }
         let Some(descriptor) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
-            return (shape_addr, class_id, gc_type, false);
+            return (shape_id, class_id, gc_type, false);
         };
         let key_name = match key_as_str(key) {
             Some(name) => name,
-            None => return (shape_addr, class_id, gc_type, false),
+            None => return (shape_id, class_id, gc_type, false),
         };
         let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = class_id == expected_class_id
@@ -433,7 +423,7 @@ fn class_field_set_contract(
                         true,
                     )))
             && !descriptor_blocks_class_field_set(object_addr, class_id, key_name);
-        (shape_addr, class_id, gc_type, valid)
+        (shape_id, class_id, gc_type, valid)
     }
 }
 
@@ -459,7 +449,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
             value_bits,
         ) as i32;
     }
-    let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
+    let (shape_id, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
         expected_class_id,
         expected_shape_id,
@@ -468,7 +458,6 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
         require_raw_f64 != 0,
         value_bits,
     );
-    let object_addr = normalize_raw_object_addr(receiver.to_bits());
     let source = if require_raw_f64 != 0 {
         ObservationSource::NumericWrite
     } else {
@@ -476,8 +465,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     };
     let observation = Observation {
         source,
-        object_addr: shape_keyed_object_addr(source, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: key_hash(key),
         class_id,
         heap_type: gc_type,
@@ -1043,7 +1031,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
 ) -> f64 {
     let bits = object.to_bits();
     let object_addr = normalize_raw_object_addr(bits);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let name_hash = if valid_method_name(method_name_ptr, method_name_len) {
         hash_bytes(std::slice::from_raw_parts(
             method_name_ptr as *const u8,
@@ -1054,8 +1042,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     };
     let observation = Observation {
         source: ObservationSource::Method,
-        object_addr: shape_keyed_object_addr(ObservationSource::Method, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: name_hash,
         class_id,
         heap_type: gc_type,
@@ -1115,7 +1102,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
 ) -> f64 {
     let bits = object.to_bits();
     let object_addr = normalize_raw_object_addr(bits);
-    let (shape_addr, class_id, gc_type) = object_shape(object_addr);
+    let (shape_id, class_id, gc_type) = object_shape(object_addr);
     let name_hash = if valid_method_name(method_name_ptr, method_name_len) {
         hash_bytes(std::slice::from_raw_parts(
             method_name_ptr as *const u8,
@@ -1126,8 +1113,7 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method_apply(
     };
     let observation = Observation {
         source: ObservationSource::Method,
-        object_addr: shape_keyed_object_addr(ObservationSource::Method, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: name_hash,
         class_id,
         heap_type: gc_type,
@@ -1180,7 +1166,7 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     expected_func_ptr: *const u8,
 ) -> i32 {
     let bits = receiver.to_bits();
-    let (shape_addr, class_id, gc_type, name_hash, contract_valid) = method_direct_call_contract(
+    let (shape_id, class_id, gc_type, name_hash, contract_valid) = method_direct_call_contract(
         receiver,
         expected_class_id,
         expected_shape_id,
@@ -1188,11 +1174,9 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
         method_name_len,
         expected_func_ptr,
     );
-    let object_addr = normalize_raw_object_addr(bits);
     let observation = Observation {
         source: ObservationSource::Method,
-        object_addr: shape_keyed_object_addr(ObservationSource::Method, object_addr),
-        shape_addr,
+        shape_id,
         key_hash: name_hash,
         class_id,
         heap_type: gc_type,
@@ -1327,8 +1311,8 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
         && expected_arity == call_arity;
     let observation = Observation {
         source: ObservationSource::Closure,
-        object_addr: 0,
-        shape_addr: 0,
+
+        shape_id: 0,
         key_hash: 0,
         class_id: 0,
         heap_type: if func_ptr.is_null() {

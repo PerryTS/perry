@@ -134,10 +134,16 @@ fn post_remark_unshaded_root_stores_survive(window: &str) {
     let inline_born_marked =
         unsafe { (*header_from_user_ptr(inline_birth as *mut u8)).gc_flags & GC_FLAG_MARKED != 0 };
     inline_root = ptr_bits(inline_birth as usize);
-    // An owner's overflow record is swept if that owner is lost; the key is
-    // deliberately NOT a root. This observes actual loss, not just mark bits.
-    crate::object::test_seed_overflow_fields_root(inline_birth as usize, 42_f64.to_bits());
+    // Inspect the birth mark before sweep without adding a root or barrier.
+
     // No bind call or root-shading call is allowed at either publication.
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
+    assert!(
+        unsafe {
+            (*header_from_user_ptr(inline_birth as *const u8)).gc_flags & GC_FLAG_MARKED != 0
+        },
+        "post-remark inline birth was lost in {window}"
+    );
     run_cycle_in_single_unit_steps(&mut state);
     std::hint::black_box((
         source_home,
@@ -146,12 +152,6 @@ fn post_remark_unshaded_root_stores_survive(window: &str) {
         inline_root,
         old_roots,
     ));
-    let inline_survived = crate::object::debug_overflow_entry_len(inline_birth as usize).is_some();
-    crate::object::test_clear_overflow_fields_root();
-    assert!(
-        inline_survived,
-        "post-remark inline birth was lost in {window}"
-    );
     assert!(
         inline_born_marked,
         "inline birth operation must mark before publication"

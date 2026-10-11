@@ -258,8 +258,8 @@ fn typed_feedback_state_transitions_to_megamorphic() {
             TypedFeedbackSiteKind::HelperReturn,
             Observation {
                 source: ObservationSource::HelperReturn,
-                object_addr: 0,
-                shape_addr: 0,
+
+                shape_id: 0,
                 key_hash: 0,
                 class_id: 0,
                 heap_type: 0,
@@ -274,8 +274,8 @@ fn typed_feedback_state_transitions_to_megamorphic() {
         TypedFeedbackSiteKind::HelperReturn,
         Observation {
             source: ObservationSource::HelperReturn,
-            object_addr: 0,
-            shape_addr: 0,
+
+            shape_id: 0,
             key_hash: 0,
             class_id: 0,
             heap_type: 0,
@@ -296,8 +296,8 @@ fn typed_feedback_invalidation_counters_are_site_attributed() {
         TypedFeedbackSiteKind::MethodCall,
         Observation {
             source: ObservationSource::Method,
-            object_addr: 0,
-            shape_addr: 0,
+
+            shape_id: 0,
             key_hash: 1,
             class_id: 42,
             heap_type: 0,
@@ -317,14 +317,14 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
     reset_typed_feedback_for_tests();
     register(5, TypedFeedbackSiteKind::PropertyGet, "obj.x");
     register(6, TypedFeedbackSiteKind::MethodCall, "obj.m()");
-    for object_addr in [0x1000_0000usize, 0x2000_0000usize] {
+    for _ in 0..2 {
         observe(
             5,
             TypedFeedbackSiteKind::PropertyGet,
             Observation {
                 source: ObservationSource::Property,
-                object_addr,
-                shape_addr: 0xCAFE,
+
+                shape_id: 0xCAFE,
                 key_hash: 0xA11C_E,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -337,8 +337,8 @@ fn typed_feedback_property_and_method_keys_ignore_receiver_identity() {
             TypedFeedbackSiteKind::MethodCall,
             Observation {
                 source: ObservationSource::Method,
-                object_addr,
-                shape_addr: 0xCAFE,
+
+                shape_id: 0xCAFE,
                 key_hash: 0xBEE,
                 class_id: 7,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -377,7 +377,6 @@ fn typed_feedback_array_keys_use_element_facts_not_sample_identity() {
 
     let reg = registry();
     let observation = reg.sites.get(&7).unwrap().observations[0];
-    assert_eq!(observation.object_addr, 0);
     assert_eq!(observation.heap_type, crate::gc::GC_TYPE_ARRAY as u16);
     assert_eq!(observation.value_tag, STABLE_VALUE_NUMBER);
 }
@@ -412,9 +411,8 @@ fn typed_feedback_helper_return_keys_use_shape_facts_not_sample_identity() {
 
     let reg = registry();
     let observation = reg.sites.get(&8).unwrap().observations[0];
-    assert_eq!(observation.object_addr, 0);
     assert_eq!(observation.heap_type, crate::gc::GC_TYPE_OBJECT as u16);
-    assert_ne!(observation.shape_addr, 0);
+    assert_ne!(observation.shape_id, 0);
 }
 
 #[test]
@@ -2428,8 +2426,8 @@ fn typed_feedback_method_direct_guard_fails_after_megamorphic_site() {
             TypedFeedbackSiteKind::MethodCall,
             Observation {
                 source: ObservationSource::Method,
-                object_addr: 0,
-                shape_addr: 0x1000 + i,
+
+                shape_id: 0x1000 + i as u32,
                 key_hash: i as u64,
                 class_id: i as u32 + 1,
                 heap_type: crate::gc::GC_TYPE_OBJECT as u16,
@@ -2735,46 +2733,6 @@ fn typed_feedback_trace_dump_honors_env_paths() {
     }
     let _ = std::fs::remove_dir_all(&default_dir);
 }
-
-#[test]
-fn typed_feedback_roots_rewrite_shape_observations() {
-    let _guard = typed_feedback_test_lock();
-    reset_typed_feedback_for_tests();
-
-    let shape_user = crate::arena::arena_alloc_gc(64, 8, crate::gc::GC_TYPE_ARRAY);
-    register(70, TypedFeedbackSiteKind::PropertyGet, "obj.x");
-    observe(
-        70,
-        TypedFeedbackSiteKind::PropertyGet,
-        Observation {
-            source: ObservationSource::Property,
-            object_addr: 0,
-            shape_addr: shape_user as usize,
-            key_hash: 0xABCD,
-            class_id: 7,
-            heap_type: crate::gc::GC_TYPE_OBJECT as u16,
-            aux: 0,
-            value_tag: STABLE_VALUE_POINTER,
-        },
-    );
-
-    let valid_ptrs = crate::gc::build_valid_pointer_set();
-    let forwarded_user = crate::arena::arena_alloc_gc_old(64, 8, crate::gc::GC_TYPE_ARRAY);
-    unsafe {
-        let shape_header =
-            (shape_user as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        crate::gc::set_forwarding_address(shape_header, forwarded_user);
-    }
-
-    let mut visitor = crate::gc::RuntimeRootVisitor::for_rewrite(&valid_ptrs);
-    scan_typed_feedback_roots_mut(&mut visitor);
-
-    let reg = registry();
-    let shape_addr = reg.sites.get(&70).unwrap().observations[0].shape_addr;
-    assert_eq!(shape_addr, forwarded_user as usize);
-    assert_ne!(shape_addr, shape_user as usize);
-}
-
 /// Typed-feedback method dispatch must never dereference a NaN-boxed *inline*
 /// receiver (SHORT_STRING / INT32) as a heap object. Only POINTER / STRING /
 /// BIGINT tags carry a real, dereferenceable heap pointer in the low 48 bits;

@@ -221,9 +221,7 @@ fn packed_arraylike_loop_guard(
     // element slots. `layout_length_value` below has the same split for the
     // semantic length slot, so classes with enough declared fields to spill
     // `length` (the real wolf-ecs Query/Archetype shape) are equally safe.
-    if !crate::object::object_spill_enabled() {
-        return None;
-    }
+
     let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
         return None;
     };

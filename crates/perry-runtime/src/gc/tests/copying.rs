@@ -1950,34 +1950,3 @@ fn test_copying_minor_rewrites_singleton_closure_caches() {
         "future cache lookups should hit with the rewritten capture key"
     );
 }
-
-#[test]
-fn test_copying_minor_rewrites_overflow_owner_metadata_key() {
-    struct OverflowFieldsRootGuard;
-
-    impl Drop for OverflowFieldsRootGuard {
-        fn drop(&mut self) {
-            crate::object::test_clear_overflow_fields_root();
-        }
-    }
-
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let _overflow_guard = OverflowFieldsRootGuard;
-    crate::object::test_clear_overflow_fields_root();
-
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
-    let overflow_value = young_leaf();
-    crate::object::test_seed_overflow_fields_root(owner, ptr_bits(overflow_value));
-    js_shadow_slot_set(0, ptr_bits(owner));
-
-    let _ = gc_collect_minor();
-    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    let (mapped_owner, mapped_value_bits) = crate::object::test_overflow_fields_root();
-    let mapped_value = (mapped_value_bits & POINTER_MASK) as usize;
-
-    assert_ne!(owner_after, owner);
-    assert_eq!(mapped_owner, owner_after);
-    assert_ne!(mapped_value, overflow_value);
-    assert!(crate::arena::pointer_in_nursery(owner_after));
-    assert!(crate::arena::pointer_in_nursery(mapped_value));
-}

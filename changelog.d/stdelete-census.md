@@ -1,0 +1,1 @@
+Reconcile the runtime-root and rekey inventories with the pinned main tree while deleting the retired overflow rekey entry. Remove stale entries, classify existing scalar test counters and pacing byte counts, and re-audit the synchronous non-moving census snapshot interval. No exemption preserves a removed table or scanner.

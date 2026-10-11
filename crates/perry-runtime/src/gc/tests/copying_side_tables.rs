@@ -336,18 +336,8 @@ fn test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter() {
 
 #[test]
 fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borrow() {
-    struct OverflowFieldsRootGuard;
-
-    impl Drop for OverflowFieldsRootGuard {
-        fn drop(&mut self) {
-            crate::object::test_clear_overflow_fields_root();
-        }
-    }
-
     let _guard = CopyingNurseryTestGuard::new(1);
-    let _overflow_guard = OverflowFieldsRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::object::test_clear_overflow_fields_root();
     // This focused fixture bypasses the normal runtime initialization that
     // registers the shape table's authoritative shared keys edge.
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);

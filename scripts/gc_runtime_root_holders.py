@@ -147,7 +147,7 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
 
 * **`RuntimeState`-owned tables.** `crates/perry-runtime/src/state.rs` absorbed
   roughly a dozen former `thread_local!`s (`descriptors`, `object_hot` and its
-  `overflow_fields` / `shape_cache_overflow` / `transition_cache`,
+  `shape_cache_overflow` / `transition_cache`,
   `field_lookup`, `shapes`, and `exotic_expando`). They are struct FIELDS,
   reached through `state()`, so no declaration-site scan sees them. All are
   covered today: in particular, `exotic_expando` is visited by

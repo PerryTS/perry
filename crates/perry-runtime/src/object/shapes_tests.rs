@@ -348,7 +348,7 @@ mod c6804_tests {
             assert!(is_shape_id(birth_stamp), "every literal is birth-stamped");
             assert_eq!(
                 crate::typed_feedback::test_object_shape_token(obj as usize),
-                birth_stamp as usize,
+                birth_stamp,
                 "the observed token is the birth stamp — no split to heal"
             );
             assert_eq!(

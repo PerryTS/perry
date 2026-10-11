@@ -891,7 +891,7 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
             return *fields.add(slot as usize);
         }
 
-        if crate::object::object_spill_enabled() {
+        {
             let meta = (*obj).meta;
             if !meta.is_null() {
                 let spill = (*meta).spill as *const ArrayHeader;
@@ -903,10 +903,6 @@ fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u3
             }
             return JSValue::undefined();
         }
-
-        crate::object::overflow_get(obj as usize, slot as usize)
-            .map(JSValue::from_bits)
-            .unwrap_or_else(JSValue::undefined)
     }
 }
 
@@ -965,10 +961,8 @@ pub(crate) fn array_subclass_fast_length_with_ic(
         // SAFETY: a non-null slot is the emitted pointer global or a test's
         // stack slot; resolving it allocates the cache on the first prime.
         let cache = unsafe { crate::object::pic_slot_resolve(cache_slot) } as *mut u64;
-        let family_token = if crate::object::object_spill_enabled() {
+        let family_token = {
             unsafe { array_subclass_named_prefix_token_for_slot(obj, layout.length_slot as usize) }
-        } else {
-            0
         };
         unsafe {
             // GC_STORE_AUDIT(POINTER_FREE): this IC contains scalar
@@ -1031,9 +1025,7 @@ unsafe fn dense_slot_exists(obj: *const ObjectHeader, slot: u32, live_inline_slo
     if slot < live_inline_slots {
         return true;
     }
-    if !crate::object::object_spill_enabled() {
-        return false;
-    }
+
     let meta = (*obj).meta;
     if meta.is_null() {
         return false;
@@ -1053,9 +1045,7 @@ unsafe fn store_dense_slot(
         crate::object::store_object_field_slot(obj, slot as usize, value_bits);
         return true;
     }
-    if !crate::object::object_spill_enabled() {
-        return false;
-    }
+
     let meta = (*obj).meta;
     if meta.is_null() {
         return false;
@@ -1099,9 +1089,7 @@ unsafe fn store_dense_nonpointer_number_slot(
         ptr::write(fields.add(slot as usize), value_bits);
         return true;
     }
-    if !crate::object::object_spill_enabled() {
-        return false;
-    }
+
     let meta = (*obj).meta;
     if meta.is_null() {
         return false;

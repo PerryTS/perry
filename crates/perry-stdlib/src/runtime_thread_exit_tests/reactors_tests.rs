@@ -151,25 +151,3 @@ fn agent_retirement_releases_the_agents_turnloop_signal_subscription() {
         "a retired agent's signal subscription was left installed"
     );
 }
-
-#[test]
-fn thread_exit_releases_the_threads_typed_feedback_observations() {
-    use perry_runtime::typed_feedback as tf;
-    const SITE: u64 = 0x1147_1000_0000_0001;
-    let observed_while_alive = std::thread::spawn(|| {
-        let arr = perry_runtime::js_array_alloc(0);
-        tf::observe_array_address_for_test(SITE, arr as usize);
-        tf::site_observation_count_for_test(SITE)
-    })
-    .join()
-    .unwrap();
-    assert_eq!(
-        observed_while_alive, 1,
-        "the observation must exist while its thread lives"
-    );
-    assert_eq!(
-        tf::site_observation_count_for_test(SITE),
-        0,
-        "a dead thread's typed-feedback observation outlived its heap"
-    );
-}

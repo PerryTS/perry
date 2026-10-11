@@ -846,7 +846,7 @@ fn born_black_build_phase_object_is_traced() {
         let ch = header_from_user_ptr(child as *const u8);
         (*ch).gc_flags &= !GC_FLAG_MARKED;
     }
-    crate::object::test_seed_overflow_fields_root(child as usize, 7f64.to_bits());
+
     runtime_store_jsvalue_slot(
         parent as usize,
         fields as usize,
@@ -867,15 +867,15 @@ fn born_black_build_phase_object_is_traced() {
         filler_blocks = crate::arena::general_block_count().saturating_sub(aged_from);
     }
 
-    run_cycle_in_single_unit_steps(&mut state);
-    let _ = state.take_outcome().expect("cycle should complete");
-
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
     assert!(
-        crate::object::debug_overflow_entry_len(child as usize).is_some(),
+        unsafe { (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED != 0 },
         "child reachable only through a born-black object was swept live: \
          black births must be seeded into the trace"
     );
-    crate::object::test_clear_overflow_fields_root();
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
 
     // The filler blocks above were born black (and seeded) inside the active
     // cycle, so they survived it as floating garbage. Reclaim them so later
@@ -918,10 +918,8 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
         let ch = header_from_user_ptr(child as *const u8);
         (*ch).gc_flags &= !GC_FLAG_MARKED;
     }
-    // Give the child a side-table entry: its survival is then observable the
-    // same way the production failure was (a swept child has its
-    // OVERFLOW_FIELDS entry cleared by the dead-payload sweep arm).
-    crate::object::test_seed_overflow_fields_root(child as usize, 42f64.to_bits());
+    // Observe its mark before sweep without adding a root or allocating.
+
     runtime_store_jsvalue_slot(
         parent as usize,
         fields as usize,
@@ -929,18 +927,20 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
         ptr_bits(child as usize),
     );
 
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
+    assert!(
+        unsafe { (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED != 0 },
+        "gap-born child would be swept live: its mark was lost"
+    );
+
     run_cycle_in_single_unit_steps(&mut state);
     let _ = state.take_outcome().expect("cycle should complete");
 
-    assert!(
-        crate::object::debug_overflow_entry_len(child as usize).is_some(),
-        "gap-born child was swept live: its overflow side-table entry was cleared"
-    );
     unsafe {
         let obj = child as *mut crate::object::ObjectHeader;
         // #8113: `object_type == 1` (the old canary at offset 0) is gone. The
-        // shape word replaces it and is a STRONGER canary: the overflow store
-        // above published a ShapeId into it, so it holds a value in a narrow
+        // shape word replaces it: allocation published a ShapeId into it,
+        // so it holds a value in a narrow
         // 2^30-wide range that arbitrary recycled bytes would not land in.
         assert_eq!(
             (*obj).class_id,
@@ -953,7 +953,6 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
             (*obj).parent_class_id
         );
     }
-    crate::object::test_clear_overflow_fields_root();
 }
 
 /// Regression (#6495): the trace must visit EVERY overflow slot of a live
@@ -983,7 +982,9 @@ fn overflow_slots_beyond_legacy_layout_mask_are_traced() {
     let child = young_leaf();
     let mut values = vec![crate::value::TAG_UNDEFINED; 51];
     values[50] = string_bits(child);
-    crate::object::test_seed_overflow_fields_vec(owner as usize, values);
+    for (index, bits) in values.into_iter().enumerate() {
+        crate::object::overflow_set(owner as usize, index, bits);
+    }
 
     // Age the owner/child block out of the block-persistence window (that
     // pass would otherwise force-mark the child as a register-holding
@@ -1010,7 +1011,6 @@ fn overflow_slots_beyond_legacy_layout_mask_are_traced() {
     }
     run_cycle_in_single_unit_steps(&mut state);
     let _ = state.take_outcome().expect("cycle should complete");
-    crate::object::test_clear_overflow_fields_root();
 
     // Reclaim the filler blocks so later bounded-step tests aren't slowed.
     let mut cleanup = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));

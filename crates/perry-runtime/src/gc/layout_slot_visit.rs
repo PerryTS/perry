@@ -351,9 +351,6 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // here, or the rewrite pass would hand the same slot to the
             // visitor twice and double-count in verification statistics.
             layout_descriptors!();
-            crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
-                visit(fixed_slot(slot));
-            });
         }
         GcRewriteDescriptorKind::RegExp => {
             layout_descriptors!();

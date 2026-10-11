@@ -225,12 +225,11 @@ pub(super) fn state_slot_in(
     // A spill overwrite must remain a non-collecting leaf. Refuse legacy
     // overflow storage and unmaterialized positions before admitting it.
     if slot & STATE_SPILL != 0
-        && (!crate::object::object_spill_enabled()
-            || !crate::object::spill_store_would_be_in_capacity(
-                obj as usize,
-                (slot & !STATE_SPILL) as usize,
-            )
-            || crate::object::overflow_get(obj as usize, (slot & !STATE_SPILL) as usize).is_none())
+        && (!crate::object::spill_store_would_be_in_capacity(
+            obj as usize,
+            (slot & !STATE_SPILL) as usize,
+        ) || crate::object::overflow_get(obj as usize, (slot & !STATE_SPILL) as usize)
+            .is_none())
     {
         return None;
     }

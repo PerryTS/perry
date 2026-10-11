@@ -409,7 +409,6 @@ unsafe fn holder_slot_word(addr: usize, s: u32, inline: u32) -> Option<u32> {
         return Some(s);
     }
     if s as usize >= crate::object::spill::SPILL_MAX_FIELD_INDEX
-        || !crate::object::spill::object_spill_enabled()
         || crate::object::spill::spill_get(addr, s as usize).is_none()
     {
         return None;

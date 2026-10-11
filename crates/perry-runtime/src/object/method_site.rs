@@ -1590,9 +1590,6 @@ fn address_is_prime_stable(addr: usize) -> bool {
 /// The value of spill-located key `index` as the emitted hit will read it:
 /// through `ObjectMeta::spill`, a dense buffer the runtime never shifts.
 unsafe fn spill_bits(obj: *const ObjectHeader, index: u32) -> Option<u64> {
-    if !super::spill::object_spill_enabled() {
-        return None;
-    }
     let meta = (*obj).meta;
     if meta.is_null() || (*meta).spill == 0 {
         return None;

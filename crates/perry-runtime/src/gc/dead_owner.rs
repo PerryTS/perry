@@ -461,8 +461,9 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::symbol::prune_dead_symbol_pointers,
         young_prune: None,
     },
+    #[cfg(feature = "wasm-host")]
     DeadKeyPrune {
-        table: "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS",
+        table: "WASM_FUNCREF_EXTERNALS",
         owner: DeadKeyOwner::Closure,
         prune: crate::closure::prune_dead_closure_side_table_owners,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),

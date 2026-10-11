@@ -66,17 +66,6 @@ pub fn transition_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
 pub fn transition_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
     crate::object::scan_transition_cache_roots_mut(visitor);
 }
-
-/// Legacy scanner shim for OVERFLOW_FIELDS. Overflow fields are object-owned
-/// external slots traced through GC_TYPE_OBJECT.
-pub fn overflow_fields_root_scanner(mark: &mut dyn FnMut(f64)) {
-    crate::object::scan_overflow_fields_roots(mark);
-}
-
-pub fn overflow_fields_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
-    crate::object::scan_overflow_fields_roots_mut(visitor);
-}
-
 /// Root scanner for in-progress JSON.parse frames (issue #46).
 /// Without this, GC triggered mid-parse would sweep in-progress arrays/objects
 /// and the fresh string/object values about to be pushed into them.

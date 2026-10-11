@@ -170,9 +170,7 @@ pub(crate) unsafe fn try_own_store(
                 }
                 return true;
             }
-            if super::object_spill_enabled()
-                && super::spill_store_would_be_in_capacity(obj as usize, slot)
-            {
+            if super::spill_store_would_be_in_capacity(obj as usize, slot) {
                 // This own key already has physical storage. The capacity
                 // proof keeps the ordinary spill barrier a nonmoving leaf.
                 super::spill::spill_set(obj as usize, slot, bits);
@@ -695,7 +693,10 @@ mod tests {
             0,
         );
         assert!(unsafe { super::super::dictionary::is_dictionary(fresh) });
-        assert_eq!(super::super::js_object_get_field_by_name_f64(fresh, atom), 37.0);
+        assert_eq!(
+            super::super::js_object_get_field_by_name_f64(fresh, atom),
+            37.0
+        );
     }
 
     #[test]

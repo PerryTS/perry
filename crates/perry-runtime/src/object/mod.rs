@@ -271,18 +271,16 @@ mod regex_direct_test_tests;
 pub(crate) mod regex_proto_thunks;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod regex_read_sites;
-// #6812 object-owned overflow storage + the legacy thread-local side table.
+// Object-owned overflow storage.
 // Split out of this file to stay under the 2000-line CI cap; the sibling
 // `object::*` modules reach these through `use super::*`, so re-export the
 // names they use (the rest stay internal to `spill`).
 mod spill;
 pub(crate) use spill::{
-    learned_inline_field_count, learned_inline_fields_hot_addr, object_spill_enabled, overflow_get,
-    overflow_set, reserve_object_spill, spill_get_present, spill_reserve_claimed,
+    learned_inline_field_count, learned_inline_fields_hot_addr, overflow_get, overflow_set,
+    reserve_object_spill, spill_get_present, spill_reserve_claimed,
     spill_store_would_be_in_capacity, SPILL_MAX_FIELD_INDEX,
 };
-#[cfg(test)]
-use spill::{spill_capable_owner, spill_get};
 #[cfg(test)]
 pub(crate) use spill::{
     test_set_spill_safepoint_hook, SpillSafepointHook, TEST_LAYOUT_NOTE_SLOT_CALLS,
@@ -593,19 +591,6 @@ pub fn global_this_root_slot_for_test() -> i64 {
 /// `thread_local!`s; reach them via `crate::state::state().object_hot`
 /// (one TLS fetch for the whole group).
 pub(crate) struct ObjectHotTables {
-    /// Extra properties for objects that exceeded their pre-allocated
-    /// inline slot count.
-    ///
-    /// Heap-pointer keyed; PtrHasher avoids the per-call SipHash on
-    /// every overflow read/write. `clear_overflow_for_ptr` was 0.7%
-    /// leaf samples on perf-comprehensive (called from object dispatch
-    /// + arena_walk_objects in the GC path).
-    pub(crate) overflow_fields: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<u64>>>,
-    /// Last-accessed overflow Vec cache — one entry, keyed by `obj_ptr`.
-    /// Skips the outer HashMap lookup on consecutive writes to the same
-    /// object (the row-build pattern). See `overflow_set` for the safety
-    /// argument behind the cached raw `Vec` pointer.
-    pub(crate) overflow_last: Cell<(usize, *mut Vec<u64>)>,
     /// Direct-mapped inline shape cache. Empty entries have shape_id == 0
     /// and keys_array == null.
     pub(crate) shape_inline_cache:
@@ -684,8 +669,6 @@ pub(crate) struct ObjectHotTables {
 impl ObjectHotTables {
     pub(crate) fn new() -> Self {
         ObjectHotTables {
-            overflow_fields: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            overflow_last: Cell::new((0, std::ptr::null_mut())),
             shape_inline_cache: std::cell::UnsafeCell::new(
                 [ShapeCacheEntry {
                     shape_id: 0,
@@ -1414,105 +1397,6 @@ fn transition_cache_insert(
     // Eagerly stabilize small shapes so growth cannot invalidate a cached
     // target. Large one-off dictionaries stay lazy to avoid prefix copies.
 }
-
-/// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.
-/// OVERFLOW_FIELDS stores extra properties for objects that exceed their pre-allocated inline
-/// slot count. The u64 JSValue bits may contain NaN-boxed pointers to heap objects (strings,
-/// arrays, other objects) that are ONLY referenced via OVERFLOW_FIELDS. Without this scanner,
-/// GC would free those referenced objects.
-pub fn scan_overflow_fields_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_overflow_fields_roots_mut(&mut visitor);
-}
-
-pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let st = crate::state::state();
-    let mut moved = Vec::new();
-    let mut moved_any = false;
-    {
-        let mut m = st.object_hot.overflow_fields.borrow_mut();
-        for (&owner, fields) in m.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            // Overflow fields are external to the inline ShapeId rep, so scan
-            // every slot.
-            for val_bits in fields.iter_mut() {
-                visitor.visit_nanbox_u64_slot(val_bits);
-            }
-        }
-        for (old_owner, new_owner) in moved.drain(..) {
-            if let Some(fields) = m.remove(&old_owner) {
-                m.insert(new_owner, fields);
-                moved_any = true;
-            }
-        }
-    }
-    if moved_any {
-        st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-    }
-}
-
-pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut(*mut u64)) {
-    if owner == 0 {
-        return;
-    }
-    let slots = {
-        let map = crate::state::state().object_hot.overflow_fields.borrow();
-        // Overflow slots live outside the inline shape rep; visit every
-        // populated slot regardless of the inline layout.
-        match map.get(&owner) {
-            Some(fields) if !fields.is_empty() => {
-                let mut slots = Vec::with_capacity(fields.len());
-                let base = fields.as_ptr() as *mut u64;
-                for i in 0..fields.len() {
-                    unsafe {
-                        slots.push(base.add(i));
-                    }
-                }
-                slots
-            }
-            _ => Vec::new(),
-        }
-    };
-    for slot in slots {
-        visit(slot);
-    }
-}
-
-fn merge_overflow_fields(owner_fields: &mut Vec<u64>, moved_fields: Vec<u64>) {
-    if owner_fields.len() < moved_fields.len() {
-        owner_fields.resize(moved_fields.len(), crate::value::TAG_UNDEFINED);
-    }
-    for (i, bits) in moved_fields.into_iter().enumerate() {
-        if bits != crate::value::TAG_UNDEFINED {
-            owner_fields[i] = bits;
-        }
-    }
-}
-
-pub(crate) fn overflow_fields_owner_moved(old_owner: usize, new_owner: usize) {
-    if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
-        return;
-    }
-    let st = crate::state::state();
-    {
-        let mut map = st.object_hot.overflow_fields.borrow_mut();
-        if let Some(old_fields) = map.remove(&old_owner) {
-            match map.entry(new_owner) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    merge_overflow_fields(entry.get_mut(), old_fields);
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(old_fields);
-                }
-            }
-        }
-    }
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
 pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_object_cache_roots_mut(&mut visitor);
@@ -1638,42 +1522,6 @@ pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHe
     }
     crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
 }
-
-/// Remove OVERFLOW_FIELDS entry for a freed object pointer.
-/// Called from GC sweep when an ObjectHeader is collected, to prevent stale entries
-/// from "infecting" new objects allocated at the same address.
-pub fn clear_overflow_for_ptr(obj_ptr: usize) {
-    let st = crate::state::state();
-    st.object_hot.overflow_fields.borrow_mut().remove(&obj_ptr);
-    // If the freed object is the one our last-accessed cache points at,
-    // the cached `Vec` pointer is now dangling — clear it.
-    if st.object_hot.overflow_last.get().0 == obj_ptr {
-        st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-    }
-}
-
-/// Cheap check used by the GC sweep to short-circuit per-object
-/// `clear_overflow_for_ptr` calls. Most workloads never exceed the 8
-/// inline slots and OVERFLOW_FIELDS stays empty for the entire run; on
-/// those, paying a TLS access + RefCell borrow + HashMap remove on
-/// every dead arena object is pure waste (~1.4 % leaf samples on
-/// perf-comprehensive's sweep walk over ~1.6 M dead headers per cycle).
-/// When this returns true, the sweep skips both `clear_overflow_for_ptr`
-/// AND the `OVERFLOW_LAST` cache invalidation: with no entries in the
-/// HashMap, the cached `Vec` pointer is either already null (initial
-/// state) or was nulled by the most recent `clear_overflow_for_ptr` /
-/// `overflow_set` cycle that emptied the map. Either way it can't
-/// alias a freed pointer because no allocation can have produced a
-/// matching obj_ptr without first writing to OVERFLOW_FIELDS.
-#[inline]
-pub fn overflow_fields_is_empty() -> bool {
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .is_empty()
-}
-
 // `is_valid_obj_ptr` moved to `value/addr_class.rs` (the centralized
 // handle-vs-heap-pointer classification module); re-exported here so the
 // existing `crate::object::is_valid_obj_ptr` call sites keep compiling

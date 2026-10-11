@@ -440,18 +440,13 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
         array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
         Some(0.0)
     );
-    if crate::object::object_spill_enabled() {
+    {
         assert_ne!(cache[0] & (1_u64 << 63), 0);
         assert_eq!(cache[0] & u64::from(u32::MAX), u64::from(class_id));
         assert_eq!(
             cache[0],
             unsafe { (*(*obj).meta).array_subclass_named_prefix_token },
             "an empty subclass can publish the same pointer-free family proof"
-        );
-    } else {
-        assert_eq!(
-            cache[0],
-            (u64::from(class_id) << 32) | unsafe { u64::from((*obj).parent_class_id) }
         );
     }
     assert!(
@@ -464,7 +459,7 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
         array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
         Some(1.0)
     );
-    if crate::object::object_spill_enabled() {
+    {
         assert_ne!(cache[0] & (1_u64 << 63), 0);
         assert_eq!(cache[0] & u64::from(u32::MAX), u64::from(class_id));
         assert_eq!(

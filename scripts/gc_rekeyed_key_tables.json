@@ -74,18 +74,6 @@
       "why": "The #8168 fix: retains on the GC_TYPE_CLOSURE-narrowed predicate over the POINTER_TAG'd closure address (class_registry/gc_roots.rs:530). This helper is the rekey path for both scan_function_class_id_keys_mut and its budgeted twin."
     },
     {
-      "site": "crates/perry-runtime/src/object/descriptor_state/owner_lifecycle.rs::rewrite_descriptor_owner",
-      "table": "state().descriptors.property_descriptors + .accessor_descriptors",
-      "death": "dead_owner:prune_dead_descriptor_owner_entries",
-      "why": "Registered prune retains both maps on !is_dead_owner (object/descriptor_state/owner_lifecycle.rs:34-52); handle-band ids in the same maps are skipped by the probe as unattributable. Both this rekey and the prune it names moved out of descriptor_state.rs in the 2000-line-cap split; the function body is byte-identical apart from its visibility widening to pub(super), so the custody argument is unchanged."
-    },
-    {
-      "site": "crates/perry-runtime/src/object/mod.rs::scan_overflow_fields_roots_mut",
-      "table": "state().object_hot.overflow_fields",
-      "death": "self_pruned:clear_overflow_for_ptr",
-      "why": "Cleared per dead object by gc_type_clear_dead_payload_side_tables (gc/types.rs:799) from the sweep (gc/oldgen.rs:700, 924, 1573), outside the dead_owner fan-out."
-    },
-    {
       "site": "crates/perry-runtime/src/object/side_table_roots.rs::scan_transition_cache_slot",
       "table": "TRANSITION_CACHE_GLOBAL",
       "death": "dead_owner:prune_dead_transition_cache_entries",
@@ -98,10 +86,10 @@
       "why": "#8393: both tables are retained on the GC_TYPE_CLOSURE-narrowed predicate over their closure-address keys. The extracted visit_owner helper is the shared rekey path for the full and young-log walks."
     },
     {
-      "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_table_rekey_mut",
+      "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_table_keys_mut",
       "table": "state().shapes.inner (descriptors + indices)",
       "death": "dead_owner:prune_dead_shape_keys",
-      "why": "Registered prune drops descriptors whose keys_array is dead and retains inner.indices on the same predicate, then rebuilds the reverse indices (object/shapes.rs:966-985)."
+      "why": "Registered prune drops descriptors whose keys_array is dead and retains inner.indices on the same predicate, then rebuilds the reverse indices (object/shapes.rs:966-985). The unified scanner delegates keys to scan_shape_table_keys_mut; custody and prune are unchanged."
     },
     {
       "site": "crates/perry-runtime/src/object/shapes.rs::scan_shape_keys_address",
@@ -270,6 +258,12 @@
       "table": "UTF16_INDEX_CACHE",
       "death": "dead_owner:prune_dead_utf16_indexes",
       "why": "Four weak string identities are rewritten after relocation and pruned by the registered dead-owner fan-out before copying or mark/sweep can reuse their addresses; pruning also drops the Rust-owned offset vectors."
+    },
+    {
+      "site": "crates/perry-runtime/src/gc/ephemeron.rs::scan_ephemeron_seeds_roots_mut",
+      "table": "EPHEMERON_SEEDS",
+      "death": "self_pruned:clear_seeds",
+      "why": "Collector work queue: TraceWorklistCycleState consumes pending seeds; finish_full_trace calls clear_seeds before sweep, and copied-minor work drains discovery before reclaiming from-space. Only metadata rewrite mode visits queued addresses. The WeakMap meta edge owns storage liveness."
     }
   ]
 }

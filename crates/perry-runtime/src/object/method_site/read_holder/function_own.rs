@@ -244,9 +244,7 @@ pub(super) unsafe fn prime(
     }
     let slot = if slot < shape.live_inline_slot_count {
         slot
-    } else if (slot as usize) < crate::object::spill::SPILL_MAX_FIELD_INDEX
-        && crate::object::spill::object_spill_enabled()
-    {
+    } else if (slot as usize) < crate::object::spill::SPILL_MAX_FIELD_INDEX {
         slot | HOLDER_SLOT_SPILL
     } else {
         return None;

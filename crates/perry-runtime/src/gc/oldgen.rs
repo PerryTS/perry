@@ -739,10 +739,10 @@ pub(super) fn sweep_with_age_bump_and_malloc(
 unsafe fn finalize_dead_arena_payload(
     header: *mut GcHeader,
     user_ptr: *mut u8,
-    overflow_active: bool,
+    closure_externals_active: bool,
 ) {
     layout_clear_for_ptr(user_ptr as usize);
-    if overflow_active {
+    if closure_externals_active {
         gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
     }
     gc_type_finalize_unmarked_payload((*header).obj_type, user_ptr);
@@ -839,18 +839,8 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     let old_block_start = crate::arena::longlived_end();
     crate::arena::old_pages_reset_sweep_accounting();
 
-    // Hoist the OVERFLOW_FIELDS empty check out of the per-dead-object
-    // loop. perf-comprehensive's sweep walks ~1.6 M dead arena headers
-    // per cycle and most workloads never write past the 8 inline object
-    // slots, so OVERFLOW_FIELDS stays empty for the whole run. The
-    // hoisted bool turns 1.6 M `clear_overflow_for_ptr` calls (each one
-    // a TLS-load + RefCell borrow + HashMap remove on a missing key)
-    // into a single bool test per object. ~1.4 % leaf samples → 0 on
-    // the empty-map path, ~80 ms saved on perf-comprehensive.
-    // Wave 2: the same gate now also covers the closure dynamic-props
-    // dead-payload arm — checked once per sweep, not per object.
-    let overflow_active = !crate::object::overflow_fields_is_empty()
-        || crate::closure::closure_dynamic_side_tables_nonempty();
+    // Wasm funcref handles need dead-owner release, checked once per sweep.
+    let closure_externals_active = crate::closure::closure_dynamic_side_tables_nonempty();
 
     crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
@@ -884,7 +874,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, overflow_active);
+                finalize_dead_arena_payload(header, user_ptr, closure_externals_active);
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
                 }
@@ -966,7 +956,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
                     layout_clear_for_ptr(user_ptr as usize);
-                    if overflow_active {
+                    if closure_externals_active {
                         gc_type_clear_dead_payload_side_tables(
                             (*header).obj_type,
                             user_ptr as usize,
@@ -993,7 +983,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, overflow_active);
+                finalize_dead_arena_payload(header, user_ptr, closure_externals_active);
 
                 // Note: We deliberately do NOT zero the dead object's
                 // payload here. trace_object/trace_array/trace_closure

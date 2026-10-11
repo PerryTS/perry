@@ -27,7 +27,7 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
     // #6812 spill: the k8 pointer lives in the object-owned Array buffer,
     // which still keeps a pointer mask. With no spill, the owner's shape
     // selects every Any slot and the trace below is the correctness check.
-    if crate::object::test_object_spill_enabled() {
+    {
         let spill = crate::object::test_spill_buffer_addr(obj as usize);
         assert_ne!(spill, 0, "overflow write must have created a spill buffer");
         assert_eq!(test_layout_pointer_slot_count(spill, 9), None);

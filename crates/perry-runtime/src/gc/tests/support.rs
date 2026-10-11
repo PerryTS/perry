@@ -453,7 +453,6 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     // the copying-nursery isolation lock, so this reset is not racy.
     crate::gc::test_reset_young_pin_latch();
     activate_malloc_registry_for_tests();
-    crate::object::test_clear_overflow_fields_root();
     crate::object::test_clear_transition_cache_root();
     crate::object::test_clear_object_cache_roots();
     crate::object::test_clear_class_side_table_roots();

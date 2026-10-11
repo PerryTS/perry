@@ -123,7 +123,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
                         // cached dense-prefix word remains the admitted high
                         // water mark: a generic `length` grow beyond it still
                         // side-exits and re-establishes the complete proof.
-                        if !cache_slot.is_null() && crate::object::object_spill_enabled() {
+                        if !cache_slot.is_null() {
                             // SAFETY: a non-null slot is the emitted pointer
                             // global or a test's stack slot.
                             let cache =

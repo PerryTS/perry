@@ -388,7 +388,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::InlinePayload,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::ObjectOverflowFields,
+            move_hook_kind: GcMoveHookKind::ObjectModuleWrapper,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::None,
         },

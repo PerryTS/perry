@@ -1,0 +1,1 @@
+Remove the stale `CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS` dead-owner label and its default-build prune visit. Function properties already live in the closure's traced bag. Preserve the live wasm funcref handle lifecycle under `WASM_FUNCREF_EXTERNALS`, registering its prune only with `wasm-host`.
