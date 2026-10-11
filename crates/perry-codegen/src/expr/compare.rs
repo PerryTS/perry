@@ -804,6 +804,7 @@ fn lower_relational_against_number(
     l: &str,
     r: &str,
     dynamic_is_left: bool,
+    proven_expr: &Expr,
     fallback_fn: &str,
 ) -> String {
     let dynamic = if dynamic_is_left { l } else { r };
@@ -848,7 +849,11 @@ fn lower_relational_against_number(
         .select(I1, &is_true, DOUBLE, "1.0", &dynamic_number);
     // `undefined` deliberately retains its tagged NaN. Ordered fcmp then
     // returns false for all four relational operators, exactly as ToNumber.
-    let proven_number = normalize_int32_immediate(ctx, if dynamic_is_left { r } else { l });
+    let proven_number = if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, proven_expr) {
+        (if dynamic_is_left { r } else { l }).to_string()
+    } else {
+        normalize_int32_immediate(ctx, if dynamic_is_left { r } else { l })
+    };
     let (left_number, right_number) = if dynamic_is_left {
         (&dynamic_number, &proven_number)
     } else {
@@ -1833,7 +1838,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     && *n >= i32::MIN as f64 && *n <= i32::MAX as f64)
                             || super::i32_fast_path::is_known_i32_range(
                                 ctx,
-                                ),
+                                if left_numeric { left } else { right },
+                            ),
                     ));
                 }
                 if is_relational_op && !both_numeric {
@@ -1853,6 +1859,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &l,
                             &r,
                             !left_numeric,
+                            if left_numeric { left } else { right },
                             fname,
                         ));
                     }

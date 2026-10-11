@@ -212,7 +212,14 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     });
     let mut all_numbers = "true".to_string();
     for (id, number) in &mut numbers {
-        let boxed = lower_expr(ctx, &Expr::LocalGet(*id))?;
+        let local = Expr::LocalGet(*id);
+        let boxed = lower_expr(ctx, &local)?;
+        // A mixed graph still has canonical scalar members. Their existing
+        // write proof makes both classification and compact decoding redundant.
+        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, &local) {
+            *number = boxed;
+            continue;
+        }
         let bits = ctx.block().bitcast_double_to_i64(&boxed);
         let top = ctx.block().lshr(I64, &bits, "48");
         let int = ctx

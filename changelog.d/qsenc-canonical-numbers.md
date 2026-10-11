@@ -1,0 +1,1 @@
+Honor existing canonical raw-Number proofs in relational operands and individual members of mixed comparison graphs. Remove redundant compact-integer decoding and classification without changing coercing fallback behavior. IR regressions include a string reassignment negative control; semantic controls cover mixed graphs and observable valueOf.

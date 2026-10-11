@@ -148,3 +148,35 @@ fn strict_number_literal_equalities_need_no_coercion_or_slow_arm() {
     assert!(!ir.contains("cmpgraph.coerce"), "{ir}");
     assert!(!ir.contains("@js_eq("), "{ir}");
 }
+
+#[test]
+fn mixed_graph_does_not_decode_a_constructively_numeric_local() {
+    let expr = Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(comparison(CompareOp::Ge, 100.0)),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Lt,
+            left: Box::new(Expr::LocalGet(2)),
+            right: Box::new(Expr::Number(200.0)),
+        }),
+    };
+    let local = Stmt::Let {
+        id: 2,
+        name: "number".into(),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(Expr::Number(1.25)),
+    };
+    let good = ir(expr.clone(), vec![local.clone()]);
+    assert_eq!(good.matches("sitofp i32").count(), 1, "{good}");
+    assert_eq!(good.matches("lshr i64").count(), 1, "{good}");
+    let dynamic = ir(
+        expr,
+        vec![
+            local,
+            Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::String("1".into())))),
+        ],
+    );
+    assert_eq!(dynamic.matches("sitofp i32").count(), 2, "{dynamic}");
+    assert!(dynamic.contains("call double @js_rel_lt("), "{dynamic}");
+}
