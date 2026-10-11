@@ -155,29 +155,95 @@ pub extern "C" fn js_put_value_set_packed_miss(
     packed: *const AtomicU64,
 ) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
+    // The receiver shape answers an own writable binding before any site
+    // admission or migration. A saturated site needs no further lookup or
+    // publication to perform this checked store.
+    let target_bits = target.to_bits();
+    if target_bits & !POINTER_MASK == POINTER_TAG && !key.is_null() {
+        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        if unsafe { crate::object::shape_store::try_own_store(obj, key, value) } {
+            // Preserve publication while the existing ways have room. A
+            // saturated site needs no further publication or site memo to
+            // serve another shape. The checked slot funnel owns reps/barriers.
+            unsafe {
+                let cache = crate::object::pic_slot_peek(cache_slot);
+                if cache.is_null() || (*cache)[PACKED_SET_WAYS - 1] == PACKED_SET_EMPTY {
+                    prime_packed_set(target, key, cache_slot, packed);
+                }
+            }
+            return value;
+        }
+    }
+    // The site's key-add memo, for what the emitted add hit refuses per
+    // object or never takes (a spill slot). Its chain validity also refuses
+    // a deprecated predecessor; only a decline reaches migration below.
+    unsafe {
+        if let Some(stored) = super::packed_add::packed_add_try(site, target, value) {
+            return stored;
+        }
+    }
+    // An absent key can also have a shape answer: its existing transition
+    // and inherited-store fact. Ask it before any descriptor walk. A declined
+    // append can collect, so carry the helper's repaired operands onward.
+    let (target, key, value) = {
+        let mut refreshed = None;
+        if target_bits & !POINTER_MASK == POINTER_TAG && !key.is_null() {
+            let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
+            if let Some(stored) = unsafe {
+                crate::object::shape_store::try_warm_transition(
+                    (target_bits & POINTER_MASK) as *mut crate::ObjectHeader,
+                    key,
+                    value,
+                    &mut refreshed,
+                )
+            } {
+                // The shape answer also keeps the existing emitted add hit
+                // primed. It is optional for correctness and saturation:
+                // another predecessor still uses its own shape facts.
+                let (target, key, _) = refreshed.unwrap_or((
+                    target,
+                    crate::value::js_nanbox_string(key as i64),
+                    value,
+                ));
+                unsafe {
+                    // Publish the same overwrite/body answer as the full
+                    // miss before publishing its add edge. ConstFn adds
+                    // share the site's existing body claim with overwrites.
+                    let cache = crate::object::pic_slot_peek(cache_slot);
+                    if cache.is_null() || (*cache)[PACKED_SET_WAYS - 1] == PACKED_SET_EMPTY {
+                        prime_packed_set(
+                            target,
+                            (key.to_bits() & POINTER_MASK) as *const crate::StringHeader,
+                            cache_slot,
+                            packed,
+                        );
+                    }
+                    super::packed_add::packed_add_prime(
+                        site,
+                        target,
+                        (key.to_bits() & POINTER_MASK) as *const crate::StringHeader,
+                        pre_shape,
+                        crate::object::chain_store::ChainSite::Packed(cache_slot),
+                    );
+                }
+                return stored;
+            }
+        }
+        refreshed.map_or((target, key, value), |(target, key, value)| {
+            (
+                target,
+                (key.to_bits() & POINTER_MASK) as *const crate::StringHeader,
+                value,
+            )
+        })
+    };
+    let target_bits = target.to_bits();
     // The site's compiled-setter entry: a store whose key the receiver
     // inherits as a class accessor misses the emitted ways by construction.
     // Its hit is two ShapeId compares and one lane load (`setter_site`), so it
     // is asked before any other miss work re-derives what it already proves.
     if let Some(stored) = unsafe { setter_site::try_hit(cache_slot, target, key, value) } {
         return stored;
-    }
-    // Charter step 5: migrate a receiver whose shape the lineage generalized
-    // before the key-add memo or a way is keyed by it.
-    let target_bits = target.to_bits();
-    if target_bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
-        unsafe {
-            crate::object::field_rep_store::migrate_on_miss(
-                (target_bits & crate::value::POINTER_MASK) as usize,
-            )
-        };
-    }
-    // The site's key-add memo, for what the emitted add hit refuses per
-    // object or never takes (a spill slot). Nothing else has run yet.
-    unsafe {
-        if let Some(stored) = super::packed_add::packed_add_try(site, target, value) {
-            return stored;
-        }
     }
     // The ways the emitted code does not compare. Nothing here allocates or
     // runs user code, so `target` and `value` are still the caller's values
@@ -200,6 +266,15 @@ pub extern "C" fn js_put_value_set_packed_miss(
         }
     }
 
+    // Charter step 5: migrate a receiver whose shape the lineage generalized
+    // before the key-add memo or a way is keyed by it.
+    if target_bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        unsafe {
+            crate::object::field_rep_store::migrate_on_miss(
+                (target_bits & crate::value::POINTER_MASK) as usize,
+            )
+        };
+    }
     // P4 checked inherited setters before key interning and the clear-chain
     // add memo. A direct setter cannot add a receiver key, and this collecting
     // route validates its own live link and descriptor before invocation.
@@ -594,7 +669,7 @@ unsafe fn prime_packed_set(
             for way in ways.iter() {
                 let current = way.load(Ordering::Relaxed);
                 if current == entry {
-                    break;
+                    return;
                 }
                 if current == PACKED_SET_EMPTY {
                     way.store(entry, Ordering::Relaxed);

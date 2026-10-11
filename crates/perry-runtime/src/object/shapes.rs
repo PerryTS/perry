@@ -63,7 +63,7 @@ mod shapes_store;
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]
-pub(crate) use shapes_prototype::clear_class_identity_words;
+pub(crate) use shapes_prototype::{clear_class_identity_words, scan_shape_prototype_words_mut};
 pub(crate) use shapes_prototype::{
     identity_prototype_word, identity_word_slot, note_full_trace_begin, proto_id_carries_word,
     prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
@@ -288,6 +288,92 @@ impl ShapeRecordRef {
     pub(crate) fn prototype_word(self) -> u64 {
         // SAFETY: this handle borrows a live slab record of this agent.
         unsafe { (*self.0.as_ptr()).prototype_word() }
+    }
+
+    /// Last declaration wins, including a later noncanonical spelling of
+    /// an earlier atom. Unlike a read-site slot hint this is a full lookup.
+    pub(crate) unsafe fn own_store_slot(
+        self,
+        key: *const crate::StringHeader,
+    ) -> Option<Option<usize>> {
+        let r = &*self.0.as_ptr();
+        if r.logical_key_count == 0 {
+            // A dictionary's own keys belong to the receiver, not this record.
+            // Its generation namespace distinguishes it from an empty shape.
+            let tag = super::dictionary::DICTIONARY_GENERATION_TAG;
+            if r.semantic_generation & ((1u64 << 63) | tag) == tag {
+                return None;
+            }
+            return Some(None);
+        }
+        // The complete key index answers a binding after a descriptor or
+        // prototype generation changes too. A read site's positional guess
+        // cannot make that claim; its POSBOUND is deliberately narrower.
+        if r.keys == 0 || r.hole_count != 0 {
+            return None;
+        }
+        // The final declaration cannot be shadowed by a later one. This
+        // positional proof needs neither a site hint nor an indexed lookup.
+        let last = r.logical_key_count as usize - 1;
+        let (words, len) =
+            super::keys_array_dense_slots_resolved(r.keys as usize as *const ArrayHeader);
+        if last < len
+            && (*words.add(last)).to_bits() == crate::JSValue::string_ptr(key as *mut _).bits()
+        {
+            return Some(Some(last));
+        }
+        // Use the same small-list representation as the existing by-name
+        // resolver. Reverse order preserves the most-derived declaration,
+        // including a noncanonical spelling after an earlier atom.
+        if r.logical_key_count < super::KEYS_INDEX_THRESHOLD {
+            if words.is_null() || len < r.logical_key_count as usize {
+                return None;
+            }
+            return Some((0..r.logical_key_count as usize).rev().find(|&i| {
+                stored_key_matches(key, (*words.add(i)).to_bits())
+            }));
+        }
+        let bytes = crate::string::header_str_checked(key)?.as_bytes();
+        let hash = super::key_bytes_hash(bytes.as_ptr(), bytes.len());
+        match shape_slot_lookup_verdict(
+            r.keys as usize as *const ArrayHeader,
+            bytes,
+            hash,
+            r.logical_key_count,
+            true,
+        ) {
+            KeysIndexVerdict::Found(slot) => Some(Some(slot as usize)),
+            KeysIndexVerdict::Absent => Some(None),
+            KeysIndexVerdict::Unindexed => None,
+        }
+    }
+
+    /// A shape-owned inherited [[Set]] fact, valid under the same mutation
+    /// counter used by the existing key-add transition machinery.
+    pub(crate) fn store_chain_blocks(self, key: &[u8], validity: u64) -> Option<bool> {
+        unsafe { (*self.0.as_ptr()).store_chain_facts() }.and_then(|facts| {
+            facts
+                .borrow()
+                .iter()
+                .find(|fact| fact.key.as_ref() == key)
+                .filter(|fact| fact.validity == validity)
+                .map(|fact| fact.blocked)
+        })
+    }
+
+    pub(crate) fn note_store_chain(self, key: &[u8], validity: u64, blocked: bool) {
+        let facts = unsafe { (*self.0.as_ptr()).ensure_store_chain_facts() };
+        let mut facts = facts.borrow_mut();
+        if let Some(fact) = facts.iter_mut().find(|fact| fact.key.as_ref() == key) {
+            fact.validity = validity;
+            fact.blocked = blocked;
+        } else {
+            facts.push(shapes_store::StoreChainFact {
+                key: key.into(),
+                validity,
+                blocked,
+            });
+        }
     }
 
     #[inline]
@@ -1010,10 +1096,7 @@ impl ShapeObjectKind {
     pub(crate) fn is_function_layout(self) -> bool {
         matches!(
             self,
-            Self::Function
-                | Self::FunctionBoundCall
-                | Self::FunctionBoundApply
-                | Self::FunctionBound
+            Self::Function | Self::FunctionBoundCall | Self::FunctionBoundApply | Self::FunctionBound
         )
     }
 
@@ -6204,9 +6287,15 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     // and how many distinct prototype identities it names: what the
     // prototype-in-shape rule costs in shapes.
     let mut by_kind = [0usize; 6];
+    let mut extensions = (0, 0, 0, 0);
     let mut distinct = std::collections::HashSet::new();
     slab.for_each(|_, record| {
         // SAFETY: live slab record, read immediately under agent ownership.
+        let owned = unsafe { (*record).extension_census() };
+        extensions.0 += owned.0;
+        extensions.1 += owned.1;
+        extensions.2 += owned.2;
+        extensions.3 += owned.3;
         let proto_id = unsafe { (*record).proto_id };
         distinct.insert(proto_id);
         let kind = match proto_id {
@@ -6233,6 +6322,11 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
         rows.push((name, count, 0));
     }
     rows.push(("shapes.proto.distinct_identities", distinct.len(), 0));
+    rows.push(("shapes.extensions(native owned)", extensions.0, extensions.1));
+    // A subset of extension bytes, so this informational row adds no bytes
+    // to the census total a second time.
+    rows.push(("shapes.store_chain(facts)", extensions.2, 0));
+    rows.push(("shapes.store_chain(bytes included in extensions)", extensions.3, 0));
     rows
 }
 

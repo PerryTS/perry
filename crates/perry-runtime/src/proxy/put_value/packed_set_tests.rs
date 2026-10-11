@@ -490,6 +490,55 @@ fn a_second_shape_is_kept_in_the_ways_without_moving_the_word() {
     assert_eq!(f64::from_bits(n.bits()), 3.0);
 }
 
+/// Saturating the site's ways cannot make an own writable binding require
+/// full Set or further publication. Different slots exercise the shape answer.
+#[test]
+fn saturated_named_store_uses_each_receivers_own_binding() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let key = interned(b"n");
+    let objects: Vec<_> = (0..12)
+        .map(|width| {
+            let mut source = String::from("{");
+            for i in 0..width {
+                source.push_str(&format!("\"extra{i}\":0,"));
+            }
+            source.push_str("\"n\":1}");
+            parsed(source.as_bytes())
+        })
+        .collect();
+    let site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let mut ways = packed_set_cache_empty();
+    let mut cache_slot: PackedSetWaysSlot = &mut ways;
+    for &object in &objects[..PACKED_SET_WAYS] {
+        unsafe { prime_packed_set(object, key, &mut cache_slot, &site.set) };
+    }
+    assert!(ways[..PACKED_SET_WAYS]
+        .iter()
+        .all(|&w| w != PACKED_SET_EMPTY));
+    let before_word = site.set.load(Ordering::Relaxed);
+    let before_ways = ways;
+    for round in 0..3 {
+        for (i, &object) in objects.iter().enumerate() {
+            let value = (round * 12 + i + 20) as f64;
+            assert_eq!(
+                js_put_value_set_packed_miss(object, key, value, 0, &mut cache_slot, &site.set),
+                value
+            );
+            assert_eq!(
+                crate::object::js_object_get_field_by_name_f64(object_of(object), key),
+                value
+            );
+            assert_eq!(
+                site.set.load(Ordering::Relaxed),
+                before_word,
+                "another receiver shape needs no publication at a saturated site"
+            );
+            assert_eq!(ways, before_ways);
+        }
+    }
+}
+
 /// A fresh way cache must be born EMPTY, not zero: an unstamped class-less
 /// receiver carries `parent_class_id == 0` at `+4`, which a zero way would
 /// match in the emitted compare.
@@ -629,7 +678,7 @@ fn a_non_interned_key_publishes_by_content() {
 /// only there fires zero times while every trap test stays green. Asserts the
 /// verdict is primed on THIS site and then serves the later stores.
 #[test]
-fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
+fn a_key_adding_static_store_is_served_by_the_chain_or_shape_verdict() {
     const CID: u32 = 0x0004_2217;
     let first = interned(b"chainPackedFirst");
     let added = interned(b"chainPackedAdded");
@@ -645,6 +694,7 @@ fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
     let proto = crate::object::js_object_alloc(0, 4);
     crate::object::class_prototype_object_root_store(CID, proto);
     let before = crate::object::chain_store::chain_store_hits_this_thread();
+    crate::object::test_reset_transition_fast_hits();
     const STORES: u64 = 6;
     for i in 0..STORES {
         let obj = crate::object::js_object_alloc(CID, 0);
@@ -669,10 +719,11 @@ fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
         "the site primed a chain verdict in its own cache: {}",
         crate::object::chain_store::chain_store_counters_for_test()
     );
-    let served = crate::object::chain_store::chain_store_hits_this_thread() - before;
+    let served = crate::object::chain_store::chain_store_hits_this_thread() - before
+        + crate::object::test_transition_fast_hits();
     assert!(
         served >= STORES - 1,
-        "every store after the prime is served by the chain verdict: {served} of {STORES}"
+        "every store after the prime is served by its chain or shape fact: {served} of {STORES}"
     );
 }
 

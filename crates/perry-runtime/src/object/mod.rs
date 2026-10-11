@@ -157,6 +157,7 @@ pub(crate) use global_this::{
 pub mod handle_expando;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
+pub(crate) mod shape_store;
 pub(crate) use global_this::{
     default_prepare_stack_trace_func_ptr, is_array_prototype_method_value,
     scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,

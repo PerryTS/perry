@@ -1390,6 +1390,96 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return None;
     }
 
+    // Ordinary prototype holders answer from their shape's key index. A
+    // missing key is an indexed absence, not a byte scan of every builtin
+    // key followed by a virtual/global property lookup.
+    let addr = extract_pointer(target.to_bits()) as usize;
+    let indexed_owner = unsafe {
+        match crate::value::addr_class::try_read_gc_header(addr) {
+            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+                let meta = (*(addr as *const crate::ObjectHeader)).meta;
+                (!meta.is_null()
+                    && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0)
+                    .then_some(addr)
+            }
+            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
+                crate::object::shape_store::named_bag(addr as *const crate::ObjectHeader, key.to_bits())
+                    .map(|bag| bag as usize)
+            }
+            _ => None,
+        }
+    };
+    if let Some(indexed_owner) = indexed_owner {
+        if let Some(shape) = unsafe {
+            crate::object::shapes::object_shape_descriptor(
+                indexed_owner as *const crate::ObjectHeader,
+            )
+        } {
+            if shape.object_kind.is_ordinary_layout() {
+                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(bytes) = unsafe {
+                    crate::string::js_string_key_bytes(
+                        crate::JSValue::from_bits(key.to_bits()),
+                        &mut scratch,
+                    )
+                } {
+                    let keys = shape.keys as usize as *const crate::ArrayHeader;
+                    use crate::object::shapes::KeysIndexVerdict;
+                    let verdict = if keys.is_null() {
+                        // Keyless dictionary shapes do not answer own absence;
+                        // the descriptor path below reads their receiver keys.
+                        KeysIndexVerdict::Unindexed
+                    } else {
+                        unsafe {
+                            let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+                            let verdict = crate::object::shapes::shape_slot_lookup_verdict(
+                                keys,
+                                bytes,
+                                hash,
+                                shape.logical_key_count,
+                                true,
+                            );
+                            // A shortened mutable key list retires its old
+                            // index. Rebuild before claiming absence.
+                            if matches!(verdict, KeysIndexVerdict::Unindexed) {
+                                crate::object::shapes::shape_slot_lookup_verdict(
+                                    keys,
+                                    bytes,
+                                    hash,
+                                    shape.logical_key_count,
+                                    true,
+                                )
+                            } else {
+                                verdict
+                            }
+                        }
+                    };
+                    match verdict {
+                        KeysIndexVerdict::Absent => return None,
+                        KeysIndexVerdict::Unindexed => {}
+                        KeysIndexVerdict::Found(slot) => {
+                            let entry = unsafe { crate::object::key_attrs::keys_entry(keys, slot) };
+                            if crate::object::key_attrs::entry_is_private(entry) {
+                                return None;
+                            }
+                            if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+                                let name = std::str::from_utf8(bytes).ok()?;
+                                let acc =
+                                    crate::object::get_accessor_descriptor(indexed_owner, name)?;
+                                return Some(OwnSetDescriptor::Accessor {
+                                    setter_bits: acc.set,
+                                });
+                            }
+                            return Some(OwnSetDescriptor::Data {
+                                writable: entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
         // `undefined` is a valid value for an existing own property. Using a
         // value read as the existence probe made the first overwrite of the
@@ -1833,9 +1923,6 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
                 return false;
             }
         }
-    } else if crate::closure::is_closure_ptr(extract_pointer(receiver.to_bits()) as usize) {
-        target_set(receiver, key, value);
-        return true;
     } else if crate::object::obj_value_no_extend(receiver) {
         return false;
     }
@@ -2211,8 +2298,8 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         // property.
         let current_addr = extract_pointer(current.to_bits()) as usize;
         if current_addr != 0
+            && key_equals(key, b"__proto__")
             && current_addr == crate::array::object_prototype_addr()
-            && key_to_rust_string(key).as_deref() == Some("__proto__")
         {
             legacy_dunder_proto_set(receiver, value);
             return true;
@@ -2253,39 +2340,9 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     }
                     throw_type_error("Restricted function property assignment");
                 }
-                // Every function's [[Prototype]] is %Function.prototype% — a
-                // descriptor installed there via `Object.defineProperty(
-                // Function.prototype, k, {...})` must intercept a plain
-                // `boundFn.k = v` write (invoke an accessor's setter, throw
-                // for a getter-only accessor, or block a non-writable data
-                // property) instead of silently shadowing it with a new own
-                // data property on the receiver.
-                if crate::closure::closure_set_via_function_prototype_descriptor(
-                    cur_ptr, &name, value, receiver,
-                ) {
-                    return true;
-                }
-                // `Object.preventExtensions(fn)` / `Object.seal(fn)` set
-                // NO_EXTEND / SEALED in the closure's GcHeader (functions are
-                // GcHeader-backed closures). A [[Set]] that would ADD a new own
-                // property must fail (OrdinaryDefineOwnProperty returns false,
-                // silent in non-strict, TypeError in strict); an existing own
-                // key can still be updated. (test262
-                // Object/preventExtensions/15.2.3.10-3-{3,13}.)
-                if !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name) {
-                    let non_extensible = unsafe {
-                        let gc = (cur_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                            as *const crate::gc::GcHeader;
-                        (*gc)._reserved
-                            & (crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED)
-                            != 0
-                    };
-                    if non_extensible {
-                        return false;
-                    }
-                }
             }
-            return create_or_update_receiver_property(receiver, key, value);
+            // Functions continue through the same descriptor walk: a
+            // handled readonly write is a failure, not a successful store.
         }
         let Some(proto) = prototype_of_for_set(current) else {
             return create_or_update_receiver_property(receiver, key, value);

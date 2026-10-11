@@ -756,13 +756,15 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
             return None;
         }
         let already_interned = (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0;
-        // A chain verdict and a definition's lattice probe name interned
-        // words. Reject anything else without touching the receiver, so the
-        // semantic fallback retains interning and its roots. Specializing
-        // this existing helper removes all optional-root work from that lane.
-        if CHAIN_PROVEN && !already_interned {
-            return None;
-        }
+        // The proven-chain lane needs an interned word, but a private copy
+        // can already have a twin in the existing atom table. Resolve that
+        // word without allocating before declining to the rooted fallback.
+        let key = if CHAIN_PROVEN && !already_interned {
+            super::chain_store::interned_key_for_store(crate::value::js_nanbox_string(key as i64))?
+        } else {
+            key
+        };
+        let already_interned = already_interned || CHAIN_PROVEN;
         // A proven-chain append with an interned key does no JS or GC-heap work
         // until spill growth. Keep the same receiver/edge vet below, but create
         // handles only for chain inspection, interning or a collecting store.

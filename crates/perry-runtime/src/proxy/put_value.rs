@@ -121,27 +121,6 @@ pub(crate) fn proxy_set_with_receiver(
     )
 }
 
-/// The receivers the key-add lane serves, decided from the header and the
-/// class id before the key is looked at: a heap object whose class id is 0
-/// or a registered object-literal shape. The lane refuses every other
-/// receiver anyway; asking first keeps it from resolving the key.
-///
-/// # Safety
-/// `addr` is the payload of a POINTER-tagged value.
-#[inline]
-unsafe fn plain_store_receiver(addr: usize) -> bool {
-    if !crate::value::addr_class::is_above_handle_band(addr) {
-        return false;
-    }
-    match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
-            let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
-            class_id == 0 || crate::object::is_anon_shape_class_id(class_id)
-        }
-        _ => false,
-    }
-}
-
 /// Assignment PutValue for a property reference. Returns the assigned RHS value
 /// on success or sloppy failure, and throws TypeError when strict code attempts
 /// a failed [[Set]].
@@ -153,6 +132,16 @@ pub extern "C" fn js_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
+    // Short strings and heap strings name the same property. Reuse the
+    // existing allocation-free atom resolver before asking the shape, as
+    // the transition-only entry did, so a warm short key keeps that answer.
+    let key = if crate::JSValue::from_bits(key.to_bits()).is_short_string() {
+        unsafe { crate::object::chain_store::interned_key_for_store(key) }
+            .map(|atom| crate::value::js_nanbox_string(atom as i64))
+            .unwrap_or(key)
+    } else {
+        key
+    };
     // Sloppy script assignment lowers to PutValue rather than the named-field
     // setter.  Existing own data fields need none of PutValue's rooting,
     // ToPropertyKey, Proxy, typed-array, or receiver-aware prototype work.
@@ -179,7 +168,7 @@ pub extern "C" fn js_put_value_set(
             }
             // The private helper rejects ordinary keys before any allocation.
         }
-        if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
+        if unsafe { crate::object::shape_store::try_own_store(obj, key_ptr, value) } {
             return value;
         }
     } else if dense_array::try_set(target, key, value, receiver) {
@@ -189,42 +178,28 @@ pub extern "C" fn js_put_value_set(
         // misses continue straight to their key-add proof below.
         return value;
     }
-    // A key the receiver lacks: the append its shape's key-add edge names
-    // (`(ShapeId, key) -> target`), for a plain receiver whose prototype chain
-    // cannot intercept the key — the same lane a cached computed write site
-    // takes on its miss (`js_put_value_set_dyn_ic_miss`). It allocates only
-    // after its pre-checks pass and hands back re-rooted operands whenever it
-    // did, so a miss continues below with live values.
     let (target, key, value, receiver) = {
-        let mut refreshed: Option<(f64, f64, f64)> = None;
+        let mut refreshed = None;
         if target_bits == receiver.to_bits()
             && (target_bits & !POINTER_MASK) == POINTER_TAG
-            && unsafe { plain_store_receiver((target_bits & POINTER_MASK) as usize) }
+            && (key_bits & !POINTER_MASK) == crate::value::STRING_TAG
         {
-            if let Some(key_ptr) =
-                unsafe { crate::object::chain_store::interned_key_for_store(key) }
-            {
-                let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
-                if let Some(stored) =
-                    crate::object::object_set_field_by_name_transition_only_fast_value(
-                        obj,
-                        key_ptr,
-                        value,
-                        &mut refreshed,
-                    )
-                {
-                    return stored;
-                }
+            if let Some(stored) = unsafe {
+                crate::object::shape_store::try_warm_transition(
+                    (target_bits & POINTER_MASK) as *mut crate::ObjectHeader,
+                    (key_bits & POINTER_MASK) as *const crate::StringHeader,
+                    value,
+                    &mut refreshed,
+                )
+            } {
+                return stored;
             }
         }
         match refreshed {
-            // The key the lane used is the interned twin of the same text, so
-            // it stands in for the original key value on the general path.
             Some((t, k, v)) => (t, k, v, t),
             None => (target, key, value, receiver),
         }
     };
-
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -247,6 +222,37 @@ pub extern "C" fn js_put_value_set(
     let target = target_handle.get_nanbox_f64();
     let value = value_handle.get_nanbox_f64();
     let receiver = receiver_handle.get_nanbox_f64();
+
+    let (target, property_key, value, receiver) = if target.to_bits() == receiver.to_bits()
+        && target.to_bits() & !POINTER_MASK == POINTER_TAG
+        && property_key.to_bits() & !POINTER_MASK == crate::value::STRING_TAG
+    {
+        let mut may_move = false;
+        if let Some(stored) = unsafe {
+            crate::object::shape_store::try_store_with_refresh(
+                target,
+                property_key,
+                value,
+                &mut may_move,
+            )
+        } {
+            return stored;
+        }
+        if may_move {
+            // Marking a prototype or interning a key can collect. Rejected
+            // kinds and exceptional keys do neither and need no replay.
+            (
+                target_handle.get_nanbox_f64(),
+                property_key_handle.get_nanbox_f64(),
+                value_handle.get_nanbox_f64(),
+                receiver_handle.get_nanbox_f64(),
+            )
+        } else {
+            (target, property_key, value, receiver)
+        }
+    } else {
+        (target, property_key, value, receiver)
+    };
 
     if lookup(target).is_none() {
         if set_integer_indexed_exotic(target, property_key, value) {

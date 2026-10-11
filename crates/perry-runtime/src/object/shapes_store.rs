@@ -37,6 +37,13 @@ use super::{
 };
 use std::cell::UnsafeCell;
 
+#[path = "shapes_store/store_chain.rs"]
+mod store_chain;
+pub(super) use store_chain::StoreChainFact;
+#[path = "shapes_store/extras.rs"]
+mod extras;
+pub(super) use extras::ShapeExtras;
+
 /// Static body identity of a ConstFn slot. This is image metadata, never a
 /// closure pointer or a GC edge. Entries are sorted by slot in a shape.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,30 +52,11 @@ pub(crate) struct ConstFnSlotInfo {
     pub info: u64,
 }
 
-/// Optional, record-owned extension. It has no keyed lookup: a method-site
-/// hit reads only the receiver's shape and current closure slot. The learned
-/// masks are not shape identity, so record copies/rekeys transfer this box.
-///
-/// `brands` is the sorted list of private brands (#11791) every receiver of
-/// the shape carries: one scalar per class evaluation whose private methods
-/// or fields were installed on it (`private_brand_id`). An identity fact like
-/// `constfn_infos`; scalars, so nothing here is a GC edge.
-#[derive(Debug)]
-pub(super) struct ShapeExtras {
-    pub(super) constfn_infos: Box<[ConstFnSlotInfo]>,
-    pub(super) brands: Box<[u64]>,
-    pub(super) to_nopointer: std::sync::atomic::AtomicU32,
-    pub(super) to_any: std::sync::atomic::AtomicU32,
-    /// Weak reverse key-add edge. Never shape identity or a GC carrier.
-    pub(super) rollback_parent: std::sync::atomic::AtomicU32,
-    /// Weak keyless receiver-birth ShapeId of this prototype's shape.
-    /// Not identity, a carrier, a width, or a GC edge. Revalidated at use.
-    pub(super) created_birth_shape: std::sync::atomic::AtomicU32,
-}
 const _: () = assert!(std::mem::align_of::<ShapeExtras>() >= 2);
-// The new scalar occupies the extension's existing tail padding on LP64.
+// The birth-shape scalar occupies tail padding; the optional inherited-store
+// fact owner adds one pointer to the record extension on LP64.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 48);
+const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 56);
 
 /// A brand list is strictly ascending: sorted with no duplicate, so equal
 /// sets are equal slices.
@@ -272,34 +260,6 @@ impl ShapeRecord {
             .rollback_parent
             .store(parent, std::sync::atomic::Ordering::Relaxed);
     }
-    #[inline]
-    pub(super) fn created_birth_shape(&self) -> u32 {
-        if !self.has_boxed_extras() {
-            return 0;
-        }
-        // SAFETY: this live record owns its stable Rust extension.
-        unsafe { &*(self.extras as usize as *const ShapeExtras) }
-            .created_birth_shape
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Record a weak shape relationship on the prototype's shape. An
-    /// existing extension has room for it; a plain record acquires the same
-    /// extension, preserving its scalar rollback edge.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn note_created_birth_shape(&mut self, birth: u32) {
-        if !self.has_boxed_extras() {
-            let rollback = self.rollback_parent();
-            self.extras = new_extras(&[], &[]);
-            self.note_rollback_parent(rollback);
-        }
-        // SAFETY: the present record owns this Rust extension, not GC storage.
-        unsafe { &*(self.extras as usize as *const ShapeExtras) }
-            .created_birth_shape
-            .store(birth, std::sync::atomic::Ordering::Relaxed);
-    }
-
     const EMPTY: ShapeRecord = ShapeRecord {
         keys: 0,
         semantic_generation: 0,
@@ -820,6 +780,7 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         to_any: std::sync::atomic::AtomicU32::new(0),
         rollback_parent: std::sync::atomic::AtomicU32::new(0),
         created_birth_shape: std::sync::atomic::AtomicU32::new(0),
+        store_chain: None,
     });
     Box::into_raw(extras) as usize as u64
 }

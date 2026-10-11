@@ -550,6 +550,11 @@ pub(crate) unsafe fn interned_key_for_store(key: f64) -> Option<*const crate::St
     if jv.is_short_string() {
         let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let bytes = crate::string::js_string_key_bytes(jv, &mut buf)?;
+        // The same admission as eligible_key, before probing the atom table:
+        // an index or private name cannot use a named-store transition.
+        if bytes.first().is_none_or(|b| *b == b'#' || b.is_ascii_digit()) {
+            return None;
+        }
         let ptr = crate::string::intern_lookup_bytes(bytes)?;
         return eligible_key(ptr).then_some(ptr);
     }
