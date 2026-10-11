@@ -1,8 +1,9 @@
-//! String literal pool. Executables emit complete immutable string objects
-//! and NaN-boxed handles in the code image. Short literals coalesce at link
-//! time by their complete byte spelling; use sites remain one handle load.
-//! No allocation, registration or per-literal loop runs at startup. Unloadable
-//! output retains owned materialization so escaping strings survive dlclose.
+//! String literal pool. Executables emit complete immutable string objects in
+//! the code image; boxed handles are preinitialized where the target linker
+//! supports their tagged relocations, and initialized once at startup on Mach-O.
+//! Short literals coalesce at link time by their complete byte spelling; use
+//! sites remain one handle load. Unloadable output retains owned materialization
+//! so escaping strings survive dlclose.
 //! Static dispatch descriptors point at separate image keys, preserving their
 //! existing interned-key eligibility without using the dynamic weak cache.
 
@@ -57,7 +58,7 @@ pub struct StringEntry {
     pub escaped_ir: String,
     /// Symbol name of the `.rodata` byte array (`.str.N.bytes`).
     pub bytes_global: String,
-    /// Symbol name of the handle global (`.str.N.handle`); constant in executables.
+    /// Symbol name of the handle global (`.str.N.handle`); preinitialized where supported, otherwise set at runtime.
     pub handle_global: String,
     /// Symbol name of the immutable static-dispatch descriptor
     /// (`.str.N.dispatch`). Property/method by-id ABIs use this instead of

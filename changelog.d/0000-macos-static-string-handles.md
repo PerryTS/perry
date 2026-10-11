@@ -1,0 +1,1 @@
+Executable string literals keep their image-resident storage on Apple targets, while their NaN-boxed handles are initialized through the runtime ABI. This avoids tagged pointer relocations being rewritten by Mach-O chained fixups.

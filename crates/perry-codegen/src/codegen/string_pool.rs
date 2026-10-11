@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, I8, I32, I64, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::{sanitize_member, scoped_static_method_name};
@@ -14,6 +14,14 @@ use super::spec_function_length;
 
 mod class_birth_image;
 mod image;
+mod image_handles;
+use image_handles::{
+    add_mutable_string_handle, emit_prepare_agent_strings, emit_runtime_boxed_image_handle,
+    target_uses_runtime_boxed_images,
+};
+#[cfg(test)]
+#[path = "string_pool/image_handles_tests.rs"]
+mod image_handles_tests;
 mod image_uses;
 
 /// Emits a long sequence of INDEPENDENT init operations (string allocation,
@@ -233,6 +241,11 @@ pub(super) fn emit_string_pool(
     fresh_class_templates: &std::collections::HashSet<String>,
 ) {
     let image_literals = output_type != "dylib" && output_type != "staticlib";
+    // Mach-O chained fixups can rewrite the high bytes of an absolute
+    // relocation, corrupting a NaN-boxed STRING_TAG. Keep the image-resident
+    // string objects, but form their boxed handles through the runtime ABI.
+    let runtime_boxed_images =
+        image_literals && target_uses_runtime_boxed_images(&llmod.target_triple);
     for entry in strings.iter() {
         let image = image_literals.then(|| image::emit(llmod, entry));
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -253,6 +266,10 @@ pub(super) fn emit_string_pool(
             ));
         }
         if let Some(literal) = &image {
+            if runtime_boxed_images {
+                add_mutable_string_handle(llmod, entry, agent_strings_tls);
+                continue;
+            }
             let init = format!(
                 "bitcast (i64 add (i64 ptrtoint (ptr {literal} to i64), i64 {}) to double)",
                 crate::nanbox::i64_literal(0x7fff_0000_0000_0000)
@@ -486,28 +503,36 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
-    for entry in strings.iter().filter(|_| !image_literals) {
+    for entry in strings
+        .iter()
+        .filter(|_| !image_literals || runtime_boxed_images)
+    {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let bytes_ref = format!("@{}", entry.bytes_global);
         let handle_ref = format!("@{}", entry.handle_global);
-        let len_str = entry.byte_len.to_string();
-        // Every pool literal is an immortal image string. Short UTF-8 keys
-        // share the agent's atom identity; long, empty and WTF-8 literals use
-        // the same image allocation funnel without entering the atom index.
-        let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
-        let wtf8 = if entry.is_wtf8 { "1" } else { "0" };
-        let handle = blk.call(
-            I64,
-            "js_string_pool_atom",
-            &[
-                (PTR, &bytes_ref),
-                (I32, &len_str),
-                (I64, &hash),
-                (I32, wtf8),
-            ],
-        );
-        let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
+        let nanboxed = if runtime_boxed_images {
+            emit_runtime_boxed_image_handle(blk, entry)
+        } else {
+            let bytes_ref = format!("@{}", entry.bytes_global);
+            let len_str = entry.byte_len.to_string();
+            // Every pool literal is an immortal image string. Short UTF-8
+            // keys share the agent's atom identity; long, empty and WTF-8
+            // literals use the same image allocation funnel without entering
+            // the atom index.
+            let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
+            let wtf8 = if entry.is_wtf8 { "1" } else { "0" };
+            let handle = blk.call(
+                I64,
+                "js_string_pool_atom",
+                &[
+                    (PTR, &bytes_ref),
+                    (I32, &len_str),
+                    (I64, &hash),
+                    (I32, wtf8),
+                ],
+            );
+            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)])
+        };
         // Immutable image leaf: no global-root registration or barrier.
         blk.store(DOUBLE, &nanboxed, &handle_ref);
     }
@@ -515,36 +540,14 @@ pub(super) fn emit_string_pool(
     let [string_chunks, no_class_chunks] = chunker.finish();
     debug_assert!(no_class_chunks.is_empty());
     let agent_strings_name = format!("__perry_prepare_agent_strings_{}", module_prefix);
-    if image_literals {
-        llmod
-            .define_function(&agent_strings_name, VOID, vec![])
-            .create_block("entry")
-            .ret_void();
-    } else {
-        let ready = format!("__perry_agent_strings_ready_{}", module_prefix);
-        if agent_strings_tls {
-            llmod.add_internal_thread_local_global(&ready, I8, "0");
-        } else {
-            llmod.add_internal_global(&ready, I8, "0");
-        }
-        let prepare_strings = llmod.define_function(&agent_strings_name, VOID, vec![]);
-        prepare_strings.create_block("entry");
-        prepare_strings.create_block("prepare");
-        prepare_strings.create_block("done");
-        let prepare_label = prepare_strings.block_mut(1).unwrap().label.clone();
-        let done_label = prepare_strings.block_mut(2).unwrap().label.clone();
-        let blk = prepare_strings.block_mut(0).unwrap();
-        let prepared = blk.load(I8, &format!("@{}", ready));
-        let prepared = blk.icmp_ne(I8, &prepared, "0");
-        blk.cond_br(&prepared, &done_label, &prepare_label);
-        let blk = prepare_strings.block_mut(1).unwrap();
-        for name in &string_chunks {
-            blk.call_void(name, &[]);
-        }
-        blk.store(I8, "1", &format!("@{}", ready));
-        blk.br(&done_label);
-        prepare_strings.block_mut(2).unwrap().ret_void();
-    }
+    emit_prepare_agent_strings(
+        llmod,
+        &agent_strings_name,
+        module_prefix,
+        !image_literals || runtime_boxed_images,
+        agent_strings_tls,
+        &string_chunks,
+    );
 
     let mut chunker = InitChunker::new(
         llmod,
@@ -1971,7 +1974,7 @@ pub(super) fn emit_string_pool(
 
 #[path = "fn_info_facts.rs"]
 mod fn_info_facts;
-use fn_info_facts::{record_fn_info_facts, FnInfoFactSources};
+use fn_info_facts::{FnInfoFactSources, record_fn_info_facts};
 
 #[cfg(test)]
 #[path = "class_name_registration_tests.rs"]
@@ -1979,4 +1982,4 @@ mod class_name_registration_tests;
 
 #[path = "method_entries.rs"]
 mod method_entries;
-use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};
+use method_entries::{StaticMethodEntry, emit_class_method_entry, emit_static_method_entry};
