@@ -1,0 +1,1 @@
+Unify primitive admission in generic Number relational comparisons with the existing signed raw-Number guard and contiguous singleton tag ranges. Strings, BigInts, Symbols and objects retain the coercing fallback. IR and Node parity controls cover the guard and observable coercions.

@@ -809,29 +809,24 @@ fn lower_relational_against_number(
     let dynamic = if dynamic_is_left { l } else { r };
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
     let top16 = ctx.block().lshr(I64, &bits, "48");
-    let below_tag_band =
-        ctx.block()
-            .icmp_ult(I64, &top16, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
-    let above_tag_band = ctx
-        .block()
-        .icmp_ugt(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
-    let is_plain_number = ctx.block().or(I1, &below_tag_band, &above_tag_band);
+    // Use the same raw-Number admission as the fully dynamic comparison.
+    // Negative IEEE values and canonical NaNs precede the positive tag band.
+    let is_plain_number = emit_is_unboxed_number(ctx, &bits);
     let is_i32 = ctx
         .block()
         .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
-    let is_undefined = ctx
+    // undefined/null/false/true are four consecutive immediate values.
+    // A range decides admission without separately classifying each value.
+    debug_assert_eq!(crate::nanbox::TAG_UNDEFINED + 3, crate::nanbox::TAG_TRUE);
+    let singleton_offset = ctx
         .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
-    let is_null = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_NULL_I64);
-    let is_false = ctx
-        .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+        .sub(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let is_singleton = ctx.block().icmp_ult(I64, &singleton_offset, "4");
+    let zero_offset = ctx.block().sub(I64, &bits, crate::nanbox::TAG_NULL_I64);
+    let is_zero = ctx.block().icmp_ult(I64, &zero_offset, "2");
     let is_true = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
-    let is_zero = ctx.block().or(I1, &is_null, &is_false);
     let primitive = ctx.block().or(I1, &is_plain_number, &is_i32);
-    let primitive = ctx.block().or(I1, &primitive, &is_undefined);
-    let primitive = ctx.block().or(I1, &primitive, &is_zero);
-    let primitive = ctx.block().or(I1, &primitive, &is_true);
+    let primitive = ctx.block().or(I1, &primitive, &is_singleton);
 
     let fast_idx = ctx.new_block("relnum.fast");
     let slow_idx = ctx.new_block("relnum.slow");
@@ -1838,8 +1833,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     && *n >= i32::MIN as f64 && *n <= i32::MAX as f64)
                             || super::i32_fast_path::is_known_i32_range(
                                 ctx,
-                                if left_numeric { left } else { right },
-                            ),
+                                ),
                     ));
                 }
                 if is_relational_op && !both_numeric {
