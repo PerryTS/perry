@@ -1,1 +1,3 @@
 Default worker messages and structuredClone now share a message-owned shape codec: repeated ordinary records send their keys once and are allocated directly on the receiver layout. Compact value slots, message string sharing and bulk numeric arrays remove repeated key metadata and transitions. Enumerable getters run once at clone time, preserving mutations, cycles, shared references and transfer validation.
+
+Extend the existing rooted OwnNamesSnapshot with property facts shared by descriptor reflection and the structured-clone fallback. Remove ordinary descriptor-object allocation and the resulting per-property clone identity rebuild; retain ordered public snapshots and exotic descriptors.

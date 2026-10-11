@@ -7,7 +7,7 @@
 use super::*;
 #[path = "descriptor_keys.rs"]
 pub(crate) mod own_keys;
-pub(crate) use own_keys::OwnNamesSnapshot;
+pub(crate) use own_keys::{OwnNamesSnapshot, OwnProperty};
 
 fn property_name_array_index(name: &str) -> Option<u32> {
     if name.is_empty() || (name.len() > 1 && name.as_bytes()[0] == b'0') {
@@ -115,6 +115,19 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
     unsafe {
+        own_property(obj_value, key_value)
+            .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |property| {
+                property.materialize()
+            })
+    }
+}
+
+/// The descriptor authority returns property facts before reflection chooses
+/// to materialize a JavaScript descriptor. Snapshot consumers read these same
+/// facts directly; ordinary data/accessor resolution does not allocate.
+#[optimize(size)]
+pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
+    unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
         if obj_jv.is_null() || obj_jv.is_undefined() {
@@ -127,7 +140,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // invariant checks + FromPropertyDescriptor) and forwards non-proxies
         // straight back here, so there's no recursion. (Proxy crash cluster.)
         if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-            return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
+            return OwnProperty::public(crate::proxy::js_reflect_get_own_property_descriptor(
+                obj_value, key_value,
+            ));
         }
         if let Some((obj, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
             if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value) {
@@ -136,7 +151,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     elements,
                     elements_key,
                 )
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                .and_then(OwnProperty::public);
             }
         }
 
@@ -154,14 +169,16 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             let raw = obj_jv.as_pointer::<u8>() as usize;
             if crate::value::addr_class::is_small_handle(raw) {
                 if crate::symbol::js_is_symbol(key_value) != 0 {
-                    return symbol_own_property_descriptor(obj_value, key_value);
+                    return OwnProperty::public(symbol_own_property_descriptor(
+                        obj_value, key_value,
+                    ));
                 }
                 let Some(name) = metadata_key_to_string(key_value) else {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 };
                 let hid = raw as i64;
                 if !crate::object::handle_expando::handle_expando_has(hid, &name) {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 }
                 let attrs = crate::object::handle_expando::handle_expando_attrs(hid, &name);
                 if let Some(acc) =
@@ -169,7 +186,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 {
                     // A `0` half means "absent" — reflect it as `undefined`, not 0.
                     let undef = crate::value::TAG_UNDEFINED;
-                    return build_accessor_descriptor(
+                    return OwnProperty::accessor(
                         f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
                         f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
                         attrs.enumerable(),
@@ -178,7 +195,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 }
                 let value = crate::object::handle_expando::handle_expando_data_get(hid, &name)
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                return build_data_descriptor(
+                return OwnProperty::data(
                     value,
                     attrs.writable(),
                     attrs.enumerable(),
@@ -198,7 +215,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 )
                 .is_some_and(|bytes| super::field_get_set::own_key_hidden_bytes(object, bytes))
                 {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 }
             }
         }
@@ -239,7 +256,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         let proto = f64::from_bits(
                             super::field_get_set::class_object_prototype_value(class_obj).bits(),
                         );
-                        return build_data_descriptor(proto, false, false, false);
+                        return OwnProperty::data(proto, false, false, false);
                     }
                     let class_id = super::js_object_get_class_id(class_obj);
                     if let Some((acc, attrs)) =
@@ -250,7 +267,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         )
                     {
                         let undef = crate::value::TAG_UNDEFINED;
-                        return build_accessor_descriptor(
+                        return OwnProperty::accessor(
                             f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
                             f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
                             attrs.enumerable(),
@@ -266,17 +283,17 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // enumerable:true, configurable:false) plus "length"
         // (writable:false, enumerable:false, configurable:false).
         if obj_jv.is_any_string() {
-            return string_primitive_descriptor(obj_value, key_value);
+            return OwnProperty::public(string_primitive_descriptor(obj_value, key_value));
         }
         if let Some(str_value) = boxed_string_payload(obj_value) {
             let desc = string_primitive_descriptor(str_value, key_value);
             if desc.to_bits() != crate::value::TAG_UNDEFINED {
-                return desc;
+                return OwnProperty::public(desc);
             }
         }
 
         if crate::symbol::js_is_symbol(key_value) != 0 {
-            return symbol_own_property_descriptor(obj_value, key_value);
+            return OwnProperty::public(symbol_own_property_descriptor(obj_value, key_value));
         }
 
         // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
@@ -285,10 +302,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // (out-of-bounds / invalid index), never the ordinary keys table.
         match super::typed_array_own_index(obj_value, key_value) {
             super::TypedArrayOwnIndex::Element(value) => {
-                return build_data_descriptor(value, true, true, true);
+                return OwnProperty::data(value, true, true, true);
             }
             super::TypedArrayOwnIndex::OutOfBounds => {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
+                return None;
             }
             super::TypedArrayOwnIndex::NotTypedArray => {}
         }
@@ -304,11 +321,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 addr_handle.across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
             let addr = addr_ptr as usize;
             if key_str.is_null() {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
+                return None;
             }
-            return crate::typedarray_props::typed_array_get_own_property_descriptor(
-                addr as *const crate::typedarray::TypedArrayHeader,
-                key_str,
+            return OwnProperty::public(
+                crate::typedarray_props::typed_array_get_own_property_descriptor(
+                    addr as *const crate::typedarray::TypedArrayHeader,
+                    key_str,
+                ),
             );
         }
 
@@ -318,7 +337,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let receiver = scope.root_nanbox_f64(obj_value);
                 let Some(name) = metadata_key_to_string(key_value) else {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 };
                 let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
                 // Plain node Buffers are byte-indexed exotic objects but are
@@ -332,20 +351,20 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         let buf = addr as *const crate::buffer::BufferHeader;
                         let len = crate::buffer::js_buffer_length(buf).max(0) as u32;
                         if index < len && index <= i32::MAX as u32 {
-                            return build_data_descriptor(
+                            return OwnProperty::data(
                                 f64::from(crate::buffer::js_buffer_get(buf, index as i32)),
                                 true,
                                 true,
                                 true,
                             );
                         }
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        return None;
                     }
                 }
                 if let Some(accessor) = get_accessor_descriptor(addr, &name) {
                     let attrs = get_property_attrs(addr, &name)
                         .unwrap_or_else(|| PropertyAttrs::new(false, false, false));
-                    return build_accessor_descriptor(
+                    return OwnProperty::accessor(
                         f64::from_bits(if accessor.get == 0 {
                             crate::value::TAG_UNDEFINED
                         } else {
@@ -361,11 +380,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     );
                 }
                 let Some(value) = crate::buffer::buffer_get_own_prop(addr, &name) else {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 };
                 let attrs = get_property_attrs(addr, &name)
                     .unwrap_or_else(|| PropertyAttrs::new(true, true, true));
-                return build_data_descriptor(
+                return OwnProperty::data(
                     value,
                     attrs.writable(),
                     attrs.enumerable(),
@@ -380,13 +399,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(obj_value) {
             use super::exotic_expando::ExoticKind;
             let Some(name) = super::metadata_key_to_string(key_value) else {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
+                return None;
             };
             if let Some(acc) = super::get_accessor_descriptor(addr, &name) {
                 let attrs = super::get_property_attrs(addr, &name)
                     .unwrap_or(PropertyAttrs::new(false, false, false));
                 let undef = crate::value::TAG_UNDEFINED;
-                return build_accessor_descriptor(
+                return OwnProperty::accessor(
                     f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
                     f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
                     attrs.enumerable(),
@@ -396,7 +415,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, &name) {
                 let attrs = super::get_property_attrs(addr, &name)
                     .unwrap_or(PropertyAttrs::new(true, true, true));
-                return build_data_descriptor(
+                return OwnProperty::data(
                     f64::from_bits(bits),
                     attrs.writable(),
                     attrs.enumerable(),
@@ -416,14 +435,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 } else {
                     crate::error::js_error_get_stack(err)
                 };
-                return build_data_descriptor(
+                return OwnProperty::data(
                     f64::from_bits(crate::js_nanbox_string(s as i64).to_bits()),
                     attrs.writable(),
                     attrs.enumerable(),
                     attrs.configurable(),
                 );
             }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return None;
         }
 
         if let Some(class_id) = class_ref_id(obj_value) {
@@ -434,7 +453,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 } else {
                     super::class_registry::class_static_key_deleted(class_id, &method_name)
                 } {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 }
                 // Private registry entries retain their source spelling, but
                 // a public computed static field named `"#x"` is a distinct
@@ -445,10 +464,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                             class_id,
                             &method_name,
                         ) {
-                            return build_data_descriptor(v, true, true, true);
+                            return OwnProperty::data(v, true, true, true);
                         }
                     }
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 }
                 if super::class_prototype_ref_id(obj_value).is_none() {
                     if let Some((acc, attrs)) =
@@ -459,7 +478,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         )
                     {
                         let undef = crate::value::TAG_UNDEFINED;
-                        return build_accessor_descriptor(
+                        return OwnProperty::accessor(
                             f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
                             f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
                             attrs.enumerable(),
@@ -486,7 +505,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                             class_name.as_ptr(),
                             class_name.len() as u32,
                         );
-                        return build_data_descriptor(
+                        return OwnProperty::data(
                             crate::js_nanbox_string(s as i64),
                             false,
                             false,
@@ -503,7 +522,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     if let Some(proto) =
                         super::class_registry::decl_prototype_own_accessor(class_id, &method_name)
                     {
-                        return js_object_get_own_property_descriptor(proto, key_value);
+                        return own_property(proto, key_value);
                     }
                 } else if let Some(desc) =
                     crate::object::class_value::class_static_accessor_descriptor(
@@ -511,7 +530,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         &method_name,
                     )
                 {
-                    return desc;
+                    return OwnProperty::public(desc);
                 }
                 if super::class_prototype_ref_id(obj_value).is_some()
                     && (method_name == "constructor"
@@ -524,7 +543,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     } else {
                         class_prototype_method_value_for_name(class_id, &method_name)
                     };
-                    return build_data_descriptor(value, true, false, true);
+                    return OwnProperty::data(value, true, false, true);
                 }
                 // Own data properties, including `prototype`, live in the
                 // class function object's property bag. Read their actual
@@ -542,11 +561,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                                 &method_name,
                             )
                             .unwrap_or((true, true, true));
-                        return build_data_descriptor(v, writable, enumerable, configurable);
+                        return OwnProperty::data(v, writable, enumerable, configurable);
                     }
                 }
             }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return None;
         }
 
         // #2059: function objects (closures) are not `ObjectHeader`s — routing
@@ -571,7 +590,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         .across_mut::<u8, _>(|| crate::builtins::js_string_coerce(key_value));
                     let ptr = ptr_raw as usize;
                     if key_str.is_null() {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        return None;
                     }
                     let name_ptr =
                         (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -581,7 +600,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 
                     // #3655: a `delete`d configurable slot is no longer own.
                     if crate::closure::closure_is_key_deleted(ptr, name) {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        return None;
                     }
 
                     // (value, writable, enumerable, configurable). `name`/`length` are the
@@ -608,7 +627,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         } else {
                             f64::from_bits(acc.set)
                         };
-                        return build_accessor_descriptor(
+                        return OwnProperty::accessor(
                             get,
                             set,
                             attrs.enumerable(),
@@ -689,16 +708,35 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         }
                     };
                     let Some((value, writable, enumerable, configurable)) = resolved else {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        return None;
                     };
-                    return build_data_descriptor(value, writable, enumerable, configurable);
+                    return OwnProperty::data(value, writable, enumerable, configurable);
                 }
             }
         }
 
         let obj = extract_obj_ptr(obj_value);
         if obj.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return None;
+        }
+        if let Some(shape) = super::object_is_shaped(obj)
+            .then(|| super::shapes::object_shape_descriptor(obj))
+            .flatten()
+        {
+            if matches!(
+                shape.object_kind,
+                super::shapes::ShapeObjectKind::Ordinary
+                    | super::shapes::ShapeObjectKind::OrdinaryUnmarked
+            ) && shape.proto_id != super::shapes::PROTO_ID_PER_OBJECT
+            {
+                let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = crate::string::js_string_key_bytes(
+                    crate::JSValue::from_bits(key_value.to_bits()),
+                    &mut short,
+                ) {
+                    return ordinary_own_property(obj, name);
+                }
+            }
         }
         // Extract key string.
         //
@@ -720,7 +758,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             (obj_now, key_str)
         };
         if key_str.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return None;
         }
         // Extract key as a Rust string for descriptor lookup.
         let key_rust: Option<String> = {
@@ -731,7 +769,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         };
 
         if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
-            return desc;
+            return OwnProperty::public(desc);
         }
         if crate::array::is_array_subclass_value(obj_value) && key_rust.as_deref() == Some("length")
         {
@@ -746,7 +784,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 && get_property_attrs(obj as usize, "length")
                     .map(|attrs| attrs.writable())
                     .unwrap_or(true);
-            return build_data_descriptor(f64::from_bits(length.bits()), writable, false, false);
+            return OwnProperty::data(f64::from_bits(length.bits()), writable, false, false);
         }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
@@ -756,7 +794,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 let arr = super::array_object_ops::array_header(obj);
                 let obj = arr as *mut ObjectHeader;
                 let Some(ref name) = key_rust else {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 };
                 let is_frozen = crate::array::array_is_frozen(arr);
                 if name == "length" {
@@ -766,7 +804,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         && get_property_attrs(obj as usize, "length")
                             .map(|a| a.writable())
                             .unwrap_or(true);
-                    return build_data_descriptor(
+                    return OwnProperty::data(
                         crate::array::js_array_length(arr) as f64,
                         writable,
                         false,
@@ -790,7 +828,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         } else {
                             f64::from_bits(acc.set)
                         };
-                        return build_accessor_descriptor(
+                        return OwnProperty::accessor(
                             get,
                             set,
                             attrs.enumerable(),
@@ -805,21 +843,21 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         // explicit attributes in the side table — honor those.
                         let attrs = get_property_attrs(obj as usize, name)
                             .unwrap_or_else(|| PropertyAttrs::new(!is_frozen, true, !is_frozen));
-                        return build_data_descriptor(
+                        return OwnProperty::data(
                             value,
                             attrs.writable(),
                             attrs.enumerable(),
                             attrs.configurable(),
                         );
                     }
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return None;
                 }
                 // Named (non-index) accessor installed via defineProperty.
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                     let attrs = get_property_attrs(obj as usize, name)
                         .unwrap_or(PropertyAttrs::new(false, false, false));
                     let undef = crate::value::TAG_UNDEFINED;
-                    return build_accessor_descriptor(
+                    return OwnProperty::accessor(
                         f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
                         f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
                         attrs.enumerable(),
@@ -829,7 +867,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if let Some(value) = crate::array::array_named_property_get(arr, key_str) {
                     let attrs = get_property_attrs(obj as usize, name)
                         .unwrap_or(PropertyAttrs::new(true, true, true));
-                    return build_data_descriptor(
+                    return OwnProperty::data(
                         value,
                         attrs.writable(),
                         attrs.enumerable(),
@@ -843,11 +881,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
                         let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
                         if crate::value::js_nanbox_get_pointer(proto) as usize == obj as usize {
-                            return build_data_descriptor(ctor, true, false, true);
+                            return OwnProperty::data(ctor, true, false, true);
                         }
                     }
                 }
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
+                return None;
             }
         }
 
@@ -859,54 +897,54 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             // the table ever assigns NATIVE_MODULE_CLASS_ID.
             if let Some(ops) = super::nm_namespace_ops() {
                 if let Some(desc) = (ops.get_own_descriptor)(obj, key_str, key_rust.as_deref()) {
-                    return desc;
+                    return OwnProperty::public(desc);
                 }
             }
         }
 
-        // Resolve the own property once. Its key entry proves presence and
-        // attributes, and that same position supplies either the data value
-        // or the accessor pair. Reflection never performs an inherited Get.
-        let keys = super::object_keys(obj);
-        let Some(name) = key_rust.as_deref() else {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        };
-        let Some(slot) =
-            super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
-        else {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        };
         if (*obj).class_id == MODULE_NAMESPACE_CLASS_ID {
-            return module_namespace_own_property_descriptor(obj, key_str);
+            return OwnProperty::public(module_namespace_own_property_descriptor(obj, key_str));
         }
-        let entry = super::key_attrs::keys_entry(keys.arr(), slot);
-        let attrs = PropertyAttrs {
-            bits: super::key_attrs::entry_to_attr_bits(entry),
-        };
-        if entry & super::key_attrs::ENTRY_ACCESSOR != 0 {
-            let acc = super::accessor_pair::slot_accessor(obj, slot);
-            return build_accessor_descriptor(
-                f64::from_bits(if acc.get != 0 {
-                    acc.get
-                } else {
-                    crate::value::TAG_UNDEFINED
-                }),
-                f64::from_bits(if acc.set != 0 {
-                    acc.set
-                } else {
-                    crate::value::TAG_UNDEFINED
-                }),
-                attrs.enumerable(),
-                attrs.configurable(),
-            );
-        }
-        build_data_descriptor(
-            f64::from_bits(js_object_get_field(obj, slot).bits()),
-            attrs.writable(),
+        ordinary_own_property(obj, key_rust.as_deref()?.as_bytes())
+    }
+}
+
+#[optimize(size)]
+unsafe fn ordinary_own_property(obj: *mut ObjectHeader, name: &[u8]) -> Option<OwnProperty> {
+    // Resolve the own property once. Its key entry proves presence and
+    // attributes, and that same position supplies either the data value
+    // or the accessor pair. Reflection never performs an inherited Get.
+    let keys = super::object_keys(obj);
+    let Some(slot) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name) else {
+        return None;
+    };
+    let entry = super::key_attrs::keys_entry(keys.arr(), slot);
+    let attrs = PropertyAttrs {
+        bits: super::key_attrs::entry_to_attr_bits(entry),
+    };
+    if entry & super::key_attrs::ENTRY_ACCESSOR != 0 {
+        let acc = super::accessor_pair::slot_accessor(obj, slot);
+        return OwnProperty::accessor(
+            f64::from_bits(if acc.get != 0 {
+                acc.get
+            } else {
+                crate::value::TAG_UNDEFINED
+            }),
+            f64::from_bits(if acc.set != 0 {
+                acc.set
+            } else {
+                crate::value::TAG_UNDEFINED
+            }),
             attrs.enumerable(),
             attrs.configurable(),
-        )
+        );
     }
+    OwnProperty::data(
+        f64::from_bits(js_object_get_field(obj, slot).bits()),
+        attrs.writable(),
+        attrs.enumerable(),
+        attrs.configurable(),
+    )
 }
 
 mod builders;
@@ -1560,17 +1598,11 @@ pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 
         let desc_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
         for i in 0..names.count() {
-            key_handle.set_nanbox_f64(names.key(i));
-            let desc = match names.data_value(&obj_handle, i) {
-                Some(value) => build_data_descriptor(value, true, true, true),
-                None => js_object_get_own_property_descriptor(
-                    obj_handle.get_nanbox_f64(),
-                    key_handle.get_nanbox_f64(),
-                ),
-            };
-            if desc.to_bits() == crate::value::TAG_UNDEFINED {
+            let Some((key, property)) = names.property(&obj_handle, i) else {
                 continue;
-            }
+            };
+            key_handle.set_nanbox_f64(key);
+            let desc = property.materialize();
             desc_handle.set_nanbox_f64(desc);
             if names.has_final_result_keys() {
                 super::store_object_field_slot(

@@ -14,6 +14,7 @@
 use super::{CloneMessage, CloneNode, CloneShape, CloneSlot};
 use crate::fast_hash::PtrHashMap;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+use crate::object::descriptors::{OwnNamesSnapshot, OwnProperty};
 
 use super::{
     fs_thread_codec, unsupported_transfer_type_name, SerializedValue, VIEW_KIND_DATA_VIEW,
@@ -635,9 +636,11 @@ impl Writer<'_> {
                     let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
                     let bits = if Self::array_descriptor_stamp(arr) != descriptor_stamp {
                         let name = i.to_string();
-                        let Some(bits) =
-                            self.own_value(JSValue::pointer(arr.cast()).bits(), name.as_bytes())
-                        else {
+                        let Some(bits) = self.own_value(
+                            JSValue::pointer(arr.cast()).bits(),
+                            name.as_bytes(),
+                            None,
+                        ) else {
                             self.data.slots[start + i] = CloneSlot::HOLE;
                             if self.thrown.is_some() {
                                 break;
@@ -681,17 +684,16 @@ impl Writer<'_> {
         arr: *const crate::array::ArrayHeader,
         len: usize,
     ) -> SerializedValue {
-        let mut names = self.enumerable_keys(JSValue::pointer(arr.cast()).bits());
-        // Dense and descriptor storage can describe the same own index.
-        // Snapshot enumerability, then visit each numeric key in index order.
-        let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
-        names.retain(|name| {
-            let name = std::str::from_utf8(name).expect("property key is UTF-8");
-            crate::object::get_property_attrs(arr as usize, name)
-                .is_none_or(|attrs| attrs.enumerable())
-        });
-        let key_index = |name: &Vec<u8>| {
-            std::str::from_utf8(name)
+        let owner = self
+            .scope
+            .root_nanbox_u64(JSValue::pointer(arr.cast()).bits());
+        let snapshot = OwnNamesSnapshot::collect(self.scope, &owner);
+        let mut names = self.snapshot_candidates(&snapshot, &owner);
+        self.refresh_identities();
+        // The public array snapshot can name an index from both dense and
+        // descriptor storage. Keep one visit in numeric own-key order.
+        let key_index = |entry: &(Vec<u8>, u32)| {
+            std::str::from_utf8(&entry.0)
                 .ok()
                 .and_then(crate::object::canonical_array_index)
         };
@@ -701,13 +703,17 @@ impl Writer<'_> {
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => std::cmp::Ordering::Equal,
         });
-        names.dedup();
+        names.dedup_by(|a, b| a.0 == b.0);
         let start = self.reserve_slots(len);
         let mut keys = Vec::new();
         let mut fields = Vec::new();
-        for name in names {
+        for (name, position) in names {
             let arr = crate::array::clean_arr_ptr(self.array_source(index, arr));
-            let Some(bits) = self.own_value(JSValue::pointer(arr.cast()).bits(), &name) else {
+            let Some(bits) = self.own_value(
+                JSValue::pointer(arr.cast()).bits(),
+                &name,
+                Some((&snapshot, position)),
+            ) else {
                 if self.thrown.is_some() {
                     break;
                 }
@@ -836,63 +842,84 @@ impl Writer<'_> {
         }
     }
 
-    // General descriptors use the runtime's one own-property implementation.
-    // Roots are local to this message, including temporary descriptor values.
+    // Ordinary facts come from the shared rooted own-name snapshot. Only
+    // exotic public descriptors and getters can allocate during a read.
     #[cold]
     #[optimize(size)]
-    unsafe fn own_value(&mut self, receiver: u64, name: &[u8]) -> Option<u64> {
+    unsafe fn own_value(
+        &mut self,
+        receiver: u64,
+        name: &[u8],
+        snapshot: Option<(&OwnNamesSnapshot<'_>, u32)>,
+    ) -> Option<u64> {
         let owner = self.scope.root_nanbox_u64(receiver);
-        let key = self.scope.root_nanbox_u64(
-            JSValue::string_ptr(crate::string::js_string_from_bytes(
-                name.as_ptr(),
-                name.len() as u32,
-            ))
-            .bits(),
-        );
-        let descriptor = crate::object::js_object_get_own_property_descriptor(
-            owner.get_nanbox_f64(),
-            key.get_nanbox_f64(),
-        )
-        .to_bits();
-        self.refresh_identities();
-        if descriptor == TAG_UNDEFINED {
+        let property = if let Some((snapshot, position)) = snapshot {
+            snapshot
+                .property(&owner, position)
+                .map(|(_, property)| property)
+        } else {
+            // A shape invalidated by a nested getter retains its original
+            // message-key order. Resolve those keys through the same authority.
+            let key = self.scope.root_nanbox_u64(
+                JSValue::string_ptr(crate::string::js_string_from_bytes(
+                    name.as_ptr(),
+                    name.len() as u32,
+                ))
+                .bits(),
+            );
+            self.refresh_identities();
+            crate::object::descriptors::own_property(owner.get_nanbox_f64(), key.get_nanbox_f64())
+        }?;
+        if matches!(property, OwnProperty::Public(_)) {
+            self.refresh_identities();
+        }
+        let (value, flags) = property.value_and_flags();
+        if flags & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0 {
             return None;
         }
-        let descriptor = self.scope.root_nanbox_u64(descriptor);
-        let obj =
-            (descriptor.get_nanbox_u64() & POINTER_MASK) as *const crate::object::ObjectHeader;
-        let keys = crate::object::object_keys(obj);
-        let field = |name: &[u8]| {
-            crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
-                .map(|slot| crate::object::js_object_get_field(obj, slot).bits())
-        };
-        if field(b"enumerable") != Some(TAG_TRUE) {
-            return None;
+        if flags & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+            return self.getter(value, owner.get_nanbox_u64());
         }
-        if let Some(value) = field(b"value") {
-            return Some(value);
+        Some(value)
+    }
+
+    #[cold]
+    #[optimize(size)]
+    unsafe fn snapshot_candidates(
+        &mut self,
+        snapshot: &OwnNamesSnapshot<'_>,
+        owner: &RuntimeHandle<'_>,
+    ) -> Vec<(Vec<u8>, u32)> {
+        let mut candidates = Vec::with_capacity(snapshot.count() as usize);
+        let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..snapshot.count() {
+            let Some((_, property)) = snapshot.property(owner, i) else {
+                continue;
+            };
+            let (_, flags) = property.value_and_flags();
+            if flags & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                continue;
+            }
+            if let Some(name) = crate::string::js_string_key_bytes(
+                JSValue::from_bits(snapshot.key(i).to_bits()),
+                &mut short,
+            ) {
+                candidates.push((name.to_vec(), i));
+            }
         }
-        self.getter(
-            field(b"get").unwrap_or(TAG_UNDEFINED),
-            owner.get_nanbox_u64(),
-        )
+        candidates
     }
 
     #[cold]
     #[optimize(size)]
     unsafe fn enumerable_keys(&mut self, receiver: u64) -> Vec<Vec<u8>> {
         let owner = self.scope.root_nanbox_u64(receiver);
-        let arr = crate::object::js_object_keys_value(f64::from_bits(owner.get_nanbox_u64()));
-        let bits = JSValue::pointer(arr.cast()).bits();
-        let keys = self.scope.root_nanbox_u64(bits);
+        let snapshot = OwnNamesSnapshot::collect(self.scope, &owner);
         self.refresh_identities();
-        let arr = crate::array::clean_arr_ptr(
-            (keys.get_nanbox_u64() & POINTER_MASK) as *const crate::array::ArrayHeader,
-        );
-        let mut names = Vec::with_capacity((*arr).length as usize);
+        let mut names = Vec::with_capacity(snapshot.count() as usize);
         let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..(*arr).length {
-            let key = crate::array::js_array_get_f64(arr, i).to_bits();
+        for i in 0..snapshot.count() {
+            let key = snapshot.key(i).to_bits();
             if let Some(name) =
                 crate::string::js_string_key_bytes(JSValue::from_bits(key), &mut short)
             {
@@ -920,13 +947,18 @@ impl Writer<'_> {
         &mut self,
         index: usize,
         obj: *const crate::object::ObjectHeader,
-        candidates: Vec<Vec<u8>>,
+        candidates: Vec<(Vec<u8>, u32)>,
+        snapshot: Option<&OwnNamesSnapshot<'_>>,
         mut names: Vec<Vec<u8>>,
         mut fields: Vec<CloneSlot>,
     ) -> SerializedValue {
-        for name in candidates {
+        for (name, position) in candidates {
             let obj = self.source(index, obj);
-            let Some(bits) = self.own_value(JSValue::pointer(obj.cast()).bits(), &name) else {
+            let Some(bits) = self.own_value(
+                JSValue::pointer(obj.cast()).bits(),
+                &name,
+                snapshot.map(|s| (s, position)),
+            ) else {
                 if self.thrown.is_some() {
                     break;
                 }
@@ -1016,9 +1048,13 @@ impl Writer<'_> {
                 let obj = self.source(index, obj);
                 if crate::object::shapes::object_shape_stamp(obj) != id {
                     let names = self.data.shapes[shape as usize].keys[..i].to_vec();
-                    let candidates = self.data.shapes[shape as usize].keys[i..].to_vec();
+                    let candidates = self.data.shapes[shape as usize].keys[i..]
+                        .iter()
+                        .cloned()
+                        .map(|name| (name, 0))
+                        .collect();
                     let fields = self.data.slots[start..start + i].to_vec();
-                    return self.descriptor_fields(index, obj, candidates, names, fields);
+                    return self.descriptor_fields(index, obj, candidates, None, names, fields);
                 }
                 let position = self.data.shapes[shape as usize].positions[i];
                 let bits = crate::object::object_field_at_with_live(obj, position, live).bits();
@@ -1029,8 +1065,20 @@ impl Writer<'_> {
                 start: start as u32,
             };
         }
-        let names = self.enumerable_keys(JSValue::pointer(obj.cast()).bits());
-        self.descriptor_fields(index, obj, names, Vec::new(), Vec::new())
+        let owner = self
+            .scope
+            .root_nanbox_u64(JSValue::pointer(obj.cast()).bits());
+        let snapshot = OwnNamesSnapshot::collect(self.scope, &owner);
+        let candidates = self.snapshot_candidates(&snapshot, &owner);
+        self.refresh_identities();
+        self.descriptor_fields(
+            index,
+            obj,
+            candidates,
+            Some(&snapshot),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// A class instance for `perry/thread`: every slot in order plus its

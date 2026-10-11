@@ -3,6 +3,94 @@
 use super::{shapes, ObjectHeader, ObjectKeys};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
+/// Property facts owned by descriptor resolution. Exotic families keep their
+/// public descriptor representation; ordinary keys carry values and flags.
+pub(crate) enum OwnProperty {
+    Data(f64, super::PropertyAttrs),
+    Accessor(f64, f64, super::PropertyAttrs),
+    Public(f64),
+}
+
+impl OwnProperty {
+    pub(crate) fn data(
+        value: f64,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Option<Self> {
+        Some(Self::Data(
+            value,
+            super::PropertyAttrs::new(writable, enumerable, configurable),
+        ))
+    }
+
+    pub(crate) fn accessor(
+        get: f64,
+        set: f64,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Option<Self> {
+        Some(Self::Accessor(
+            get,
+            set,
+            super::PropertyAttrs::new(false, enumerable, configurable),
+        ))
+    }
+
+    pub(crate) fn public(descriptor: f64) -> Option<Self> {
+        (descriptor.to_bits() != crate::value::TAG_UNDEFINED).then_some(Self::Public(descriptor))
+    }
+
+    pub(crate) unsafe fn materialize(self) -> f64 {
+        match self {
+            Self::Data(value, attrs) => super::build_data_descriptor(
+                value,
+                attrs.writable(),
+                attrs.enumerable(),
+                attrs.configurable(),
+            ),
+            Self::Accessor(get, set, attrs) => {
+                super::build_accessor_descriptor(get, set, attrs.enumerable(), attrs.configurable())
+            }
+            Self::Public(descriptor) => descriptor,
+        }
+    }
+
+    /// A clone reads a data value or invokes the getter itself. It never
+    /// materializes ordinary descriptors, and retains exotic public behavior.
+    #[optimize(size)]
+    pub(crate) unsafe fn value_and_flags(self) -> (u64, u8) {
+        use super::key_attrs::{attr_bits_to_entry, ENTRY_ACCESSOR, ENTRY_NON_ENUMERABLE};
+        match self {
+            Self::Data(value, attrs) => (value.to_bits(), attr_bits_to_entry(attrs.bits)),
+            Self::Accessor(get, _, attrs) => (
+                get.to_bits(),
+                ENTRY_ACCESSOR | attr_bits_to_entry(attrs.bits),
+            ),
+            Self::Public(descriptor) => {
+                let obj = crate::value::js_nanbox_get_pointer(descriptor) as *const ObjectHeader;
+                let keys = super::object_keys(obj);
+                let field = |name: &[u8]| {
+                    super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+                        .map(|slot| super::js_object_get_field(obj, slot).bits())
+                };
+                let flags = if field(b"enumerable") == Some(crate::value::TAG_TRUE) {
+                    0
+                } else {
+                    ENTRY_NON_ENUMERABLE
+                };
+                match field(b"value") {
+                    Some(value) => (value, flags),
+                    None => (
+                        field(b"get").unwrap_or(crate::value::TAG_UNDEFINED),
+                        flags | ENTRY_ACCESSOR,
+                    ),
+                }
+            }
+        }
+    }
+}
+
 pub(crate) struct OwnNamesSnapshot<'scope> {
     keys: RuntimeHandle<'scope>,
     count: u32,
@@ -93,6 +181,25 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         Some(f64::from_bits(
             super::js_object_get_field(receiver, index).bits(),
         ))
+    }
+
+    /// Read the retained key with its live own value/accessor and attributes.
+    /// The immutable shape prefix needs no name or descriptor allocation;
+    /// every use revalidates its ShapeId. Public key snapshots resolve through
+    /// the same descriptor authority after mutations or for other families.
+    #[optimize(size)]
+    pub(crate) unsafe fn property(
+        &self,
+        object: &RuntimeHandle<'_>,
+        index: u32,
+    ) -> Option<(f64, OwnProperty)> {
+        let key = self.key(index);
+        let property = match self.data_value(object, index) {
+            Some(value) => OwnProperty::data(value, true, true, true),
+            None => super::own_property(object.get_nanbox_f64(), key),
+        }?;
+        // Resolution of an exotic family can allocate: reload the rooted key.
+        Some((self.key(index), property))
     }
 
     /// A fresh reflection result has default attributes too. When the
