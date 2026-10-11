@@ -19,9 +19,8 @@ use super::{NativeArgKind, NativeModSig, NativeRetKind, NATIVE_MODULE_TABLE};
 /// Entries with `class_filter: Some("Pool")` only match when
 /// `class_name == Some("Pool")`; entries with `class_filter: None`
 /// match any class_name. More-specific entries (with class_filter)
-/// are checked first. A row whose runtime symbol belongs to a wrapper the
-/// compile does not route (`NativeRouting::serves`) does not match: its
-/// archive is not linked, so the call takes the runtime's by-name dispatch.
+/// are checked first. Provider admission is checked after table selection so
+/// an unavailable known method is a compile error, not a by-name fallback.
 #[allow(private_interfaces)]
 pub fn native_module_lookup(
     module: &str,
@@ -43,28 +42,36 @@ pub fn native_module_lookup(
         "perry/container-compose" => "perry/compose",
         m => m,
     };
-    crate::native_routing::with_program_routing(|routing| {
-        // First pass: look for an exact class_filter match.
-        let exact = NATIVE_MODULE_TABLE.iter().find(|sig| {
-            sig.module == normalized
-                && sig.has_receiver == has_receiver
-                && sig.method == method
-                && sig.class_filter.is_some()
-                && sig.class_filter == class_name
-                && routing.serves(sig.runtime)
-        });
-        if exact.is_some() {
-            return exact;
-        }
-        // Second pass: generic (class_filter == None) entries.
-        NATIVE_MODULE_TABLE.iter().find(|sig| {
-            sig.module == normalized
-                && sig.has_receiver == has_receiver
-                && sig.method == method
-                && sig.class_filter.is_none()
-                && routing.serves(sig.runtime)
-        })
+    // First pass: look for an exact class_filter match.
+    let exact = NATIVE_MODULE_TABLE.iter().find(|sig| {
+        sig.module == normalized
+            && sig.has_receiver == has_receiver
+            && sig.method == method
+            && sig.class_filter.is_some()
+            && sig.class_filter == class_name
+    });
+    if exact.is_some() {
+        return exact;
+    }
+    // Second pass: generic (class_filter == None) entries.
+    NATIVE_MODULE_TABLE.iter().find(|sig| {
+        sig.module == normalized
+            && sig.has_receiver == has_receiver
+            && sig.method == method
+            && sig.class_filter.is_none()
     })
+}
+
+pub(crate) fn validate_native_module_provider(
+    routing: &crate::native_routing::NativeRouting,
+    sig: &NativeModSig,
+) -> Result<()> {
+    match routing
+        .unprovided_symbol_diagnostic(sig.runtime, Some(&format!("{}.{}", sig.module, sig.method)))
+    {
+        Some(message) => Err(anyhow::anyhow!(message)),
+        None => Ok(()),
+    }
 }
 
 /// Lower a native module call through the dispatch table.
@@ -79,6 +86,10 @@ pub fn lower_native_module_dispatch(
     recv: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    crate::native_routing::with_program_routing(|routing| {
+        validate_native_module_provider(routing, sig)
+    })?;
+
     // Native-table calls used to lower arguments into bare SSA registers one
     // at a time. If a later argument allocated or called user code, an earlier
     // object/closure could move before the FFI call (for example
@@ -414,6 +425,53 @@ pub fn lower_native_module_dispatch(
         }
         body(ctx, &values)
     })
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    fn http_routing(
+        provider: crate::native_routing::NativeProvider,
+    ) -> crate::native_routing::NativeRouting {
+        crate::native_routing::NativeRouting::new([
+            ("http".into(), provider.clone()),
+            ("https".into(), provider.clone()),
+            ("http2".into(), provider),
+        ])
+    }
+
+    #[test]
+    fn known_unavailable_bun_method_is_selected_then_rejected() {
+        let sig = native_module_lookup("bun", false, "serve", None)
+            .expect("Bun.serve has a native-table row");
+        assert_eq!(sig.runtime, "js_bun_serve");
+        let disabled = http_routing(crate::native_routing::NativeProvider::Bundled(
+            "perry_ext_http".into(),
+        ));
+        let error = validate_native_module_provider(&disabled, sig)
+            .expect_err("unprovided Bun.serve must fail before fallback")
+            .to_string();
+        for expected in [
+            "bun.serve",
+            "js_bun_serve",
+            "http",
+            "perry_ext_http",
+            "PERRY_DISABLE_WELL_KNOWN=1",
+        ] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn provided_bun_method_is_admitted_and_unknown_methods_still_fall_back() {
+        let sig = native_module_lookup("bun", false, "serve", None).unwrap();
+        let routed = http_routing(crate::native_routing::NativeProvider::Wrapper(
+            "perry_ext_http".into(),
+        ));
+        validate_native_module_provider(&routed, sig).unwrap();
+        assert!(native_module_lookup("bun", false, "notARealMethod", None).is_none());
+    }
 }
 
 #[cfg(test)]

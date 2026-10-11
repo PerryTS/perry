@@ -143,6 +143,43 @@ impl NativeRouting {
         }
     }
 
+    /// Explain why an emitted wrapper-owned symbol has no provider in this
+    /// routing decision. Symbols outside the well-known wrapper registry and
+    /// symbols served by the selected provider remain valid.
+    pub fn unprovided_symbol_diagnostic(&self, symbol: &str, api: Option<&str>) -> Option<String> {
+        let owner = crate::ext_registry::well_known_owner_for_symbol(symbol)?;
+        if !self.unprovided(owner) {
+            return None;
+        }
+        let lib = self.providers.get(bare(owner))?.wrapper_lib();
+        let api = api
+            .map(|api| format!("{api} requires "))
+            .unwrap_or_default();
+        Some(format!(
+            "{api}native symbol `{symbol}` from wrapper crate `{lib}` (module `{owner}`) has no provider: PERRY_DISABLE_WELL_KNOWN=1 leaves the module to the bundled runtime, which does not implement it. Unset PERRY_DISABLE_WELL_KNOWN to route `{owner}` to `{lib}`."
+        ))
+    }
+
+    /// Validate only FFI symbols this module actually emitted or replayed
+    /// from its object-cache manifest. Unknown symbols and bundled-runtime
+    /// symbols are not wrapper-provider errors.
+    pub fn validate_ffi_symbols<'a>(
+        &self,
+        symbols: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), String> {
+        let mut errors = std::collections::BTreeSet::new();
+        for symbol in symbols {
+            if let Some(error) = self.unprovided_symbol_diagnostic(symbol, None) {
+                errors.insert(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.into_iter().collect::<Vec<_>>().join("\n"))
+        }
+    }
+
     /// Stable text form for the object-cache key.
     pub fn cache_key(&self) -> String {
         self.providers
@@ -278,6 +315,55 @@ mod tests {
         let bundled_ts =
             NativeRouting::new([("typescript".into(), bundled("perry_ext_typescript"))]);
         assert!(bundled_ts.unprovided("typescript"));
+    }
+
+    #[test]
+    fn emitted_symbol_admission_uses_exact_and_prefix_owners() {
+        let disabled_http = flip_off();
+        let error = disabled_http
+            .unprovided_symbol_diagnostic("js_bun_serve", Some("Bun.serve"))
+            .expect("Bun.serve is wrapper-owned when http is bundled");
+        for expected in [
+            "Bun.serve",
+            "js_bun_serve",
+            "http",
+            "perry_ext_http",
+            "PERRY_DISABLE_WELL_KNOWN=1",
+        ] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+        assert!(flip_on()
+            .unprovided_symbol_diagnostic("js_bun_serve", Some("Bun.serve"))
+            .is_none());
+
+        let disabled_typescript =
+            NativeRouting::new([("typescript".into(), bundled("perry_ext_typescript"))]);
+        assert!(disabled_typescript
+            .unprovided_symbol_diagnostic("js_typescript_transpile", None)
+            .unwrap()
+            .contains("perry_ext_typescript"));
+    }
+
+    #[test]
+    fn emitted_symbol_admission_preserves_aliases_unknowns_and_bundled_symbols() {
+        let routing = flip_off();
+        for alias in ["http", "node:http", "https", "node:https"] {
+            assert!(
+                routing.unprovided(alias),
+                "expected alias {alias} unprovided"
+            );
+        }
+        for symbol in ["js_array_push_f64", "js_bun_unregistered", "unregistered"] {
+            assert!(routing.unprovided_symbol_diagnostic(symbol, None).is_none());
+        }
+        assert!(
+            routing
+                .validate_ffi_symbols(["js_bun_serve", "js_bun_serve"])
+                .unwrap_err()
+                .matches("js_bun_serve")
+                .count()
+                == 1
+        );
     }
 
     #[test]

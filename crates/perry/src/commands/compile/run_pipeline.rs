@@ -117,6 +117,19 @@ fn namespace_local_function_wrapper_symbol(module_name: &str, function_name: &st
     )
 }
 
+fn validate_module_ffi_symbols(
+    routing: &perry_codegen::NativeRouting,
+    module: &str,
+    source: &str,
+    symbols: &[&str],
+) -> Result<(), String> {
+    routing
+        .validate_ffi_symbols(symbols.iter().copied())
+        .map_err(|error| {
+            format!("{source} module '{module}' has no provider for a native symbol:\n{error}")
+        })
+}
+
 #[cfg(test)]
 mod namespace_local_function_symbol_tests {
     use super::namespace_local_function_wrapper_symbol;
@@ -129,6 +142,63 @@ mod namespace_local_function_symbol_tests {
         assert_eq!(dollar, "__perry_wrap_perry_fn_chunk_js__u__24_a");
         assert_eq!(underscore, "__perry_wrap_perry_fn_chunk_js___a");
         assert_ne!(dollar, underscore);
+    }
+}
+
+#[cfg(test)]
+mod native_symbol_admission_tests {
+    use super::validate_module_ffi_symbols;
+    use perry_codegen::{NativeProvider, NativeRouting};
+
+    fn disabled_http() -> NativeRouting {
+        NativeRouting::new([
+            (
+                "http".into(),
+                NativeProvider::Bundled("perry_ext_http".into()),
+            ),
+            (
+                "https".into(),
+                NativeProvider::Bundled("perry_ext_http".into()),
+            ),
+            (
+                "http2".into(),
+                NativeProvider::Bundled("perry_ext_http".into()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn fresh_capture_and_warm_cache_manifest_apply_the_same_symbol_admission() {
+        let routing = disabled_http();
+        let fresh =
+            validate_module_ffi_symbols(&routing, "entry.ts", "compiled", &["js_bun_serve"])
+                .expect_err("fresh capture must reject the unavailable wrapper symbol");
+        assert!(fresh.contains("js_bun_serve") && fresh.contains("perry_ext_http"));
+
+        // Exercise the same sidecar read used by the object-cache hit path.
+        let root = tempfile::tempdir().unwrap();
+        let cache = crate::commands::compile::ObjectCache::new(root.path(), "test-target", true);
+        let key = 0x1215_6001;
+        cache.store_ffi_manifest(key, &["js_bun_serve"]);
+        cache.store_static_seeds(key, &[]);
+        cache
+            .store_and_get_path(key, b"cached object")
+            .expect("write cache object");
+        let (_, cached_symbols, _) = cache
+            .lookup_path_with_ffi(key)
+            .expect("complete object cache entry");
+        let cached_refs: Vec<&str> = cached_symbols.iter().map(String::as_str).collect();
+        let warm = validate_module_ffi_symbols(&routing, "entry.ts", "cached", &cached_refs)
+            .expect_err("warm cache manifest must reject the unavailable wrapper symbol");
+        assert!(warm.contains("js_bun_serve") && warm.contains("perry_ext_http"));
+
+        assert!(validate_module_ffi_symbols(
+            &routing,
+            "entry.ts",
+            "compiled",
+            &["js_array_push_f64", "unknown_symbol"],
+        )
+        .is_ok());
     }
 }
 
@@ -6016,6 +6086,13 @@ pub fn run_with_parse_cache(
                     .lookup_path_with_ffi(k)
                     .map(|(p, s, seeds)| (k, p, s, seeds))
             }) {
+                let cached_symbols: Vec<&str> = ffi_symbols.iter().map(String::as_str).collect();
+                validate_module_ffi_symbols(
+                    &ctx.native_routing,
+                    &hir_module.name,
+                    "cached",
+                    &cached_symbols,
+                )?;
                 // Design step 4: a hit replays the module's static shape
                 // seeds exactly as the skipped codegen reported them, so the
                 // seed unit is the same cold and warm. A malformed line makes
@@ -6147,6 +6224,12 @@ pub fn run_with_parse_cache(
                 )
             })?;
             let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+            validate_module_ffi_symbols(
+                &ctx.native_routing,
+                &hir_module.name,
+                "compiled",
+                &emitted_ffi_symbols,
+            )?;
             program_static_seeds
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())

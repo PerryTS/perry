@@ -1,0 +1,1 @@
+Known native symbols now report a provider error when their wrapper is disabled, including `Bun.serve` without a `node:http` import. Fresh code generation and warm object-cache manifests apply the same admission check, while unknown symbols keep their existing fallback behavior.
