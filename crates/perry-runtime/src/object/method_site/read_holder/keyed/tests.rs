@@ -31,6 +31,10 @@ fn inheriting<'a>(scope: &'a RuntimeHandleScope, proto: &RuntimeHandle<'_>) -> R
 
 #[test]
 fn keyed_read_matches_get_across_mutations() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::super::run_with_fresh_worker_gate("keyed_read_matches_get_across_mutations") {
         return;
     }
@@ -96,17 +100,23 @@ fn keyed_read_matches_get_across_mutations() {
     let mut marked = Vec::new();
     let mut mark = |v: f64| marked.push(v.to_bits() & crate::value::POINTER_MASK);
     unsafe {
-        scan_roots(
+        scan_site_keys(
             slot as usize,
             &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
         )
     };
+    // The key is still a root (compared by identity); the hop is a stable
+    // weak word and is not.
     assert!(marked.contains(&(key_now.to_bits() & crate::value::POINTER_MASK)));
-    mid.with_mut_ptr::<ObjectHeader, _>(|p| assert!(marked.contains(&(p as u64))));
+    mid.with_mut_ptr::<ObjectHeader, _>(|p| assert!(!marked.contains(&(p as u64))));
 }
 
 #[test]
 fn keyed_rotating_keys_stop_eviction_and_own_values_are_receiver_local() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::super::run_with_fresh_worker_gate(
         "keyed_rotating_keys_stop_eviction_and_own_values_are_receiver_local",
     ) {
@@ -139,6 +149,10 @@ fn keyed_rotating_keys_stop_eviction_and_own_values_are_receiver_local() {
 
 #[test]
 fn keyed_symbol_read_matches_get_across_mutations() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::super::run_with_fresh_worker_gate(
         "keyed_symbol_read_matches_get_across_mutations",
     ) {
@@ -207,7 +221,7 @@ fn keyed_symbol_read_matches_get_across_mutations() {
     let mut marked = Vec::new();
     let mut mark = |v: f64| marked.push(v.to_bits() & crate::value::POINTER_MASK);
     unsafe {
-        scan_roots(
+        scan_site_keys(
             slot as usize,
             &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
         );
@@ -250,6 +264,10 @@ fn keyed_native_alias_retains_generic_forwarding() {
 
 #[test]
 fn region_consumes_keyed_absent_and_inherited_entries() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::super::run_with_fresh_worker_gate(
         "region_consumes_keyed_absent_and_inherited_entries",
     ) {
@@ -447,7 +465,7 @@ fn rematerialized_names_reuse_the_traced_site_key_after_movement() {
     }
     let _copying = crate::gc::CopyingNurseryTestGuard::new(0);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
-    crate::gc::gc_register_mutable_root_scanner(super::super::scan_read_holder_roots_mut);
+    crate::gc::gc_register_mutable_root_scanner(super::scan_keyed_key_roots_mut);
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     let scope = RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));

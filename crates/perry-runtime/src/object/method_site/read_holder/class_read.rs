@@ -1,7 +1,7 @@
 //! Bounded read-site facts for declared-class instances.
 //!
 //! A bare CLASS ShapeId names its prototype through the identity word.
-//! Each hit compares that live word with the rooted first hop, then checks
+//! Each hit compares that live word with the stable first hop, then checks
 //! every hop and holder shape. Publication and replacement are ordinary
 //! shape-link facts; no process-wide generation is needed.
 //! The entries belong to one PicCache site (word 2 points to its bounded
@@ -31,7 +31,7 @@ const _: () = assert!(WAYS.is_power_of_two() && CURSOR_BITS + (WAYS as u32) < us
 /// An absent entry has no slot to load. Its slot word can instead describe
 /// a bounded set of receiver ShapeIds sharing the SAME chain and prototype
 /// identity. The ids occupy the tail of its owned hop block; they are not
-/// object addresses and the root scan visits only the chain prefix.
+/// object addresses.
 const MULTI_ABSENT: u32 = 1 << 31;
 // Runtime ordinary Get keeps a holder's null/undefined value. The existing
 // declared-class lane retains its generic getter's nullish continuation rule.
@@ -221,15 +221,10 @@ impl Site {
 per_test_global! {
     static PRIMES: AtomicU64 = AtomicU64::new(0);
     static HITS: AtomicU64 = AtomicU64::new(0);
-    static ROOT_REWRITES: AtomicU64 = AtomicU64::new(0);
 }
 
-pub(super) fn stats() -> (u64, u64, u64) {
-    (
-        PRIMES.load(Ordering::Relaxed),
-        HITS.load(Ordering::Relaxed),
-        ROOT_REWRITES.load(Ordering::Relaxed),
-    )
+pub(super) fn stats() -> (u64, u64) {
+    (PRIMES.load(Ordering::Relaxed), HITS.load(Ordering::Relaxed))
 }
 
 #[inline]
@@ -520,13 +515,6 @@ unsafe fn site_mut(cache: *mut PicCache) -> &'static mut Site {
         c[HOLDER_STATE] & STATE_CLASS_SITE != 0 && tagged & !crate::value::POINTER_MASK == SITE_TAG;
     if !has_site {
         let new = empty_site();
-        if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
-            let mut sites = HOLDER_SITES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            sites.push(HolderSite::Named(cache as usize));
-            c[HOLDER_STATE] |= STATE_REGISTERED;
-        }
         let addr = new as usize as u64;
         assert_eq!(addr & !crate::value::POINTER_MASK, 0);
         c[SITE_WORD] = (SITE_TAG | addr) as i64;
@@ -571,6 +559,16 @@ pub(super) unsafe fn publish_chain(cache: *mut PicCache, recv: *const ObjectHead
         shape_proto_id(shape).is_some_and(hop_identity_pins_link)
             || admitted_link(holder as *const ObjectHeader).is_some()
     }) {
+        return;
+    }
+    // I1: the holder and every hop the entry stores are stable (old and
+    // never-move); a class entry compares the live identity word before it
+    // reads any of them.
+    if !super::super::memo_referents_stable(
+        std::iter::once(if w.depth == 0 { 0 } else { w.holder })
+            .chain(walked.iter().map(|&(addr, _)| addr)),
+    ) {
+        super::note_young_retry(&mut *cache);
         return;
     }
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
@@ -740,29 +738,6 @@ pub(super) unsafe fn holder_accessor<const INLINE_ONLY: bool>(
         }
     }
     None
-}
-
-/// The PIC arena retains every site; its class entries are strong roots
-/// until workers start. Every address is rewritten in place after evacuation.
-pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let word = c[SITE_WORD] as u64;
-    if c[HOLDER_STATE] & STATE_CLASS_SITE == 0 || word & !crate::value::POINTER_MASK != SITE_TAG {
-        return;
-    }
-    let s = unsafe { &mut *((word & crate::value::POINTER_MASK) as usize as *mut Site) };
-    for (addr, _) in &mut s.accessor_hops[..s.accessor_depth] {
-        visitor.visit_tagged_usize_slot(addr, crate::value::POINTER_TAG);
-    }
-    for entry in &mut s.holders {
-        super::scan_entry_roots(entry, visitor);
-    }
-    for e in s.class_entries_mut() {
-        if e.token == 0 {
-            continue;
-        }
-        let rewritten = unsafe { e.scan(visitor) };
-        ROOT_REWRITES.fetch_add(rewritten, Ordering::Relaxed);
-    }
 }
 
 #[cfg(test)]

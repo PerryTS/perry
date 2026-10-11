@@ -20,6 +20,10 @@ fn matcher_slot_bits(obj: usize, spilled: bool) -> u64 {
 
 fn matcher_edge_moves_with(spilled: bool) {
     let _guard = CopyingNurseryTestGuard::new(2);
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     let re = crate::regex::test_alloc_nursery_regexp_for_move("edge/source", "gy");
     let data = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(re as i64))
         .expect("a RegExp birth carries its matcher") as usize;

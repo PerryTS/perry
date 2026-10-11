@@ -3601,26 +3601,18 @@
   {
    "file": "crates/perry-runtime/src/object/method_site.rs",
    "names": [
-    "METHOD_SITES"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "The values are addresses of MethodSite records allocated by pic_slot_resolve_init from the process-lifetime PicArena (std::alloc chunks, never freed), not from any thread's GC arena. Before workers start, primary-heap holders are visited by the primary agent's scan_method_site_roots_mut. Worker startup atomically gates all site reads and later publishes without writing live entries; thereafter no agent reads or scans the stale holder words, allowing their objects to collect."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/method_site.rs",
-   "names": [
     "SITE_REFUSED"
    ],
    "verdict": "no_heap_address",
    "why": "Diagnostic refusal counters indexed by a reason code: the only writes are `SITE_REFUSED[reason].fetch_add(1, ..)` and the only reads are loads in the counter dump; never stores an address."
   },
   {
-   "file": "crates/perry-runtime/src/object/method_site/read_holder.rs",
+   "file": "crates/perry-runtime/src/object/method_site/read_holder/keyed.rs",
    "names": [
-    "HOLDER_SITES"
+    "KEYED_SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. Primary-heap holder and hop addresses are written only by the primary agent and traced by its scan_read_holder_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads or scans stale holder words, allowing their objects to collect."
+   "why": "The addresses of keyed read sites' `KeyedCache`s, each allocated from the process-lifetime PIC arena (`std::alloc` chunks that are never freed and belong to no thread's arena), so thread exit cannot free or reuse them. Only the primary agent writes keyed entries, and its `scan_keyed_key_roots_mut` visits their keys (holders and hops are stable unrooted words, `gc::never_move`) until the atomic worker-start gate is set; thereafter no agent reads or scans the stale entries."
   },
   {
    "file": "crates/perry-runtime/src/object/method_site/chain_memo.rs",

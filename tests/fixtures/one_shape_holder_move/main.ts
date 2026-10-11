@@ -1,9 +1,10 @@
 // The holder of an inherited read is reachable ONLY through the receiver's
 // prototype link, never through a variable. The read site caches its address.
-// Each round a collection moves the holder (forced evacuation), the holder is
-// then changed through the live chain, and the SAME site reads again. A site
-// that does not root and rewrite its holder reads the old copy and returns the
-// value from before the move. Chains of depth 1, 2 and 3 are covered, each
+// Each round runs a collection (forced evacuation), the holder is then changed
+// through the live chain, and the SAME site reads again. A site may name only a
+// stable (old, never-move) holder, so it never reads a moved copy; a site that
+// named a young holder would read the old copy and return the value from
+// before the move. Chains of depth 1, 2 and 3 are covered, each
 // through its own site; parameter receivers and runtime-length loops keep the
 // sites alive (a fixed small loop would be unrolled).
 const gcNow: any = (globalThis as any).gc;

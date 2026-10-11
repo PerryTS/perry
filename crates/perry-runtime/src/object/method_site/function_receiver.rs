@@ -165,6 +165,10 @@ mod tests {
 
     #[test]
     fn function_receiver_holder_hit_and_sabotage() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !run_with_fresh_worker_gate("function_receiver_holder_hit_and_sabotage") {
             return;
         }
@@ -229,6 +233,10 @@ mod tests {
     }
     #[test]
     fn bound_function_receiver_keeps_inherited_method_sites() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !run_with_fresh_worker_gate("bound_function_receiver_keeps_inherited_method_sites") {
             return;
         }

@@ -48,6 +48,10 @@ fn array_accessor_facts_and_pair_are_in_the_holder_shape() {
 
 #[test]
 fn accessor_installed_after_a_holder_memo_retires_that_memo() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::method_site::run_with_fresh_worker_gate(
         "accessor_installed_after_a_holder_memo_retires_that_memo",
     ) {

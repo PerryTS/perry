@@ -316,7 +316,7 @@ mod tests {
             }
             assert_eq!(object_shape_stamp(a), object_shape_stamp(b));
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-            cache[HOLDER_STATE] = STATE_REGISTERED;
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
             assert_eq!(prime_alias(a, key, &mut slot), Some(7.0));
             let token = (u64::from(object_shape_stamp(a)) | PIC_ID_TOKEN_BIT) as i64;
@@ -410,7 +410,7 @@ mod tests {
             );
             assert_ne!(object_shape_stamp(a), object_shape_stamp(b));
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-            cache[HOLDER_STATE] = STATE_REGISTERED;
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
             assert_eq!(
                 prime_alias(a, key, &mut slot).map(f64::to_bits),
@@ -510,7 +510,7 @@ mod tests {
             crate::object::prototype_chain::object_set_user_prototype(a as usize, holder.to_bits());
             let missing = crate::string::canonical_key(b"native_alias_absent_value");
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-            cache[HOLDER_STATE] = STATE_REGISTERED;
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
             assert_eq!(
                 prime_alias(a, missing, &mut slot).map(f64::to_bits),
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(crate::agent::current_agent(), crate::agent::PRIMARY_AGENT);
         let key = crate::string::canonical_key(b"tag");
         let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-        cache[HOLDER_STATE] = STATE_REGISTERED;
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         let mut slot = &mut cache as *mut PicCache;
         assert_eq!(
             unsafe { prime_function_read(a as usize, key, &mut slot) },

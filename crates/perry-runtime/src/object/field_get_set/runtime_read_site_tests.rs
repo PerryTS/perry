@@ -87,6 +87,10 @@ fn an_own_key_is_answered_by_the_compact_word() {
 
 #[test]
 fn an_inherited_key_is_answered_by_the_holder_entry() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     fresh_gate!("an_inherited_key_is_answered_by_the_holder_entry");
     let site = RuntimeReadSite::new();
     let scope = RuntimeHandleScope::new();
@@ -112,6 +116,10 @@ fn an_inherited_key_is_answered_by_the_holder_entry() {
 
 #[test]
 fn a_deleted_inherited_key_is_not_answered_from_the_entry() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     fresh_gate!("a_deleted_inherited_key_is_not_answered_from_the_entry");
     let site = RuntimeReadSite::new();
     let scope = RuntimeHandleScope::new();
@@ -141,6 +149,10 @@ fn a_deleted_inherited_key_is_not_answered_from_the_entry() {
 
 #[test]
 fn an_own_key_added_later_shadows_the_holder() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     fresh_gate!("an_own_key_added_later_shadows_the_holder");
     let site = RuntimeReadSite::new();
     let scope = RuntimeHandleScope::new();
@@ -162,6 +174,10 @@ fn an_own_key_added_later_shadows_the_holder() {
 
 #[test]
 fn set_prototype_of_is_seen_by_the_site() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     fresh_gate!("set_prototype_of_is_seen_by_the_site");
     let site = RuntimeReadSite::new();
     let scope = RuntimeHandleScope::new();
@@ -354,6 +370,10 @@ fn probe_own_accessor_never_reuses_another_receivers_pair() {
 
 #[test]
 fn constructor_probe_and_read_share_an_ordinary_serial_holder() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     fresh_gate!("constructor_probe_and_read_share_an_ordinary_serial_holder");
     use crate::object::method_site::read_holder::probe::{Answer, Key};
     let scope = RuntimeHandleScope::new();

@@ -2,6 +2,10 @@ use super::*;
 
 #[test]
 fn weak_class_method_memo_matches_get_across_mutations() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !run_with_fresh_worker_gate("weak_class_method_memo_matches_get_across_mutations") {
         return;
     }

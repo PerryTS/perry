@@ -226,11 +226,12 @@ console.log(sum, unrelated.y, child.y);
     );
 }
 
-/// The inherited entry holds the direct prototype as a strong, rewriteable
-/// root. The holder is young when the site primes; a forced copying minor
-/// must actually relocate objects, then the same site must keep calling the
-/// live method through the moved holder. Dropping the method-site root scan
-/// makes this fail under poisoned from-space.
+/// The inherited entry holds the direct prototype as a plain, unrooted word,
+/// so it may name only a stable (old, never-move) holder. The holder is young
+/// when the site first misses: the prime is refused and the holder is marked;
+/// a forced copying minor must actually relocate objects and promote it; then
+/// the site primes and keeps calling the live method through the holder.
+/// Admitting the young holder makes this fail under poisoned from-space.
 #[test]
 fn an_inherited_method_holder_survives_a_moving_collection() {
     let (stdout, stderr) = compile_and_run(
@@ -261,10 +262,11 @@ console.log(sum, call(o, 7));
         stat(&stderr, "primes_inherited") > 0,
         "site never primed: {stderr}"
     );
-    assert!(stat(&stderr, "misses") < 50, "site did not hit: {stderr}");
+    // Up to the first minor the holder is young and the site misses.
+    assert!(stat(&stderr, "misses") < 1100, "site did not hit: {stderr}");
     assert!(
-        stat(&stderr, "holder_rewrites") > 0,
-        "the method-site holder was not relocated: {stderr}"
+        stat(&stderr, "unstable_referent_refusals") > 0,
+        "the young holder was not refused: {stderr}"
     );
     let moved: u64 = stderr
         .lines()

@@ -28,6 +28,8 @@ fn a_split_regexp_site_returns_the_generic_body_before_arguments() {
         .stack_size(16 << 20)
         .spawn(|| unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
+            // Memo logic with young objects inside a no-move scope.
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let re = crate::regex::test_construct_regexp_and_exec_once("a", "");
             let recv = crate::value::js_nanbox_pointer(re as i64);
             let mut slot: MethodSiteSlot = std::ptr::null_mut();

@@ -1,5 +1,10 @@
 //! Computed reads own the same shape/holder proofs as named reads. Four ways
-//! belong to the site; the existing holder root list traces their keys and hops.
+//! belong to the site. Holders and hops follow the read sites' I1 rule (stable
+//! objects, weak words; see "Weak entries" in `read_holder.rs`). The KEY is
+//! still a strong root: a hit compares it by identity, and nothing makes a
+//! key string or symbol immortal yet (side-table plan I2, atoms immortal).
+//! Until then [`KEYED_SITES`] lists the sites so [`scan_keyed_key_roots_mut`]
+//! can visit their keys, and only their keys.
 use super::*;
 
 const WAYS: usize = 4;
@@ -246,6 +251,42 @@ unsafe fn dynamic_key_walk(recv: *const ObjectHeader, key: KeyRef<'_>) -> Option
     walk_to_key(recv, key, false, HOLDER_MAX_DEPTH)
 }
 
+/// Sites holding a keyed entry, for their keys' root scan (see the module
+/// docs: removed once keys are immortal atoms).
+static KEYED_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// Root scan of keyed entries' KEYS. Holders and hops are stable weak words
+/// and are not visited. After the worker gate no agent reads an entry.
+pub(crate) fn scan_keyed_key_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    let Ok(sites) = KEYED_SITES.lock() else {
+        return;
+    };
+    for &site in sites.iter() {
+        // SAFETY: registered keyed caches are PIC-arena allocations, never
+        // freed.
+        unsafe { scan_site_keys(site, visitor) };
+    }
+}
+
+/// One keyed site's keys. A fixed-name entry stores an untagged metadata
+/// address, which is not visited.
+///
+/// # Safety
+/// `site` is a live `KeyedCache`.
+pub(super) unsafe fn scan_site_keys(site: usize, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let cache = &mut *(site as *mut KeyedCache);
+    for e in &mut cache.entries {
+        if e.token != 0 && e.identity_key & !crate::value::POINTER_MASK != 0 {
+            visitor.visit_nanbox_u64_slot(&mut e.identity_key);
+        }
+    }
+}
+
 unsafe fn publish_keyed(
     cache: &mut KeyedCache,
     recv: *const ObjectHeader,
@@ -253,6 +294,13 @@ unsafe fn publish_keyed(
     w: &Walk,
     first_way: usize,
 ) -> Option<usize> {
+    // I1: the holder and hops this entry stores must be stable.
+    let depth = if w.holder == 0 { 0 } else { w.depth };
+    if !super::super::memo_referents_stable(
+        std::iter::once(w.holder).chain(w.hops[..depth.saturating_sub(1)].iter().map(|&(a, _)| a)),
+    ) {
+        return None;
+    }
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     let available = cache
         .entries
@@ -284,7 +332,6 @@ unsafe fn publish_keyed(
             old.depth - 1,
         )));
     }
-    let depth = if w.holder == 0 { 0 } else { w.depth };
     let hops = if depth > 1 {
         Box::into_raw(Box::<[Hop]>::from(&w.hops[..depth - 1])) as *mut Hop
     } else {
@@ -302,22 +349,13 @@ unsafe fn publish_keyed(
         ..KeyedEntry::EMPTY
     };
     if !cache.registered {
-        HOLDER_SITES
+        KEYED_SITES
             .lock()
-            .unwrap()
-            .push(HolderSite::Keyed(cache as *mut _ as usize));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(cache as *mut _ as usize);
         cache.registered = true;
     }
     Some(i)
-}
-
-pub(super) unsafe fn scan_roots(site: usize, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let cache = &mut *(site as *mut KeyedCache);
-    for e in &mut cache.entries {
-        if e.token != 0 {
-            e.scan(visitor);
-        }
-    }
 }
 
 #[no_mangle]

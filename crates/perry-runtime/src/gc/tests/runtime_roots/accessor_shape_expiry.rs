@@ -66,6 +66,13 @@ fn accessor_site_refills_after_weak_receiver_shape_retirement() {
             )
         })
     });
+    // Site memos name only stable holders (`gc::never_move`): mark `middle`
+    // (the receivers' future prototype) and let one minor promote the chain
+    // before the sites prime.
+    middle.with_mut_ptr::<ObjectHeader, _>(|m| unsafe {
+        crate::object::proto_validity::mark_object_as_prototype(m as usize)
+    });
+    gc_collect_minor();
     let site = RuntimeReadSite::new();
     let data_site = RuntimeReadSite::new();
     let absent_site = RuntimeReadSite::new();

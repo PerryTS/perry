@@ -927,6 +927,10 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     assert!(crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_REGEXP));
 
     let _guard = CopyingNurseryTestGuard::new(1);
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     let re = crate::regex::test_alloc_nursery_regexp_for_move("move/source", "gi");
     let old_addr = re as usize;
     assert!(crate::arena::pointer_in_nursery(old_addr));

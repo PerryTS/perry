@@ -674,6 +674,10 @@ mod tests {
 
     #[test]
     fn builtin_site_primes_and_rejects_changed_receiver_and_holder() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !run_with_fresh_worker_gate(
             "builtin_site_primes_and_rejects_changed_receiver_and_holder",
         ) {

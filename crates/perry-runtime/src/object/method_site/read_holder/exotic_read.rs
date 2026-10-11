@@ -271,7 +271,7 @@ mod tests {
             let recv = crate::array::js_array_alloc(1);
             let key = crate::string::canonical_key(b"arrayic_absent");
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-            cache[HOLDER_STATE] = STATE_REGISTERED;
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
             assert_eq!(
                 prime_array_read(recv.cast(), key, &mut slot).map(f64::to_bits),
@@ -292,7 +292,10 @@ mod tests {
                 crate::value::TAG_UNDEFINED,
                 "an array proof survives in the shared saved-holder entries"
             );
-            assert_eq!(front(function.cast(), &mut slot), crate::value::TAG_UNDEFINED);
+            assert_eq!(
+                front(function.cast(), &mut slot),
+                crate::value::TAG_UNDEFINED
+            );
             let proto = crate::array::array_prototype_addr() as *mut ObjectHeader;
             crate::object::js_object_set_field_by_name(proto, key, 17.0);
             assert_eq!(
@@ -359,7 +362,7 @@ mod tests {
             let recv = crate::value::js_nanbox_get_pointer(ctor) as *const ObjectHeader;
             let key = crate::string::canonical_key(b"isBuffer");
             let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
-            cache[HOLDER_STATE] = STATE_REGISTERED;
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let mut slot = &mut cache as *mut PicCache;
             assert_eq!(
                 prime_function_read(recv as usize, key, &mut slot).map(f64::to_bits),

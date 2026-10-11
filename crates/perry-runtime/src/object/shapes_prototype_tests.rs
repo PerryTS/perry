@@ -219,6 +219,10 @@ fn c3_unrooted_prototype_collection_clears_the_stable_cell() {
 
 #[test]
 fn c3_holder_hit_matches_generic_get_across_shape_link_mutations() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     use crate::object::method_site::read_holder::{prime_read_holder, read_holder_hit};
     if !crate::object::method_site::run_with_fresh_worker_gate(
         "c3_holder_hit_matches_generic_get_across_shape_link_mutations",

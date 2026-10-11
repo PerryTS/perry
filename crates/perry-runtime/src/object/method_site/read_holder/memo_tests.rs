@@ -30,7 +30,7 @@ fn alternating_terminals_and_deep_hops_hit_and_invalidate_independently() {
     let mut holders: Vec<_> = (0..10).map(|i| shaped(base + 100 + i)).collect();
     let mut hops: Vec<_> = (0..10).map(|i| shaped(base + 200 + i)).collect();
     let mut cache = [0; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED; // stack cache: do not register it
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for i in 0..9 {
         let mut chain = NO_HOPS;
         chain[0] = (
@@ -94,16 +94,6 @@ fn alternating_terminals_and_deep_hops_hit_and_invalidate_independently() {
         unsafe { entry_answer(&cache, token(2)) },
         Some(crate::value::TAG_UNDEFINED)
     );
-    let mut seen = Vec::new();
-    let mut mark = |v: f64| seen.push(v.to_bits() & crate::value::POINTER_MASK);
-    class_read::scan_roots(
-        &mut cache,
-        &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
-    );
-    for i in 0..8 {
-        assert!(seen.contains(&((&*holders[i] as *const ObjectHeader) as u64)));
-        assert!(seen.contains(&((&*hops[i] as *const ObjectHeader) as u64)));
-    }
     let tenth = Walk {
         holder: (&*holders[9] as *const ObjectHeader) as usize,
         holder_shape: base + 109,
@@ -152,6 +142,10 @@ extern "C" fn receiver_number(this: f64) -> f64 {
 
 #[test]
 fn alternating_getter_receivers_use_cached_pairs_and_original_this() {
+    // Memo logic with young objects: nothing may move while the test
+    // holds raw addresses, and the publication rule is waived for it.
+    let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     if !super::super::run_with_fresh_worker_gate(
         "alternating_getter_receivers_use_cached_pairs_and_original_this",
     ) {
@@ -292,7 +286,7 @@ fn ten_receiver_shapes_share_one_confirmed_absent_terminal() {
     let mut cache = [0; crate::object::PIC_CACHE_WORDS];
     // The stack cache is not a process-lifetime PIC allocation. Skip
     // registration; this test exercises only the published words.
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     let mut recv = ObjectHeader {
         class_id: 0,
         parent_class_id: base,

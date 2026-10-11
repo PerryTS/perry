@@ -10,10 +10,8 @@ sum_counter() {
   awk -v key="$2" 'index($0,key"="){split($0,a,key"="); split(a[2],b,/[^0-9]/); sum+=b[1]} END{print sum+0}' "$1"
 }
 primes=$(sum_counter "$tmp_dir/err" read_absent_primes)
-rewrites=$(sum_counter "$tmp_dir/err" read_holder_rewrites)
 copied=$(sum_counter "$tmp_dir/err" copied_objects)
 test "$primes" -gt 0
 test "$primes" -lt 100
-test "$rewrites" -gt 0
 test "$copied" -gt 0
-printf 'read_absent_primes=%s (<100 across repeated shapes); holder_rewrites=%s; copied_objects=%s\n' "$primes" "$rewrites" "$copied"
+printf 'read_absent_primes=%s (<100 across repeated shapes); copied_objects=%s\n' "$primes" "$copied"

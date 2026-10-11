@@ -92,6 +92,9 @@ mod tests {
         }
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
+        // Memo logic with young objects: nothing moves (above), and the
+        // publication rule is waived for them.
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         crate::object::ensure_object_intrinsics();
         unsafe {
             let key = crate::string::canonical_key(b"presence_entry");
@@ -156,15 +159,17 @@ mod tests {
             );
             assert!((*slot).registered, "the shared root registry owns the site");
             let mut marked = Vec::new();
-            scan_roots(
+            super::scan_site_keys(
                 slot as usize,
                 &mut crate::gc::RuntimeRootVisitor::for_copy(&mut |v| {
                     marked.push(v.to_bits() & crate::value::POINTER_MASK)
                 }),
             );
+            // The key is a root (compared by identity); the holder is a
+            // stable weak word and is not (`read_holder.rs`, "Weak entries").
             assert!(
-                marked.contains(&(middle as u64)),
-                "the inherited holder is traced"
+                !marked.contains(&(middle as u64)),
+                "the inherited holder is not traced"
             );
             assert!(
                 marked.contains(&(key as u64)),

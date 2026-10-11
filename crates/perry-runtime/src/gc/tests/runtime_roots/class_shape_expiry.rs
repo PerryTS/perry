@@ -126,6 +126,13 @@ fn class_sites_refill_after_moving_gc_receiver_retirement() {
         chain.push(hop);
     }
     let proto = chain.last().unwrap();
+    // Site memos name only stable holders (`gc::never_move`): mark the last
+    // hop (the receivers' future prototype) and let one minor promote the
+    // whole chain before the sites prime.
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| unsafe {
+        crate::object::proto_validity::mark_object_as_prototype(p as usize)
+    });
+    gc_collect_minor();
     let mut absent = ReadSite::new();
     let mut deep = ReadSite::new();
     let mut previous = 0;

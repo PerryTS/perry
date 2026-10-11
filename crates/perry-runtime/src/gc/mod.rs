@@ -669,6 +669,10 @@ pub(super) mod knob_overrides {
         pub(crate) fn on() -> Self {
             Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
         }
+
+        pub(crate) fn off() -> Self {
+            Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(false))))
+        }
     }
 
     #[cfg(test)]
@@ -1125,16 +1129,16 @@ pub fn gc_init() {
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
     reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
-    // An inherited method-site entry roots its direct prototype holder.
-    reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
     // A site's chain memo names every prototype from the receiver's
     // [[Prototype]] to the holder of the method it answers; it compares each
     // one's header word on use, so each is a STRONG root.
     reg_scanner!(crate::object::method_site::chain_memo::scan_chain_memo_roots_mut);
-    // A read site's holder entry names the object that holds the answer (and
-    // the hops to it); the emitted hit loads through it, so each is a STRONG
-    // root (`object::method_site::read_holder`).
-    reg_scanner!(crate::object::method_site::read_holder::scan_read_holder_roots_mut);
+    // Read and method sites' holder entries are NOT roots: they name only
+    // stable objects (old, never-move) that the receiver's ShapeId keeps
+    // alive (`gc::never_move`, `read_holder.rs` "Weak entries"). A keyed
+    // entry's KEY is still compared by identity and is rooted here until
+    // keys are immortal atoms.
+    reg_scanner!(crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);

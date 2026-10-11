@@ -45,20 +45,13 @@ pub(super) fn receiver_shape(class_id: u32, generation: u64) -> u32 {
 fn empty_site_has_no_facts_or_roots() {
     let record = empty_site();
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_CLASS_SITE | STATE_REGISTERED;
+    cache[HOLDER_STATE] = STATE_CLASS_SITE;
     cache[SITE_WORD] = (SITE_TAG | record as usize as u64) as i64;
     assert_eq!(unsafe { (*record).next }, 0);
     assert!(unsafe { &*record }.class_entries().all(|e| e.token == 0));
     let recv = shaped(pinned_shape(39_000));
     let token = (PIC_ID_TOKEN_BIT | u64::from(recv.parent_class_id)) as i64;
     assert_eq!(unsafe { leaf_answer(&cache, &*recv, token) }, None);
-    let mut seen = Vec::new();
-    let mut mark = |v: f64| seen.push(v.to_bits());
-    scan_roots(
-        &mut cache,
-        &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
-    );
-    assert!(seen.is_empty());
     for e in unsafe { &*record }.class_entries() {
         assert!(e.hops.is_null());
         unsafe { e.drop_block() };
@@ -91,7 +84,7 @@ fn primary_ways_stay_single_until_churn() {
         getter: 0,
     };
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for r in &mut receivers[..WAYS] {
         unsafe { publish(&mut cache, &**r, &w) };
     }
@@ -173,7 +166,7 @@ fn non_absent_and_same_receiver_refreshes_do_not_arm_sharing() {
         })
         .collect();
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for r in &receivers {
         unsafe { publish(&mut cache, &**r, &data) };
     }
@@ -187,7 +180,7 @@ fn non_absent_and_same_receiver_refreshes_do_not_arm_sharing() {
     }
     unsafe { drop(Box::from_raw(record)) };
     cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for _ in 0..WAYS * 3 {
         unsafe { publish(&mut cache, &*receivers[0], &absent) };
     }
@@ -226,7 +219,7 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
         })
         .collect();
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     let before = stats().0;
     for r in receivers.iter().chain(&receivers) {
         unsafe { publish(&mut cache, &**r, &w) };
@@ -289,21 +282,6 @@ fn multi_absent_shares_chain_and_checks_every_shape() {
     assert_eq!(unsafe { answer(e, r) }, None, "terminal changed");
     assert_eq!(unsafe { leaf_answer(&cache, r, token) }, None);
     unsafe { (*ptr).parent_class_id = base + 200 };
-    let mut seen = Vec::new();
-    let mut mark = |v: f64| seen.push(v.to_bits() & crate::value::POINTER_MASK);
-    scan_roots(
-        &mut cache,
-        &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
-    );
-    assert_eq!(
-        seen.len(),
-        9,
-        "receiver ids must not be visited as pointers"
-    );
-    for hop in &chain {
-        assert!(seen.contains(&((&**hop as *const ObjectHeader) as u64)));
-    }
-    assert!(seen.contains(&((&*holder as *const ObjectHeader) as u64)));
     // A new chain for a member replaces the owned group allocation.
     let short = deep_walk(&chain[..1], &holder);
     unsafe { publish(&mut cache, r, &short) };
@@ -327,7 +305,7 @@ fn multi_absent_bound_and_prototype_identity_are_enforced() {
     let holder = shaped(base + 200);
     let w = deep_walk(&[], &holder);
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     let receivers: Vec<_> = (1..=ABSENT_RECEIVERS + 5)
         .map(|i| {
             let mut r = shaped(receiver_shape(CID, u64::from(i)));
@@ -431,7 +409,7 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
         getter: 0,
     };
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for r in receivers.iter().chain(&receivers) {
         assert_eq!(unsafe { class_link(*r) }, Some(a as *const ObjectHeader));
         unsafe { publish(&mut cache, *r, &w) };
@@ -492,7 +470,7 @@ fn collecting_shared_reads_check_receiver_and_chain() {
         })
         .collect();
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     for r in receivers.iter().chain(&receivers) {
         unsafe { publish(&mut cache, &**r, &w) };
     }
@@ -551,7 +529,7 @@ fn unpinned_hop_is_not_published() {
     let holder = shaped(pinned_shape(30_000));
     let w = deep_walk(&chain, &holder);
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     unsafe { publish(&mut cache, &*recv, &w) };
     assert!(
         unsafe { site(&cache) }.is_none(),
@@ -613,7 +591,7 @@ fn deep_entry_compares_every_hop() {
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
     // Skip registration: the stack cache is not a process-lifetime PIC
     // allocation, and this test drives only the published words.
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     unsafe { publish(&mut cache, &*recv, &w) };
     let token = (PIC_ID_TOKEN_BIT | u64::from(recv_shape)) as i64;
     let s = unsafe { site(&cache) }.expect("published site");
@@ -625,7 +603,7 @@ fn deep_entry_compares_every_hop() {
     );
     // Fake headers carry admitted shape descriptors; the comparison
     // checks below exercise every shape the real walk records.
-    let mut e = *e;
+    let e = *e;
 
     assert_eq!(
         unsafe { pinned_answer(&e) },
@@ -644,18 +622,6 @@ fn deep_entry_compares_every_hop() {
         assert_eq!(unsafe { pinned_answer(&e) }, None, "hop {i} moved");
         unsafe { (*hop).parent_class_id = original };
     }
-    // The root scan visits every hop, the deepest too.
-    let deepest = (&*chain[CLASS_READ_MAX_DEPTH - 2] as *const ObjectHeader) as usize;
-    let mut seen: Vec<u64> = Vec::new();
-    {
-        let mut mark = |v: f64| seen.push(v.to_bits() & crate::value::POINTER_MASK);
-        let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
-        scan_roots(&mut cache, &mut visitor);
-    }
-    assert!(
-        seen.contains(&(deepest as u64)),
-        "the root scan must visit the deepest hop"
-    );
     // A shallow chain published over the same way gets a block its size.
     let shallow = deep_walk(&chain[..1], &holder);
     unsafe { publish(&mut cache, &*recv, &shallow) };

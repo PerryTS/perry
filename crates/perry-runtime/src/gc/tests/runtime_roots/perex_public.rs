@@ -29,7 +29,7 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
     gc_register_mutable_root_scanner(
-        crate::object::method_site::read_holder::scan_read_holder_roots_mut,
+        crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut,
     );
     gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
     // PR #10564 review finding: the new_target savepoint in exception.rs is
@@ -430,7 +430,11 @@ fn regexp_cold_birth_keeps_the_realm_intrinsic_after_global_replacement_and_move
     let before =
         crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"))
             as usize;
-    assert!(crate::arena::pointer_in_nursery(before));
+    // The intrinsic is born old and never-move (`gc::never_move`).
+    assert_eq!(
+        crate::arena::classify_heap_generation(before),
+        crate::arena::HeapGeneration::Old
+    );
     let key = crate::string::intern_ascii_literal(b"RegExp");
     crate::object::js_object_set_field_by_name(
         crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
@@ -445,7 +449,11 @@ fn regexp_cold_birth_keeps_the_realm_intrinsic_after_global_replacement_and_move
     let after = crate::object::js_object_get_prototype_of(
         receiver.with_const_ptr::<RegExpHeader, _>(|r| js_nanbox_pointer(r as i64)),
     );
-    assert_ne!(crate::value::js_nanbox_get_pointer(after) as usize, before);
+    assert_eq!(
+        crate::value::js_nanbox_get_pointer(after) as usize,
+        before,
+        "the old intrinsic stays at its address across the moving minor"
+    );
     assert!(crate::value::JSValue::from_bits(after.to_bits()).is_pointer());
     let input = text(&scope, b"a");
     assert_eq!(test(&receiver, &input), 1);

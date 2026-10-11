@@ -932,6 +932,10 @@ pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
     }
     // The mint is a no-move window here: `old` is a raw link address.
     let _no_move = crate::gc::GcSuppressScope::new();
+    // A site memo may still name `old`
+    // (`gc::never_move::note_memo_named`): pin it so that memo keeps reading it.
+    // SAFETY: `old` was a linked (rooted) prototype until the caller's store.
+    unsafe { crate::gc::never_move::pin_displaced_memo_prototype(old as usize) };
     // SAFETY: `old` was a linked (rooted) prototype object until the store
     // above, and nothing between that read and here can collect.
     unsafe {

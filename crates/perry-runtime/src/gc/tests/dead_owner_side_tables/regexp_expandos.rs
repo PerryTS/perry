@@ -30,6 +30,10 @@ fn test_unrooted_regexp_instance_and_data_reclaimed_by_copying_collection() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     let addr = construct_regexp("dies-before-the-full-trace");
     crate::object::js_object_set_field_by_name(
         addr as *mut crate::ObjectHeader,

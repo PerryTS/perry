@@ -111,7 +111,7 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     for scanner in [
-        crate::object::method_site::read_holder::scan_read_holder_roots_mut,
+        crate::object::method_site::read_holder::keyed::scan_keyed_key_roots_mut,
         crate::object::scan_object_cache_roots_mut,
         crate::object::scan_shape_cache_roots_mut,
         crate::object::shapes::scan_shape_table_rekey_mut,
@@ -128,6 +128,9 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
     for _ in 0..270 {
         chain.push(inherit(&scope, chain.last().unwrap()));
     }
+    // Site memos name only stable holders (`gc::never_move`): let one minor
+    // promote the freshly linked prototypes before the sites prime.
+    let _ = crate::gc::gc_collect_minor();
     let obj = chain.last().unwrap();
     let key = crate::runtime_state_key!(NAME);
     assert_eq!(read(key, obj).to_bits(), TAG_UNDEFINED);
@@ -177,8 +180,10 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         chain[9].with_mut_ptr(boxed),
         replacement.with_mut_ptr(boxed),
     );
+    // The replacement holder is young: the site answers through the generic
+    // read and publishes nothing that names it (`gc::never_move`).
     assert_eq!(read(key, obj), 9.0);
-    assert_eq!(leaf(key, obj), Some(9.0));
+    assert_eq!(leaf(key, obj), None, "a young holder is never published");
     let before = obj.with_mut_ptr(boxed).to_bits();
     let holder_before = replacement.with_mut_ptr(boxed).to_bits();
     crate::gc::gc_collect_minor();
@@ -187,13 +192,22 @@ fn deep_absence_and_holder_reads_validate_every_hop() {
         before,
         "the control must actually move the receiver"
     );
+    // The minor promoted the never-move holder once; from now on it stays.
     assert_ne!(replacement.with_mut_ptr(boxed).to_bits(), holder_before);
+    assert_eq!(read(key, obj), 9.0, "the read after the minor primes");
+    assert_eq!(leaf(key, obj), Some(9.0), "and the entry then hits");
+    let holder_old = replacement.with_mut_ptr(boxed).to_bits();
+    crate::gc::gc_collect_minor();
+    assert_eq!(
+        replacement.with_mut_ptr(boxed).to_bits(),
+        holder_old,
+        "an old never-move holder does not move again"
+    );
     assert_eq!(
         leaf(key, obj),
         Some(9.0),
-        "moving GC must preserve the warmed hit"
+        "the entry survives the collection"
     );
-    assert_eq!(read(key, obj), 9.0, "holder roots survive collection");
     set(obj, NAME, 10.0);
     assert_eq!(
         read(key, obj),

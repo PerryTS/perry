@@ -92,7 +92,7 @@ fn callable_getter_word_is_retained_for_both_storage_locations() {
             getter,
         };
         let mut cache = [0; crate::object::PIC_CACHE_WORDS];
-        cache[HOLDER_STATE] = STATE_REGISTERED; // stack cache never enters the root list
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         unsafe { publish(&mut cache, &recv, &w, true) };
         assert_eq!(cache[HOLDER_HOP_SHAPES] as usize, getter);
     }
@@ -141,7 +141,7 @@ fn spill_accessor_uses_the_same_pair_and_shape_guards() {
             getter: acc.getter,
         };
         let mut cache = [0; crate::object::PIC_CACHE_WORDS];
-        cache[HOLDER_STATE] = STATE_REGISTERED;
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         publish(&mut cache, recv, &w, true);
         let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
         assert_eq!(

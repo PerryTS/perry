@@ -31,8 +31,56 @@
 //!
 //! The primary entry lives in `PicCache` words [`HOLDER_RECV`]..[`HOLDER_STATE`].
 //! Eight further complete answers belong to the same site's bounded record.
-//! Holders, hops and accessor pairs are strong roots, rewritten when they move
-//! ([`scan_read_holder_roots_mut`]).
+//!
+//! # Weak entries
+//!
+//! No entry word is a GC root, no site is registered, and no collection visits
+//! or rewrites an entry. The same holds for the class entries
+//! (`class_read.rs`), keyed entries' holders (`keyed.rs`; their KEYS are still
+//! rooted until keys are immortal atoms) and method-site entries and chain
+//! proofs (`method_site.rs`). Each premise below is enforced at publication
+//! and backed by a test (`gc/tests/holder_memo.rs`):
+//!
+//! 1. **Stable referents (I1).** Every object address an entry stores — a
+//!    holder, an intermediate hop, a terminal — is admitted by
+//!    `method_site::memo_referents_stable`: a `GC_TYPE_OBJECT` that is old and
+//!    never-move (`gc::never_move`). A minor never moves an old object, and
+//!    the only passes that move old objects (old-page defragmentation and
+//!    idle compaction) decline any block holding a never-move one. So while a
+//!    named object lives, it is at the stored address. A young candidate is
+//!    refused and marked; the next minor promotes it and the site primes again.
+//! 2. **ShapeIds are never reused** (`shapes.rs`), and a hit reads no entry
+//!    word before the live receiver's ShapeId equals the entry's token.
+//! 3. **A receiver ShapeId pins its [[Prototype]]**: a serial, default or
+//!    MIXED identity names one object, and the receiver (its meta record, or
+//!    the shape's identity word) references it, so a live receiver carrying
+//!    the token keeps that prototype alive. Each further hop is admitted only
+//!    if its own ShapeId pins its link (`hop_identity_pins_link`), and the hit
+//!    compares each hop's ShapeId before following it, so by induction every
+//!    named object is reachable from the receiver. A ShapeId whose objects
+//!    have all died can never be carried again (2), so an entry naming a dead
+//!    object can never pass its token compare.
+//! 4. **A bare CLASS identity** names the class's *current* prototype, which a
+//!    relink can displace while receivers of the token (or, for a declared
+//!    parent link, a hop carrying it) live on. Class entries and chain proofs
+//!    compare the live identity word before any holder. For every other
+//!    reader, publication flags each referent memo-named
+//!    (`gc::never_move::note_memo_named`) and the relink's retirement
+//!    (`class_registry::retire_displaced_decl_prototype`) pins a flagged
+//!    prototype, so the entry keeps reading that object, whose re-stamped
+//!    ShapeId no longer matches.
+//! 5. **Accessor pairs** are compared, never dereferenced before the compare:
+//!    the hit loads the holder's live lane and compares it with the primed
+//!    pair. A pair is reachable from its holder while it is in the lane.
+//!    Replacing a pair's getter or setter moves the holder to a fresh ShapeId
+//!    (`descriptor_state::note_accessor_function_replaced`), so a new pair
+//!    reusing a dead pair's address in the same lane matches an old entry
+//!    only if it holds the same functions — and then the entry's getter is
+//!    that pair's getter. A pair that moves only makes the entry miss and
+//!    re-prime.
+//!
+//! The worker gate is unchanged: once a worker starts, no agent reads an
+//! entry, so stale words are inert.
 //!
 //! # Emitted form
 //!
@@ -53,8 +101,7 @@
 //! is not own. Data and absent entries are recorded only after the generic
 //! getter's answer agrees with the shapes. An accessor is published only
 //! after its pair is validated, then its getter runs once. A worker
-//! agent's start gates all further
-//! holder hits and primes; stale entries stop being roots and can collect.
+//! agent's start gates all further holder hits and primes.
 //!
 //! A miss whose receiver a live entry already answers is served from the
 //! entry and primes nothing. Complete answers for other receiver shapes use
@@ -120,14 +167,12 @@ pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
 /// (`accessor_pair::holder_closure_getter_entry`), which reads the closure
 /// from the pair at each hit; 0 for a setter-only pair or a deep chain
 /// that needs the collecting validator. A code address, never a GC pointer:
-/// the root scan never visits this word.
-/// The accessor's pair itself (its raw address) is in [`HOLDER_HOPS`], a
-/// strong root rewritten on move like the hop words it replaces.
+/// no GC pass reads this word.
+/// The accessor's pair itself (its raw address) is in [`HOLDER_HOPS`]: a
+/// compared word, never a root (see "Weak entries").
 pub const HOLDER_HOP_SHAPES: usize = HOLDER_HOPS + 3;
-/// The site's registration and bounded-record state.
+/// The site's bounded-record state.
 pub const HOLDER_STATE: usize = crate::codegen_abi::PIC_HOLDER_STATE_WORD;
-/// The cache is on the root list.
-const STATE_REGISTERED: i64 = 1;
 /// Legacy ABI bit: no new holder prime sets it.
 #[cfg(test)]
 const STATE_LATCHED: i64 = crate::codegen_abi::PIC_HOLDER_STATE_LATCHED;
@@ -212,25 +257,12 @@ fn holder_words_mut(c: &mut PicCache) -> &mut HolderEntry {
     unsafe { &mut *(c.as_mut_ptr().add(HOLDER_RECV) as *mut HolderEntry) }
 }
 
-/// Every cache that holds (or held) a holder entry, for the primary agent's
-/// root scan until a worker starts. The entries are in the per-site caches;
-/// this is only where the scan finds them.
-#[derive(Clone, Copy)]
-enum HolderSite {
-    Named(usize),
-    Keyed(usize),
-}
-
-static HOLDER_SITES: std::sync::Mutex<Vec<HolderSite>> = std::sync::Mutex::new(Vec::new());
-
 per_test_global! {
     static PRIMES_HOLDER: AtomicU64 = AtomicU64::new(0);
     static PRIMES_ABSENT: AtomicU64 = AtomicU64::new(0);
     static REFUSED_HOLDER: AtomicU64 = AtomicU64::new(0);
     static PRIMES_ACCESSOR: AtomicU64 = AtomicU64::new(0);
     static HITS_ACCESSOR: AtomicU64 = AtomicU64::new(0);
-    static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
-    static ACCESSOR_REWRITES: AtomicU64 = AtomicU64::new(0);
     static SAME_SHAPE_RELINKS: AtomicU64 = AtomicU64::new(0);
     static CLASS_PRIMES: AtomicU64 = AtomicU64::new(0);
 }
@@ -251,16 +283,8 @@ pub fn read_accessor_stats() -> (u64, u64) {
     )
 }
 
-pub fn class_read_stats() -> (u64, u64, u64) {
+pub fn class_read_stats() -> (u64, u64) {
     class_read::stats()
-}
-
-pub fn read_holder_rewrites() -> u64 {
-    HOLDER_REWRITES.load(Ordering::Relaxed)
-}
-
-pub fn read_accessor_rewrites() -> u64 {
-    ACCESSOR_REWRITES.load(Ordering::Relaxed)
 }
 
 pub fn read_accessor_same_shape_relinks() -> u64 {
@@ -274,6 +298,19 @@ pub fn read_accessor_class_primes() -> u64 {
 #[inline]
 fn refuse() {
     REFUSED_HOLDER.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The site's young-referent retry stamp lives in the upper half of
+/// [`HOLDER_STATE`] (`method_site::young_retry_stamp`).
+fn note_young_retry(c: &mut PicCache) {
+    let low = c[HOLDER_STATE] as u64 & u64::from(u32::MAX);
+    c[HOLDER_STATE] = (low | u64::from(super::young_retry_stamp()) << 32) as i64;
+}
+
+/// Is this site waiting for a minor to promote a refused referent?
+#[inline]
+pub(super) fn young_retry_waiting(c: &PicCache) -> bool {
+    super::young_retry_pending((c[HOLDER_STATE] as u64 >> 32) as u32)
 }
 
 /// Expired shapes do not compete for bounded memo storage. This query is
@@ -302,7 +339,7 @@ unsafe fn holder_entry_retired(c: &HolderEntry) -> bool {
 
 /// Spare depth-1 ABSENT words: the upper half of the holder-shape word and
 /// four words that otherwise hold intermediate hop addresses/shapes.
-/// The root scanner visits only HOLDER_OBJ for this entry kind.
+/// Only HOLDER_OBJ names an object for this entry kind.
 #[inline]
 fn multi_absent_id(c: &HolderEntry, i: usize) -> u32 {
     debug_assert!(i < MULTI_ABSENT_EXTRA_IDS);
@@ -1000,6 +1037,9 @@ pub(crate) unsafe fn prime_function_read(
         {
             return Some(f64::from_bits(bits));
         }
+        if young_retry_waiting(&*existing) {
+            return None;
+        }
     }
     let name = crate::string::header_str_checked(key)?.as_bytes();
     if let Some(value) = function_own::prime(closure, name, cache_slot) {
@@ -1084,6 +1124,9 @@ pub(crate) unsafe fn prime_read_holder(
                 return Some(crate::value::JSValue::from_bits(bits));
             }
         }
+        if young_retry_waiting(&*existing) {
+            return None;
+        }
     }
     materialize_class_prototype(obj);
     let name = crate::string::header_str_checked(key)?.as_bytes();
@@ -1097,7 +1140,14 @@ pub(crate) unsafe fn prime_read_holder(
     let acc = accessor_walk(recv, name);
     if let Some(acc) = acc {
         let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
-        if !cache.is_null() {
+        // I1: a deep accessor's hops are stored too (`publish_accessor_hops`);
+        // `publish` asks for the holder.
+        let hops_stable =
+            super::memo_referents_stable(acc.hops[..acc.depth - 1].iter().map(|&(a, _)| a));
+        if !cache.is_null() && !hops_stable {
+            note_young_retry(&mut *cache);
+        }
+        if !cache.is_null() && hops_stable {
             let mut hops = NO_HOPS;
             hops[0].0 = acc.pair;
             let w = Walk {
@@ -1190,6 +1240,22 @@ unsafe fn publish_token(
     accessor: bool,
     token: i64,
 ) {
+    // I1: every object address the entry stores must be stable (old and
+    // never-move); see "Weak entries" in the module docs. An accessor's
+    // `hops[0]` is its pair, which the hit compares with the holder's live
+    // lane and never dereferences first, so it is not asked.
+    let named_hops = if accessor {
+        0
+    } else {
+        w.depth.saturating_sub(1)
+    };
+    if !super::memo_referents_stable(
+        std::iter::once(w.holder).chain(w.hops[..named_hops].iter().map(|&(addr, _)| addr)),
+    ) {
+        refuse();
+        note_young_retry(&mut *cache);
+        return;
+    }
     let c = &mut *cache;
     // A default-prototype optional field is often absent from many receiver
     // shapes at ONE read site (TypeScript AST's `.name` is the canonical
@@ -1299,12 +1365,6 @@ unsafe fn publish_token(
     } else {
         (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64
     };
-    if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
-        c[HOLDER_STATE] |= STATE_REGISTERED;
-        if let Ok(mut sites) = HOLDER_SITES.lock() {
-            sites.push(HolderSite::Named(cache as usize));
-        }
-    }
     // Last: the entry is live only once every other word is written.
     c[HOLDER_RECV] = token;
     if accessor {
@@ -1320,57 +1380,6 @@ unsafe fn publish_token(
         PRIMES_ABSENT.fetch_add(1, Ordering::Relaxed);
     }
     super::stats_report_enabled();
-}
-
-/// The primary and overflow answers use exactly the same root traversal.
-fn scan_entry_roots(c: &mut HolderEntry, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if c[HOLDER_RECV] != 0 {
-        if visitor.visit_i64_slot(&mut c[HOLDER_OBJ]) {
-            HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
-            if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
-                ACCESSOR_REWRITES.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
-            // Only the accessor pair is managed; the next word is native code.
-            let count = if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
-                1
-            } else {
-                HOLDER_MAX_DEPTH - 1
-            };
-            for i in 0..count {
-                visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
-            }
-        }
-    }
-}
-
-/// Root scan: live entries are primary roots only until a worker starts. Once
-/// the sticky gate is set, `entry_answer` declines before touching any entry
-/// word, and no agent needs to retain the old primary objects.
-pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
-        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
-    {
-        return;
-    }
-    let Ok(sites) = HOLDER_SITES.lock() else {
-        return;
-    };
-    for &site in sites.iter() {
-        let site = match site {
-            HolderSite::Named(site) => site,
-            HolderSite::Keyed(site) => {
-                unsafe { keyed::scan_roots(site, visitor) };
-                continue;
-            }
-        };
-        // SAFETY: registered caches are PIC-arena allocations
-        // (`pic_arena_alloc`), which are never freed.
-        let c = unsafe { &mut *(site as *mut PicCache) };
-        scan_entry_roots(holder_words_mut(c), visitor);
-        class_read::scan_roots(c, visitor);
-    }
 }
 
 /// Populate the real site storage for collector-contract tests. Each object
@@ -1458,6 +1467,10 @@ mod tests {
 
     #[test]
     fn inherited_accessor_rechecks_intermediate_shapes() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !crate::object::method_site::run_with_fresh_worker_gate(
             "inherited_accessor_rechecks_intermediate_shapes",
         ) {
@@ -1528,6 +1541,10 @@ mod tests {
     /// with no global word to consult.
     #[test]
     fn class_accessor_rechecks_same_shape_holder_link() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !crate::object::method_site::run_with_fresh_worker_gate(
             "class_accessor_rechecks_same_shape_holder_link",
         ) {
@@ -1706,6 +1723,10 @@ mod tests {
 
     #[test]
     fn static_declaration_parent_walk_can_publish_and_hit_an_absent_read() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         // Priming is declined once any worker agent exists, and that gate is
         // sticky for the process; run in a fresh process so test order cannot
         // decide it.

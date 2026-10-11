@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # An inherited-read entry's holder (data kind, depth 1..3, reachable only
-# through the receiver's link) must be rooted and rewritten when a collection
-# moves it. The values cannot tell: an unrooted entry's stale address fails
-# its shape compare and the site re-primes, so the observable is the counters.
+# through the receiver's link) is an unrooted word, so it may name only a
+# stable (old, never-move) holder: a prime on a young holder is refused and
+# the next minor promotes it. The values check the site never reads a stale
+# copy; the counters check the refusal happened and the sites still primed.
 set -euo pipefail
 binary=$(realpath "${1:?pass the compiled fixture executable}")
 fixture_dir=$(cd "$(dirname "$0")" && pwd)
@@ -14,10 +15,10 @@ sum_counter() {
   awk -v key="$2" 'index($0,key"="){split($0,a,key"="); split(a[2],b,/[^0-9]/); sum+=b[1]} END{print sum+0}' "$1"
 }
 primes=$(sum_counter "$tmp_dir/err" read_holder_primes)
-rewrites=$(sum_counter "$tmp_dir/err" read_holder_rewrites)
+refusals=$(sum_counter "$tmp_dir/err" unstable_referent_refusals)
 copied=$(sum_counter "$tmp_dir/err" copied_objects)
 test "$primes" -gt 0
 test "$primes" -le 8
-test "$rewrites" -gt 0
+test "$refusals" -gt 0
 test "$copied" -gt 0
-printf 'read_holder_primes=%s (<=8: moved holders do not re-prime); holder_rewrites=%s; copied_objects=%s\n' "$primes" "$rewrites" "$copied"
+printf 'read_holder_primes=%s (<=8); unstable_referent_refusals=%s; copied_objects=%s\n' "$primes" "$refusals" "$copied"

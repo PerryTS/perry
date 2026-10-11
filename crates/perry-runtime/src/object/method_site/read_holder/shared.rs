@@ -130,27 +130,12 @@ impl SharedEntry {
             .filter(|&bits| bits != crate::value::TAG_HOLE)
     }
 
-    pub(crate) unsafe fn scan(&mut self, visitor: &mut crate::gc::RuntimeRootVisitor<'_>) -> u64 {
-        let mut rewritten = 0;
-        // A key carries its NaN-box tag; a metadata address has no tag.
-        if self.identity_key & !crate::value::POINTER_MASK != 0 {
-            visitor.visit_nanbox_u64_slot(&mut self.identity_key);
-        }
-        if self.holder != 0
-            && visitor.visit_tagged_usize_slot(&mut self.holder, crate::value::POINTER_TAG)
-        {
-            rewritten += 1;
-        }
-        if self.exact_chain {
-            self.exact_proof().scan(visitor);
-        } else if self.depth > 1 {
-            for hop in std::slice::from_raw_parts_mut(self.hops, self.depth - 1) {
-                if visitor.visit_tagged_usize_slot(&mut hop.0, crate::value::POINTER_TAG) {
-                    rewritten += 1;
-                }
-            }
-        }
-        rewritten
+    /// The objects a method proof names: its holder, then each heap hop.
+    pub(crate) unsafe fn method_referents(&self) -> Vec<usize> {
+        debug_assert!(self.exact_chain);
+        std::iter::once(self.holder)
+            .chain(self.exact_proof().heap_addrs())
+            .collect()
     }
 }
 
@@ -180,25 +165,6 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shared_identity_address_is_metadata_not_a_gc_edge() {
-        let identity = crate::value::TAG_NULL;
-        let address = &identity as *const u64 as u64;
-        assert_eq!(address & !crate::value::POINTER_MASK, 0);
-        let mut entry = SharedEntry {
-            identity_key: address,
-            ..SharedEntry::EMPTY
-        };
-        let mut seen = Vec::new();
-        unsafe {
-            entry.scan(&mut crate::gc::RuntimeRootVisitor::for_copy(&mut |value| {
-                seen.push(value.to_bits());
-            }));
-        }
-        assert!(seen.is_empty());
-        assert_eq!(entry.identity_key, address);
-    }
 
     #[test]
     fn shared_method_entry_preserves_undefined_slot_answer() {

@@ -144,6 +144,10 @@ fn regex_global_result_array_preserves_young_match_strings() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _env_guard = VerifyEvacuationTestGuard::on();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let source_bytes = "x".repeat(OLD_BORN_FIELDS as usize);
     let source =

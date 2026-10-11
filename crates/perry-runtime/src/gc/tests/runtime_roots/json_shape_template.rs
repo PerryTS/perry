@@ -51,6 +51,10 @@ fn assert_initial_prototype_lookup_survives(empty: bool) {
     let _guard = CopyingNurseryTestGuard::new(0);
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     // Warm the realm itself so the deliberate allocation below is the first
     // prototype-probe key, rather than unrelated globalThis bootstrap work.
     crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
@@ -181,6 +185,10 @@ fn shape_template_element_survives_the_date_field_allocation() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
+    // Builtin prototypes are born old (`gc::never_move`): an old object's
+    // shape-keys edge is rewritten by the shape-table scanner, as production
+    // registers it (`gc_init`).
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::json::test_clear_parse_roots();
 
     let (arr_bits, expected) = unsafe {

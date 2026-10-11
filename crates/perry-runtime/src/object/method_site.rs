@@ -38,9 +38,9 @@
 //!   seen at once. The body info, not the closure, is compared: a factory
 //!   that returns fresh closures per object shares one body, and the call
 //!   passes the LOADED closure, so each object's captures are its own.
-//! * An inherited entry holds the direct holder as a strong root. The
-//!   receiver's shape pins that holder, and the holder's shape pins the
-//!   inline slot. A structural change invalidates one of those word compares;
+//! * An inherited entry holds the direct holder as a plain, unrooted word
+//!   (see GC below). The receiver's shape pins that holder, and the holder's
+//!   shape pins the inline slot. A structural change invalidates one of those word compares;
 //!   a value overwrite is seen by loading the slot on every hit.
 //!
 //! Canonical Array/Map/Set and shape-described function receivers use the same
@@ -68,17 +68,22 @@
 //!   argument-list body ABI; bit 58 names an owned chain proof. A new kind extends the emitted `msite.other` dispatch and
 //!   [`publish`], nothing else;
 //! * an entry that holds a heap reference stores it in [`MethodEntry::closure`]
-//!   and is registered by [`publish`], so [`scan_method_site_roots_mut`] marks
-//!   and rewrites it;
+//!   (or in its owned chain proof), and [`publish`] admits it only if every
+//!   object it names is stable ([`memo_referents_stable`]);
 //! * an inherited entry records the direct holder's word in
 //!   [`MethodEntry::gen`]; deeper entries own the consumed holder shapes;
 //! * primes resolve the pre-call receiver shape, with collection suppressed.
 //!
 //! # GC
 //!
-//! [`MethodEntry::closure`] is a STRONG root for the inherited holder: marked,
-//! and rewritten when it moves (`scan_method_site_roots_mut`). Every site that ever primed an
-//! inherited entry is registered once for the scan.
+//! No entry word is a root, and no site is registered anywhere. An inherited
+//! entry's holder (and a chain proof's hops and holder) is a STABLE object —
+//! old and never-move (`gc::never_move`) — so its address cannot change while
+//! it lives; [`publish`] refuses an entry naming anything else, and the site
+//! primes again after the next minor promotes it. Liveness comes from the
+//! receiver: the emitted hit compares the receiver's word first, and that
+//! ShapeId pins its [[Prototype]], so a matching receiver keeps the holder
+//! alive (the full argument is "Weak entries" in `read_holder.rs`).
 //!
 //! # Agents
 //!
@@ -134,7 +139,7 @@ pub struct MethodEntry {
     /// entry whose generic invocation route consumes the current closure.
     /// A value entry validates closure kind and a non-null info, not body identity.
     pub info: u64,
-    /// Inherited entry: the direct holder's address (a STRONG GC root).
+    /// Inherited entry: the direct holder's address (stable, unrooted).
     pub closure: usize,
     /// Inherited entry: the holder's full `(class_id | ShapeId)` word.
     pub gen: u64,
@@ -162,8 +167,9 @@ pub struct MethodSite {
     pub entries: [MethodEntry; METHOD_SITE_WAYS],
     /// The entry the next prime replaces when every entry is taken.
     next: u64,
-    /// Registered with the root scan.
-    registered: u64,
+    /// [`young_retry_stamp`] of the last publication refused for a young
+    /// referent; priming waits for the next minor.
+    young_retry: u64,
 }
 
 // The emitted site runs on 64-bit targets only (`method_site_enabled`).
@@ -201,10 +207,10 @@ const _: () = {
 /// The emitted `@perry_ic_N = private global ptr null` for a method site.
 pub type MethodSiteSlot = *mut MethodSite;
 
-/// Every site that holds (or held) an inherited entry, for the primary agent's
-/// root scan until a worker starts. The sites are process-lifetime
-/// allocations, but their holders belong to the primary heap.
-static METHOD_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+/// Serializes [`publish`] with [`note_worker_agent`]: every in-flight write
+/// finishes before a worker can run emitted code, and later publishes see the
+/// gate. Holds no data.
+static PUBLISH_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Sticky process-wide gate: a worker cannot read a primary-heap holder from
 /// a process-global method or read site. Emitted method sites read this byte
@@ -245,7 +251,7 @@ pub fn note_worker_agent() {
     // Publish the gate under the same lock as `publish`: every in-flight
     // write finishes before a worker can run emitted code, and all later
     // publishes decline. No site word is written at worker startup.
-    let _sites = METHOD_SITES
+    let _sites = PUBLISH_GATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let first = WORKER_AGENTS_EXIST.swap(1, Ordering::SeqCst) == 0;
@@ -271,9 +277,105 @@ fn refuse(reason: usize) {
 }
 
 per_test_global! {
+    static UNSTABLE_REFERENTS: AtomicU64 = AtomicU64::new(0);
+    /// Of the refused referents: young objects (admitted after a minor),
+    /// and anything that is not a `GC_TYPE_OBJECT` (never admitted).
+    static UNSTABLE_YOUNG: AtomicU64 = AtomicU64::new(0);
+    static UNSTABLE_NOT_OBJECT: AtomicU64 = AtomicU64::new(0);
+}
+
+/// The publication rule of every per-site memo (I1, `gc::never_move`): an
+/// entry may store an object's address only if that object is stable — old
+/// and never-move — so the word needs no root, no registry and no rewrite.
+/// Asking marks each referent never-move, so a young one is promoted by the
+/// next minor and the site's next miss publishes. Every referent is asked
+/// even after one is refused. `0` names nothing and is always admitted.
+///
+/// Each admitted referent is also flagged memo-named
+/// (`gc::never_move::note_memo_named`): if a class relink later displaces it
+/// from its class identity, the retirement pins it (premise 4 of "Weak
+/// entries" in `read_holder.rs`).
+///
+/// # Safety
+/// Each address is 0 or a live heap object the caller just walked to.
+pub(crate) unsafe fn memo_referents_stable(addrs: impl IntoIterator<Item = usize>) -> bool {
+    let addrs: Vec<usize> = addrs.into_iter().filter(|&a| a != 0).collect();
+    let mut stable = true;
+    for &addr in &addrs {
+        if !crate::gc::never_move::stable_memo_referent(addr) {
+            stable = false;
+            let object = crate::value::addr_class::try_read_gc_header(addr)
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT);
+            if object {
+                UNSTABLE_YOUNG.fetch_add(1, Ordering::Relaxed);
+            } else {
+                UNSTABLE_NOT_OBJECT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    if stable {
+        for &addr in &addrs {
+            crate::gc::never_move::note_memo_named(addr);
+        }
+    }
+    if !stable {
+        UNSTABLE_REFERENTS.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    true
+}
+
+/// Publications refused because a referent was not yet stable.
+pub fn memo_unstable_referent_refusals() -> u64 {
+    UNSTABLE_REFERENTS.load(Ordering::Relaxed)
+}
+
+/// A site's young-referent retry word: after a publication is refused for a
+/// young referent, the site skips priming (the generic path answers) until
+/// the next copying minor, which is what promotes the referent. A word of the
+/// site's own memory, valid for one minor; 0 means "prime freely".
+#[inline]
+pub(crate) fn young_retry_stamp() -> u32 {
+    (crate::gc::copying_minor_cycles() as u32).wrapping_add(1)
+}
+
+/// Does a stamp written by [`young_retry_stamp`] still hold?
+#[inline]
+pub(crate) fn young_retry_pending(stamp: u32) -> bool {
+    #[cfg(test)]
+    if young_retry_sabotage::active() {
+        return false;
+    }
+    stamp != 0 && stamp == young_retry_stamp()
+}
+
+/// Test-only: ignore every site's retry stamp.
+#[cfg(test)]
+pub(crate) mod young_retry_sabotage {
+    use std::cell::Cell;
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+    pub(crate) fn active() -> bool {
+        ON.with(Cell::get)
+    }
+    pub(crate) struct Guard;
+    impl Guard {
+        pub(crate) fn new() -> Self {
+            ON.with(|c| c.set(true));
+            Guard
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ON.with(|c| c.set(false));
+        }
+    }
+}
+
+per_test_global! {
     static PRIMES_OWN: AtomicU64 = AtomicU64::new(0);
     static PRIMES_INHERITED: AtomicU64 = AtomicU64::new(0);
-    static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
     static MISSES: AtomicU64 = AtomicU64::new(0);
     static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
     static PRIMES_CONSTFN: AtomicU64 = AtomicU64::new(0);
@@ -350,18 +452,18 @@ pub(crate) fn stats_report_enabled() -> bool {
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 let (ap, ah) = read_holder::read_accessor_stats();
-                let (cp, ch, cr) = read_holder::class_read_stats();
+                let (cp, ch) = read_holder::class_read_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_builtin={} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_builtin={} primes_function={} primes_constfn={} chain_memo_records={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} read_accessor_same_shape_relinks={} read_holder_refused={hr} unstable_referent_refusals={} unstable_young={} unstable_not_object={}{refused}",
                     PRIMES_BUILTIN.load(Ordering::Relaxed),
                     method_site_function_primes(),
                     PRIMES_CONSTFN.load(Ordering::Relaxed),
                     chain_memo::chain_memo_records(),
-                    HOLDER_REWRITES.load(Ordering::Relaxed),
                     read_holder::read_accessor_class_primes(),
-                    read_holder::read_holder_rewrites(),
-                    read_holder::read_accessor_rewrites(),
-                    read_holder::read_accessor_same_shape_relinks()
+                    read_holder::read_accessor_same_shape_relinks(),
+                    memo_unstable_referent_refusals(),
+                    UNSTABLE_YOUNG.load(Ordering::Relaxed),
+                    UNSTABLE_NOT_OBJECT.load(Ordering::Relaxed),
                 );
             }
             unsafe { libc::atexit(report) };
@@ -424,8 +526,11 @@ unsafe fn method_site_miss_object(
     // Ordinary objects and described function shapes can prime. Every
     // other receiver keeps generic dispatch.
     let megamorphic = site_is_megamorphic(slot);
-    if megamorphic || !prime_candidate(receiver, name) {
-        refuse(if megamorphic { 18 } else { 1 });
+    let waiting = young_retry_waiting(slot);
+    if megamorphic || waiting || !prime_candidate(receiver, name) {
+        if !waiting {
+            refuse(if megamorphic { 18 } else { 1 });
+        }
         return crate::typed_feedback::js_typed_feedback_native_call_method(
             site_id,
             recv,
@@ -1259,14 +1364,14 @@ fn prime_candidate(receiver: MissReceiver, _name: &[u8]) -> bool {
 unsafe fn site_of(slot: *mut MethodSiteSlot) -> *mut MethodSite {
     crate::object::pic_slot_resolve_init(slot, |fresh| {
         // GC_STORE_AUDIT(INIT): a fresh site record in the IC arena; its only
-        // heap references (inherited closures) are written by `publish` and
-        // scanned as strong roots.
+        // heap references (inherited holders) are stable words `publish`
+        // admits.
         std::ptr::write(
             fresh,
             MethodSite {
                 entries: [EMPTY_ENTRY; METHOD_SITE_WAYS],
                 next: 0,
-                registered: 0,
+                young_retry: 0,
             },
         );
     })
@@ -1276,6 +1381,13 @@ unsafe fn site_of(slot: *mut MethodSiteSlot) -> *mut MethodSite {
 /// pairs than ways, and re-priming on every miss would cost more than the
 /// dispatcher alone.
 const METHOD_SITE_MAX_EVICTIONS: u64 = 16;
+
+/// Is `slot`'s site waiting for a minor to promote a refused referent?
+#[inline]
+unsafe fn young_retry_waiting(slot: *mut MethodSiteSlot) -> bool {
+    let site = crate::object::pic_slot_peek(slot);
+    !site.is_null() && young_retry_pending((*site).young_retry as u32)
+}
 
 /// Has `slot`'s site given up priming ([`METHOD_SITE_MAX_EVICTIONS`])?
 #[inline]
@@ -1288,12 +1400,28 @@ unsafe fn site_is_megamorphic(slot: *mut MethodSiteSlot) -> bool {
 /// receiver word, else into an empty one, else over the next in turn. The
 /// word is written LAST, so a half-written entry never matches.
 unsafe fn publish(slot: *mut MethodSiteSlot, mut entry: MethodEntry) -> bool {
-    let Ok(mut sites) = METHOD_SITES.lock() else {
+    let Ok(_gate) = PUBLISH_GATE.lock() else {
         return false;
     };
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return false;
     }
+    // I1: every object the entry names must be stable.
+    let stable = if entry.slot & METHOD_SITE_CHAIN != 0 {
+        memo_referents_stable(holder_prime::chain_referents(&entry))
+    } else if entry.slot & METHOD_SITE_INHERITED != 0 {
+        memo_referents_stable([entry.closure])
+    } else {
+        true
+    };
+    if !stable {
+        let site = site_of(slot);
+        if !site.is_null() {
+            (*site).young_retry = u64::from(young_retry_stamp());
+        }
+        return false;
+    }
+
     let site = site_of(slot);
     if site.is_null() {
         return false;
@@ -1326,10 +1454,6 @@ unsafe fn publish(slot: *mut MethodSiteSlot, mut entry: MethodEntry) -> bool {
         });
     if !inherited && holder_prime::unify_own_body(&site.entries[idx], &mut entry) {
         return true;
-    }
-    if entry.closure != 0 && site.registered == 0 {
-        site.registered = 1;
-        sites.push(site as *mut MethodSite as usize);
     }
     let e = &mut site.entries[idx];
     holder_prime::drop_chain(e);
@@ -1810,32 +1934,6 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
         return std::ptr::null();
     }
     super::class_prototype_object(class_id)
-}
-
-/// Root scan: before workers exist, every inherited entry's holder is marked
-/// and rewritten. After the sticky gate, no emitted or runtime path reads an
-/// entry; returning here lets otherwise-dead holders collect. A primary
-/// inline hit begun before the gate cannot safepoint between its entry read
-/// and method call, so no primary GC can observe an in-flight holder read.
-pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
-        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
-    {
-        return;
-    }
-    if let Ok(sites) = METHOD_SITES.lock() {
-        for &site in sites.iter() {
-            for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {
-                if e.slot & METHOD_SITE_CHAIN != 0 {
-                    unsafe { holder_prime::scan_chain(e, visitor) };
-                } else if e.closure != 0 {
-                    if visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG) {
-                        HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[cfg(all(test, feature = "regex-engine"))]

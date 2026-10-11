@@ -839,24 +839,32 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     if in_keys {
         // Charter step 3: the pair lives in the key's slot.
         unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
-        note_accessor_function_replaced(obj, &key, previous.map(descriptor_from), acc);
+        note_accessor_function_replaced(obj, &key, previous, pair_from(&acc));
         return;
     }
 }
 
 /// RULE 1 when an accessor's getter or setter is REPLACED under unchanged
 /// attributes: its keys (and so its ShapeId) did not change, but a cache
-/// keyed on the ShapeId may hold the old function.
+/// keyed on the ShapeId may hold the old function. Every function word of the
+/// pair counts, compiled entries included: a read site keeps the getter it
+/// primed on and validates only the holder's ShapeId and the pair's address,
+/// which a new pair could reuse once the old one dies (premise 5 of "Weak
+/// entries", `method_site/read_holder.rs`).
 fn note_accessor_function_replaced(
     obj: usize,
     key: &str,
-    previous: Option<AccessorDescriptor>,
-    now: AccessorDescriptor,
+    previous: Option<super::accessor_pair::Accessor>,
+    now: super::accessor_pair::Accessor,
 ) {
     let Some(previous) = previous else {
         return;
     };
-    if previous.get == now.get && previous.set == now.set {
+    if previous == now {
+        return;
+    }
+    #[cfg(test)]
+    if accessor_replacement_sabotage::active() {
         return;
     }
     unsafe {
@@ -866,6 +874,31 @@ fn note_accessor_function_replaced(
                 obj as *mut ObjectHeader,
                 key.as_bytes(),
             );
+        }
+    }
+}
+
+/// Test-only: skip RULE 1's transition, to show the guarding test fails
+/// without it (`gc/tests/holder_memo.rs`).
+#[cfg(test)]
+pub(crate) mod accessor_replacement_sabotage {
+    use std::cell::Cell;
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+    pub(crate) fn active() -> bool {
+        ON.with(Cell::get)
+    }
+    pub(crate) struct Guard;
+    impl Guard {
+        pub(crate) fn new() -> Self {
+            ON.with(|c| c.set(true));
+            Guard
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ON.with(|c| c.set(false));
         }
     }
 }
@@ -962,7 +995,7 @@ pub(crate) fn set_builtin_accessor_pair(
     if in_keys {
         // Charter step 3: the pair lives in the key's slot.
         unsafe { store_own_accessor(obj, &key, Some(pair)) };
-        note_accessor_function_replaced(obj, &key, previous.map(descriptor_from), acc);
+        note_accessor_function_replaced(obj, &key, previous, pair);
         return;
     }
 }

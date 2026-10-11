@@ -213,12 +213,11 @@ pub(super) unsafe fn drop_chain(entry: &MethodEntry) {
     }
 }
 
-pub(super) unsafe fn scan_chain(
-    entry: &mut MethodEntry,
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-) {
-    let chain = &mut *(entry.closure as *mut MethodChain);
-    chain.scan(visitor);
+/// Every object a chain entry names: its holder and each heap hop of its
+/// proof (identity-word slots are stable metadata, not objects).
+pub(super) unsafe fn chain_referents(entry: &MethodEntry) -> Vec<usize> {
+    let chain = &*(entry.closure as *const MethodChain);
+    chain.method_referents()
 }
 
 /// A direct-holder lookup only asks for a complete proof when a deeper or
@@ -393,6 +392,10 @@ mod tests {
 
     #[test]
     fn a_mutating_body_primes_the_shape_seen_before_the_call() {
+        // Memo logic with young objects: nothing may move while the test
+        // holds raw addresses, and the publication rule is waived for it.
+        let _no_move_memo_logic = crate::gc::GcSuppressScope::new();
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         if !run_with_fresh_worker_gate("a_mutating_body_primes_the_shape_seen_before_the_call") {
             return;
         }
@@ -473,6 +476,8 @@ mod tests {
         }
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
+        // Proof logic only: nothing moves in this scope.
+        let _admit = crate::gc::never_move::test_admit::Guard::new();
         crate::object::builtin_prototype_value("Object");
         unsafe {
             let name = b"deep_method_entry";
@@ -500,15 +505,10 @@ mod tests {
             let entry = &mut (*slot).entries[0];
             assert_ne!(entry.slot & METHOD_SITE_CHAIN, 0);
             assert_eq!(js_method_site_chain_value(entry), value.to_bits());
-            let mut traced = Vec::new();
-            scan_chain(
-                entry,
-                &mut crate::gc::RuntimeRootVisitor::for_copy(&mut |v| {
-                    traced.push(v.to_bits() & crate::value::POINTER_MASK)
-                }),
-            );
-            assert!(traced.contains(&(holder as u64)));
-            assert!(traced.contains(&(middle as u64)));
+            // The entry names both objects as stable, unrooted words.
+            let named = chain_referents(entry);
+            assert!(named.contains(&(holder as usize)));
+            assert!(named.contains(&(middle as usize)));
             crate::object::js_object_set_field_by_name(middle, key, value);
             assert_eq!(js_method_site_chain_value(entry), crate::value::TAG_HOLE);
         }

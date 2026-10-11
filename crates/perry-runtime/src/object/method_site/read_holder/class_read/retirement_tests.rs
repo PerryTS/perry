@@ -82,7 +82,7 @@ fn retired_absent_replacement_does_not_arm_sharing() {
         getter: 0,
     };
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    cache[HOLDER_STATE] = STATE_REGISTERED;
+    let _admit = crate::gc::never_move::test_admit::Guard::new();
     let shapes: Vec<_> = (0..WAYS + 2)
         .map(|i| owned_receiver_shape(CID, 91_001 + i as u64))
         .collect();

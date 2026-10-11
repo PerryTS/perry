@@ -112,10 +112,9 @@ fn regexp_birth_shape_prototype_word_follows_evacuation_with_no_live_regexp() {
             "#12313 round {round}: RegExp.prototype.exec did not resolve through the birth shape"
         );
     }
-    assert!(
-        prototypes.len() > 1,
-        "the intrinsic RegExp prototype never moved, so the word was never tested"
-    );
+    // The intrinsic is born old and never-move (`gc::never_move`): no
+    // collection may move it, so the word stays valid by construction.
+    assert_eq!(prototypes.len(), 1, "the never-move RegExp prototype moved");
 }
 
 #[test]
@@ -209,10 +208,10 @@ fn regexp_birth_observes_prototype_edits_and_replaced_parent_after_gc() {
             1
         );
     }
-    assert_ne!(
+    assert_eq!(
         before,
         prototype_value().to_bits(),
-        "prototype must actually move"
+        "the never-move intrinsic prototype must not move"
     );
     assert_eq!(
         crate::proxy::js_reflect_set_prototype_of(

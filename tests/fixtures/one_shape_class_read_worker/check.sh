@@ -23,13 +23,11 @@ sum_counter() {
 }
 control_hits=$(sum_counter "$tmp_dir/control.err" class_read_hits)
 worker_hits=$(sum_counter "$tmp_dir/worker.err" class_read_hits)
-control_rewrites=$(sum_counter "$tmp_dir/control.err" class_read_root_rewrites)
 control_copied=$(sum_counter "$tmp_dir/control.err" copied_objects)
 worker_copied=$(sum_counter "$tmp_dir/worker.err" copied_objects)
 test "$worker_hits" -gt 0
 test "$control_hits" -gt "$worker_hits"
-test "$control_rewrites" -gt 0
 test "$control_copied" -gt 0
 test "$worker_copied" -gt 0
-printf 'class_read_hits control=%s worker=%s; root_rewrites=%s; copied_objects control=%s worker=%s\n' \
-  "$control_hits" "$worker_hits" "$control_rewrites" "$control_copied" "$worker_copied"
+printf 'class_read_hits control=%s worker=%s; copied_objects control=%s worker=%s\n' \
+  "$control_hits" "$worker_hits" "$control_copied" "$worker_copied"

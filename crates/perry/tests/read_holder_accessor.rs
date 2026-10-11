@@ -157,8 +157,5 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
         stat(&stderr, "read_accessor_class_primes") > 0,
         "bare CLASS path never primed: {stderr}"
     );
-    assert!(
-        stat(&stderr, "read_accessor_rewrites") > 0,
-        "accessor holder never moved: {stderr}"
-    );
+    // No holder moves: entries name only stable holders (gc::never_move).
 }
