@@ -142,27 +142,33 @@ pub(crate) fn object_alloc_created(
 /// An intrinsic's empty object, born with its internal brand and class
 /// prototype in one shape. Only scalar facts cross allocation; no literal
 /// keys cache, intermediate prototype shape or brand transition is needed.
-pub(crate) fn object_alloc_branded(class_id: u32, brand: u64) -> *mut ObjectHeader {
+pub(crate) fn object_alloc_branded(
+    class_id: u32,
+    brand: u64,
+    site: &shapes::BrandedBirthSite,
+) -> *mut ObjectHeader {
+    let shape = site.resolve(class_id, brand);
+    let width = super::INLINE_SLOT_FLOOR;
+    let size = std::mem::size_of::<ObjectHeader>() + width * 8;
+    let fast = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
+        as *mut ObjectHeader;
+    if !fast.is_null() {
+        unsafe {
+            init_unpublished(fast, class_id, width, shape);
+            shapes::store_kind::check_store_facts(fast);
+        }
+        return fast;
+    }
     let object = object_alloc_unpublished(class_id, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(object);
-    let shape = shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
-        std::ptr::null(),
-        0,
-        0,
-        0,
-        shapes::ShapeObjectKind::Ordinary,
-        0,
-        // Intrinsic classes retain their exact CLASS identity. The vtable
-        // classifier used by class_proto_id treats reserved native ids as
-        // anonymous literals, which would publish DEFAULT instead.
-        shapes::PROTO_ID_CLASS | u64::from(class_id),
-        0,
-        super::field_rep::REP_ANY,
-        &[brand],
-        None,
-        0,
-    ));
+    // The uncarried memo can retire during allocation. Resolve the same facts
+    // through the sole interner with the unpublished receiver rooted.
+    let shape = if shapes::branded_birth_matches(shape, class_id, brand) {
+        shape
+    } else {
+        site.resolve(class_id, brand)
+    };
     let object = owner.get_raw_mut_ptr::<ObjectHeader>();
     unsafe {
         if crate::arena::pointer_in_nursery(object as usize) {
@@ -446,7 +452,7 @@ pub(crate) fn object_alloc_unpublished(class_id: u32, field_count: u32) -> *mut 
 
 /// Initialize storage before a birth shape is published. No collection point.
 #[inline(always)]
-unsafe fn init_unpublished(
+pub(super) unsafe fn init_unpublished(
     ptr: *mut ObjectHeader,
     class_id: u32,
     initialized_slots: usize,

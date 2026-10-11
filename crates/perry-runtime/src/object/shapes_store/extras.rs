@@ -26,6 +26,9 @@ pub(in crate::object) struct ShapeExtras {
     pub(in crate::object) integrity_targets: [u32; 3],
     /// Exact immutable integrity identity, reached only behind its packed bit.
     pub(in crate::object) integrity_flags: u16,
+    /// Derived from immutable permanent-image body metadata at publication.
+    /// Fits extension padding; actual closure identities are checked per birth.
+    pub(in crate::object) constfn_birth_admitted: bool,
     /// Per-key inherited [[Set]] facts of this shape. The existing prototype
     /// validity word retires them after a descriptor or link mutation.
     pub(in crate::object) store_chain: Option<Box<std::cell::RefCell<Vec<StoreChainFact>>>>,
@@ -58,5 +61,38 @@ impl ShapeRecord {
         unsafe { &*(self.extras as usize as *const ShapeExtras) }
             .created_birth_shape
             .store(birth, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl ShapeRecord {
+    #[inline]
+    pub(in crate::object) fn constfn_birth_admitted(&self) -> bool {
+        self.has_boxed_extras()
+            && unsafe { &*(self.extras as usize as *const ShapeExtras) }.constfn_birth_admitted
+    }
+}
+
+impl ShapeRecord {
+    /// Called by a permanent-image seed after validating its ABI entries.
+    /// Derive from this record's exact body list, including a by-facts alias.
+    pub(in crate::object) unsafe fn derive_constfn_birth_admission(&self) {
+        if !self.has_boxed_extras() {
+            return;
+        }
+        let extras = &mut *(self.extras as usize as *mut ShapeExtras);
+        extras.constfn_birth_admitted = !extras.constfn_infos.is_empty()
+            && extras.constfn_infos.iter().all(|entry| {
+                let info = &*(entry.info as usize as *const crate::closure::JsFunctionInfo);
+                info.flags
+                    & (crate::codegen_abi::FN_COMPILED_BODY
+                        | crate::codegen_abi::FN_PERMANENT_IMAGE)
+                    == (crate::codegen_abi::FN_COMPILED_BODY
+                        | crate::codegen_abi::FN_PERMANENT_IMAGE)
+                    && !info.code.is_null()
+                    && matches!(
+                        crate::closure::resolve_strategy(info).kind(),
+                        crate::closure::DispatchKind::Arity(_)
+                    )
+            });
     }
 }

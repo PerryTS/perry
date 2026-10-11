@@ -212,6 +212,13 @@ pub(crate) fn lower_object_literal(
     ctx: &mut FnCtx<'_>,
     props: &[(String, Expr)],
 ) -> Result<String> {
+    // A complete ConstFn literal has one seeded final birth. Other literals
+    // retain their own construction semantics and ordinary representation.
+    if let Some(born) =
+        crate::codegen::static_constfn::birth_literal(ctx, props, 0, props.len() as u32, 0)
+    {
+        return born;
+    }
     // #6951: the object handle is allocated BEFORE the property values are
     // lowered and lives in an SSA register across all of them. `{ a: s, b: f() }`
     // therefore had its half-built object swept by `f`'s collection, and the
@@ -397,14 +404,7 @@ pub(crate) fn lower_object_literal(
                         );
                     }
                 }
-                let final_handle = crate::codegen::static_constfn::finalize_literal(
-                    ctx,
-                    props,
-                    0,
-                    obj_handle,
-                    props.len() as u32,
-                );
-                Ok(nanbox_pointer_inline(ctx.block(), &final_handle))
+                Ok(nanbox_pointer_inline(ctx.block(), obj_handle))
             },
         );
     }

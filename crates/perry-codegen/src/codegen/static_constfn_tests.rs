@@ -63,7 +63,7 @@ fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_sh
             .collect();
             let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
             assert_eq!(
-                ir.contains("call i64 @js_object_finalize_constfn_static"),
+                ir.contains("call i64 @js_object_alloc_constfn_static"),
                 admitted,
                 "{setting:?}/{output}"
             );
@@ -77,7 +77,7 @@ fn default_and_explicit_constfn_modes_discover_and_emit_only_executable_final_sh
 }
 
 #[test]
-fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patches() {
+fn final_literal_seed_and_birth_share_symbols_and_patch_after_publication() {
     let m = fixture();
     let births = crate::module_birth_shapes(&m, opts("executable")).unwrap();
     assert_eq!(
@@ -103,26 +103,26 @@ fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patc
         .collect::<Vec<_>>()
         .join("\n");
     let stamp = body
-        .find("call i64 @js_object_finalize_constfn_static")
+        .find("call i64 @js_object_alloc_constfn_static")
         .expect("finalizer was emitted");
     assert!(
-        body.rfind("call void @js_object_set_field").unwrap() < stamp,
-        "every store must precede promotion"
+        !body.contains("call void @js_object_set_field"),
+        "complete literal birth must remove per-field checked stores"
     );
     assert!(
         body.rfind("call void @js_closure_set_capture_bits")
             .unwrap()
-            < stamp,
-        "this patches must precede promotion"
+            > stamp,
+        "rebindable methods are patched on the rooted born object"
     );
-    let allocation = body
-        .find("call i64 @js_object_alloc_with_shape")
-        .expect("ordinary allocation");
-    assert!(allocation < stamp);
     assert!(
-        !body[allocation..body[allocation..].find('\n').unwrap() + allocation]
-            .contains(&format!("i32 {id},")),
-        "allocation cannot name the final id"
+        !body[stamp..].contains("call i64 @js_object_finalize_constfn_static"),
+        "birth must remove post-construction literal promotion"
+    );
+    let line = body[stamp..].lines().next().unwrap();
+    assert!(
+        line.contains(&format!("i32 {id},")),
+        "birth uses the final shape"
     );
     assert!(
         ir.contains("hidden constant") && ir.contains("perry_closure_cf_final_order__1$info"),
@@ -148,12 +148,12 @@ fn final_literal_seed_and_lowering_share_symbols_and_stamp_after_stores_and_patc
     );
     assert_eq!(
         ir.matches("call i64 @js_string_pool_atom").count(),
-        ordinary_atoms,
-        "packed finalizer metadata must not allocate JavaScript string-pool atoms"
+        0,
+        "completed births consume packed keys without JavaScript string-pool atoms"
     );
     options.output_type = "dylib".into();
     let unloadable = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
-    assert!(!unloadable.contains("call i64 @js_object_finalize_constfn_static"));
+    assert!(!unloadable.contains("call i64 @js_object_alloc_constfn_static"));
     assert!(super::super::static_shape_ids::take_module_static_seeds().is_empty());
 }
 
@@ -394,7 +394,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
     options.static_shape_ids = assigned.into_iter().collect();
     let ir = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert_eq!(
-        ir.matches("call i64 @js_object_finalize_constfn_static")
+        ir.matches("call i64 @js_object_alloc_constfn_static")
             .count(),
         1,
         "completed record must call the finalizer once"
@@ -658,10 +658,10 @@ fn class_replacement_returns_never_produce_a_final_record() {
             .collect();
     let ir = String::from_utf8(crate::compile_module(&m, options).unwrap()).unwrap();
     assert_eq!(
-        ir.matches("call i64 @js_object_finalize_constfn_static")
+        ir.matches("call i64 @js_object_alloc_constfn_static")
             .count(),
         1,
-        "only the unrelated literal is finalized; the class allocation stays ordinary"
+        "only the unrelated literal has a completed birth; the class allocation stays ordinary"
     );
 }
 

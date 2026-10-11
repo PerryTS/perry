@@ -1,4 +1,4 @@
-//! Static ConstFn describes a completed object. Allocation ids remain Any/F64.
+//! Static ConstFn shapes describe completed objects and literal births.
 use super::{BirthProto, BirthShape, ConstFnBirth, ModuleBirth};
 use perry_hir::{Class, Expr, Module, Stmt};
 use std::collections::{BTreeSet, HashMap};
@@ -511,25 +511,106 @@ pub(crate) fn static_method_lanes(
     lanes
 }
 
-/// Called only below the last store/this patch. The runtime owns a root during
-/// minting and returns its refreshed handle for the expression's result.
-pub(crate) fn finalize_literal(
+/// Literal values are evaluated and rooted before their single completed
+/// birth. Shape metadata is consumed at the seed, never rebuilt per evaluation.
+pub(crate) fn birth_literal(
     ctx: &mut crate::expr::FnCtx<'_>,
     props: &[(String, Expr)],
     base_rep: u64,
-    object: &str,
     live: u32,
-) -> String {
+    class_id: u32,
+) -> Option<anyhow::Result<String>> {
     if !super::static_shape_ids::has_static_final_shapes() {
-        return object.to_string();
+        return None;
     }
-    let Some(mut shape) = literal_final(ctx.strings.module_prefix(), props, base_rep) else {
-        return object.to_string();
-    };
-    // Finalization validates the complete live bound. Keep the allocation
-    // capacity so widening a method literal does not retire its ConstFn lanes.
+    let mut shape = literal_final(ctx.strings.module_prefix(), props, base_rep)?;
     shape.live = live;
-    finalize_shape(ctx, &shape, object)
+    let id = super::static_shape_ids::static_final_shape_id(&shape)?;
+    let entries = format!("@{}", entries_symbol(ctx.strings.module_prefix(), id));
+    let keys = format!("{entries}_keys");
+    let patches: Vec<_> = props
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, (_, expr))| {
+            if let Expr::Closure {
+                params,
+                body,
+                captures,
+                captures_this: true,
+                is_arrow: false,
+                ..
+            } = expr
+            {
+                Some((
+                    slot,
+                    crate::type_analysis::compute_auto_captures(ctx, params, body, captures).len(),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let exprs: Vec<_> = props.iter().map(|(_, expr)| expr).collect();
+    Some(crate::rooting::with_operands_rooted_across_call(
+        ctx,
+        &exprs,
+        |_ctx| Ok(()),
+        |ctx, values, ()| {
+            use crate::types::{I32, I64, PTR};
+            let words = ctx.func.alloca_entry_array(I64, values.len());
+            for (slot, value) in values.iter().enumerate() {
+                let bits = ctx.block().bitcast_double_to_i64(value);
+                let ptr = ctx.block().gep(I64, &words, &[(I64, &slot.to_string())]);
+                ctx.block().store(I64, &bits, &ptr);
+            }
+            let object = ctx.block().call(
+                I64,
+                "js_object_alloc_constfn_static",
+                &[
+                    (I32, &id.to_string()),
+                    (PTR, &keys),
+                    (I32, &shape.keys.len().to_string()),
+                    (I32, &shape.key_count.to_string()),
+                    (I32, &live.to_string()),
+                    (I32, &class_id.to_string()),
+                    (I64, &shape.rep.to_string()),
+                    (PTR, &entries),
+                    (I32, &shape.constfn.len().to_string()),
+                    (PTR, &words),
+                ],
+            );
+            // The born object must survive every patch helper and be re-read
+            // below it. The operand scope still owns all evaluated values.
+            let mut group = crate::rooting::open_rooted_group(1);
+            let owner =
+                group.adopt_emitted(ctx, crate::rooting::Repr::Ptr, &object, !patches.is_empty());
+            for (slot, capture) in &patches {
+                let current = group.reread_emitted(ctx, owner);
+                let bits = ctx.block().call(
+                    I64,
+                    "js_object_get_field",
+                    &[(I64, &current), (I32, &slot.to_string())],
+                );
+                let closure = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+                let current = group.reread_emitted(ctx, owner);
+                let boxed_bits = ctx
+                    .block()
+                    .or(I64, &current, crate::nanbox::POINTER_TAG_I64);
+                ctx.block().call_void(
+                    "js_closure_set_capture_bits",
+                    &[
+                        (I64, &closure),
+                        (I32, &capture.to_string()),
+                        (I64, &boxed_bits),
+                    ],
+                );
+            }
+            let current = group.reread_emitted(ctx, owner);
+            let boxed = crate::expr::nanbox_pointer_inline(ctx.block(), &current);
+            group.release(ctx);
+            Ok(boxed)
+        },
+    ))
 }
 
 pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed: &str) -> String {

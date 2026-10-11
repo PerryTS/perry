@@ -92,6 +92,34 @@ fn lower_new_impl(
     args: &[Expr],
     cap_args_appended: usize,
 ) -> Result<String> {
+    if cap_args_appended == 0 {
+        let candidate = ctx
+            .classes
+            .get(class_name)
+            .and_then(|class| crate::codegen::static_constfn::anon_props(class, args));
+        if let Some(props) = candidate {
+            if let Some(rep) = ctx
+                .class_keys_globals
+                .get(class_name)
+                .and_then(|keys| ctx.class_birth_reps.get(keys))
+                .copied()
+            {
+                let class = ctx.classes[class_name];
+                let live = class.fields.len() as u32
+                    + super::new_alloc::birth_slack_in(
+                        class,
+                        &|name| ctx.classes.get(name).copied(),
+                        ctx.anon_key_adds,
+                    );
+                let cid = ctx.class_ids[class_name];
+                if let Some(born) =
+                    crate::codegen::static_constfn::birth_literal(ctx, &props, rep, live, cid)
+                {
+                    return born;
+                }
+            }
+        }
+    }
     // #6969: one expression-scope temp-root barrier. The body below roots its
     // constructor arguments across the instance allocation, and it has ~20
     // return paths with `lowered_args` consumed at a dozen of them — one cut
@@ -114,32 +142,6 @@ fn lower_new_impl(
     let result = result.map(|boxed| {
         if ctx.block().is_terminated() || !crate::codegen::static_constfn::has_final_shapes() {
             return boxed;
-        }
-        let candidate = ctx
-            .classes
-            .get(class_name)
-            .and_then(|class| crate::codegen::static_constfn::anon_props(class, args));
-        if let Some(props) = candidate {
-            if let Some(rep) = ctx
-                .class_keys_globals
-                .get(class_name)
-                .and_then(|keys| ctx.class_birth_reps.get(keys))
-                .copied()
-            {
-                let bits = ctx.block().bitcast_double_to_i64(&boxed);
-                let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-                let class = ctx.classes[class_name];
-                let live = class.fields.len() as u32
-                    + super::new_alloc::birth_slack_in(
-                        class,
-                        &|name| ctx.classes.get(name).copied(),
-                        ctx.anon_key_adds,
-                    );
-                let handle = crate::codegen::static_constfn::finalize_literal(
-                    ctx, &props, rep, &handle, live,
-                );
-                return nanbox_pointer_inline(ctx.block(), &handle);
-            }
         }
         crate::codegen::static_constfn::finalize_class(ctx, class_name, &boxed)
     });

@@ -172,6 +172,18 @@
       "why": "Cache miss counter (telemetry). Holds no address."
     },
     {
+      "file": "crates/perry-runtime/src/weakref.rs",
+      "name": "WEAKMAP_BIRTH_SITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "BrandedBirthSite contains only Cell<u32>: a weak scalar ShapeId, never a GC address or carrier. resolve checks record presence and all branded birth facts on every use; retired ids are rejected and re-resolved through the existing interner."
+    },
+    {
+      "file": "crates/perry-runtime/src/weakref.rs",
+      "name": "WEAKSET_BIRTH_SITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "BrandedBirthSite contains only Cell<u32>: a weak scalar ShapeId, never a GC address or carrier. resolve checks record presence and all branded birth facts on every use; retired ids are rejected and re-resolved through the existing interner."
+    },
+    {
       "file": "crates/perry-runtime/src/closure/shape.rs",
       "name": "BASE_SHAPES",
       "verdict": "not_a_gc_pointer",

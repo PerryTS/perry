@@ -1320,13 +1320,22 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
-fn weak_collection_new(class: u32) -> *mut ObjectHeader {
-    crate::object::object_alloc_branded(class, u64::from(class))
+fn weak_collection_new(
+    class: u32,
+    site: &crate::object::shapes::BrandedBirthSite,
+) -> *mut ObjectHeader {
+    crate::object::object_alloc_branded(class, u64::from(class), site)
+}
+crate::perry_thread_local! {
+    static WEAKMAP_BIRTH_SITE: crate::object::shapes::BrandedBirthSite =
+        const { crate::object::shapes::BrandedBirthSite::new() };
+    static WEAKSET_BIRTH_SITE: crate::object::shapes::BrandedBirthSite =
+        const { crate::object::shapes::BrandedBirthSite::new() };
 }
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
-    weak_collection_new(CLASS_ID_WEAKMAP)
+    WEAKMAP_BIRTH_SITE.with(|site| weak_collection_new(CLASS_ID_WEAKMAP, site))
 }
 
 include!("weakref/subclass.rs");
@@ -1444,7 +1453,7 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
-    weak_collection_new(CLASS_ID_WEAKSET)
+    WEAKSET_BIRTH_SITE.with(|site| weak_collection_new(CLASS_ID_WEAKSET, site))
 }
 
 /// `WeakSet ( [ iterable ] )`'s iterable-consumption loop. `set` is the

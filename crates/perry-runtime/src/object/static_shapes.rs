@@ -151,6 +151,10 @@ pub extern "C" fn js_shape_seed_plain_constfn(
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    if let Some(record) = shapes::shape_record_by_id(id) {
+        // Permanent image entries were checked above; no closure is retained.
+        unsafe { record.derive_constfn_birth_admission() };
+    }
     note_static_request("seed-constfn", requested, id);
     id
 }

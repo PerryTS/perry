@@ -38,6 +38,11 @@ use std::cell::RefCell;
 mod shapes_own_data;
 pub(crate) use shapes_own_data::own_data_shape;
 
+#[path = "shapes_branded_birth.rs"]
+mod shapes_branded_birth;
+#[path = "static_constfn_birth.rs"]
+mod static_constfn_birth;
+pub(crate) use shapes_branded_birth::{branded_birth_matches, BrandedBirthSite};
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
@@ -291,6 +296,11 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    /// Seed-only derivation from checked permanent-image body metadata.
+    pub(crate) unsafe fn derive_constfn_birth_admission(self) {
+        (*self.0.as_ptr()).derive_constfn_birth_admission();
+    }
+
     #[inline(always)]
     pub(crate) fn prototype_word(self) -> u64 {
         // SAFETY: this handle borrows a live slab record of this agent.

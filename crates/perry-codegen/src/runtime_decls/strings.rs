@@ -1219,6 +1219,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
+    module.declare_function(
+        "js_object_alloc_constfn_static",
+        I64,
+        &[I32, PTR, I32, I32, I32, I32, I64, PTR, I32, PTR],
+    );
     module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32, I64]);
     module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
     module.declare_function("js_shape_run_static_seed", VOID, &[]);
