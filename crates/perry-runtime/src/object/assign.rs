@@ -116,7 +116,6 @@ pub(crate) unsafe fn object_define_string_key(
 /// `tgt_h` roots the target object and `src_h` the source object.
 unsafe fn copy_positional_source(
     define: bool,
-    strict_set_is_shape_equivalent: bool,
     plan: PositionalPlan,
     tgt_h: &crate::gc::RuntimeHandle<'_>,
     src_h: &crate::gc::RuntimeHandle<'_>,
@@ -166,22 +165,14 @@ unsafe fn copy_positional_source(
             continue;
         }
         let key_h = iter_scope.root_string_ptr(key_ptr);
+        // Assign reaches this loop only after the all-keys preflight proved
+        // strict [[Set]] an own-data overwrite/add for every source key, so
+        // its store is the shape-answered PutValue funnel: the receiver
+        // shape's own slot, or its learned transition under the shape's
+        // prototype-chain fact.
         tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
             key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                if strict_set_is_shape_equivalent {
-                    // The all-keys preflight proved that strict [[Set]] is an
-                    // own-data overwrite/add for every source key. Preserve
-                    // the positional copy's direct shape-transition store.
-                    js_object_set_field_by_name(t, k, val_h.get_nanbox_f64());
-                } else {
-                    object_assign_set_string_key(
-                        define,
-                        t,
-                        target_is_array,
-                        k,
-                        val_h.get_nanbox_f64(),
-                    );
-                }
+                object_assign_set_string_key(define, t, target_is_array, k, val_h.get_nanbox_f64());
             })
         });
     }
@@ -1020,14 +1011,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             });
         }
     } else if source_obj_type == crate::gc::GC_TYPE_OBJECT
-        && copy_positional_source(
-            define,
-            strict_set_is_shape_equivalent,
-            positional_plan,
-            &tgt_h,
-            &src_h,
-            target_is_array,
-        )
+        && copy_positional_source(define, positional_plan, &tgt_h, &src_h, target_is_array)
     {
         // Every own string key was an enumerable data property of the
         // source shape, copied by position (`copy_positional_source`).
