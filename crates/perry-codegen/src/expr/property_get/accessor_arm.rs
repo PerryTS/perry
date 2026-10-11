@@ -160,8 +160,8 @@ impl abi::accessor_guards::AccessorGuards for EmittedGuards<'_, '_> {
         let workers = blk.load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
         let workers = blk.zext(I8, &workers, I32);
         let no_workers = blk.icmp_eq(I32, &workers, "0");
-        // Publication stores getter=0 for setter-only and spill answers.
-        // A nonzero getter therefore proves that the next load is inline.
+        // Publication stores getter=0 for setter-only and deep answers.
+        // A nonzero getter proves that the validated pair can be called.
         let has_getter = blk.icmp_ne(I64, &self.getter, "0");
         let ok = blk.and(I1, &no_workers, &has_getter);
         blk.cond_br(&ok, &next, self.miss_label);
@@ -172,11 +172,49 @@ impl abi::accessor_guards::AccessorGuards for EmittedGuards<'_, '_> {
     fn lane(&mut self) -> Result<(), Self::Failure> {
         let next = self.ctx.block_label(self.call_idx);
         let blk = self.ctx.block();
-        let slot = blk.and(I64, &self.kind, "4294967295");
+        let slot = blk.and(I64, &self.kind, "2147483647");
+        let spill_bit = blk.and(I64, &self.kind, &abi::PIC_HOLDER_SLOT_SPILL_BIT.to_string());
+        let is_spill = blk.icmp_ne(I64, &spill_bit, "0");
+        let inline_idx = self.ctx.new_block("pic.acc.storage.inline");
+        let spill_idx = self.ctx.new_block("pic.acc.storage.spill");
+        let join_idx = self.ctx.new_block("pic.acc.storage.join");
+        let inline_l = self.ctx.block_label(inline_idx);
+        let spill_l = self.ctx.block_label(spill_idx);
+        let join_l = self.ctx.block_label(join_idx);
+        self.ctx.block().cond_br(&is_spill, &spill_l, &inline_l);
+
+        self.ctx.current_block = inline_idx;
+        let blk = self.ctx.block();
         let base_addr = blk.add(I64, &self.holder, &self.header_bytes.to_string());
         let base = blk.inttoptr(I64, &base_addr);
         let lane_ptr = blk.gep(I64, &base, &[(I64, &slot)]);
-        let lane = blk.load(I64, &lane_ptr);
+        let inline_lane = blk.load(I64, &lane_ptr);
+        blk.br(&join_l);
+
+        self.ctx.current_block = spill_idx;
+        // Publication proved this spill position live. A delete retires the
+        // holder's ShapeId; growth preserves the earlier positions, exactly
+        // the proof used by the own-spill miss front. No safepoint intervenes.
+        let meta_offset =
+            crate::target_layout::object_meta_slot_offset_bytes(self.ctx.target_triple);
+        let blk = self.ctx.block();
+        let meta_addr = blk.add(I64, &self.holder, &meta_offset.to_string());
+        let meta_ptr = blk.inttoptr(I64, &meta_addr);
+        let meta = blk.load(PTR, &meta_ptr);
+        let spill_ptr = blk.gep(
+            I8,
+            &meta,
+            &[(I64, &abi::OBJECT_META_SPILL_OFFSET.to_string())],
+        );
+        let spill = blk.load(PTR, &spill_ptr);
+        let elements = blk.gep(I8, &spill, &[(I64, &abi::ARRAY_HEADER_SIZE.to_string())]);
+        let lane_ptr = blk.gep(I64, &elements, &[(I64, &slot)]);
+        let spill_lane = blk.load(I64, &lane_ptr);
+        blk.br(&join_l);
+
+        self.ctx.current_block = join_idx;
+        let blk = self.ctx.block();
+        let lane = blk.phi(I64, &[(&inline_lane, &inline_l), (&spill_lane, &spill_l)]);
         let tagged = blk.or(I64, &self.pair, crate::nanbox::POINTER_TAG_I64);
         let same = blk.icmp_eq(I64, &lane, &tagged);
         blk.cond_br(&same, &next, self.miss_label);

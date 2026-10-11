@@ -655,13 +655,12 @@ pub const PIC_HOLDER_OBJ_WORD: usize = 13;
 pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
 pub const PIC_HOLDER_KIND_WORD: usize = 15;
 /// A class-accessor entry (#10498): its kind word carries
-/// [`PIC_HOLDER_ACCESSOR_BIT`] over the holder's inline slot (low 32 bits);
+/// [`PIC_HOLDER_ACCESSOR_BIT`] over the holder's slot word (low 32 bits);
 /// [`PIC_HOLDER_PAIR_WORD`] holds the raw address of the accessor pair that
 /// slot held when the site primed (a strong root the collector rewrites), and
 /// [`PIC_HOLDER_GETTER_WORD`] the code the hit calls for the getter that pair
 /// names, as `double get(double this, i64 pair)` (0 when only the collecting
-/// slow call answers the entry: a setter-only pair, or a lane in the holder's
-/// spill storage, see [`PIC_HOLDER_SLOT_SPILL_BIT`]):
+/// slow call answers the entry: a setter-only pair or a deep chain):
 /// a compiled class getter, which declares `this` only (the pair is
 /// over-applied), or the runtime's closure-getter entry, which calls the
 /// function object in the pair's getter element through the closure ABI. A
@@ -672,8 +671,8 @@ pub const PIC_HOLDER_PAIR_WORD: usize = 16;
 pub const PIC_HOLDER_GETTER_WORD: usize = 19;
 /// A holder slot word (the low 32 bits of an entry's kind) with this bit set
 /// names a position in the holder's SPILL storage, not an inline slot. The
-/// emitted accessor arm loads inline lanes only: a spill lane's accessor entry
-/// keeps getter word 0, and the collecting slow call answers it.
+/// emitted accessor arm uses the same receiver/holder/pair proof for either
+/// storage location; spill positions are live while the holder ShapeId matches.
 pub const PIC_HOLDER_SLOT_SPILL_BIT: i64 = 1 << 31;
 
 /// `proxy::put_value::setter_site` (#10498): the word of a static-key store

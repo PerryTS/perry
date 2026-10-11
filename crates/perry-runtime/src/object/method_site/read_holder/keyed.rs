@@ -20,13 +20,33 @@ impl KeyRef<'_> {
             Self::Name { word, bytes } => (word, Some(bytes)),
             Self::Symbol(word) => (word, None),
         };
+        // Wide records already own a content-validated shape index. Do not
+        // precede its lookup with an unbounded word scan of the same keys.
+        if let Some(bytes) = bytes {
+            if count >= crate::object::KEYS_INDEX_THRESHOLD {
+                let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+                return crate::object::keys_find_property_slot_by_bytes_resolved_hashed(
+                    keys, count, bytes, hash,
+                );
+            }
+        }
         let slots = crate::array::array_elements_ptr(keys);
         if word != 0 {
-            if let Some(i) = (0..count).find(|&i| *slots.add(i as usize) == word) {
+            if let Some(i) = (0..count).rev().find(|&i| {
+                *slots.add(i as usize) == word
+                    && !crate::object::key_attrs::entry_is_private(
+                        crate::object::key_attrs::keys_entry(keys, i),
+                    )
+            }) {
                 return Some(i);
             }
         }
-        bytes.and_then(|bytes| crate::object::keys_find_slot_by_bytes_resolved(keys, count, bytes))
+        bytes.and_then(|bytes| {
+            let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+            crate::object::keys_find_property_slot_by_bytes_resolved_hashed(
+                keys, count, bytes, hash,
+            )
+        })
     }
 }
 
@@ -171,7 +191,7 @@ pub(super) unsafe fn walk_to_key(
     None
 }
 
-/// Shape evidence is re-read after Get, so no unrooted walk crosses user code.
+/// A data/absence proof contains no observable Get and crosses no safepoint.
 unsafe fn dynamic_key_walk(recv: *const ObjectHeader, key: KeyRef<'_>) -> Option<Walk> {
     let recv = ordinary_receiver(recv as usize)?;
     match key {
@@ -341,88 +361,99 @@ unsafe fn miss(
     obj_box: f64,
     dynamic: bool,
 ) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let recv_handle = scope.root_nanbox_f64(obj_box);
-    let key_handle = scope.root_nanbox_f64(key);
-    let symbol = crate::symbol::js_is_symbol(key) != 0;
-    let value = if dynamic || receiver(obj_box.to_bits()).is_none() {
+    if let Some(value) = shape_read(slot, obj_box.to_bits(), key.to_bits()) {
+        return f64::from_bits(value);
+    }
+    // All proof work precedes Get. A declined proof needs no roots or post-Get
+    // re-walk: each collecting dispatch is a tail call with no raw use after it.
+    if dynamic || receiver(obj_box.to_bits()).is_none() {
         crate::value::js_dyn_index_get(obj_box, key)
-    } else if symbol {
+    } else if crate::symbol::js_is_symbol(key) != 0 {
         crate::symbol::js_object_get_symbol_property(obj_box, key)
     } else {
         crate::object::dynamic_key_read::js_typed_feedback_object_get_field_by_key_f64(
             site_id, obj, key, obj_box,
         )
-    };
+    }
+}
+
+/// Consume the same proof that fills a shared entry. Saturated sites share
+/// the dispatcher's plain own-slot proof without repeating holder admission.
+unsafe fn shape_read(slot: *mut *mut KeyedCache, obj_bits: u64, bits: u64) -> Option<u64> {
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
         || slot.is_null()
         || crate::object::field_get_set::accessor_receiver_override_armed()
         || crate::object::prototype_chain::resolution_stack_savepoint() != 0
     {
-        return value;
+        return None;
     }
-    // A saturated site keeps its remaining hits, but its misses use only Get.
-    // Do not rebuild a holder proof that the bounded memo cannot publish.
+    let tag = bits >> 48;
+    let symbol =
+        tag != 0x7FFF && tag != 0x7FF9 && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0;
+    if !symbol && tag != 0x7FFF && tag != 0x7FF9 {
+        return None;
+    }
+    let recv = receiver(obj_bits)?;
     let cache = crate::object::pic_slot_peek(slot);
     if !cache.is_null() && (*cache).evictions >= MAX_EVICTIONS {
-        return value;
+        return if symbol {
+            None
+        } else {
+            crate::object::dynamic_key_read::positional_slot_answer(recv, bits)
+                .map(f64::to_bits)
+                .filter(|&value| value != crate::value::TAG_HOLE)
+        };
     }
-    let bits = key_handle.get_nanbox_u64();
-    let tag = bits >> 48;
-    if !symbol && tag != 0x7FFF && tag != 0x7FF9 {
-        return value;
-    }
-    let Some(recv) = receiver(recv_handle.get_nanbox_u64()) else {
-        return value;
-    };
     let mut buf = [0; crate::value::SHORT_STRING_MAX_LEN];
     let bytes = if symbol {
         None
     } else {
-        crate::string::js_string_key_bytes(crate::JSValue::from_bits(bits), &mut buf)
+        Some(crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(bits),
+            &mut buf,
+        )?)
     };
-    let key_ref = if symbol {
-        KeyRef::Symbol(bits)
-    } else {
-        let Some(bytes) = bytes else {
-            return value;
-        };
-        KeyRef::Name { word: bits, bytes }
+    let key_ref = match bytes {
+        Some(bytes) => KeyRef::Name { word: bits, bytes },
+        None => KeyRef::Symbol(bits),
     };
-    let Some(w) = dynamic_key_walk(recv, key_ref) else {
-        return value;
-    };
-    let confirmed = match w.slot {
-        Some(s) => {
-            holder_slot_value(
-                if w.holder == 0 {
-                    recv as usize
-                } else {
-                    w.holder
-                },
-                s,
-            ) == Some(value.to_bits())
-                && value.to_bits() != crate::value::TAG_HOLE
-        }
-        None => value.to_bits() == crate::value::TAG_UNDEFINED,
-    };
-    if confirmed {
-        let canonical = if let Some(bytes) = bytes {
+    // Publication already uses the atom identity when one exists. A runtime
+    // string (for example typeof's result) can have the same contents but a
+    // different word: consume that existing entry before rebuilding its proof.
+    let canonical = match bytes {
+        Some(bytes) if tag != 0x7FF9 => {
             let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
-            if tag == 0x7FF9 {
-                bits
-            } else {
-                crate::string::atom_lookup(bytes, hash)
-                    .map_or(bits, |a| crate::value::STRING_TAG | a as u64)
-            }
-        } else {
-            bits
-        };
-        let cache = crate::object::pic_slot_resolve(slot);
-        publish_keyed(&mut *cache, recv, canonical, &w);
+            crate::string::atom_lookup(bytes, hash)
+                .map_or(bits, |a| crate::value::STRING_TAG | a as u64)
+        }
+        _ => bits,
+    };
+    if canonical != bits && !cache.is_null() {
+        if let Some(value) = answer(&*cache, recv, canonical) {
+            return Some(value);
+        }
     }
-    value
+    let w = dynamic_key_walk(recv, key_ref)?;
+    let value = match w.slot {
+        Some(s) => holder_slot_value(
+            if w.holder == 0 {
+                recv as usize
+            } else {
+                w.holder
+            },
+            s,
+        )?,
+        None => crate::value::TAG_UNDEFINED,
+    };
+    if value == crate::value::TAG_HOLE {
+        return None;
+    }
+    // System allocation only: no GC or user code between the proof and its
+    // publication, so receiver/key/hop pointers need no handle-scope round trip.
+    let cache = crate::object::pic_slot_resolve(slot);
+    publish_keyed(&mut *cache, recv, canonical, &w);
+    Some(value)
 }
 
 /// A statement run consumes the keyed entries published by its original

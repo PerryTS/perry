@@ -3,9 +3,9 @@
 //! about the same entry/receiver, with no mutation or collecting edge between.
 //!
 //! `callable` also establishes worker exclusion. For an inline consumer it
-//! must prove a nonzero getter and an inline lane before `lane` loads it.
-//! A collecting consumer permits setter-only and spill answers; it derives a
-//! spill getter only after the current lane has matched the rooted pair.
+//! must prove a nonzero getter before `lane` loads its inline or spill slot.
+//! A collecting consumer also permits setter-only and deep answers; it derives
+//! a deep getter only after the current lane has matched the rooted pair.
 
 pub trait AccessorGuards {
     type Failure;

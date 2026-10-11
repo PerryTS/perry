@@ -1724,6 +1724,10 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         "pic.acc.holder",
         "pic.acc.lane",
         "pic.acc.inline",
+        // Both storage locations retain the same pair guard and call edge.
+        "pic.acc.storage.inline",
+        "pic.acc.storage.spill",
+        "pic.acc.storage.join",
         "pic.acc.call",
     ];
     // Labels carry a numeric suffix (`pic.token.6`); strip it for comparison.

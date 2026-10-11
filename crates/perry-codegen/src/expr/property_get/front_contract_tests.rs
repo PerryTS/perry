@@ -199,6 +199,31 @@ pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> 
         }
         let (_, on_true, on_false) = tower_cond_br(body);
         let next = guards.get(i + 1).map(|(l, _)| *l).unwrap_or(call);
+        if i == guards.len() - 1 {
+            let (inline, inline_body) = find("pic.acc.storage.inline")?;
+            let (spill, spill_body) = find("pic.acc.storage.spill")?;
+            let (join, join_body) = find("pic.acc.storage.join")?;
+            if predecessors(blocks, label) != [guards[i - 1].0]
+                || on_true != spill
+                || on_false != inline
+                || predecessors(blocks, inline) != [*label]
+                || predecessors(blocks, spill) != [*label]
+                || targets(inline_body) != [join]
+                || targets(spill_body) != [join]
+                || predecessors(blocks, join) != [inline, spill]
+                || tower_cond_br(join_body).1 != call
+                || tower_cond_br(join_body).2 != front
+            {
+                return Err("both storage loads must join at the guarded pair comparison".into());
+            }
+            if [inline_body, spill_body, join_body].iter().any(|body| {
+                body.iter()
+                    .any(|line| line.contains(" call ") || line.contains(" invoke "))
+            }) {
+                return Err("storage validation must contain only loads and comparisons".into());
+            }
+            continue;
+        }
         if on_true != next || on_false != front {
             return Err(format!(
                 "accessor guard {label} must continue to {next} and decline to the front: {body:?}"
@@ -216,7 +241,8 @@ pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> 
             return Err("primary validation must expand guards without a selector call".into());
         }
     }
-    if predecessors(blocks, call) != [guards[guards.len() - 1].0] {
+    let (join, _) = find("pic.acc.storage.join")?;
+    if predecessors(blocks, call) != [join] {
         return Err("the getter call must be reached only through every guard".into());
     }
     let calls: Vec<&String> = call_body
@@ -236,7 +262,9 @@ pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> 
             "the getter's answer must reach the merge: {call_body:?}"
         ));
     }
-    Ok(guards.iter().map(|(l, _)| *l).collect())
+    let mut declines: Vec<_> = guards[..guards.len() - 1].iter().map(|(l, _)| *l).collect();
+    declines.push(join);
+    Ok(declines)
 }
 
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {

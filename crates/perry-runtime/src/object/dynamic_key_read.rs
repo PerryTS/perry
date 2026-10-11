@@ -90,6 +90,25 @@ pub(crate) unsafe fn shape_answer(obj_box: u64, key_bits: u64) -> Option<f64> {
         return None;
     }
     let obj = addr as *const ObjectHeader;
+    if let Some(value) = positional_slot_answer(obj, key_bits) {
+        return Some(value);
+    }
+    let content = stub_key_bits(key_bits)?;
+    super::read_stub::read_stub_lookup_or_absent(obj, content)
+}
+
+/// The existing plain positional-shape proof, shared with saturated holder
+/// sites. This reads the shape itself; it consults no read stub or site memo.
+///
+/// # Safety
+/// `obj` is a live POINTER-tagged receiver above the handle floor. Its +4
+/// word is a ShapeId only for an ordinary object; all other cells miss the
+/// positional-shape directory. `key_bits` is a string value.
+#[inline]
+pub(crate) unsafe fn positional_slot_answer(
+    obj: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
     let shape_id = (*obj).parent_class_id;
     if let Some((keys, bound)) =
         super::shapes::plain_positional_key_words(super::shapes::ordinary_dir_addr(), shape_id)
@@ -103,8 +122,7 @@ pub(crate) unsafe fn shape_answer(obj_box: u64, key_bits: u64) -> Option<f64> {
             }
         }
     }
-    let content = stub_key_bits(key_bits)?;
-    super::read_stub::read_stub_lookup_or_absent(obj, content)
+    None
 }
 
 /// What the receiver's shapes answered before the generic Get.

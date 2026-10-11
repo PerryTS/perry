@@ -4,14 +4,14 @@
 use super::*;
 use crate::codegen_abi::accessor_guards::{self, AccessorGuards};
 
-struct Admitted<'a, const INLINE_ONLY: bool> {
+struct Admitted<'a, const REQUIRE_GETTER: bool> {
     words: &'a HolderEntry,
     token: i64,
     kind: u64,
     getter: usize,
 }
 
-impl<const INLINE_ONLY: bool> AccessorGuards for Admitted<'_, INLINE_ONLY> {
+impl<const REQUIRE_GETTER: bool> AccessorGuards for Admitted<'_, REQUIRE_GETTER> {
     type Failure = ();
 
     #[inline(always)]
@@ -41,11 +41,9 @@ impl<const INLINE_ONLY: bool> AccessorGuards for Admitted<'_, INLINE_ONLY> {
 
     #[inline(always)]
     fn callable(&mut self) -> Result<(), ()> {
-        // Worker exclusion is also supplied by admission. Inline consumers
-        // cannot derive a spill getter or call a setter-only pair.
-        if INLINE_ONLY
-            && (self.words[HOLDER_HOP_SHAPES] == 0 || self.kind as u32 & HOLDER_SLOT_SPILL != 0)
-        {
+        // Worker exclusion is supplied by admission. An emitted call needs
+        // a getter; the slot word selects either inline or spill storage.
+        if REQUIRE_GETTER && self.words[HOLDER_HOP_SHAPES] == 0 {
             Err(())
         } else {
             Ok(())
@@ -59,10 +57,7 @@ impl<const INLINE_ONLY: bool> AccessorGuards for Admitted<'_, INLINE_ONLY> {
             if holder_slot_value(self.words[HOLDER_OBJ] as usize, self.kind as u32) != Some(lane) {
                 return Err(());
             }
-            self.getter = if !INLINE_ONLY
-                && (self.kind & HOLDER_ACCESSOR_DEEP != 0
-                    || self.kind as u32 & HOLDER_SLOT_SPILL != 0)
-            {
+            self.getter = if !REQUIRE_GETTER && self.kind & HOLDER_ACCESSOR_DEEP != 0 {
                 crate::object::accessor_pair::site_getter_word_of_value(lane).ok_or(())?
             } else {
                 self.words[HOLDER_HOP_SHAPES] as usize
@@ -80,13 +75,13 @@ impl<const INLINE_ONLY: bool> AccessorGuards for Admitted<'_, INLINE_ONLY> {
 /// and `kind` is their current kind word. Nothing may mutate or collect
 /// between that admission and this call. The receiver token is current.
 #[inline(always)]
-pub(super) unsafe fn with_answer<const INLINE_ONLY: bool, R>(
+pub(super) unsafe fn with_answer<const REQUIRE_GETTER: bool, R>(
     words: &HolderEntry,
     token: i64,
     kind: u64,
     consume: impl FnOnce(usize, usize) -> R,
 ) -> Option<R> {
-    let mut guard = Admitted::<INLINE_ONLY> {
+    let mut guard = Admitted::<REQUIRE_GETTER> {
         words,
         token,
         kind,
@@ -100,7 +95,7 @@ pub(super) unsafe fn with_answer<const INLINE_ONLY: bool, R>(
 // `with_answer` directly so its guard/consumer sequence stays unchanged.
 #[cold]
 #[inline(never)]
-pub(super) unsafe fn validated_accessor<const INLINE_ONLY: bool>(
+pub(super) unsafe fn validated_accessor<const REQUIRE_GETTER: bool>(
     words: &HolderEntry,
     token: i64,
 ) -> Option<(usize, usize)> {
@@ -111,7 +106,7 @@ pub(super) unsafe fn validated_accessor<const INLINE_ONLY: bool>(
     {
         return None;
     }
-    with_answer::<INLINE_ONLY, _>(words, token, kind, |getter, pair| (getter, pair))
+    with_answer::<REQUIRE_GETTER, _>(words, token, kind, |getter, pair| (getter, pair))
 }
 
 #[cfg(test)]

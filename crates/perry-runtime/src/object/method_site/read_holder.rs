@@ -82,8 +82,8 @@ use function_own::HOLDER_FUNCTION_BAG;
 pub(crate) use function_own::{prime_alias, try_alias_cached_accessor};
 pub(crate) mod class_read;
 pub(crate) mod keyed;
-pub(crate) mod shared;
 mod runtime_chain;
+pub(crate) mod shared;
 pub(crate) use runtime_chain::read_runtime_chain;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod probe;
@@ -117,9 +117,8 @@ pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
 /// calls for the getter the primed pair names, `double get(double this, i64
 /// pair)`: a compiled class getter, or the closure-getter entry
 /// (`accessor_pair::holder_closure_getter_entry`), which reads the closure
-/// from the pair at each hit; 0 for a setter-only pair and for a lane in the
-/// holder's spill storage, which the emitted arm cannot load (the slow call
-/// derives the getter from the pair). A code address, never a GC pointer:
+/// from the pair at each hit; 0 for a setter-only pair or a deep chain
+/// that needs the collecting validator. A code address, never a GC pointer:
 /// the root scan never visits this word.
 /// The accessor's pair itself (its raw address) is in [`HOLDER_HOPS`], a
 /// strong root rewritten on move like the hop words it replaces.
@@ -1312,12 +1311,9 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
             probe::getter_code(*words.add(crate::object::accessor_pair::PAIR_GET)) as i64;
     }
     c[HOLDER_HOP_SHAPES] = if accessor {
-        // The emitted arm loads inline lanes only (see `HOLDER_HOP_SHAPES`).
-        if w.slot.is_some_and(|s| s & HOLDER_SLOT_SPILL != 0) {
-            0
-        } else {
-            w.getter as i64
-        }
+        // The slot word distinguishes inline and spill storage. Both retain
+        // the immutable pair's getter; replacing its lane invalidates it.
+        w.getter as i64
     } else {
         (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64
     };
