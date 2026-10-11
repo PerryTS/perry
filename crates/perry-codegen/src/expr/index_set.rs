@@ -516,6 +516,11 @@ pub(crate) fn lower(
             index,
             value,
         } => {
+            if let Some(result) =
+                super::array_append::try_lower(ctx, object, index, value, assignment_strict)?
+            {
+                return Ok(result);
+            }
             // Step 4b / #10741: a planned-bare element store inside a loop
             // region (a dense raw-f64 array, the index and value proven).
             if let Some(result) = crate::stmt::region_loop::try_lower_bare_index_set(ctx, expr)? {

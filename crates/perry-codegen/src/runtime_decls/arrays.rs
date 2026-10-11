@@ -47,6 +47,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         &[PTR, I32, PTR, I32],
     );
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_array_append_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
+    );
     module.declare_function("js_array_push_u31_with_length", I64, &[I64, I32, PTR]);
     module.declare_function("js_array_push_f64_spec", I64, &[I64, DOUBLE]);
     // #11021: the ArrayPush slow arms' push. Returns the new head with `*own = 0`,

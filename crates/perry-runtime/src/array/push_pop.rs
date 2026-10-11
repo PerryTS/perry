@@ -824,7 +824,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     let capacity = (*arr).capacity;
 
     if length >= capacity {
-        return js_array_push_f64_grow(arr, length, value);
+        return super::append::grow(arr, length, value);
     }
 
     // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout
@@ -1121,27 +1121,6 @@ static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
     *mut ArrayHeader,
     f64,
 ) -> *mut ArrayHeader = js_array_numeric_push_f64_unboxed;
-
-#[cold]
-unsafe fn js_array_push_f64_grow(
-    arr: *mut ArrayHeader,
-    length: u32,
-    value: f64,
-) -> *mut ArrayHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let arr_handle = scope.root_raw_mut_ptr(arr);
-    let value_handle = scope.root_nanbox_f64(value);
-
-    let arr = js_array_grow(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), length + 1);
-    // SAFETY: `js_array_grow` returns the resolved live array head and no
-    // safepoint intervenes before the flag read/store.
-    let flags = array_object_flags_resolved(arr);
-    // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout note
-    // and write barrier as part of the slot write.
-    store_array_slot_resolved(arr, length as usize, value_handle.get_nanbox_f64(), flags);
-    (*arr).length = length + 1;
-    arr
-}
 
 /// Push every element of `source` to the end of `target`, growing as needed.
 /// Returns a pointer to the (possibly reallocated) target. Refs #488

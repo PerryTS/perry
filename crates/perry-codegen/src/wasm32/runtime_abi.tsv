@@ -52,6 +52,7 @@ js_array_alloc	ptr	i32u
 js_array_alloc_literal	ptr	i32u
 js_array_alloc_with_length	ptr	i32u
 js_array_alloc_with_length_longlived	ptr	i32u
+js_array_append_set	f64	f64,f64,f64,i32s,f64
 js_array_at	f64	ptr,f64
 js_array_buffer_new	ptr	i32s
 js_array_buffer_new_value	ptr	f64

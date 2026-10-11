@@ -1,5 +1,9 @@
 //! Array representation for Perry — split into topical sub-modules.
 mod alloc;
+mod append;
+pub use append::js_array_append_set;
+#[cfg(test)]
+mod append_tests;
 mod buffer_receiver;
 mod concat_reverse;
 /// #10593: a retargeted array's prototype is a per-array fact.

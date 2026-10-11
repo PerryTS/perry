@@ -57,6 +57,7 @@ js_array_alloc	Reenters
 js_array_alloc_literal	Reenters
 js_array_alloc_with_length	Reenters
 js_array_alloc_with_length_longlived	Reenters
+js_array_append_set	Reenters
 js_array_at	Reenters
 js_array_buffer_new	AllocOnly
 js_array_buffer_new_value	Reenters

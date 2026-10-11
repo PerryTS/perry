@@ -3106,6 +3106,7 @@ impl<'a> FnCtx<'a> {
 mod array_methods;
 pub(crate) mod array_pop;
 mod array_push;
+mod array_append;
 mod array_push_own;
 mod arrays_finds;
 mod bigint_set;
