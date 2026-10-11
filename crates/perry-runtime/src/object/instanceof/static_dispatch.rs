@@ -673,6 +673,21 @@ fn native_instanceof(
             if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
                 return false_val;
             }
+            // Callable values (in particular closures) are objects whose
+            // `Object` membership depends on their live `[[Prototype]]`
+            // chain. Do not assume they still inherit through
+            // `Function.prototype`: user code can relink that object to null.
+            if value_is_callable(value) {
+                let matches = if let Some(constructor) = constructor {
+                    ordinary_has_instance_prototype_walk_rooted(rooted_value, constructor)
+                } else {
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let object = scope
+                        .root_nanbox_f64(js_get_global_this_builtin_value(b"Object".as_ptr(), 6));
+                    ordinary_has_instance_prototype_walk_rooted(rooted_value, &object)
+                };
+                return if matches { true_val } else { false_val };
+            }
             // A relinked class prototype (or a replaced instance prototype)
             // can end the chain before `Object.prototype`.
             if let Some(header) =
