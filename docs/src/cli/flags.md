@@ -666,3 +666,39 @@ finished-build cache and runs normal collection/preflight checks. For example:
 PERRY_COLLECT_ONLY=1 perry compile src/index.ts --cache-dir /tmp/graph-after
 PERRY_COLLECT_ONLY=1 PERRY_NO_REEXPORT_PRUNE=1 perry compile src/index.ts --cache-dir /tmp/graph-before
 ```
+
+
+### Linux hot text, including the Rust runtime
+
+Ordering changes layout only: every unlisted function remains available at the
+same optimization level. Normal builds without an order keep the original
+link arguments and startup code.
+
+For a hot runtime profile, compile with `PERRY_KEEP_SYMBOLS=1`, then run
+`scripts/record_function_order.py -o app.order -- ./app representative-args`.
+The companion recorder samples the whole executable with Linux perf and emits
+raw ELF names, including Rust runtime and stdlib archive functions. Each sampled
+code body includes all of its symbol aliases, so a folded Rust function still
+selects its canonical input section. Aliases stay adjacent and the byte estimate
+counts each existing body once; no function copies are introduced. The default
+coverage is 90% of executable samples; use `--coverage` to choose another
+fraction. Shared-library code is excluded. The existing
+`--record-function-order` build still records exact generated first-call order
+with `PERRY_FUNCTION_ORDER_OUT`; its binary can also be sampled by the companion,
+but a plain symbol-preserving binary avoids instrumentation in the sample run.
+
+Apply either list with `--function-order app.order`. On Linux the linker places
+listed generated and Rust function sections together at the beginning of text,
+retains ordinary ELF alignment and backs only complete aligned 2 MiB pages
+inside the selected prefix after PIE relocation. Partial boundary pages retain
+their original file mapping. No padding is inserted between selected and
+unlisted code; rodata, RELRO and writable LOADs keep ordinary page alignment.
+A prefix smaller than 2 MiB returns before policy reads, copying or collapse.
+For eligible pages, startup tries file-backed `MADV_COLLAPSE`; if unavailable it
+prepares an anonymous executable copy and moves it into place. The additional
+anonymous memory is bounded by complete selected pages, rather than total
+text size. qb6 lacks `CONFIG_READ_ONLY_THP_FOR_FS`, so file collapse returns
+`EINVAL` there and the anonymous fallback is required for eligible prefixes. System or process THP disablement skips the operation. Linux kernels
+without collapse support can still allocate THP via `MADV_HUGEPAGE`.
+On other targets there is no huge-page startup call.
+Unknown names remain harmless; ELF linker metacharacters are rejected.

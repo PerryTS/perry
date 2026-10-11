@@ -1309,3 +1309,6 @@ pub extern "C" fn perry_runtime_widget_init() {
         let _ = std::fs::write("/tmp/perry-crash.log", full.as_bytes());
     }));
 }
+
+#[cfg(test)]
+mod hot_text;

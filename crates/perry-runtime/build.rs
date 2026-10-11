@@ -571,6 +571,16 @@ fn emit_instrument_cfgs() {
 }
 
 fn main() {
+    // Keep page backing outside the Rust CGU. Its unreferenced object is not
+    // extracted by ordinary links, preserving their code and literal layout.
+    println!("cargo:rerun-if-changed=src/hot_text.c");
+    cc::Build::new()
+        .file("src/hot_text.c")
+        .opt_level(3)
+        .flag_if_supported("-ffunction-sections")
+        .flag_if_supported("-fdata-sections")
+        .compile("perry_hot_text");
+
     println!("cargo:rustc-check-cfg=cfg(perry_native_stack_maps)");
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

@@ -328,6 +328,7 @@ js_aux_has_active	Reenters
 js_await_any_promise	Leaf
 js_await_js_promise	Reenters
 js_await_loop_tick_timers	Reenters
+js_back_hot_text	Leaf
 js_bcrypt_compare	Reenters
 js_bcrypt_compare_sync	Reenters
 js_bcrypt_gen_salt	Reenters

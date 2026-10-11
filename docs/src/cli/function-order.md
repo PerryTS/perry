@@ -42,13 +42,18 @@ missing names fall back to the usual order, so a list recorded from an older
 version of the program is harmless. It just orders less.
 
 Normal builds carry no recording code; `--function-order` costs nothing at
-run time.
+run time on non-Linux targets. Ordered Linux executables make one bounded
+backing call at startup: prefixes smaller than 2 MiB return immediately, and
+only complete selected 2 MiB pages are eligible for huge-page backing. The
+linker keeps ordinary ELF alignment and does not pad the selected prefix.
+After PIE relocation, backing covers only complete aligned pages inside
+selected code; partial boundary pages retain their original file mapping.
 
 ## Platforms
 
 | Platform | How the order is applied |
 |---|---|
-| Linux (GNU ld, the default `cc`) | Each listed function gets its own `.text.sorted.<rank>` section; GNU ld (2.36 and later) sorts those to the start of `.text`. |
+| Linux (GNU ld, the default `cc`) | The linker script collects ranked generated sections and native runtime function sections at the start of `.text`, with ordinary ELF alignment. |
 | Linux/Android with lld | The same sections plus `--symbol-ordering-file`. |
 | macOS / iOS (ld64) | `-order_file` with the list (Mach-O names add the leading `_`). |
 | Windows, WebAssembly | Not applied; the build is unchanged. |

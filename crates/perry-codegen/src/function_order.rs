@@ -14,13 +14,17 @@
 //!   record `{flag byte, name}`; the runtime appends the name to
 //!   `$PERRY_FUNCTION_ORDER_OUT` the first time the flag flips. A normal build
 //!   never references the hook, so it costs nothing when unused.
-//! * **Consuming** (`perry compile --function-order FILE`) places the listed
-//!   functions first, in list order: on ELF each listed function gets its own
-//!   `.text.sorted.<rank>` section, which GNU ld's default script sorts by
-//!   name at the head of `.text` (lld links also get `--symbol-ordering-file`);
-//!   Mach-O links get ld64's `-order_file`. Unlisted functions keep today's
-//!   order. Only functions the program defines are looked up in the list, so
-//!   a stale or partial list is harmless.
+//! * **Runtime recording** on Linux uses scripts/record_function_order.py:
+//!   perf samples a symbol-preserving representative executable and emits
+//!   raw ELF symbols for hot generated, runtime and stdlib functions.
+//! * **Consuming** places listed functions together, in list order. Linux
+//!   uses a linker script to collect generated ranked sections and runtime
+//!   archive function sections into a 2 MiB-aligned prefix. Its linker-defined
+//!   bounds limit startup huge-page backing to complete 2 MiB pages of selected
+//!   code. Smaller prefixes only change layout and incur no backing work. Other ELF links use symbol ordering and Mach-O uses order_file.
+//!   Unlisted functions retain their optimization and remain available.
+//!
+//! Without an order file neither startup IR nor link arguments change.
 //!
 //! The list is plain text: one LLVM function name per line (the ELF symbol;
 //! Mach-O symbols add a leading `_`). Blank lines and `#` comments are
@@ -92,6 +96,33 @@ impl FunctionOrder {
             .map(|rank| format!("{SORTED_SECTION_PREFIX}{rank:08}"))
     }
 
+    /// An ELF linker-script augmentation: consume the selected generated
+    /// sections and runtime archive sections before the default .text rule.
+    /// Rust uses function sections by default on Linux; no archive rewriting
+    /// or code duplication is needed. Only complete pages of selected code are
+    /// eligible: no padding is inserted between selected and unlisted text.
+    pub fn elf_linker_script(&self) -> Result<String, &'static str> {
+        let mut out =
+            String::from("SECTIONS {\n .text : ALIGN(16) {\n  __perry_hot_text_start = .;\n");
+        for (rank, name) in self.names.iter().enumerate() {
+            // Names enter a linker pattern. Reject metacharacters rather than
+            // allowing an order file to select unrelated sections or commands.
+            if !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.$".contains(&b))
+            {
+                return Err("function order contains an unsafe ELF symbol name");
+            }
+            out.push_str(&format!(
+                "  *(.text.sorted.{rank:08} .text.{name} .text.hot.{name} .text.unlikely.{name} .text.startup.{name} .text.exit.{name} .gnu.linkonce.t.{name})\n"
+            ));
+        }
+        out.push_str(
+            "  __perry_hot_text_end = .;\n  __perry_hot_text_limit = __perry_hot_text_end;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
+        );
+        Ok(out)
+    }
+
     /// A content digest for the object-cache key: two lists that rank the
     /// same names the same way share it, whatever their comments say.
     pub fn digest(&self) -> u64 {
@@ -140,7 +171,7 @@ impl FunctionLayout {
         match self {
             FunctionLayout::Default => String::new(),
             FunctionLayout::Record => "record-v1".to_string(),
-            FunctionLayout::Order(order) => format!("order-v1:{:016x}", order.digest()),
+            FunctionLayout::Order(order) => format!("order-v4:{:016x}", order.digest()),
         }
     }
 }
@@ -213,6 +244,24 @@ mod tests {
             FunctionLayout::Record.cache_key(),
             FunctionLayout::Default.cache_key()
         );
+    }
+
+    #[test]
+    fn elf_order_selects_runtime_and_generated_sections_and_rejects_patterns() {
+        let order = FunctionOrder::parse("js_string_concat\n_ZN13perry_runtime3foo17h123E\nmain\n");
+        let script = order.elf_linker_script().unwrap();
+        assert!(script.contains(".text.sorted.00000000 .text.js_string_concat"));
+        assert!(script.contains(".text._ZN13perry_runtime3foo17h123E"));
+        assert!(script.contains("__perry_hot_text_limit"));
+        assert!(script.contains(".text : ALIGN(16)"));
+        assert!(script.contains("__perry_hot_text_limit = __perry_hot_text_end"));
+        assert!(!script.contains(". = ALIGN"), "no padding inside text");
+        for bad in ["*", "a?b", "a[b]", "a\"b", "a;evil"] {
+            assert!(
+                FunctionOrder::parse(bad).elf_linker_script().is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

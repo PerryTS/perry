@@ -16,6 +16,13 @@ pub(crate) fn apply(module: &Module<'_>, layout: &FunctionLayout, effective_targ
         FunctionLayout::Order(order) => {
             if elf_target(effective_target) {
                 place_listed_functions(module, order);
+                if !order.is_empty()
+                    && effective_target.contains("linux")
+                    && !effective_target.contains("android")
+                    && !effective_target.contains("ohos")
+                {
+                    back_hot_text(module);
+                }
             }
         }
     }
@@ -50,6 +57,50 @@ fn place_listed_functions(module: &Module<'_>, order: &FunctionOrder) {
             global.set_section(Some(&section));
         }
     }
+}
+
+/// The linker supplies the exact rounded prefix. This call exists only in an
+/// ordered Linux executable; normal IR and non-Linux IR stay unchanged.
+fn back_hot_text(module: &Module<'_>) {
+    let Some(main) = module.get_function("main") else {
+        return;
+    };
+    let Some(entry) = main.get_first_basic_block() else {
+        return;
+    };
+    let mut at = entry.get_first_instruction();
+    while let Some(inst) = at {
+        if inst.get_opcode() != InstructionOpcode::Alloca {
+            break;
+        }
+        at = inst.get_next_instruction();
+    }
+    let Some(at) = at else { return };
+    let ctx = module.get_context();
+    let ptr = ctx.ptr_type(AddressSpace::default());
+    let mut bounds = Vec::new();
+    for name in ["__perry_hot_text_start", "__perry_hot_text_limit"] {
+        let global = module
+            .get_global(name)
+            .unwrap_or_else(|| module.add_global(ctx.i8_type(), None, name));
+        bounds.push(global.as_pointer_value().into());
+    }
+    let hook = module.get_function("js_back_hot_text").unwrap_or_else(|| {
+        module.add_function(
+            "js_back_hot_text",
+            ctx.void_type().fn_type(&[ptr.into(), ptr.into()], false),
+            Some(Linkage::External),
+        )
+    });
+    let builder = ctx.create_builder();
+    builder.position_before(&at);
+    let call = builder
+        .build_call(hook, &bounds, "")
+        .expect("hot text call");
+    call.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_string_attribute("gc-leaf-function", ""),
+    );
 }
 
 /// Call the recording hook at the top of every defined function, after its
@@ -187,6 +238,42 @@ mod tests {
             "the record carries flag + name:\n{ir}"
         );
         assert!(ir.contains("\"gc-leaf-function\""), "{ir}");
+    }
+
+    #[test]
+    fn huge_text_startup_is_only_in_nonempty_linux_ordered_main() {
+        let ctx = Context::create();
+        for (triple, names, want) in [
+            ("x86_64-unknown-linux-gnu", "main", true),
+            ("x86_64-unknown-linux-gnu", "", false),
+            ("arm64-apple-macosx15.0.0", "main", false),
+            ("x86_64-pc-windows-msvc", "main", false),
+            ("aarch64-linux-android", "main", false),
+        ] {
+            let m = crate::inprocess::parse_ir_text(
+                &ctx,
+                "define i32 @main() {\nentry:\n %x = alloca i64\n ret i32 0\n}\n",
+                "main",
+            )
+            .unwrap();
+            apply(
+                &m,
+                &FunctionLayout::Order(Arc::new(FunctionOrder::parse(names))),
+                triple,
+            );
+            m.verify().unwrap();
+            let ir = m.print_to_string().to_string();
+            assert_eq!(
+                ir.contains("call void @js_back_hot_text("),
+                want,
+                "{triple}"
+            );
+            if want {
+                assert!(ir.find("alloca").unwrap() < ir.find("call void").unwrap());
+                assert!(ir.contains("@__perry_hot_text_start"));
+                assert!(ir.contains("@__perry_hot_text_limit"));
+            }
+        }
     }
 
     #[test]

@@ -278,17 +278,19 @@ pub struct CompileArgs {
     /// function's name is appended to that file the first time it executes
     /// (one name per line; delete the file before a fresh recording). Feed
     /// the file to `--function-order` for the real build. The instrumentation
-    /// exists only in this build; normal builds carry none.
+    /// exists only in this build; normal builds carry none. For hot runtime
+    /// and stdlib symbols on Linux, sample a symbol-preserving binary with
+    /// scripts/record_function_order.py.
     #[arg(long, conflicts_with = "function_order")]
     pub record_function_order: bool,
 
-    /// Lay out compiled functions in the order a recording build wrote
-    /// (`--record-function-order`): the listed functions are placed first and
-    /// together, in list order, so the code a program runs at startup shares
-    /// pages. Unlisted functions keep the default order; names the program
-    /// does not define are ignored, so a stale or partial list is harmless.
-    /// ELF via `.text.sorted.*` sections (GNU ld) and `--symbol-ordering-file`
-    /// (lld); Mach-O via ld64's `-order_file`.
+    /// Lay out generated and runtime functions together in recorded order.
+    /// Use a generated first-call recording or Linux perf hot-symbol recording
+    /// (scripts/record_function_order.py). Unlisted functions keep the default
+    /// optimization and remain available; unknown names are ignored.
+    /// Linux links collect generated and Rust function sections into one
+    /// 2 MiB-aligned hot prefix, backed by THP when enabled. Other ELF links
+    /// use symbol ordering; Mach-O uses ld64's order file.
     #[arg(long, value_name = "FILE")]
     pub function_order: Option<PathBuf>,
 
