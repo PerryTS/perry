@@ -4,7 +4,7 @@ use super::*;
 fn regexp_builtin_shape_rejects_overrides() {
     const CHILD: &str = "PERRY_TEST_REGEXP_BUILTIN_SHAPE_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        for kind in ["own", "flags", "symbol", "exec", "order"] {
+        for kind in ["own", "flags", "symbol", "exec", "test", "order"] {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -95,6 +95,22 @@ fn regexp_builtin_shape_rejects_overrides() {
                 assert!(
                     !builtin_behavior(value(re)),
                     "prototype symbol value must retire holder proof"
+                );
+            }
+            "test" => {
+                super::super::js_object_set_field_by_name(
+                    proto,
+                    crate::string::js_string_from_str("test"),
+                    other,
+                );
+                assert!(
+                    !builtin_behavior(value(re)),
+                    "test must retire the aggregate proof"
+                );
+                assert!(!test(value(re)), "the window shortcut must observe test");
+                assert!(
+                    exec_is_builtin(value(re)),
+                    "the narrower exec proof remains valid"
                 );
             }
             "exec" => {

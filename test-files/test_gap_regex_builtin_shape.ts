@@ -79,3 +79,13 @@ const custom: any = /a/g;
 warm(custom);
 Object.setPrototypeOf(custom, { [Symbol.replace]() { return "custom-prototype"; } });
 console.log("prototype", "a".replace(custom, "x"));
+
+// The aggregate proof is also shared by builtin test/exec admission.
+const protoExec = RegExp.prototype.exec;
+const execReceiver = /a/;
+console.log("warm test", execReceiver.test("a"));
+let protoExecCalls = 0;
+RegExp.prototype.exec = function (_s: string) { protoExecCalls++; return null; };
+console.log("proto exec test", execReceiver.test("a"), protoExecCalls);
+console.log("proto exec replace", "a".replace(/a/g, "x"), protoExecCalls);
+RegExp.prototype.exec = protoExec;

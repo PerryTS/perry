@@ -236,9 +236,9 @@ mod tests {
     /// quietly — a wrong arity PARSES and miscompiles, handing the runtime a
     /// garbage argument.
     ///
-    /// `Expr::RegExp` lowers to `js_regexp_literal(pattern, flags, site_key)`
-    /// (`expr/logical_collections.rs`), so the declaration must be exactly
-    /// three `i64` parameters returning `i64`.
+    /// `Expr::RegExp` lowers to `js_regexp_literal(site_key)`
+    /// (`expr/regex_literal.rs`), so the declaration must be exactly
+    /// one `i64` parameter returning `i64`.
     #[test]
     fn the_literal_site_regexp_entry_is_declared_with_its_exact_arity() {
         let mut module = crate::module::LlModule::new("arm64-apple-macosx");
@@ -254,8 +254,8 @@ mod tests {
                  HIR-level test can see",
             );
         assert!(
-            line.starts_with("declare i64 @js_regexp_literal(i64, i64, i64)"),
-            "the site-keyed entry takes (pattern handle, flags handle, site key) and returns a \
+            line.starts_with("declare i64 @js_regexp_literal(i64)"),
+            "the site-keyed entry takes a descriptor address and returns a \
              RegExpHeader handle — a wrong arity parses and miscompiles instead of failing. Got: \
              {line}"
         );

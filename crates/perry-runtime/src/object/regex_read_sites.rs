@@ -65,16 +65,25 @@ pub(crate) fn builtin_exec_data(value: f64) -> Option<*const crate::regex::RegEx
     // answer proves a live, ordinary, branded receiver, which is all the exec
     // site's read needs to know about it. Every other value is not a RegExp
     // and keeps the observable path.
-    let data = crate::regex::regexp_data_of(value).filter(|_| {
-        EXEC_READ.with(|site| unsafe {
-            let object = (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
-            match site.read_leaf(object) {
-                Some(method) => thunks::is_builtin_regexp_exec(method),
-                None => matches!(site.probe(object, Key::Name(b"exec")), Some(Answer::Data(bits))
-                    if thunks::is_builtin_regexp_exec(f64::from_bits(bits))),
-            }
+    // The aggregate shape proof already covers exec. Share it with replace
+    // and test instead of probing a second holder/getter site on pristine
+    // receivers. Mutated receivers retain the narrower observable-exec proof.
+    let data = if builtin_behavior(value) {
+        crate::regex::regexp_data_of(value)
+    } else {
+        crate::regex::regexp_data_of(value).filter(|_| {
+            EXEC_READ.with(|site| unsafe {
+                let object =
+                    (value.to_bits() & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
+                match site.read_leaf(object) {
+                    Some(method) => thunks::is_builtin_regexp_exec(method),
+                    None => matches!(site.probe(object, Key::Name(b"exec")),
+                        Some(Answer::Data(bits))
+                        if thunks::is_builtin_regexp_exec(f64::from_bits(bits))),
+                }
+            })
         })
-    });
+    };
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_counters(|d| {
             if data.is_some() {
@@ -88,7 +97,8 @@ pub(crate) fn builtin_exec_data(value: f64) -> Option<*const crate::regex::RegEx
 }
 
 pub(crate) fn test(value: f64) -> bool {
-    let hit = data_is(value, 1, thunks::regex_proto_test_thunk as *const u8);
+    let hit =
+        builtin_behavior(value) || data_is(value, 1, thunks::regex_proto_test_thunk as *const u8);
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_counters(|d| {
             if hit {
@@ -177,6 +187,14 @@ unsafe fn prove_builtin_behavior(
         b"exec",
     )?;
     if !constfn_code(&shape, exec, thunks::regex_proto_exec_thunk as *const u8) {
+        return None;
+    }
+    let test = super::keys_find_slot_by_bytes_resolved(
+        shape.keys as usize as *const crate::array::ArrayHeader,
+        shape.logical_key_count,
+        b"test",
+    )?;
+    if !constfn_code(&shape, test, thunks::regex_proto_test_thunk as *const u8) {
         return None;
     }
     for (index, code) in [

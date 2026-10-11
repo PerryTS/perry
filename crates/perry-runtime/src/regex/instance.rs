@@ -17,6 +17,46 @@ crate::perry_thread_local! {
 /// collecting action here, so no handle is needed for it.
 pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
+    if shape != 0 {
+        let size = std::mem::size_of::<RegExpHeader>() + crate::object::INLINE_SLOT_FLOOR * 8;
+        let receiver = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
+            as *mut RegExpHeader;
+        if !receiver.is_null() {
+            // The birth record is an agent-lifetime external carrier. Its
+            // two Any lanes cannot deprecate (only F64/ConstFn lanes do), so
+            // no record lookup or layout validation belongs to this birth.
+            unsafe {
+                (*receiver).class_id = 0;
+                (*receiver).parent_class_id = shape;
+                // GC_STORE_AUDIT(INIT): unpublished nursery object's empty metadata.
+                (*receiver).meta = std::ptr::null_mut();
+                crate::object::shapes::store_kind::premark_plain_ordinary(receiver);
+                let slots = receiver
+                    .cast::<u8>()
+                    .add(std::mem::size_of::<RegExpHeader>())
+                    .cast::<u64>();
+                let matcher = js_nanbox_pointer(data() as i64).to_bits();
+                // GC_STORE_AUDIT(INIT): young receiver; shade the matcher below if marking.
+                slots.write(matcher);
+                // GC_STORE_AUDIT(INIT): lastIndex starts at Number zero on every evaluation.
+                slots.add(1).write(0.0f64.to_bits());
+                for i in 2..crate::object::INLINE_SLOT_FLOOR {
+                    // GC_STORE_AUDIT(INIT): pointer-free physical slack for ordinary key adds.
+                    slots.add(i).write(crate::value::TAG_UNDEFINED);
+                }
+                if !crate::gc::incremental_mark_barrier_globally_idle() {
+                    crate::gc::runtime_shade_external_edge(matcher);
+                }
+            }
+            return receiver;
+        }
+    }
+    new_slow(shape, data)
+}
+
+#[cold]
+#[inline(never)]
+fn new_slow(shape: u32, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let (mut receiver, born_on_memo) = crate::object::object_alloc_plain_born(2, shape);
     let rep = born_on_memo.unwrap_or_else(|| {
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
@@ -104,6 +144,11 @@ fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
         // shape table's scanner while no receiver carries it.
         crate::object::shapes::note_external_shape_carrier(
             crate::object::shapes::shape_descriptor_by_id(shape),
+        );
+        assert_eq!(
+            crate::object::shapes::shape_rep_by_id(shape),
+            0,
+            "the fixed RegExp birth must have only Any lanes"
         );
         BIRTH_SHAPE.with(|memo| memo.set(shape));
         // The canonical keys above prove both namespaces and positions.

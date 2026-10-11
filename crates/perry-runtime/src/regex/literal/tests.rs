@@ -9,7 +9,7 @@ fn literal<'s>(scope: &'s RuntimeHandleScope, site: *mut u64, pattern: &str) -> 
     let source = scope.root_string_ptr(super::super::js_string_from_str(pattern));
     let flags = scope.root_string_ptr(super::super::js_string_from_str("g"));
     scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
-        flags.with_const_ptr(|flags| js_regexp_literal(source, flags, site as i64))
+        flags.with_const_ptr(|flags| from_parts(source, flags, site as i64))
     }))
 }
 fn data(re: &RuntimeHandle<'_>) -> usize {

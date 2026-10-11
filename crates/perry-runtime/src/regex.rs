@@ -76,6 +76,8 @@ mod literal;
 mod perex_substitution;
 #[cfg(feature = "regex-engine")]
 pub use literal::js_regexp_literal;
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) use literal::{from_parts as test_regexp_literal, LiteralSite};
 #[cfg(feature = "regex-engine")]
 pub use perex_replace::{js_string_replace_all_js, js_string_replace_js};
 #[cfg(feature = "regex-engine")]

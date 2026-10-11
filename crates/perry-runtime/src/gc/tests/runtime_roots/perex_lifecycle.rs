@@ -1,6 +1,7 @@
 //! GC program lifetime after bounded cache eviction releases its strong roots.
 use super::*;
 use crate::regex::RegExpHeader;
+use crate::string::StringHeader;
 
 fn text<'s>(scope: &'s RuntimeHandleScope, value: &str) -> RuntimeHandle<'s> {
     scope.root_string_ptr(crate::string::js_string_from_bytes(
@@ -173,8 +174,9 @@ fn perex_lifecycle_literal_and_dynamic_construction_have_independent_state() {
     let mut owners = Vec::new();
     for _ in 0..2 {
         owners.push(scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
-            flags
-                .with_const_ptr(|flags| crate::regex::js_regexp_literal(source, flags, site as i64))
+            flags.with_const_ptr(|flags| {
+                crate::regex::test_regexp_literal(source, flags, site as i64)
+            })
         })));
     }
     owners.push(regex(&scope, "born[0-9]+built", "g"));
@@ -309,14 +311,29 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    let site = Box::leak(Box::new([0u64; 2])).as_mut_ptr();
+    let descriptor = Box::leak(Box::new(crate::regex::LiteralSite {
+        pattern: std::ptr::null(),
+        flags: std::ptr::null(),
+        data: 0,
+    }));
+    let site = std::ptr::addr_of_mut!(descriptor.data);
     let old = {
         let scope = RuntimeHandleScope::new();
         let source = text(&scope, "site-only-root");
         let flags = text(&scope, "g");
-        let re = scope.root_raw_mut_ptr(source.with_const_ptr(|s| {
-            flags.with_const_ptr(|f| crate::regex::js_regexp_literal(s, f, site as i64))
-        }));
+        let source_word =
+            source.with_const_ptr::<StringHeader, _>(|s| crate::value::js_nanbox_string(s as i64));
+        let flags_word =
+            flags.with_const_ptr::<StringHeader, _>(|f| crate::value::js_nanbox_string(f as i64));
+        descriptor.pattern = &source_word;
+        descriptor.flags = &flags_word;
+        let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
+            descriptor as *mut crate::regex::LiteralSite as i64,
+        ));
+        // The warm entry must never load operands again. The moving-GC
+        // rounds below make the descriptor's data word its sole root.
+        descriptor.pattern = std::ptr::null();
+        descriptor.flags = std::ptr::null();
         assert!(matches(&re, "site-only-root"));
         let data = unsafe { (*site & crate::value::POINTER_MASK) as usize };
         assert!(
@@ -340,9 +357,7 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     // Hit must not parse flags or probe the compile cache; null operands are
     // deliberately unusable as source input. The site has all matcher data.
     let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
-        std::ptr::null(),
-        std::ptr::null(),
-        site as i64,
+        descriptor as *mut crate::regex::LiteralSite as i64,
     ));
     assert!(matches(&re, "site-only-root"));
     assert_eq!(
@@ -353,9 +368,7 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     // The previous match advanced this instance's own global lastIndex.
     assert!(!matches(&re, "site-only-root"));
     let fresh = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
-        std::ptr::null(),
-        std::ptr::null(),
-        site as i64,
+        descriptor as *mut crate::regex::LiteralSite as i64,
     ));
     assert!(matches(&fresh, "site-only-root"));
 }

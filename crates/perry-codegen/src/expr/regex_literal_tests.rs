@@ -93,7 +93,7 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
         Type::Boolean,
     )]);
     assert!(ir.contains("call i64 @js_regexp_literal("), "{ir}");
-    assert!(ir.contains("private global i64 0"), "{ir}");
+    assert!(ir.contains("private global { ptr, ptr, i64 }"), "{ir}");
     assert_generic(&ir);
 }
 
@@ -128,6 +128,10 @@ fn literal_site_is_one_call_to_the_shared_birth_entry() {
         body.matches("call i64 @js_regexp_literal(").count(),
         1,
         "{ir}"
+    );
+    assert!(
+        !body.contains("load double"),
+        "literal operands belong to the shared cold miss: {ir}"
     );
     for inline in [
         // A function prologue may initialize its arena state independently

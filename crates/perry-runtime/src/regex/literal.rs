@@ -6,12 +6,43 @@ use super::{RegExpData, RegExpHeader};
 use crate::gc::RuntimeHandleScope;
 use crate::string::StringHeader;
 
-/// `site_word` is an immortal, aligned, zero-initialized codegen global unique
-/// to this literal. Only the primary JS agent accesses it. On first use it
-/// becomes an existing global root; subsequent evaluations allocate a fresh
-/// ordinary object with its own lastIndex around the same immutable data.
+/// Immortal codegen descriptor. The source/flags addresses name existing
+/// rooted string globals; only `data` is mutable, through the global-root
+/// store contract. No source/flags loads belong to a repeated evaluation.
+#[repr(C)]
+pub(crate) struct LiteralSite {
+    pub(crate) pattern: *const f64,
+    pub(crate) flags: *const f64,
+    pub(crate) data: u64,
+}
+
 #[no_mangle]
-pub extern "C" fn js_regexp_literal(
+pub extern "C" fn js_regexp_literal(site: i64) -> *mut RegExpHeader {
+    let site = site as *mut LiteralSite;
+    let word = unsafe { std::ptr::addr_of_mut!((*site).data) };
+    if crate::agent::current_agent() == crate::agent::PRIMARY_AGENT && unsafe { word.read() } != 0 {
+        return super::instance::new(|| unsafe {
+            (word.read() & crate::value::POINTER_MASK) as *const RegExpData
+        });
+    }
+    literal_cold(site, word)
+}
+
+#[cold]
+#[inline(never)]
+fn literal_cold(site: *mut LiteralSite, word: *mut u64) -> *mut RegExpHeader {
+    let (pattern, flags) = unsafe {
+        (
+            crate::value::js_nanbox_get_pointer((*site).pattern.read()) as *const StringHeader,
+            crate::value::js_nanbox_get_pointer((*site).flags.read()) as *const StringHeader,
+        )
+    };
+    from_parts(pattern, flags, word as i64)
+}
+
+// The cold miss and runtime fixtures share exactly the same publication and
+// birth. Runtime fixtures supply raw strings and an immortal mutable word.
+pub(crate) fn from_parts(
     pattern: *const StringHeader,
     flags: *const StringHeader,
     site_word: i64,

@@ -3214,7 +3214,7 @@ js_regexp_exec_get_groups	i64
 js_regexp_exec_get_index	f64	
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
-js_regexp_literal	ptr	ptr,ptr,i64
+js_regexp_literal	ptr	i64
 js_regexp_new	ptr	ptr,ptr
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr

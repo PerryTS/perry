@@ -330,13 +330,13 @@ fn test_incremental_barrier_shades_regexp_literal_birth_data() {
     // The first evaluation compiles, publishes the site and mints the birth
     // shape; the one under the barrier is an ordinary hit.
     let _first = scope.root_raw_mut_ptr(source.with_const_ptr(|s| {
-        flags.with_const_ptr(|f| crate::regex::js_regexp_literal(s, f, site as i64))
+        flags.with_const_ptr(|f| crate::regex::test_regexp_literal(s, f, site as i64))
     }));
     clear_marks();
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
     assert!(!crate::gc::incremental_mark_barrier_globally_idle());
-    let re = crate::regex::js_regexp_literal(std::ptr::null(), std::ptr::null(), site as i64);
+    let re = crate::regex::test_regexp_literal(std::ptr::null(), std::ptr::null(), site as i64);
     let data = unsafe { (*site & crate::value::POINTER_MASK) as usize };
     assert_eq!(crate::regex::regexp_data_ptr(re) as usize, data);
     mark_user_ptr(re as usize);
