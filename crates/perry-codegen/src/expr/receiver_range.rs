@@ -258,6 +258,68 @@ mod tests {
         }
     }
 
+    /// The biased value is `bits - (POINTER_TAG | HANDLE_FLOOR)`; the only
+    /// way back to an address is [`emit_handle`] / [`emit_field_ptr`], which
+    /// add the same floor. An emitter that offsets a biased value by a literal
+    /// of its own has hand-typed the floor, and goes wrong the day the floor
+    /// moves: the private-site guard added `1048580` (the 1 MiB floor + 4)
+    /// after #12383 moved the floor to 2 MiB, so it read the ShapeId word one
+    /// MiB below every receiver — a SIGSEGV when that page was unmapped and a
+    /// passed brand check when it held a matching ShapeId.
+    #[test]
+    fn no_emitter_offsets_a_biased_value_by_a_literal() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root];
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                scanned += 1;
+                for (n, line) in text.lines().enumerate() {
+                    let compact: String = line.split_whitespace().collect();
+                    for op in ["add(I64,&biased", "sub(I64,&biased", "or(I64,&biased"] {
+                        if let Some(at) = compact.find(op) {
+                            let rest = &compact[at + op.len()..];
+                            // `&biased,"<digits>"` or `&biased_x,"<digits>"`
+                            let rest = rest.trim_start_matches(|c: char| {
+                                c == '_' || c.is_ascii_alphanumeric()
+                            });
+                            if let Some(lit) = rest.strip_prefix(",\"") {
+                                if lit.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
+                                    offenders.push(format!(
+                                        "{}:{}: {}",
+                                        path.display(),
+                                        n + 1,
+                                        line.trim()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned > 100,
+            "the scan must have read the codegen sources ({scanned} files)"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a biased receiver value is offset by a hand-typed literal; derive the address with \
+             receiver_range::emit_handle / emit_field_ptr:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     #[test]
     fn emitted_literals_are_the_constants() {
         assert_eq!(RECEIVER_BIAS_LITERAL, (RECEIVER_BIAS as i64).to_string());

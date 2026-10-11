@@ -132,18 +132,11 @@ pub(crate) fn emit_private_site_guard(
     let blk = ctx.block();
     let word = blk.load_atomic_monotonic(I64, site, 8);
     let bits = blk.bitcast_double_to_i64(obj);
-    // `bits - (POINTER_TAG + HANDLE_BAND_MAX) < 2^48 - HANDLE_BAND_MAX`: POINTER-tagged and
-    // above the small-handle band, in one compare.
-    let biased = blk.sub(
-        I64,
-        &bits,
-        crate::expr::receiver_range::RECEIVER_BIAS_LITERAL,
-    );
-    let in_range = blk.icmp_ult(
-        I64,
-        &biased,
-        crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
-    );
+    // POINTER-tagged and above the handle band, in one compare: the shared
+    // receiver test of every read and write route (`receiver_range`).
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+    let biased = recv.biased;
+    let in_range = recv.is_object_pointer;
     let inert = emit_private_template_inert(blk, class_id);
     let ready = blk.and(crate::types::I1, &in_range, &inert);
     let ready = if static_id.is_some() {
@@ -156,8 +149,9 @@ pub(crate) fn emit_private_site_guard(
 
     ctx.current_block = probe_idx;
     let blk = ctx.block();
-    let shape_addr = blk.add(I64, &biased, "1048580"); // payload + 4
-    let shape_ptr = blk.inttoptr(I64, &shape_addr);
+    // The ShapeId word (payload + 4), addressed from the biased value by the
+    // module that biased it, so the two never disagree about the handle floor.
+    let shape_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
     let shape = blk.load(crate::types::I32, &shape_ptr);
     let shape = blk.zext(crate::types::I32, &shape, I64);
     // A site word is never 0 once primed, and no ShapeId is 0, so an
