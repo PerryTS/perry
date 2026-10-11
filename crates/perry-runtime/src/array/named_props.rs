@@ -1154,4 +1154,5 @@ pub(crate) fn test_clear_full_array_named_property_roots() {
 mod property_bag;
 pub(crate) use property_bag::{
     array_property_bag, array_property_bag_ensure, array_property_bag_resolved,
+    array_prototype_property_bag_ensure,
 };

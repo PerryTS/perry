@@ -258,7 +258,15 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // The prototype is an own static data property too. Include it in
         // the initial attributed layout so adding name/length cannot spill it.
         let proto_obj = if name == "Array" {
-            crate::array::js_array_alloc(0) as *mut ObjectHeader
+            let arr = crate::array::js_array_alloc(0);
+            // SAFETY: the fresh intrinsic, under this bootstrap's no-move scope.
+            unsafe {
+                crate::array::array_prototype_property_bag_ensure(
+                    arr,
+                    super::proto_room::BUILTIN_PROTOTYPE_ROOM,
+                );
+            }
+            arr as *mut ObjectHeader
         } else {
             super::proto_room::alloc_builtin_prototype()
         };

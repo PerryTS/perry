@@ -333,7 +333,7 @@ pub(crate) use self::named_props::{
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
     array_named_property_set, array_named_props_reserve, array_named_props_slot,
     array_property_bag, array_property_bag_ensure, array_property_bag_resolved,
-    carry_named_props_reserve, ensure_named_props_slot,
+    array_prototype_property_bag_ensure, carry_named_props_reserve, ensure_named_props_slot,
     prune_dead_full_array_named_property_owners, store_named_props_word,
     transfer_full_array_named_props_owner, visit_array_named_props_slots,
 };

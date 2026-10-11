@@ -109,6 +109,46 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
 mod tests {
     use super::*;
 
+    /// `%Array.prototype%`'s named holder (its property bag) is born old and
+    /// never-move like every builtin prototype, so an array method site's
+    /// memo admits it before any minor has run.
+    #[test]
+    fn array_prototype_bag_is_born_old_and_never_move() {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(|| unsafe {
+                crate::object::js_get_global_this();
+                let proto = crate::array::array_prototype_addr();
+                assert_ne!(proto, 0, "no %Array.prototype%");
+                let bag =
+                    crate::array::array_property_bag(proto as *const crate::array::ArrayHeader);
+                assert!(!bag.is_null(), "%Array.prototype% has no property bag");
+                let header =
+                    (bag as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                // Never-move from birth (asked before the memo rule, which
+                // would mark it), and admitted by that rule: old.
+                assert!(crate::gc::never_move::is_never_move(header));
+                assert!(
+                    crate::gc::never_move::stable_memo_referent(bag as usize),
+                    "%Array.prototype%'s bag is young"
+                );
+                let d = crate::object::shapes::object_shape_descriptor(bag).expect("shape");
+                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                for name in ["constructor", "slice", "toString"] {
+                    let s = crate::object::keys_find_slot_by_bytes_resolved(
+                        list,
+                        d.logical_key_count,
+                        name.as_bytes(),
+                    )
+                    .unwrap_or_else(|| panic!("{name} missing"));
+                    assert!(s < d.live_inline_slot_count, "{name} is not inline");
+                }
+            })
+            .expect("spawn")
+            .join()
+            .expect("array-prototype bag test panicked");
+    }
+
     /// `%Object.prototype%` holds its own keys inline (the method site's
     /// inherited entry reads them there), its live bound is exactly what they
     /// use, and the allocation's unused room went back.

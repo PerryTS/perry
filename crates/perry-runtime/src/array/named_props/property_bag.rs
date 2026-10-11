@@ -61,6 +61,28 @@ pub(crate) unsafe fn names(
 pub(crate) unsafe fn array_property_bag_ensure(
     arr: *mut ArrayHeader,
 ) -> *mut crate::object::ObjectHeader {
+    property_bag_ensure(arr, None)
+}
+
+/// The property bag of `%Array.prototype%`, created with the array: the named
+/// holder every array method site answers from, so it is born old and
+/// never-move with `room` inline slots like every other prototype the runtime
+/// builds once per realm (owner decision O3, `gc::never_move`). A young bag
+/// is refused by every site memo until the first minor promotes it.
+///
+/// # Safety
+/// `arr` is the live, just-allocated intrinsic, not yet exposed to script.
+pub(crate) unsafe fn array_prototype_property_bag_ensure(
+    arr: *mut ArrayHeader,
+    room: u32,
+) -> *mut crate::object::ObjectHeader {
+    property_bag_ensure(arr, Some(room))
+}
+
+unsafe fn property_bag_ensure(
+    arr: *mut ArrayHeader,
+    born_old_room: Option<u32>,
+) -> *mut crate::object::ObjectHeader {
     // Installs already hold raw owner pointers. Growth leaves a forwarding
     // alias; suppress collection while migrating the existing property slots.
     let _no_move = crate::gc::GcSuppressScope::new();
@@ -100,7 +122,10 @@ pub(crate) unsafe fn array_property_bag_ensure(
         !arr.is_null(),
         "descriptor holder must have a property reserve"
     );
-    let bag = crate::object::js_object_alloc(0, 0);
+    let bag = match born_old_room {
+        Some(room) => crate::object::object_alloc_prototype_old(0, room),
+        None => crate::object::js_object_alloc(0, 0),
+    };
     for (name, value) in props {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::object_ops::define_property_force_store_value(bag, key, value);
