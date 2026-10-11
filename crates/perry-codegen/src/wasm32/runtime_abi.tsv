@@ -182,6 +182,7 @@ js_array_set_length_strict	void	ptr,f64
 js_array_set_string_key	ptr	ptr,ptr,f64
 js_array_shift_f64	f64	ptr
 js_array_slice	ptr	ptr,i32s,i32s
+js_array_slice_method	f64	f64,f64,f64,usize
 js_array_slice_values	ptr	ptr,f64,f64
 js_array_some	f64	ptr,ptr
 js_array_some_captureless	f64	ptr,ptr
@@ -1907,6 +1908,10 @@ js_method_site_call_value	f64	f64,f64,ptr,usize
 js_method_site_call_value_apply	f64	f64,f64,i64
 js_method_site_lookup	f64	ptr,f64,i64,usize,ptr
 js_method_site_miss	f64	ptr,i64,f64,i64,ptr,usize
+js_method_site_miss0	f64	ptr,i64,f64,i64
+js_method_site_miss1	f64	ptr,i64,f64,i64,f64
+js_method_site_miss2	f64	ptr,i64,f64,i64,f64,f64
+js_method_site_miss3	f64	ptr,i64,f64,i64,f64,f64,f64
 js_method_site_prepare	f64	ptr,f64,i64,usize
 js_method_site_stats	f64	i32s
 js_microtasks_pending	i32s	

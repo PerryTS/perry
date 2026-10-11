@@ -816,7 +816,6 @@ fn emit_native_method_str_dispatch_with(
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     // The alloca MUST live in the entry block. An alloca in a loop body lowers
     // to a runtime stack adjustment which is never restored (#167).
-    let (args_ptr, args_len_str) = emit_method_args_buffer(ctx, lowered_args);
     let site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::MethodCall,
@@ -835,11 +834,10 @@ fn emit_native_method_str_dispatch_with(
             lowered_args,
             &site_id,
             &method_id,
-            &args_ptr,
-            &args_len_str,
             lanes,
         );
     }
+    let (args_ptr, args_len_str) = emit_method_args_buffer(ctx, lowered_args);
     ctx.block().call(
         DOUBLE,
         "js_typed_feedback_native_call_method_by_id",

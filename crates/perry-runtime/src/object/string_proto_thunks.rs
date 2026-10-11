@@ -147,6 +147,16 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             continue;
         }
 
+        if name == "indexOf" {
+            super::global_this::install_proto_method(
+                proto_obj,
+                name,
+                crate::fn_info!(string_proto_index_of_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                spec_length,
+            );
+            continue;
+        }
+
         // `call_fixed_arity = 0` → the thunk receives all args as a rest array.
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
@@ -389,4 +399,30 @@ extern "C" fn string_proto_split_thunk(
     limit: f64,
 ) -> f64 {
     crate::regex::js_string_split_js(this.as_f64(), separator, limit)
+}
+
+/// Fixed register ABI for indexOf, shared by reflective and method-site calls.
+/// Coercions keep the spec order and read all movable operands from roots.
+pub(super) extern "C" fn string_proto_index_of_thunk(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    search: f64,
+    position: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let search = scope.root_nanbox_f64(search);
+    let position = scope.root_nanbox_f64(position);
+    let string = string_this_or_throw(this, "indexOf");
+    let string = scope.root_string_ptr(string);
+    let needle = crate::value::js_jsvalue_to_string(search.get_nanbox_f64());
+    if needle.is_null() {
+        return -1.0;
+    }
+    let needle = scope.root_string_ptr(needle);
+    let from = crate::string::js_string_index_to_i32(position.get_nanbox_f64());
+    crate::string::js_string_index_of_from(
+        string.get_raw_const_ptr(),
+        needle.get_raw_const_ptr(),
+        from,
+    ) as f64
 }

@@ -15,7 +15,7 @@ use crate::temp_root_coverage::{entry_opts, module_with_init};
 const DISPATCH: &str = "call double @js_typed_feedback_native_call_method_by_id(";
 /// The One Path method site's miss: universal dispatch behind the site
 /// (`expr/method_site.rs`), which a plain (non-builtin-named) call now takes.
-const SITE_MISS: &str = "call double @js_method_site_miss(";
+const SITE_MISS: &str = "call double @js_method_site_miss";
 
 /// Does `ir` reach universal method dispatch, directly or behind a site?
 fn dispatches(ir: &str) -> bool {
@@ -165,6 +165,17 @@ fn unproven_number_method_uses_an_inline_tag_check() {
         !ir.contains(GET_TIME),
         "the Number check is an inline tag test, not a runtime call:\n{ir}"
     );
+}
+
+#[test]
+fn unproven_slice_uses_one_shared_register_helper_after_the_string_guard() {
+    let ir = main_ir(
+        "kind_guard_slice.ts",
+        vec![method_call(any_value(), "slice", Vec::new())],
+    );
+    assert!(ir.contains("call double @js_array_slice_method("), "{ir}");
+    assert!(!dispatches(&ir), "the operation helper owns the miss: {ir}");
+    assert!(!ir.contains("kindguard.array_header"), "{ir}");
 }
 
 #[test]

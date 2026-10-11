@@ -687,6 +687,27 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I64, DOUBLE, I64, PTR, I64],
     );
+    module.declare_function("js_method_site_miss0", DOUBLE, &[PTR, I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_array_slice_method",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I64],
+    );
+    module.declare_function(
+        "js_method_site_miss1",
+        DOUBLE,
+        &[PTR, I64, DOUBLE, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_method_site_miss2",
+        DOUBLE,
+        &[PTR, I64, DOUBLE, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_method_site_miss3",
+        DOUBLE,
+        &[PTR, I64, DOUBLE, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
     // #11910: the split site's lookup half and its call half's runtime path.
     module.declare_function("js_method_site_prepare", DOUBLE, &[PTR, DOUBLE, I64, I64]);
     module.declare_function(

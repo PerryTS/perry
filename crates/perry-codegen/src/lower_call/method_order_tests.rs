@@ -98,7 +98,7 @@ fn an_order_free_argument_keeps_the_fused_site() {
     )));
     let f = f_body(&ir);
     assert!(
-        f.contains("call double @js_method_site_miss("),
+        f.contains("call double @js_method_site_miss"),
         "the site is emitted:\n{f}"
     );
     assert!(

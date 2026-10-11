@@ -244,7 +244,20 @@ pub(super) unsafe fn dispatch_string(
                         as *mut crate::StringHeader;
                     return Some(f64::from_bits(JSValue::string_ptr(result).bits()));
                 }
-                "indexOf" | "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
+                "indexOf" => {
+                    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                    return Some(
+                        super::super::string_proto_thunks::string_proto_index_of_thunk(
+                            std::ptr::null(),
+                            crate::closure::JsThis::from_f64(f64::from_bits(
+                                JSValue::string_ptr(receiver_string().cast_mut()).bits(),
+                            )),
+                            arg_at(0).unwrap_or(undefined),
+                            arg_at(1).unwrap_or(undefined),
+                        ),
+                    );
+                }
+                "includes" | "lastIndexOf" | "startsWith" | "endsWith" => {
                     let search_arg_to_string = |method_id: i32| -> *const crate::StringHeader {
                         let value = arg_at(0)
                             .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
@@ -275,7 +288,7 @@ pub(super) unsafe fn dispatch_string(
                     if needle_h.is_none() {
                         // Match Node: `s.indexOf(undefined)` → -1, includes → false.
                         return Some(match method_name {
-                            "indexOf" | "lastIndexOf" => -1.0_f64,
+                            "lastIndexOf" => -1.0_f64,
                             "includes" | "startsWith" | "endsWith" => {
                                 f64::from_bits(JSValue::bool(false).bits())
                             }
@@ -296,9 +309,7 @@ pub(super) unsafe fn dispatch_string(
                             arg_at(1)
                                 .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits())),
                         )),
-                        "indexOf" | "includes" | "startsWith" if args_len >= 2 => {
-                            Some(arg_i32(1) as f64)
-                        }
+                        "includes" | "startsWith" if args_len >= 2 => Some(arg_i32(1) as f64),
                         "endsWith" if args_len >= 2 => Some(arg_i32(1) as f64),
                         _ => None,
                     };
@@ -322,10 +333,6 @@ pub(super) unsafe fn dispatch_string(
                     // `Array.prototype.includes` etc. on plain values
                     // already use this representation).
                     return Some(match method_name {
-                        "indexOf" => {
-                            let from = pos_num.unwrap_or(0.0) as i32;
-                            crate::string::js_string_index_of_from(s_ptr, needle, from) as f64
-                        }
                         "includes" => {
                             let from = pos_num.unwrap_or(0.0) as i32;
                             let i = crate::string::js_string_index_of_from(s_ptr, needle, from);

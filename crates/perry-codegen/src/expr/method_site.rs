@@ -175,13 +175,20 @@ pub(crate) fn emit_method_site(
     lowered_args: &[String],
     feedback_site: &str,
     method_id: &str,
-    args_ptr: &str,
-    argc: &str,
     lanes: &[crate::codegen::static_constfn::StaticMethodLane],
 ) -> String {
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS, RECEIVER_SPAN,
     };
+    // Compiled JS method candidates already have direct body calls. Keep
+    // their existing buffer layout instead of perturbing register allocation
+    // around those calls. Zero/one-argument native sites use registers;
+    // other calls share their buffer across the two consuming branches.
+    // Deferring multiple argument stores increases register preservation
+    // and caller text even though the miss call itself gets smaller.
+    let register_miss = lowered_args.len() <= 1 && lanes.is_empty();
+    let shared_buffer = (!register_miss)
+        .then(|| crate::lower_call::emit_method_args_buffer(ctx, lowered_args));
     let abi_word = crate::runtime_abi::METHOD_SITE_WORD_OFFSET.to_string();
     let abi_slot = crate::runtime_abi::METHOD_SITE_SLOT_OFFSET.to_string();
     // An entry memoizes a body as its `JsFunctionInfo` (the identity a
@@ -804,6 +811,13 @@ pub(crate) fn emit_method_site(
     let native = ctx.block().icmp_ne(I64, &flag, "0");
     ctx.block().cond_br(&native, &native_l, &fixed_l);
     ctx.current_block = native_idx;
+    let native_buffer;
+    let (args_ptr, argc) = if let Some((args_ptr, argc)) = &shared_buffer {
+        (args_ptr, argc)
+    } else {
+        native_buffer = crate::lower_call::emit_method_args_buffer(ctx, lowered_args);
+        (&native_buffer.0, &native_buffer.1)
+    };
     let native_value = crate::expr::body_call::emit_native_args_body_call(
         ctx.block(),
         &fptr,
@@ -860,18 +874,34 @@ pub(crate) fn emit_method_site(
 
     // miss (heap object): prime + the universal dispatcher.
     ctx.current_block = miss_idx;
-    let miss_value = ctx.block().call(
-        DOUBLE,
-        "js_method_site_miss",
-        &[
-            (PTR, &ic.slot_ref),
+    let miss_value = if register_miss {
+        let mut operands = vec![
+            (PTR, ic.slot_ref.as_str()),
             (I64, feedback_site),
             (DOUBLE, recv_box),
             (I64, method_id),
-            (PTR, args_ptr),
-            (I64, argc),
-        ],
-    );
+        ];
+        operands.extend(lowered_args.iter().map(|arg| (DOUBLE, arg.as_str())));
+        ctx.block().call(
+            DOUBLE,
+            &format!("js_method_site_miss{}", lowered_args.len()),
+            &operands,
+        )
+    } else {
+        let (args_ptr, argc) = shared_buffer.as_ref().expect("shared call buffer");
+        ctx.block().call(
+            DOUBLE,
+            "js_method_site_miss",
+            &[
+                (PTR, &ic.slot_ref),
+                (I64, feedback_site),
+                (DOUBLE, recv_box),
+                (I64, method_id),
+                (PTR, args_ptr),
+                (I64, argc),
+            ],
+        )
+    };
     let miss_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_l);
@@ -1224,8 +1254,7 @@ mod tests {
         false
     }
 
-    #[test]
-    fn function_native_argument_method_site_emits_a_live_hit() {
+    fn function_native_argument_method_site_ir(arity: usize) -> String {
         let mut module = Module::new("function_method_site.ts");
         module.init_kind = ModuleInitKind::Eager;
         module.functions.push(Function {
@@ -1248,7 +1277,7 @@ mod tests {
                     property: "bind".into(),
                     byte_offset: 0,
                 }),
-                args: vec![Expr::Null],
+                args: vec![Expr::Null; arity],
                 type_args: Vec::new(),
                 byte_offset: 0,
             }))],
@@ -1261,11 +1290,30 @@ mod tests {
             was_plain_async: false,
             was_unrolled: false,
         });
-        let ir = String::from_utf8(
+        String::from_utf8(
             crate::compile_module(&module, super::super::class_field_barrier_tests::ir_opts())
                 .expect("fixture compiles"),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn argument_list_method_sites_reuse_one_argument_buffer() {
+        for arity in [2, 3, 4] {
+            let ir = function_native_argument_method_site_ir(arity);
+            assert_eq!(ir.matches(&format!("alloca [{arity} x double]")).count(), 1, "{ir}");
+            assert!(native_hit_is_reachable(&ir));
+            assert!(ir.contains("@js_method_site_miss("));
+        }
+    }
+
+    #[test]
+    fn function_native_argument_method_site_emits_a_live_hit() {
+        let ir = function_native_argument_method_site_ir(1);
+        assert!(
+            ir.contains("@js_method_site_miss1("),
+            "small miss uses argument registers: {ir}"
+        );
         assert!(
             native_hit_is_reachable(&ir),
             "native body must be a live emitted hit: {ir}"
@@ -1287,18 +1335,18 @@ mod tests {
             &u64::MAX.to_string(),
         )));
         // Disable the real edge while leaving all native-call blocks intact.
-        // A label-only detector would stay green on this sabotage.
-        let sabotaged = ir
+        // A label-only detector would stay green on this negative control.
+        let negative_control = ir
             .lines()
             .map(|line| {
                 if line.contains("br i1 %") && line.contains("label %msite.native_args") {
-                    "  br label %msite.fixed_args.sabotaged"
+                    "  br label %msite.fixed_args.negative_control"
                 } else {
                     line
                 }
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!native_hit_is_reachable(&sabotaged));
+        assert!(!native_hit_is_reachable(&negative_control));
     }
 }

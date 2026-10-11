@@ -1,4 +1,5 @@
-//! Builtin receiver facts in the existing method-site memo. A canonical kind
+//! Builtin receiver facts in the existing method-site memo. Primitive strings,
+//! a canonical kind
 //! or an Array's existing property-bag ShapeId proves absence of own overrides
 //! and of a custom prototype. Legacy arrays recheck own-key absence per use
 //! without migrating storage. The inherited holder still supplies its shape,
@@ -13,6 +14,33 @@ use super::*;
 
 mod generator;
 
+/// The compiler's unpatched `slice` site, after its String arm declined.
+/// Arguments must be order-free and `argc <= 2`. The receiver's existing
+/// Array shape proves no own method or custom prototype; every other case
+/// retains the ordinary dispatcher in this one shared operation helper.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_slice_method(
+    recv: f64,
+    start: f64,
+    end: f64,
+    argc: usize,
+) -> f64 {
+    if miss_entry::is_site_receiver(recv) {
+        let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| (*h).obj_type == crate::gc::GC_TYPE_ARRAY)
+        {
+            let array = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+            if !array.is_null() && crate::array::array_has_plain_shape_resolved(array) {
+                let result = crate::array::js_array_slice_values(array, start, end);
+                return crate::value::js_nanbox_pointer(result as i64);
+            }
+        }
+    }
+    let args = [start, end];
+    crate::object::js_native_call_method(recv, b"slice".as_ptr().cast(), 5, args.as_ptr(), argc)
+}
+
 // Below the allocated ShapeId band: legacy named-property storage has no
 // immutable key list, so this shape needs a key-absence read on every hit.
 const LEGACY_ARRAY_SHAPE: u32 = 1;
@@ -26,6 +54,14 @@ pub(super) unsafe fn receiver_word(bits: u64) -> Option<u64> {
 
 #[inline(always)]
 unsafe fn receiver_facts(bits: u64) -> Option<(u64, u64)> {
+    // Primitive strings have no own method slots or custom prototype. Their
+    // intrinsic holder supplies the same shape/slot/body proof as an Array.
+    if crate::value::JSValue::from_bits(bits).is_any_string() {
+        return Some((
+            (u64::from(u32::MAX - u32::from(crate::gc::GC_TYPE_STRING)) << 32) | 1,
+            bits,
+        ));
+    }
     if !miss_entry::is_site_receiver(f64::from_bits(bits)) {
         return None;
     }
@@ -95,6 +131,15 @@ unsafe fn builtin_holder(kind: u8) -> *const ObjectHeader {
             return std::ptr::null();
         }
         return crate::array::array_property_bag(proto as *const crate::array::ArrayHeader);
+    }
+    if kind == crate::gc::GC_TYPE_STRING {
+        let recv = f64::from_bits(crate::value::JSValue::short_string_unchecked(b"").bits());
+        let mut proto = crate::array::primitive_wrapper_prototype_addr(recv);
+        if proto == 0 {
+            crate::object::js_get_global_this();
+            proto = crate::array::primitive_wrapper_prototype_addr(recv);
+        }
+        return proto as *const ObjectHeader;
     }
     let prototype = match kind {
         crate::gc::GC_TYPE_OBJECT => {
@@ -244,7 +289,7 @@ unsafe fn legacy_lacks_name(live: u64, name: &[u8]) -> bool {
     .is_none()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub(super) unsafe fn lookup_hit(
     slot: *mut MethodSiteSlot,
     bits: u64,
@@ -331,11 +376,13 @@ pub(super) unsafe fn lookup(
                     }
                 }
                 let next = builtin_holder(word_kind(word));
-                super::super::descriptor_state::owner_key_is_accessor(
-                    (live & crate::value::POINTER_MASK) as usize,
-                    name,
-                ) || (!next.is_null()
-                    && super::super::key_attrs::object_key_is_accessor(next, name))
+                (word_kind(word) != crate::gc::GC_TYPE_STRING
+                    && super::super::descriptor_state::owner_key_is_accessor(
+                        (live & crate::value::POINTER_MASK) as usize,
+                        name,
+                    ))
+                    || (!next.is_null()
+                        && super::super::key_attrs::object_key_is_accessor(next, name))
             };
             let value = spec_get(recv_h.get_nanbox_f64(), name);
             let bits = value.to_bits();
@@ -368,14 +415,34 @@ pub(super) unsafe fn call_miss(
     }
     // A cold prototype bootstrap or an overridden getter can collect. Root
     // every operand before resolving the method, then refresh the arguments.
+    use std::cell::UnsafeCell;
+    use std::mem::MaybeUninit;
+    let original = if argc != 0 && !args.is_null() {
+        std::slice::from_raw_parts(args, argc)
+    } else {
+        &[]
+    };
+    let mut stack = [const { MaybeUninit::<UnsafeCell<f64>>::uninit() }; 16];
+    let heap;
+    let cells: &[UnsafeCell<f64>] = if original.len() <= stack.len() {
+        for (slot, value) in stack.iter_mut().zip(original) {
+            slot.write(UnsafeCell::new(*value));
+        }
+        std::slice::from_raw_parts(stack.as_ptr().cast(), original.len())
+    } else {
+        heap = original
+            .iter()
+            .map(|v| UnsafeCell::new(*v))
+            .collect::<Vec<_>>();
+        &heap
+    };
+    // Stable cells are rewritten by the existing runtime-handle scanner.
+    // They outlive the scope, including exception unwinding.
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_h = scope.root_nanbox_f64(recv);
-    let original = if argc != 0 && !args.is_null() {
-        std::slice::from_raw_parts(args, argc).to_vec()
-    } else {
-        Vec::new()
-    };
-    let handles = scope.root_nanbox_f64_slice(&original);
+    for cell in cells {
+        scope.root_nanbox_cell(cell);
+    }
     let mut code = 0;
     let value = lookup(slot, recv, method_id, argc, &mut code).or_else(|| {
         if !generator {
@@ -388,13 +455,57 @@ pub(super) unsafe fn call_miss(
             std::slice::from_raw_parts(name.ptr, name.len),
         ))
     })?;
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&handles);
-    Some(js_method_site_call_value(
-        value,
-        recv_h.get_nanbox_f64(),
-        args.as_ptr(),
-        args.len(),
-    ))
+    let recv = recv_h.get_nanbox_f64();
+    Some(
+        call_selected(slot, value, recv, cells.as_ptr().cast(), cells.len()).unwrap_or_else(|| {
+            js_method_site_call_value(value, recv, cells.as_ptr().cast(), cells.len())
+        }),
+    )
+}
+
+/// The register entrance for small fused sites. The same holder proof selects
+/// the native entry; the common fixed bodies consume registers directly. Only
+/// native-list bodies and a genuine miss need the shared stack-buffer bridge.
+#[inline(never)]
+pub(super) unsafe fn call_registers(
+    slot: *mut MethodSiteSlot,
+    site: u64,
+    recv: f64,
+    method: i64,
+    argc: usize,
+    a0: f64,
+    a1: f64,
+    a2: f64,
+) -> f64 {
+    if let Some((value, info, code, live)) = lookup_hit(slot, recv.to_bits()) {
+        let info = &*(info as *const crate::closure::JsFunctionInfo);
+        let recv = if info.flags & perry_abi::FN_RESOLVES_ARRAY_THIS != 0 {
+            f64::from_bits(live)
+        } else {
+            recv
+        };
+        let closure = (value & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        let this = crate::closure::JsThis::from_f64(recv);
+        if native_args_tag(info) == 0 {
+            macro_rules! call {
+                ($ty:ident $(, $arg:expr)*) => {{
+                    let body: crate::codegen_abi::$ty<crate::closure::ClosureHeader> = std::mem::transmute(code);
+                    body(closure, this $(, $arg)*)
+                }};
+            }
+            match info.params {
+                0 => return call!(JsBody0),
+                1 => return call!(JsBody1, a0),
+                2 => return call!(JsBody2, a0, a1),
+                3 => return call!(JsBody3, a0, a1, a2),
+                _ => {}
+            }
+        }
+        if let Some(result) = invoke_body(value, info, code, recv, [a0, a1, a2].as_ptr(), argc) {
+            return result;
+        }
+    }
+    super::js_method_site_miss(slot, site, recv, method, [a0, a1, a2].as_ptr(), argc)
 }
 
 pub(super) unsafe fn call_hit(
@@ -427,7 +538,8 @@ pub(super) unsafe fn call_selected(
     argc: usize,
 ) -> Option<f64> {
     if slot.is_null()
-        || !miss_entry::is_site_receiver(recv)
+        || !(miss_entry::is_site_receiver(recv)
+            || crate::value::JSValue::from_bits(recv.to_bits()).is_any_string())
         || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
     {
         return None;
@@ -441,7 +553,10 @@ pub(super) unsafe fn call_selected(
             || e.word >> 32 < u64::from(u32::MAX - u32::from(u8::MAX))
             || !matches!(
                 word_kind(e.word),
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET
+                crate::gc::GC_TYPE_ARRAY
+                    | crate::gc::GC_TYPE_MAP
+                    | crate::gc::GC_TYPE_SET
+                    | crate::gc::GC_TYPE_STRING
             )
             || !closure_of_body(value.to_bits(), e.info)
         {
@@ -459,7 +574,7 @@ pub(super) unsafe fn call_selected(
     None
 }
 
-#[inline(always)]
+#[inline(never)]
 unsafe fn invoke_body(
     value: u64,
     info: &crate::closure::JsFunctionInfo,
@@ -519,6 +634,42 @@ mod tests {
         _arg: f64,
     ) -> f64 {
         901.0
+    }
+
+    #[test]
+    fn slice_register_helper_uses_the_array_shape_and_rejects_own_override() {
+        if !run_with_fresh_worker_gate(
+            "slice_register_helper_uses_the_array_shape_and_rejects_own_override",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _stable = crate::gc::GcSuppressScope::new();
+            let mut array = crate::array::js_array_alloc(16);
+            for value in [11.0, 22.0, 33.0] {
+                array = crate::array::js_array_push_f64(array, value);
+            }
+            let recv = crate::value::js_nanbox_pointer(array as i64);
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let result = js_array_slice_method(recv, undefined, undefined, 0);
+            let result =
+                crate::value::js_nanbox_get_pointer(result) as *const crate::array::ArrayHeader;
+            assert_eq!(crate::array::js_array_length(result), 3);
+            assert_eq!(
+                crate::array::array_prototype_addr(),
+                0,
+                "no realm bootstrap"
+            );
+            let method = crate::closure::js_closure_alloc(crate::fn_info!(replacement, 1), 0);
+            crate::object::js_object_set_field_by_name(
+                array.cast(),
+                crate::string::canonical_key(b"slice"),
+                crate::value::js_nanbox_pointer(method as i64),
+            );
+            assert!(!crate::array::array_has_plain_shape_resolved(array));
+            assert_eq!(js_array_slice_method(recv, undefined, undefined, 0), 901.0);
+        }
     }
 
     #[test]

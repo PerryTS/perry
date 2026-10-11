@@ -103,13 +103,37 @@ fn try_lower_tag_guarded_string_method(
     // The receiver tag already selected the guarded builtin arm. Its miss
     // uses the same dispatcher-only fallback as the other builtin guards;
     // an ordinary method site here duplicates lookup code and a `this` root.
-    let generic_value = super::console_promise::emit_native_method_str_dispatch_plain(
-        ctx,
-        property,
-        call_byte_offset,
-        &generic_recv,
-        &generic_args,
-    );
+    let generic_value = if property == "slice"
+        && args.len() <= 2
+        && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+        && !crate::expr::method_site::args_may_observe_lookup(ctx, args)
+    {
+        // Prototype patches have already selected the lookup-first path above.
+        // Share the remaining Array shape admission and native call out of line;
+        // this replaces the dispatcher call without a second inline kind tower.
+        let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let start = generic_args.first().unwrap_or(&undefined);
+        let end = generic_args.get(1).unwrap_or(&undefined);
+        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+        ctx.block().call(
+            DOUBLE,
+            "js_array_slice_method",
+            &[
+                (DOUBLE, &generic_recv),
+                (DOUBLE, start),
+                (DOUBLE, end),
+                (I64, &args.len().to_string()),
+            ],
+        )
+    } else {
+        super::console_promise::emit_native_method_str_dispatch_plain(
+            ctx,
+            property,
+            call_byte_offset,
+            &generic_recv,
+            &generic_args,
+        )
+    };
     group.release(ctx);
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
