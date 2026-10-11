@@ -11,9 +11,9 @@
 //! cannot get a loop now REJECTS rather than quietly taking a second,
 //! never-exercised transport.
 
-use perry_runtime::{js_promise_new_cross_thread, JSValue, ObjectHeader, Promise, StringHeader};
+use perry_runtime::{JSValue, ObjectHeader, Promise, js_promise_new_cross_thread};
 
-use crate::common::{register_handle, Handle};
+use crate::common::{Handle, register_handle};
 
 mod turnloop_bridge;
 
@@ -40,17 +40,10 @@ impl Default for SmtpConfig {
 }
 
 /// Extract a Rust String from a JSValue that contains a string pointer
-unsafe fn jsvalue_to_string(value: JSValue) -> Option<String> {
-    if value.is_pointer() {
-        let ptr = value.as_pointer() as *const StringHeader;
-        if !ptr.is_null() {
-            let len = (*ptr).byte_len as usize;
-            let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data_ptr, len);
-            return Some(String::from_utf8_lossy(bytes).to_string());
-        }
-    }
-    None
+fn jsvalue_to_string(value: JSValue) -> Option<String> {
+    perry_runtime::string::with_string_value_bytes(f64::from_bits(value.bits()), |bytes| {
+        String::from_utf8_lossy(bytes).into_owned()
+    })
 }
 
 /// Parse SMTP configuration from JSValue
@@ -132,7 +125,10 @@ pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
     let config = JSValue::from_bits(config_f.to_bits());
     let smtp_config = parse_smtp_config(config);
     let handle = register_handle(SmtpTransportHandle::new(smtp_config));
-    handle as f64
+    // A transporter is a JS object-like handle. Tag the id as POINTER_TAG so
+    // method lowering reaches the generic handle dispatcher instead of
+    // treating the receiver as a numeric primitive.
+    perry_runtime::js_nanbox_pointer(handle)
 }
 
 /// Email message options
@@ -240,9 +236,9 @@ pub unsafe extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mu
 
 /// Runtime method dispatch for a transporter handle whose static type was lost.
 ///
-/// `createTransport` hands JS a bare handle id (`NR_F64`), so EVERY method call
-/// on the result is an untyped call. See the arm in
-/// `common/dispatch/method_dispatch.rs` for why this had to exist.
+/// `createTransport` returns a pointer-tagged handle id; method calls on the
+/// result still use generic dispatch when its static type is lost. See the arm
+/// in `common/dispatch/method_dispatch.rs` for why this exists.
 ///
 /// Registry membership is checked first and the name vocabulary second, so an
 /// id belonging to another subsystem, or a name this binding does not
@@ -276,4 +272,40 @@ pub(crate) unsafe fn dispatch_transporter_method(
     Some(f64::from_bits(
         JSValue::pointer(promise as *const u8).bits(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_transport_returns_pointer_tagged_handle() {
+        let config = JSValue::from_bits(crate::common::dispatch::TAG_UNDEFINED_F64.to_bits());
+        let boxed = unsafe { js_nodemailer_create_transport(f64::from_bits(config.bits())) };
+        let value = JSValue::from_bits(boxed.to_bits());
+        assert!(value.is_pointer());
+
+        let handle = (boxed.to_bits() & 0x0000_FFFF_FFFF_FFFF) as Handle;
+        let stored = crate::common::get_handle::<SmtpTransportHandle>(handle)
+            .expect("tagged transporter handle remains registered");
+        assert_eq!(stored.config.host, "localhost");
+    }
+
+    #[test]
+    fn string_reader_accepts_inline_short_strings() {
+        let short = JSValue::try_short_string(b"hello").expect("fits SSO");
+        assert_eq!(jsvalue_to_string(short).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn transporter_dispatch_leaves_unknown_methods_and_foreign_handles_unclaimed() {
+        let transporter =
+            crate::common::register_handle(SmtpTransportHandle::new(SmtpConfig::default()));
+        assert!(
+            unsafe { dispatch_transporter_method(transporter, "unknownMethod", &[]) }.is_none()
+        );
+
+        let foreign = crate::common::register_handle(String::from("another registry type"));
+        assert!(unsafe { dispatch_transporter_method(foreign, "verify", &[]) }.is_none());
+    }
 }

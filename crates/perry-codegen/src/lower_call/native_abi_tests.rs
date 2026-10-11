@@ -1,6 +1,6 @@
 //! #11408: check emitted calls, including omitted optional arguments, rather
 //! than relying only on the source-level signature audit.
-use crate::{compile_module, CompileOptions};
+use crate::{CompileOptions, compile_module};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Stmt};
 
@@ -159,6 +159,37 @@ fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
             .map(|arg| arg.split_whitespace().next().unwrap())
             .collect();
         assert_eq!(actual, params, "{module}.{method}: {call}");
+    }
+}
+
+#[test]
+fn nodemailer_handle_abi_preserves_tagged_return_and_integer_receivers() {
+    let create = native_call("nodemailer", None, "createTransport", false);
+    call_line(&create, "double @js_nodemailer_create_transport");
+
+    for (method, signature, params) in [
+        (
+            "sendMail",
+            "i64 @js_nodemailer_send_mail",
+            vec!["i64", "i64"],
+        ),
+        ("verify", "i64 @js_nodemailer_verify", vec!["i64"]),
+    ] {
+        let ir = native_call("nodemailer", None, method, true);
+        let call = call_line(&ir, signature);
+        assert!(
+            ir.contains("and i64"),
+            "{method} receiver should be unboxed from a tagged JS value:\n{ir}"
+        );
+        for (ty, argument) in params
+            .iter()
+            .zip(call.split('(').nth(1).unwrap_or_default().split(','))
+        {
+            assert!(
+                argument.trim_start().starts_with(ty),
+                "{method} native ABI should pass {ty} receiver/argument, got {call}"
+            );
+        }
     }
 }
 

@@ -3,20 +3,16 @@
 //! ## Why this exists
 //!
 //! `nodemailer.createTransport(...)` is a module-level call, so codegen lowers
-//! it through the native table and it works. Its RESULT, though, is a plain
-//! handle id returned as `NR_F64` — a number — and there is no TypeScript class
-//! behind it, so `transporter.sendMail(...)` and `transporter.verify()` are
-//! lowered as generic method calls on an untyped receiver. Those route through
-//! the runtime's `HANDLE_METHOD_DISPATCH` slow path, and **no arm anywhere
-//! claimed a nodemailer handle**: every call failed with
-//! `TypeError: (number).sendMail is not a function`.
+//! it through the native table and it works. Its result is a `POINTER_TAG`-
+//! boxed handle id; there is no TypeScript class behind it, so
+//! `transporter.sendMail(...)` and `transporter.verify()` are lowered as
+//! generic method calls on an untyped receiver. Those route through the
+//! runtime's `HANDLE_METHOD_DISPATCH` slow path, and this extension claims
+//! only handles registered by this crate.
 //!
-//! That is not a P6 regression — it reproduces on the base commit, in every
-//! call shape (module scope, inside an `async fn`, `.then` chain), for both
-//! methods. It is recorded in `docs/turnloop/p6-report.md` under the defects
-//! this phase found. It is fixed here rather than merely reported because
-//! without it the whole SMTP surface is unreachable from JS and "SMTP now runs
-//! on turnloop" would be a claim nothing could check.
+//! The dispatch extension keeps foreign handle ids and unsupported method
+//! names out of this binding, while the native return encoding makes the
+//! transporter object-like to JS.
 //!
 //! ## The gate
 //!
@@ -28,7 +24,7 @@
 
 use std::sync::Once;
 
-use perry_ffi::{get_handle, Handle, JsValue, Promise};
+use perry_ffi::{Handle, JsValue, Promise, get_handle};
 
 use crate::SmtpTransportHandle;
 
@@ -100,4 +96,42 @@ unsafe extern "C" fn transporter_method_dispatch_ext(
     // SAFETY: `out` is the caller's one-`f64` slot.
     unsafe { *out = f64::from_bits(JsValue::from_object_ptr(promise).bits()) };
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extension_leaves_unknown_methods_and_foreign_handles_unclaimed() {
+        let transporter =
+            perry_ffi::register_handle(SmtpTransportHandle::new(crate::SmtpConfig::default()));
+        let mut out = 0.0;
+        let unknown = b"unknownMethod";
+        let claimed = unsafe {
+            transporter_method_dispatch_ext(
+                transporter,
+                unknown.as_ptr(),
+                unknown.len(),
+                std::ptr::null(),
+                0,
+                &mut out,
+            )
+        };
+        assert_eq!(claimed, 0);
+
+        let foreign = perry_ffi::register_handle(String::from("another registry type"));
+        let verify = b"verify";
+        let claimed = unsafe {
+            transporter_method_dispatch_ext(
+                foreign,
+                verify.as_ptr(),
+                verify.len(),
+                std::ptr::null(),
+                0,
+                &mut out,
+            )
+        };
+        assert_eq!(claimed, 0);
+    }
 }

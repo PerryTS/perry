@@ -302,14 +302,10 @@ unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f6
 
 #[cfg(feature = "bundled-nodemailer")]
 unsafe fn arm_nodemailer(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // turnloop P6: `nodemailer.createTransport(...)` returns a bare handle
-    // NUMBER, so `transporter.sendMail(...)` / `.verify()` are lowered as
-    // generic calls on an untyped receiver and land here. No arm claimed them,
-    // so the whole surface answered `TypeError: (number).sendMail is not a
-    // function` — on the base commit too, in every call shape. This is the
-    // bundled-surface half of the fix; `perry-ext-nodemailer` registers a
-    // dispatch EXTENSION for the well-known-flip half, because its handles live
-    // in perry-ffi's registry rather than this one.
+    // `createTransport` returns a POINTER_TAG-boxed handle, so generic calls
+    // on its untyped receiver land here. Keep this bundled arm separate from
+    // `perry-ext-nodemailer`'s extension because their handles live in
+    // different registries.
     if let Some(value) = crate::nodemailer::dispatch_transporter_method(handle, method_name, &args)
     {
         return Some(value);

@@ -25,9 +25,9 @@
 //! info object resolved back to user code on success.
 
 use perry_ffi::{
-    alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape, js_object_get_field,
-    js_object_set_field, register_handle, Handle, JsPromise, JsValue, ObjectHeader, Promise,
-    StringHeader,
+    Handle, JsPromise, JsValue, ObjectHeader, Promise, StringHeader, alloc_string,
+    build_object_shape, get_handle, js_object_alloc_with_shape, js_object_get_field,
+    js_object_set_field, register_handle,
 };
 
 mod dispatch_ext;
@@ -125,13 +125,13 @@ unsafe fn parse_smtp_config(config: JsValue) -> SmtpConfig {
 pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
     let config = JsValue::from_bits(config_f.to_bits());
     let smtp_config = parse_smtp_config(config);
-    // The transporter is returned to JS as a bare handle NUMBER, so every
-    // method call on it lands in the runtime's untyped dispatch. Register the
-    // extension that claims those before the first one can happen — without it
-    // `transporter.sendMail(...)` is `TypeError: (number).sendMail is not a
-    // function`, which is what it was on the base commit.
+    // Register the extension that claims transporter method calls before the
+    // first one can happen. The returned id is pointer-tagged below, which
+    // makes the value object-like to JS while preserving the handle id for the
+    // generic method dispatcher.
     dispatch_ext::ensure_registered();
-    register_handle(SmtpTransportHandle::new(smtp_config)) as f64
+    let handle = register_handle(SmtpTransportHandle::new(smtp_config));
+    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
 struct MailOptions {
@@ -265,12 +265,16 @@ mod tests {
     fn create_transport_with_null_returns_handle() {
         // Null/undefined config falls back to the SmtpConfig::default()
         // — `js_nodemailer_create_transport` always returns a non-zero
-        // handle so the user can still queue mails (which will error
-        // at SMTP-connect time).
+        // pointer-tagged handle so methods remain dispatchable (and fail
+        // asynchronously at SMTP-connect time when no local SMTP server is
+        // available).
         let h_f =
             unsafe { js_nodemailer_create_transport(f64::from_bits(JsValue::UNDEFINED.bits())) };
         assert_ne!(h_f, 0.0);
-        let stored = get_handle::<SmtpTransportHandle>(h_f as i64).expect("registered");
+        let bits = h_f.to_bits();
+        assert_eq!(bits >> 48, 0x7FFD);
+        let handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        let stored = get_handle::<SmtpTransportHandle>(handle).expect("registered");
         assert_eq!(stored.config.host, "localhost");
     }
 }
