@@ -10,6 +10,7 @@ use super::{
     js_array_set_f64_extend, ArrayHeader,
 };
 use crate::closure::ClosureHeader;
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::JSValue;
 
 mod proxy_from;
@@ -458,74 +459,93 @@ fn is_constructor_value(value: f64) -> bool {
     crate::object::js_value_is_constructor(value)
 }
 
-/// Build a fresh `{value, writable, enumerable, configurable}` (all true)
-/// data descriptor object, returned NaN-boxed — the shape
-/// `CreateDataProperty` hands to `[[DefineOwnProperty]]`.
-unsafe fn data_property_descriptor(value: f64) -> f64 {
-    let desc = crate::object::js_object_alloc(0, 4);
-    let set = |name: &[u8], v: f64| {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(desc, key, v);
-    };
-    set(b"value", value);
-    set(b"writable", f64::from_bits(TAG_TRUE));
-    set(b"enumerable", f64::from_bits(TAG_TRUE));
-    set(b"configurable", f64::from_bits(TAG_TRUE));
-    f64::from_bits(JSValue::pointer(desc as *const u8).bits())
-}
-
-/// `CreateDataPropertyOrThrow(A, index, value)` — returns `true` on success.
-/// A freshly-`ArrayCreate`d result takes the fast array-set path (never
-/// fails); a `Construct`-produced object routes through `[[DefineOwnProperty]]`
-/// (`Reflect.defineProperty` semantics), which reports `false` for a
-/// non-extensible target or a non-configurable existing index.
-unsafe fn create_index_data_property(result: f64, index: usize, value: f64) -> bool {
-    if jsv_is_array(result) {
-        let arr = crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
-        js_array_set_f64_extend(arr, index as u32, value);
+/// `CreateDataPropertyOrThrow(A, index, value)` on the ROOTED result `A`;
+/// `false` when the define is refused (the caller throws, after closing an
+/// open iterator). Every step here can allocate — growing a plain result,
+/// the descriptor object, its four keys, the index key — so the result, the
+/// value and the descriptor live in handles and are re-read after each
+/// allocation: a raw copy held across one of them names from-space after an
+/// evacuating minor, and the store then lands in whatever the nursery has
+/// placed there since.
+///
+/// `array_result`: the result is a plain Array (a fresh `ArrayCreate`, or a
+/// constructor that returned one), so the define is an indexed store that
+/// cannot fail. Growth may hand back a new header; the handle is updated.
+pub(super) fn define_index(
+    result: &RuntimeHandle<'_>,
+    index: usize,
+    value: f64,
+    array_result: bool,
+) -> bool {
+    if array_result {
+        let raw = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64());
+        let grown = js_array_set_f64_extend(raw as *mut ArrayHeader, index as u32, value);
+        result.set_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
         return true;
     }
-    let key_str = index.to_string();
-    let key = crate::string::js_string_from_bytes(key_str.as_ptr(), key_str.len() as u32);
-    let key_f64 = f64::from_bits(JSValue::string_ptr(key).bits());
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let name = index.to_string();
     // `CreateDataProperty` installs a *fresh* fully-defaulted data property,
     // fully replacing a configurable existing one (even a non-writable one).
     // Perry's ordinary `[[DefineOwnProperty]]` merges rather than replaces, so
     // drop a configurable-but-non-writable existing descriptor first; the new
     // definition then lands writable. A non-configurable existing property is
     // left in place so the define correctly reports failure.
-    let obj_addr = crate::value::js_nanbox_get_pointer(result) as usize;
-    if let Some(attrs) = crate::object::get_property_attrs(obj_addr, &key_str) {
+    let obj_addr = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as usize;
+    if let Some(attrs) = crate::object::get_property_attrs(obj_addr, &name) {
         if !attrs.writable() && attrs.configurable() {
-            // Reset the existing (configurable) descriptor to a fully-default
-            // writable data property so the subsequent define overwrites both
-            // its value and attributes — Perry's `[[DefineOwnProperty]]` merges
-            // onto an existing property and would otherwise keep `writable:false`
-            // and the stale value.
             crate::object::set_property_attrs(
                 obj_addr,
-                key_str.clone(),
+                name.clone(),
                 crate::object::PropertyAttrs::new(true, true, true),
             );
         }
     }
-    let desc = data_property_descriptor(value);
-    crate::proxy::js_reflect_define_property(result, key_f64, desc).to_bits() == TAG_TRUE
+    let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+    for field_name in [
+        b"value".as_slice(),
+        b"writable",
+        b"enumerable",
+        b"configurable",
+    ] {
+        let key = crate::string::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+        let field = if field_name == b"value" {
+            value.get_nanbox_f64()
+        } else {
+            f64::from_bits(TAG_TRUE)
+        };
+        desc.with_mut_ptr(|ptr| crate::object::js_object_set_field_by_name(ptr, key, field));
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    let descriptor = desc.with_const_ptr::<crate::ObjectHeader, _>(|ptr| {
+        crate::value::js_nanbox_pointer(ptr as i64)
+    });
+    crate::proxy::js_reflect_define_property(
+        result.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        descriptor,
+    )
+    .to_bits()
+        == TAG_TRUE
 }
 
-/// `Set(A, "length", len, true)`. Arrays take the fast length set; a
-/// `Construct`-produced object goes through `OrdinarySet` (honoring an
-/// inherited `length` accessor — a poisoned setter throws and propagates,
-/// a failed write throws in the strict path).
-unsafe fn set_result_length(result: f64, len: usize) {
-    if jsv_is_array(result) {
-        let arr = crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
-        crate::array::js_array_set_length(arr, len as f64);
-        return;
+/// `Set(A, "length", len, true)` on the rooted result. Arrays take the fast
+/// length set; a `Construct`-produced object goes through `OrdinarySet`
+/// (honoring an inherited `length` accessor — a poisoned setter throws and
+/// propagates, a failed write throws in the strict path). Returns the result.
+pub(super) fn finish_length(result: &RuntimeHandle<'_>, len: usize, array_result: bool) -> f64 {
+    if array_result {
+        let raw = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64());
+        crate::array::js_array_set_length(raw as *mut ArrayHeader, len as f64);
+    } else {
+        let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let key = crate::value::js_nanbox_string(key as i64);
+        let current = result.get_nanbox_f64();
+        crate::proxy::js_put_value_set(current, key, len as f64, current, 1);
     }
-    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-    let key_f64 = f64::from_bits(JSValue::string_ptr(key).bits());
-    crate::proxy::js_put_value_set(result, key_f64, len as f64, result, 1);
+    result.get_nanbox_f64()
 }
 
 #[cold]
@@ -553,11 +573,14 @@ fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
 
 /// `ToLength(? Get(arrayLike, "length"))` for the array-like branch.
 fn array_like_length(items: f64) -> usize {
-    let raw = crate::value::js_nanbox_get_pointer(items);
-    if raw == 0 {
+    if crate::value::js_nanbox_get_pointer(items) == 0 {
         return 0;
     }
+    // The key allocation can collect: derive the receiver address after it.
+    let scope = RuntimeHandleScope::new();
+    let items = scope.root_nanbox_f64(items);
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let raw = crate::value::js_nanbox_get_pointer(items.get_nanbox_f64());
     let length_val = crate::object::js_object_get_field_by_name_f64(
         raw as *const crate::object::ObjectHeader,
         key,
@@ -608,8 +631,12 @@ fn items_is_iterable(items: f64) -> bool {
     if crate::array::is_builtin_iterator_class_id(raw) {
         return true;
     }
-    // A bare iterator / generator object exposes a callable `next`.
+    // A bare iterator / generator object exposes a callable `next`. The key
+    // allocation can collect: derive the receiver address after it.
+    let scope = RuntimeHandleScope::new();
+    let items = scope.root_nanbox_f64(items);
     let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+    let raw = crate::value::js_nanbox_get_pointer(items.get_nanbox_f64()) as usize;
     let next_val = crate::object::js_object_get_field_by_name(
         raw as *const crate::object::ObjectHeader,
         next_key,
@@ -645,87 +672,92 @@ fn classify_iter_source(items: f64) -> IterSourceKind {
     IterSourceKind::Generic
 }
 
-/// Populate `result` from an iterable `items`, applying `mapfn` when
-/// `mapping`. Implements the iterator branch of ECMA-262 §23.1.2.1 step 6
-/// (including `IteratorClose` on an abrupt `mapfn` / `CreateDataProperty`).
+/// Populate the rooted `result` from an iterable `items`, applying `mapfn`
+/// when `mapping`. Implements the iterator branch of ECMA-262 §23.1.2.1
+/// step 6 (including `IteratorClose` on an abrupt `mapfn` /
+/// `CreateDataProperty`). `mapfn` and the iterator run user code that can
+/// collect, so every GC-managed operand — result, source, snapshot, iterator,
+/// callback, `thisArg` — is a handle re-read after each call.
 unsafe fn populate_from_iterable(
-    result: f64,
-    items: f64,
+    result: &RuntimeHandle<'_>,
+    items: &RuntimeHandle<'_>,
     mapping: bool,
-    mapfn: f64,
-    this_arg: f64,
-) {
-    match classify_iter_source(items) {
+    mapfn: &RuntimeHandle<'_>,
+    this_arg: &RuntimeHandle<'_>,
+    array_result: bool,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let map = |value: f64, k: usize| {
+        if mapping {
+            call_map_fn(mapfn.get_nanbox_f64(), this_arg.get_nanbox_f64(), value, k)
+        } else {
+            value
+        }
+    };
+    match classify_iter_source(items.get_nanbox_f64()) {
         IterSourceKind::LiveArray => {
-            let arr = crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader;
             let mut k = 0usize;
             loop {
-                let live = clean_arr_ptr(arr);
+                let live =
+                    clean_arr_ptr(crate::value::js_nanbox_get_pointer(items.get_nanbox_f64())
+                        as *const ArrayHeader);
                 if live.is_null() || k >= (*live).length as usize {
                     break;
                 }
                 let value = crate::array::js_array_get_f64(live, k as u32);
-                let mapped = if mapping {
-                    call_map_fn(mapfn, this_arg, value, k)
-                } else {
-                    value
-                };
-                if !create_index_data_property(result, k, mapped) {
+                let mapped = map(value, k);
+                if !define_index(result, k, mapped, array_result) {
                     throw_cannot_define_property(k);
                 }
                 k += 1;
             }
-            set_result_length(result, k);
+            finish_length(result, k, array_result)
         }
         IterSourceKind::Snapshot => {
-            let snapshot = clean_arr_ptr(js_array_clone(
-                crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
+            let snapshot = scope.root_raw_mut_ptr(js_array_clone(
+                crate::value::js_nanbox_get_pointer(items.get_nanbox_f64()) as *const ArrayHeader,
             ));
-            let len = if snapshot.is_null() {
+            let current = || clean_arr_ptr(snapshot.get_raw_mut_ptr::<ArrayHeader>());
+            let len = if current().is_null() {
                 0
             } else {
-                (*snapshot).length as usize
+                (*current()).length as usize
             };
             for k in 0..len {
-                let value = crate::array::js_array_get_f64(snapshot, k as u32);
-                let mapped = if mapping {
-                    call_map_fn(mapfn, this_arg, value, k)
-                } else {
-                    value
-                };
-                if !create_index_data_property(result, k, mapped) {
+                let value = crate::array::js_array_get_f64(current(), k as u32);
+                let mapped = map(value, k);
+                if !define_index(result, k, mapped, array_result) {
                     throw_cannot_define_property(k);
                 }
             }
-            set_result_length(result, len);
+            finish_length(result, len, array_result)
         }
         IterSourceKind::Generic => {
-            let iter = crate::symbol::js_get_iterator(items);
+            let iter =
+                scope.root_nanbox_f64(crate::symbol::js_get_iterator(items.get_nanbox_f64()));
             let mut k = 0usize;
             loop {
-                match crate::collection_iter::iterator_next_value(iter) {
-                    None => {
-                        set_result_length(result, k);
-                        break;
-                    }
+                match crate::collection_iter::iterator_next_value(iter.get_nanbox_f64()) {
+                    None => return finish_length(result, k, array_result),
                     Some(value) => {
                         let mapped = if mapping {
                             match crate::collection_iter::call_with_this_capturing_throw(
-                                mapfn,
-                                this_arg,
+                                mapfn.get_nanbox_f64(),
+                                this_arg.get_nanbox_f64(),
                                 &[value, k as f64],
                             ) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    crate::collection_iter::iterator_close(iter);
-                                    crate::exception::js_throw(e);
+                                    let e = scope.root_nanbox_f64(e);
+                                    crate::collection_iter::iterator_close(iter.get_nanbox_f64());
+                                    crate::exception::js_throw(e.get_nanbox_f64());
                                 }
                             }
                         } else {
                             value
                         };
-                        if !create_index_data_property(result, k, mapped) {
-                            crate::collection_iter::iterator_close(iter);
+                        if !define_index(result, k, mapped, array_result) {
+                            crate::collection_iter::iterator_close(iter.get_nanbox_f64());
                             throw_cannot_define_property(k);
                         }
                         k += 1;
@@ -743,6 +775,10 @@ unsafe fn populate_from_iterable(
 /// otherwise a plain Array is created. Abrupt completions everywhere
 /// propagate, and the iterator branch closes the iterator on an abrupt
 /// `mapfn` / `CreateDataProperty`.
+///
+/// `mapfn`, getters, iterators and a custom constructor all run user code
+/// that can collect, so the operands and the result are rooted for the whole
+/// algorithm and re-read after every call.
 pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     // Steps 1-3: validate `mapfn`.
     // Only `undefined` means "no mapfn"; any other value (including `null`)
@@ -762,57 +798,60 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     if item_bits == TAG_NULL {
         throw_not_iterable("object null");
     }
+    let scope = RuntimeHandleScope::new();
+    let c = scope.root_nanbox_f64(c);
+    let mapfn = scope.root_nanbox_f64(mapfn);
+    let this_arg = scope.root_nanbox_f64(this_arg);
     // An inline SSO string has no header for the iterable / array-like probes
     // below to read (`js_nanbox_get_pointer` answers 0 and the result came out
     // empty: `Array.from("ab" + "c", f)`, #11519). Materialize it, as
-    // `js_array_from_value` does, rooting the other operands across that one
-    // allocation.
-    if JSValue::from_bits(item_bits).is_short_string() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let (c, mapfn, this_arg) = (
-            scope.root_nanbox_f64(c),
-            scope.root_nanbox_f64(mapfn),
-            scope.root_nanbox_f64(this_arg),
-        );
+    // `js_array_from_value` does.
+    let items = if JSValue::from_bits(item_bits).is_short_string() {
         let hdr = crate::string::js_string_materialize_to_heap(items);
-        let items = crate::value::js_nanbox_string(hdr as i64);
-        return array_from_full(
-            c.get_nanbox_f64(),
-            items,
-            mapfn.get_nanbox_f64(),
-            this_arg.get_nanbox_f64(),
-        );
-    }
+        scope.root_nanbox_f64(crate::value::js_nanbox_string(hdr as i64))
+    } else {
+        scope.root_nanbox_f64(items)
+    };
 
     // Proxy GetMethod is observable. Resolve it once, retain it across
     // construction, and root iterator state across callbacks that can collect.
-    if let Some(proxy) = crate::array::array_ptr_as_proxy(
-        crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader,
-    ) {
-        return proxy_from::array_from_proxy(c, proxy, mapfn, this_arg, mapping);
+    if let Some(proxy) = crate::array::array_ptr_as_proxy(crate::value::js_nanbox_get_pointer(
+        items.get_nanbox_f64(),
+    ) as *const ArrayHeader)
+    {
+        return proxy_from::array_from_proxy(
+            c.get_nanbox_f64(),
+            proxy,
+            mapfn.get_nanbox_f64(),
+            this_arg.get_nanbox_f64(),
+            mapping,
+        );
     }
-    let is_ctor = is_constructor_value(c);
+    let is_ctor = is_constructor_value(c.get_nanbox_f64());
 
-    if items_is_iterable(items) {
+    if items_is_iterable(items.get_nanbox_f64()) {
         // Step 5: iterable. Construct the result BEFORE creating the iterator
         // (Construct can throw, e.g. a custom constructor) so the throw
         // propagates without a dangling open iterator.
         let result = if is_ctor {
-            unsafe { crate::object::js_new_function_construct(c, std::ptr::null(), 0) }
+            unsafe {
+                crate::object::js_new_function_construct(c.get_nanbox_f64(), std::ptr::null(), 0)
+            }
         } else {
             let arr = js_array_alloc(0);
             f64::from_bits(JSValue::pointer(arr as *const u8).bits())
         };
-        unsafe {
-            populate_from_iterable(result, items, mapping, mapfn, this_arg);
-        }
-        result
+        let result = scope.root_nanbox_f64(result);
+        let array_result = jsv_is_array(result.get_nanbox_f64());
+        unsafe { populate_from_iterable(&result, &items, mapping, &mapfn, &this_arg, array_result) }
     } else {
         // Step 6+: array-like.
-        let len = array_like_length(items);
+        let len = array_like_length(items.get_nanbox_f64());
         let result = if is_ctor {
             let len_arg = [len as f64];
-            unsafe { crate::object::js_new_function_construct(c, len_arg.as_ptr(), 1) }
+            unsafe {
+                crate::object::js_new_function_construct(c.get_nanbox_f64(), len_arg.as_ptr(), 1)
+            }
         } else {
             let arr = js_array_alloc(len as u32);
             unsafe {
@@ -820,23 +859,23 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
             }
             f64::from_bits(JSValue::pointer(arr as *const u8).bits())
         };
-        let mut k = 0usize;
-        while k < len {
-            let kvalue = crate::object::js_object_get_index_polymorphic(item_bits as i64, k as f64);
+        let result = scope.root_nanbox_f64(result);
+        let array_result = jsv_is_array(result.get_nanbox_f64());
+        for k in 0..len {
+            let kvalue = crate::object::js_object_get_index_polymorphic(
+                items.get_nanbox_f64().to_bits() as i64,
+                k as f64,
+            );
             let mapped = if mapping {
-                call_map_fn(mapfn, this_arg, kvalue, k)
+                call_map_fn(mapfn.get_nanbox_f64(), this_arg.get_nanbox_f64(), kvalue, k)
             } else {
                 kvalue
             };
-            if !unsafe { create_index_data_property(result, k, mapped) } {
+            if !define_index(&result, k, mapped, array_result) {
                 throw_cannot_define_property(k);
             }
-            k += 1;
         }
-        unsafe {
-            set_result_length(result, len);
-        }
-        result
+        finish_length(&result, len, array_result)
     }
 }
 
@@ -845,13 +884,18 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
 /// the result is `Construct(C, «len»)`; otherwise a plain Array is created.
 /// Each element is installed via `CreateDataPropertyOrThrow` and the final
 /// `Set(A, "length", len, true)` runs — every abrupt completion (a throwing
-/// constructor, a failed define, a poisoned length setter) propagates.
+/// constructor, a failed define, a poisoned length setter) propagates. The
+/// items, the constructor and the result are rooted across the constructor
+/// call and every define, all of which can collect.
 pub fn array_of_full(c: f64, vals: &[f64]) -> f64 {
     let len = vals.len();
-    let is_ctor = is_constructor_value(c);
+    let scope = RuntimeHandleScope::new();
+    let c = scope.root_nanbox_f64(c);
+    let vals = scope.root_nanbox_f64_slice(vals);
+    let is_ctor = is_constructor_value(c.get_nanbox_f64());
     let result = if is_ctor {
         let len_arg = [len as f64];
-        unsafe { crate::object::js_new_function_construct(c, len_arg.as_ptr(), 1) }
+        unsafe { crate::object::js_new_function_construct(c.get_nanbox_f64(), len_arg.as_ptr(), 1) }
     } else {
         let arr = js_array_alloc(len as u32);
         unsafe {
@@ -859,15 +903,14 @@ pub fn array_of_full(c: f64, vals: &[f64]) -> f64 {
         }
         f64::from_bits(JSValue::pointer(arr as *const u8).bits())
     };
-    for (k, &v) in vals.iter().enumerate() {
-        if !unsafe { create_index_data_property(result, k, v) } {
+    let result = scope.root_nanbox_f64(result);
+    let array_result = jsv_is_array(result.get_nanbox_f64());
+    for (k, v) in vals.iter().enumerate() {
+        if !define_index(&result, k, v.get_nanbox_f64(), array_result) {
             throw_cannot_define_property(k);
         }
     }
-    unsafe {
-        set_result_length(result, len);
-    }
-    result
+    finish_length(&result, len, array_result)
 }
 
 /// Peek a source's dense length for the concat capacity estimate: `Some(len)`

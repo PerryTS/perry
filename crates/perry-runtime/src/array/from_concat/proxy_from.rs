@@ -1,6 +1,5 @@
 //! Proxy-only Array.from: one GetMethod, with roots across user callbacks.
 use super::*;
-use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
 fn get(value: &RuntimeHandle<'_>, name: &[u8]) -> f64 {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -23,58 +22,13 @@ fn invoke(method: &RuntimeHandle<'_>, receiver: &RuntimeHandle<'_>) -> Result<f6
 }
 
 fn define(result: &RuntimeHandle<'_>, index: usize, value: f64, fresh_array: bool) {
-    if fresh_array {
-        let raw = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64());
-        let grown = js_array_set_f64_extend(raw as *mut ArrayHeader, index as u32, value);
-        result.set_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
-        return;
-    }
-    let scope = RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
-    for name in [
-        b"value".as_slice(),
-        b"writable",
-        b"enumerable",
-        b"configurable",
-    ] {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let field = if name == b"value" {
-            value.get_nanbox_f64()
-        } else {
-            f64::from_bits(TAG_TRUE)
-        };
-        desc.with_mut_ptr(|ptr| crate::object::js_object_set_field_by_name(ptr, key, field));
-    }
-    let name = index.to_string();
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
-    let descriptor = desc.with_const_ptr::<crate::ObjectHeader, _>(|ptr| {
-        crate::value::js_nanbox_pointer(ptr as i64)
-    });
-    if crate::proxy::js_reflect_define_property(
-        result.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        descriptor,
-    )
-    .to_bits()
-        != TAG_TRUE
-    {
+    if !define_index(result, index, value, fresh_array) {
         throw_cannot_define_property(index);
     }
 }
 
 fn finish(result: &RuntimeHandle<'_>, len: usize, fresh_array: bool) -> f64 {
-    if fresh_array {
-        let raw = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64());
-        crate::array::js_array_set_length(raw as *mut ArrayHeader, len as f64);
-    } else {
-        let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-        let key = crate::value::js_nanbox_string(key as i64);
-        let current = result.get_nanbox_f64();
-        crate::proxy::js_put_value_set(current, key, len as f64, current, 1);
-    }
-    result.get_nanbox_f64()
+    finish_length(result, len, fresh_array)
 }
 
 pub(super) fn array_from_proxy(
