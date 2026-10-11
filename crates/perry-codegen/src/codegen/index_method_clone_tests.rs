@@ -702,8 +702,8 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         "negative, fractional, and unproven Number calls must retain the public fallback:\n{ir}"
     );
     assert!(
-        generic.contains("call double @perry_array_read_cold_")
-            && ir.contains("call double @js_array_get_index_or_string("),
+        generic.contains("call double @perry_array_read_cold_shared(")
+            && ir.contains("declare double @perry_array_read_cold_shared("),
         "the generic miss body must preserve arbitrary JavaScript property-key semantics:\n{generic}"
     );
 }
@@ -734,8 +734,8 @@ fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback()
         "the published receiver-shape capability must guard the live index and retain its receiver-safe miss:\n{wrapper}"
     );
     assert!(
-        generic.contains("call double @perry_array_read_cold_")
-            && ir.contains("call double @js_array_get_index_or_string(")
+        generic.contains("call double @perry_array_read_cold_shared(")
+            && ir.contains("declare double @perry_array_read_cold_shared(")
             && !generic.contains("js_object_get_field_by_name"),
         "the pshape generic arm must preserve arbitrary keys without re-looking up this.column:\n{generic}"
     );

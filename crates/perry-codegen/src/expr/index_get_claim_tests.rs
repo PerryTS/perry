@@ -931,7 +931,7 @@ fn dynamic_number_key_splits_canonical_indices_from_exact_property_keys() {
     );
     assert!(
         ir.contains("aidx.runtime_key")
-            && ir.contains("call double @js_array_get_index_or_string("),
+            && ir.contains("call double @perry_array_read_cold_shared("),
         "the exact noncanonical property-key fallback disappeared:\n{ir}"
     );
     assert!(
@@ -950,9 +950,7 @@ fn generic_key_recovers_numeric_elements_without_losing_claim_safe_fallback() {
     );
     assert!(
         ir.contains("aidx.runtime_key")
-            && ir.contains("sso.split.sso")
-            && ir.contains("call double @js_dyn_index_get(")
-            && ir.contains("call double @js_array_get_index_or_string("),
+            && ir.contains("call double @perry_array_read_cold_shared("),
         "the generic key lost its exact boxed-receiver fallback:\n{ir}"
     );
 }

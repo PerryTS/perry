@@ -369,30 +369,22 @@ pub(crate) fn object_prototype_index_get(index: u32) -> f64 {
 pub(crate) fn object_prototype_index_get_with_receiver(index: u32, receiver: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
-    match object_prototype_value() {
-        Some(proto) => {
-            // Fire an accessor getter installed via
-            // `Object.defineProperty(Object.prototype, '<i>', { get })` — the
-            // polymorphic read misses the descriptor side table.
-            let addr = (proto.to_bits() & crate::value::POINTER_MASK) as usize;
-            if let Some(acc) = crate::object::get_accessor_descriptor(addr, &index.to_string()) {
-                if acc.get != 0 {
-                    return f64::from_bits(
-                        unsafe {
-                            crate::object::invoke_accessor_getter(
-                                acc.get,
-                                receiver.get_nanbox_f64(),
-                            )
-                        }
-                        .bits(),
-                    );
-                }
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            crate::object::js_object_get_index_polymorphic(proto.to_bits() as i64, index as f64)
-        }
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    // The intrinsic chain is independent of a reassigned global Object.
+    // The existing address resolver also heals collector/growth forwarding.
+    let addr = super::object_prototype_addr();
+    if addr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    let key = index.to_string();
+    unsafe {
+        crate::object::own_property_get_by_bytes(
+            addr as *const crate::object::ObjectHeader,
+            key.as_bytes(),
+            receiver.get_nanbox_f64(),
+        )
+    }
+    .map(|v| f64::from_bits(v.bits()))
+    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 /// `true` when `Object.prototype` carries an own `<index>` property (data or

@@ -278,7 +278,7 @@ fn array_record_index_retains_boxed_cold_forwarding_custody() {
         index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(2)])),
     });
     assert!(ll.contains("array_record_index.guard.deref") && ll.contains("67141887"));
-    assert!(ll.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ll.contains("call double @perry_array_read_cold_shared"));
     assert!(
         !ll.contains("guard.follow") && !ll.contains("guard.repair"),
         "forwarding remains in the shared generic runtime, with no duplicated site repair"
@@ -405,7 +405,7 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
             ll.contains("load i16") && ll.contains("33023"),
             "one live Array header word is the shape check: {ll}"
         );
-        assert!(ll.contains("icmp ult i64") && ll.contains("281474975662080"));
+        assert!(ll.contains("icmp ult i64") && ll.contains("281474974613504"));
         assert!(ll.contains("call double @js_value_length_property_f64("));
         assert!(
             !ll.contains("call double @perry_length_cold_") && !ll.contains("plen.typed_array"),

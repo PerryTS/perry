@@ -148,13 +148,12 @@ pub(crate) use channel::{
 };
 pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use helpers::{
-    array_or_sso_index_get, array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_alias_metadata_suffix, class_field_store_needs_string_addref,
-    emit_all_pointer_array_declaration, emit_string_addref_if_heap_string,
-    expr_has_numeric_pointer_free_array_layout, expr_produces_fresh_heap_allocation,
-    expr_produces_non_pointer_bits_by_construction, is_global_this_builtin_name,
-    lower_expr_with_expected_type, lower_js_args_array, store_needs_string_addref,
-    unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
+    array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
+    class_field_store_needs_string_addref, emit_all_pointer_array_declaration,
+    emit_string_addref_if_heap_string, expr_has_numeric_pointer_free_array_layout,
+    expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
+    is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
+    store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
@@ -3105,10 +3104,10 @@ impl<'a> FnCtx<'a> {
 // Issue #1098 phase 2: lower_expr arm-bodies extracted into
 // per-chunk sibling modules. The dispatch in `lower_expr` below routes each
 // variant to its module's `lower(ctx, expr)` helper.
+mod array_append;
 mod array_methods;
 pub(crate) mod array_pop;
 mod array_push;
-mod array_append;
 mod array_push_own;
 mod arrays_finds;
 mod bigint_set;

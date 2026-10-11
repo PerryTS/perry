@@ -8,6 +8,8 @@ use std::sync::atomic::Ordering;
 mod keyed;
 #[path = "indexing_proto_chain.rs"]
 mod proto_chain;
+#[path = "indexing_read_cold.rs"]
+mod read_cold;
 pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,

@@ -1,5 +1,14 @@
 function read(a: any[], k: any) { return a[k]; }
 function len(a: any[]) { return a.length; }
+// Object.prototype alone must invalidate the empty-chain proof, before any
+// Array.prototype indexed mutation has happened in this process.
+if (process.argv[2] === 'object-first') {
+const objectFirst: any[] = [14, , ];
+Object.defineProperty(Object.prototype, '23', {configurable:true,get(){return this[0]+50;}});
+console.log('object first oob',read(objectFirst,23));
+objectFirst.length=24;console.log('object first hole',read(objectFirst,23));
+delete Object.prototype[23];
+}
 const a: any[] = [11, , 33];
 a[-1] = 'negative'; a[1.5] = 'fraction'; a['NaN'] = 'nan'; a['01'] = 'leading';
 console.log(read(a,0), read(a,1), read(a,2), read(a,3), read(a,999999));
@@ -53,3 +62,60 @@ console.log(numericRead(sparseNumbers, 20), numericRead(sparseNumbers, 21));
 delete Array.prototype[20];
 const numericAlias = nums; for(let i=0;i<100;i++) nums.push(i);
 console.log(numericRead(numericAlias, 99));
+// Shared hole/OOB path preserves accessor receiver and precedence at both
+// intrinsic prototypes, then walks a replaced chain (including proxies).
+const inherited: any[] = [17, , ];
+(inherited as any).marker = 80;
+Object.defineProperty(Array.prototype, '23', {configurable:true, get(){return this[0] + this.marker;}});
+Object.defineProperty(Object.prototype, '24', {configurable:true, get(){return this[0] + this.marker + 1;}});
+inherited.length = 25;
+console.log('inherited holes', read(inherited,23), read(inherited,24));
+inherited.length = 1;
+console.log('inherited oob', read(inherited,23), read(inherited,24), read(inherited,25));
+Object.defineProperty(Object.prototype, '23', {configurable:true, get(){return 900;}});
+console.log('precedence', read(inherited,23));
+delete Array.prototype[23]; delete Object.prototype[23]; delete Object.prototype[24];
+const chain: any = Object.create(Array.prototype);
+Object.defineProperty(chain, '23', {configurable:true, get(){return this[0] + this.marker + 2;}});
+Object.setPrototypeOf(inherited,chain);
+inherited.length=25; console.log('custom holes',read(inherited,23),read(inherited,24));
+inherited.length=1; console.log('custom oob',read(inherited,23),read(inherited,24));
+Object.setPrototypeOf(inherited,null); console.log('null proto',read(inherited,23));
+const proxyProto: any = new Proxy({23:100}, {get(t,k,r){return k==='23' ? r[0]+t[k] : Reflect.get(t,k,r);}});
+Object.setPrototypeOf(inherited,proxyProto); console.log('proxy proto',read(inherited,23));
+const arrayProto: any[] = [];
+Object.defineProperty(arrayProto,'23',{configurable:true,get(){return this[0]+this.marker+3;}});
+Object.setPrototypeOf(inherited,arrayProto); console.log('array proto',read(inherited,23));
+// Restore the known intrinsic chain directly: getPrototypeOf is a separate API.
+Object.setPrototypeOf(Array.prototype,{26:123});
+console.log('intrinsic relink',read([1],26));
+Object.setPrototypeOf(Array.prototype,Object.prototype);
+Array.prototype[27]=127; Object.prototype[28]=128;
+const protoData: any[] = new Array(30);
+console.log('prototype data holes',read(protoData,27),read(protoData,28));
+protoData.length=0;
+console.log('prototype data oob',read(protoData,27),read(protoData,28));
+Object.prototype[29]=129;
+Object.defineProperty(Array.prototype,'29',{configurable:true,get(){return undefined;}});
+console.log('undefined getter shadows',read(protoData,29));
+delete Array.prototype[27]; delete Object.prototype[28]; delete Array.prototype[29]; delete Object.prototype[29];
+
+const originalObject = Object;
+Object.prototype[30] = 130;
+globalThis.Object = {prototype:{30:999}} as any;
+console.log('intrinsic object after global replace',read(protoData,30));
+globalThis.Object = originalObject;
+delete Object.prototype[30];
+
+// Array algorithms use the same rooted own/prototype walk as a cold GET.
+const ownWalk: any[] = [11,,33];
+Object.defineProperty(ownWalk,'1',{configurable:true,get(){return this[0]+10;}});
+console.log('own algorithm getter',ownWalk.slice(1,2)[0],ownWalk.slice(0,3).join(','));
+const farOwn: any[] = [1]; farOwn[2000000]=41;
+console.log('own sparse algorithm',farOwn.slice(2000000,2000001)[0],farOwn.slice(1999999,2000000)[0]);
+console.log('own shifted algorithm',shifted.slice(0,2).join(','));
+Object.defineProperty(ownWalk,'1',{configurable:true,get:undefined,set(v){}});
+console.log('own setter shadows',read(ownWalk,1),ownWalk.slice(1,2)[0]);
+const frozenProto: any[] = Object.freeze([4,45]);
+const frozenChild: any[] = new Array(2); Object.setPrototypeOf(frozenChild,frozenProto);
+console.log('frozen prototype data',read(frozenChild,1));

@@ -149,11 +149,3 @@ pub(super) fn lower_claimable_array_string_key_get(
 ) -> String {
     super::guarded_array::emit_read_cold(ctx, arr_box, "0", idx_double, "0", false, false, None)
 }
-
-pub(super) fn emit_claimable_array_key_body(
-    ctx: &mut FnCtx<'_>,
-    arr_box: &str,
-    idx_double: &str,
-) -> String {
-    crate::expr::array_or_sso_index_get(ctx, arr_box, idx_double)
-}

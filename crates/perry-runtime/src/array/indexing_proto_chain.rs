@@ -10,63 +10,11 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
-/// Out-of-bounds element read fallback: `Array.prototype[index]` when the
-/// prototype has indexed properties (see `ARRAY_PROTO_HAS_INDEX`). Returns the
-/// inherited value, or `undefined` if absent. Skipped entirely when the
-/// receiver IS `Array.prototype` (avoids self-recursion) or the flag is unset.
-///
-/// #6981: the `proto != receiver` self-recursion guard is an OBJECT IDENTITY
-/// test, so both sides must be forwarding-resolved. `js_array_get_f64` resolves
-/// its receiver through `clean_arr_ptr`; the prototype address comes from a
-/// memoized cache, so it is healed here too. Comparing a stale address against
-/// a resolved one makes the guard silently stop firing and
-/// `js_array_get_f64` ⇄ this function recurse without bound.
+/// The receiver is the live real Array admitted by the indexing entry.
+/// Runtime and compiled misses share one receiver-preserving indexed walk.
 #[inline]
 pub(super) unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
-    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-    // A custom [[Prototype]] (`Object.setPrototypeOf(arr, p)`) replaces the
-    // default chain — gated on a global relaxed flag. #9192: `p` need not be an
-    // array; a plain object / `Object.create(Array.prototype)` result answers
-    // the whole lookup through the generic resolver.
-    if crate::object::prototype_chain::array_static_proto_recorded() {
-        let arr = receiver as *const ArrayHeader;
-        match array_custom_prototype(arr) {
-            Some(ArrayCustomProto::Null) => return TAG_UNDEFINED_F64,
-            Some(ArrayCustomProto::Other(bits)) => {
-                return array_object_proto_index_get(
-                    crate::value::js_nanbox_pointer(receiver as i64),
-                    bits,
-                    index,
-                )
-                .unwrap_or(TAG_UNDEFINED_F64)
-            }
-            Some(ArrayCustomProto::Array(proto_arr)) => {
-                return array_spec_get_with_receiver(
-                    proto_arr,
-                    index,
-                    crate::value::js_nanbox_pointer(receiver as i64),
-                );
-            }
-            None => {}
-        }
-    }
-    if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
-        let proto = array_prototype_addr();
-        if proto != 0 && proto != crate::value::resolve_forwarding(receiver) {
-            let proto_arr = proto as *const ArrayHeader;
-            if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
-                return js_array_get_f64(proto_arr, index);
-            }
-        }
-    }
-    // Object.prototype indexed property (data or defineProperty accessor):
-    // arr → Array.prototype → Object.prototype (concat/S15.4.4.4_A3_T3).
-    if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-        && crate::array::object_prototype_has_index_prop(index)
-    {
-        return crate::array::sort_object_prototype_index_get(index);
-    }
-    TAG_UNDEFINED_F64
+    array_miss_index_get(receiver as *const ArrayHeader, index)
 }
 
 /// Spec `[[HasProperty]]`(O, ToString(index)) for an ordinary Array receiver:
@@ -297,78 +245,118 @@ unsafe fn array_object_proto_index_has(proto_bits: u64, index: u32) -> bool {
     crate::object::prototype_value_has_property(proto.get_nanbox_u64(), key_ptr)
 }
 
-/// Spec `[[Get]]`(O, ToString(index)) for an ordinary Array receiver: own value
-/// (firing index accessors via `js_array_get_f64`) or, for an absent own index,
-/// the inherited `Array.prototype[index]`. Returns `undefined` when absent.
+/// Spec `[[Get]]` for an ordinary Array. Own data, own accessors and the
+/// actual prototype chain share the same rooted indexed walk.
 pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
     let arr = clean_arr_ptr(arr);
-    array_spec_get_with_receiver(arr, index, crate::value::js_nanbox_pointer(arr as i64))
-}
-
-fn array_spec_get_with_receiver(arr: *const ArrayHeader, index: u32, receiver: f64) -> f64 {
-    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-    let arr = clean_arr_ptr(arr);
     if arr.is_null() {
-        return TAG_UNDEFINED_F64;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     unsafe {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_nanbox_f64(receiver);
-        if array_has_own_index(arr, index) {
-            return array_inherited_index_get(arr, index, receiver.get_nanbox_f64());
-        }
-        // #9192: see `array_spec_has_index` — a non-array custom prototype
-        // replaces the default chain outright.
-        match array_custom_prototype(arr) {
-            Some(ArrayCustomProto::Null) => return TAG_UNDEFINED_F64,
-            Some(ArrayCustomProto::Other(bits)) => {
-                return array_object_proto_index_get(receiver.get_nanbox_f64(), bits, index)
-                    .unwrap_or(TAG_UNDEFINED_F64)
-            }
-            Some(ArrayCustomProto::Array(proto_arr)) => {
-                return array_spec_get_with_receiver(proto_arr, index, receiver.get_nanbox_f64());
-            }
-            None => {}
-        }
-        if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
-            let proto = array_prototype_addr();
-            if proto != 0 && proto != arr as usize {
-                let proto_arr = proto as *const ArrayHeader;
-                if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
-                    return array_inherited_index_get(proto_arr, index, receiver.get_nanbox_f64());
-                }
-            }
-        }
-        if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-            && crate::array::object_prototype_has_index_prop(index)
-        {
-            return crate::array::sort_object_prototype_index_get_with_receiver(
-                index,
-                receiver.get_nanbox_f64(),
-            );
-        }
-        TAG_UNDEFINED_F64
+        array_index_get_walk(
+            arr,
+            index,
+            crate::value::js_nanbox_pointer(arr as i64),
+            true,
+        )
     }
 }
 
-/// Read an own indexed property from an Array prototype while preserving the
-/// original receiver for an inherited accessor's `this` value.
-unsafe fn array_inherited_index_get(
-    proto_arr: *const ArrayHeader,
+/// An already-admitted ordinary array has no own element at `index`.
+/// The established header/default-chain proof skips an empty chain. A changed
+/// chain reads indexed data slots directly; getters and exotic prototypes keep
+/// the original receiver through the exact descriptor/prototype machinery.
+#[inline(always)]
+pub(super) unsafe fn array_miss_index_get(arr: *const ArrayHeader, index: u32) -> f64 {
+    let flags = array_object_flags_resolved(arr);
+    if flags & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_NAMED_PROPS) == 0
+        && PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+    {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    array_index_get_walk(
+        arr,
+        index,
+        crate::value::js_nanbox_pointer(arr as i64),
+        false,
+    )
+}
+
+/// One rooted walk for own and inherited Array index GETs. A compiled miss
+/// skips the already-tested own slots. Every later holder uses the canonical
+/// descriptor/dense/sparse order and retains the original receiver.
+#[inline(never)]
+unsafe fn array_index_get_walk(
+    arr: *const ArrayHeader,
     index: u32,
     receiver: f64,
+    mut check_own: bool,
 ) -> f64 {
-    if array_object_flags(proto_arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
-        if let Some(acc) =
-            crate::object::get_accessor_descriptor(proto_arr as usize, &index.to_string())
-        {
-            if acc.get != 0 {
-                return f64::from_bits(
-                    crate::object::invoke_accessor_getter(acc.get, receiver).bits(),
-                );
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let holder = scope.root_raw_const_ptr(arr);
+    let key = index.to_string();
+    loop {
+        // Growth and collector forwarding retain array identity. The holder
+        // is already an admitted real Array, so use the existing resolver.
+        let arr =
+            crate::value::resolve_forwarding(holder.get_raw_const_ptr::<ArrayHeader>() as usize)
+                as *const ArrayHeader;
+        holder.set_raw_const_ptr(arr);
+        let flags = array_object_flags_resolved(arr);
+        if check_own && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+            if let Some(acc) = crate::object::get_accessor_descriptor(arr as usize, &key) {
+                return if acc.get == 0 {
+                    undefined
+                } else {
+                    f64::from_bits(
+                        crate::object::invoke_accessor_getter(acc.get, receiver.get_nanbox_f64())
+                            .bits(),
+                    )
+                };
             }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
+        if check_own && index < (*arr).length {
+            if index < (*arr).capacity {
+                // Dense storage is authoritative. Descriptor bags can hold
+                // only attributes for a numeric slot (for example freeze),
+                // so a named metadata placeholder must never shadow it.
+                let bits = *crate::array::array_elements_ptr(arr).add(index as usize);
+                if bits != crate::value::TAG_HOLE {
+                    return f64::from_bits(bits);
+                }
+            } else if let Some(value) = array_sparse_index_property_get(arr, index) {
+                return value;
+            }
+        }
+        if !array_index_fast_path_invalid_for(flags) {
+            return undefined;
+        }
+        if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+            match array_custom_prototype(holder.get_raw_const_ptr()) {
+                Some(ArrayCustomProto::Null) => return undefined,
+                Some(ArrayCustomProto::Array(proto)) => {
+                    holder.set_raw_const_ptr(proto);
+                    check_own = true;
+                    continue;
+                }
+                Some(ArrayCustomProto::Other(bits)) => {
+                    return array_object_proto_index_get(receiver.get_nanbox_f64(), bits, index)
+                        .unwrap_or(undefined)
+                }
+                None => {}
+            }
+        }
+        let proto = array_prototype_addr();
+        if proto != 0 && proto != holder.get_raw_const_ptr::<ArrayHeader>() as usize {
+            holder.set_raw_const_ptr(proto as *const ArrayHeader);
+            check_own = true;
+            continue;
+        }
+        return crate::array::sort_object_prototype_index_get_with_receiver(
+            index,
+            receiver.get_nanbox_f64(),
+        );
     }
-    js_array_get_f64(proto_arr, index)
 }

@@ -184,11 +184,11 @@ pub(super) fn lower_region_validated_array_index_get(
     ))
 }
 
-/// `POINTER_TAG << 48 | 1 MiB`: subtracted from a NaN-boxed receiver, a heap
+/// `POINTER_TAG << 48 | 2 MiB`: subtracted from a NaN-boxed receiver, a heap
 /// array handle lands in `[0, HEAP_POINTER_BAND_SPAN)`.
 pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str =
     crate::expr::receiver_range::RECEIVER_BIAS_LITERAL;
-/// `2^48 - 1 MiB`: the handles above the runtime-id band.
+/// `2^48 - 2 MiB`: the handles above the runtime-id band.
 pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str =
     crate::expr::receiver_range::RECEIVER_SPAN_LITERAL;
 /// The array read's guard mask over the header word `[h-8]` read as an i32:
@@ -461,6 +461,9 @@ pub(crate) fn emit_typed_f64_region_guard(
     pass
 }
 
+/// Every caller already has a nonnegative signed-i32 index: the canonical
+/// runtime-key split, numeric_index_has_integer_array_index_proof, or the
+/// existing bounded receiver descriptor. No source-expression proof is added.
 pub(super) fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -518,6 +521,7 @@ fn lower_guarded_array_index_get_with_index(
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
 ) -> Result<String> {
+    let canonical = matches!(index, GuardedArrayIndex::Signed(_));
     let (idx_i32, unsigned_index) = match index {
         GuardedArrayIndex::Signed(value) => (value, None),
         GuardedArrayIndex::Unsigned { i32_value, number } => (i32_value, Some(number)),
@@ -558,33 +562,58 @@ fn lower_guarded_array_index_get_with_index(
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
+    let exotic_idx = ctx.new_block(&format!("{}.cold.exact_args", block_prefix));
+    let absence_idx = ctx.new_block(&format!("{}.cold.absent_args", block_prefix));
+    let exotic_label = ctx.block_label(exotic_idx);
+    let absence_label = ctx.block_label(absence_idx);
     let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
     let range_idx = ctx.new_block(&format!("{}.guard.range", block_prefix));
+    let backing_idx = ctx.new_block(&format!("{}.guard.backing", block_prefix));
     let deref_label = ctx.block_label(deref_idx);
     let range_label = ctx.block_label(range_idx);
+    let backing_label = ctx.block_label(backing_idx);
     let bits = ctx.block().bitcast_double_to_i64(arr_box);
     let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
     let heap = ctx
         .block()
         .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
-    ctx.block().cond_br(&heap, &deref_label, &fallback_label);
+    ctx.block().cond_br(&heap, &deref_label, &exotic_label);
 
     ctx.current_block = deref_idx;
-    let handle = ctx.block().add(I64, &offset, crate::expr::receiver_range::HANDLE_FLOOR_LITERAL);
+    let handle = if ctx.target_triple.starts_with("x86_64") {
+        let blk = ctx.block();
+        // The band proves the pointer tag. Keep the resulting native handle
+        // opaque to constant folding: otherwise LLVM rematerializes separate
+        // 64-bit boxed-address biases for the header and every storage load.
+        // This existing tied-register identity emits no machine instruction;
+        // it cannot allocate or collect. Other targets retain their mask.
+        let raw = blk.sub(I64, &bits, crate::nanbox::POINTER_TAG_I64);
+        let handle = blk.fresh_reg();
+        blk.emit_raw(format!(
+            "  {handle} = call i64 asm \"\", \"=r,0\"(i64 {raw}) \"gc-leaf-function\""
+        ));
+        handle
+    } else {
+        ctx.block().and(I64, &bits, POINTER_MASK_I64)
+    };
     let word = emit_array_guard_word(ctx.block(), &handle);
     let live = emit_array_guard_word_ok(ctx.block(), &word);
-    ctx.block().cond_br(&live, &range_label, &fallback_label);
+    ctx.block().cond_br(&live, &range_label, &exotic_label);
 
     ctx.current_block = range_idx;
     let blk = ctx.block();
     let ptr = blk.inttoptr(I64, &handle);
     let length = blk.load(I32, &ptr);
+    // Distinct miss predecessors carry a constant absence mode. Computing a
+    // select of modes here made LLVM emit setcc/lea on every packed hit.
+    let logical = blk.icmp_ult(I32, idx_i32, &length);
+    blk.cond_br(&logical, &backing_label, &absence_label);
+
+    ctx.current_block = backing_idx;
+    let blk = ctx.block();
     let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
     let capacity = blk.load(I32, &cap_ptr);
-    // Unsigned bounds reject negative keys and presized sparse storage.
-    let logical = blk.icmp_ult(I32, idx_i32, &length);
-    let backed = blk.icmp_ult(I32, idx_i32, &capacity);
-    let mut admitted = blk.and(I1, &logical, &backed);
+    let mut admitted = blk.icmp_ult(I32, idx_i32, &capacity);
     if require_numeric_layout {
         // Dense raw-f64 is the existing numeric contract. Holes are cold even
         // in numeric context, so no prototype protector is needed at the site.
@@ -612,9 +641,34 @@ fn lower_guarded_array_index_get_with_index(
         let observed = blk.icmp_ne(I32, &guard, "0");
         admitted = blk.and(I1, &admitted, &observed);
     }
-    blk.cond_br(&admitted, &fast_label, &fallback_label);
+    blk.cond_br(&admitted, &fast_label, &exotic_label);
 
+    // Carry the existing guard's absence proof to the shared operation. No
+    // receiver/key classification or own-slot read is repeated for that arm.
+    let census_hole_idx = (!require_numeric_layout && crate::expr::store_census::enabled())
+        .then(|| ctx.new_block(&format!("{}.census.hole", block_prefix)));
+    // Materialize cold arguments only after a failed guard. The existing
+    // empty tied-register asm has no machine instruction; its sideeffect
+    // marker prevents CFG/phi lowering from pulling these moves onto hits.
+    ctx.current_block = exotic_idx;
+    let exact_control = ctx.block().fresh_reg();
+    ctx.block().emit_raw(format!(
+        "  {exact_control} = call i64 asm sideeffect \"# array-get exact args\", \"=r,0\"(i64 2) \"gc-leaf-function\""
+    ));
+    ctx.block().br(&fallback_label);
+    ctx.current_block = absence_idx;
+    let absent_control = ctx.block().fresh_reg();
+    let admitted_control = if canonical { handle.as_str() } else { "4" };
+    ctx.block().emit_raw(format!(
+        "  {absent_control} = call i64 asm sideeffect \"# array-get absent args\", \"=r,0\"(i64 {admitted_control}) \"gc-leaf-function\""
+    ));
+    ctx.block().br(&fallback_label);
+    let cold_inputs = [
+        (&exact_control[..], exotic_label.as_str()),
+        (&absent_control[..], absence_label.as_str()),
+    ];
     ctx.current_block = fallback_idx;
+    let cold_mode = ctx.block().phi(I64, &cold_inputs);
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     let idx_box = unsigned_index
         .map(str::to_owned)
@@ -622,12 +676,12 @@ fn lower_guarded_array_index_get_with_index(
     let fallback_boxed = emit_read_cold(
         ctx,
         arr_box,
-        idx_i32,
+        &cold_mode,
         &idx_box,
         &feedback_site_id,
         true,
         coerce_numeric_fallback,
-        receiver_slot,
+        unsigned_index.and(receiver_slot),
     );
     let fallback_val = fallback_boxed.clone();
     let fallback_end_label = ctx.block().label.clone();
@@ -672,11 +726,8 @@ fn lower_guarded_array_index_get_with_index(
     ctx.current_block = fast_idx;
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
     let blk = ctx.block();
-    let idx = blk.zext(I32, idx_i32, I64);
-    let offset = blk.shl(I64, &idx, "3");
-    // Reuse the canonical storage machinery, including shifted/named arrays.
-    let base = blk.array_elements_addr_with_capacity(&handle, &capacity);
-    let addr = blk.add(I64, &base, &offset);
+    // Reuse the canonical backing geometry, including shifted/named arrays.
+    let addr = blk.array_element_addr_with_capacity(&handle, &capacity, idx_i32);
     let ptr = blk.inttoptr(I64, &addr);
     let bits = blk.load(I64, &ptr);
     let fast_val = blk.bitcast_i64_to_double(&bits);
@@ -686,14 +737,14 @@ fn lower_guarded_array_index_get_with_index(
     } else {
         let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
         if crate::expr::store_census::enabled() {
-            let hole_idx = ctx.new_block(&format!("{}.census.hole", block_prefix));
+            let hole_idx = census_hole_idx.expect("hole census predecessor");
             let hole_label = ctx.block_label(hole_idx);
             ctx.block().cond_br(&hole, &hole_label, &merge_label);
             ctx.current_block = hole_idx;
             crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
-            ctx.block().br(&fallback_label);
+            ctx.block().br(&absence_label);
         } else {
-            ctx.block().cond_br(&hole, &fallback_label, &merge_label);
+            ctx.block().cond_br(&hole, &absence_label, &merge_label);
         }
     }
     if require_numeric_layout {
@@ -750,93 +801,55 @@ fn lower_guarded_array_index_get_with_index(
     ))
 }
 
-/// One link-coalesced cold body for the operation. It keeps the exact generic
-/// property-key getter and numeric consumer's coercion, without a second
-/// numeric-layout promotion path. No site or module duplicates the body.
+/// One runtime cold body for the operation. The mode carries only this
+/// guard's existing own-absence proof; exotic keys/receivers retain their
+/// exact getter and numeric coercion. No site or module duplicates the body.
 pub(super) fn emit_read_cold(
     ctx: &mut FnCtx<'_>,
     receiver: &str,
-    _index: &str,
+    mode: &str,
     boxed_index: &str,
     site: &str,
-    numeric_layout: bool,
+    _numeric_layout: bool,
     coerce: bool,
     _receiver_slot: Option<&str>,
 ) -> String {
-    let name = "perry_array_read_cold_shared";
-    if !ctx.pending_helpers.iter().any(|f| f.name == name) {
-        let mut helper = crate::function::LlFunction::new(
-            name,
-            DOUBLE,
-            vec![
-                (DOUBLE, "%receiver".into()),
-                (DOUBLE, "%key".into()),
-                (I64, "%site".into()),
-                (I1, "%numeric".into()),
-                (I1, "%coerce".into()),
-            ],
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
+    // Low bit carries coercion for either a small operation code or the
+    // already-admitted, aligned array pointer. Pointer controls reuse the
+    // canonical split's nonnegative check and the existing receiver guard.
+    let flags = if coerce {
+        ctx.block().or(I64, mode, "1")
+    } else {
+        mode.to_string()
+    };
+    let scratch = (_receiver_slot.is_some() || typed_feedback_emission_enabled())
+        .then(|| ctx.func.alloca_entry_array(I64, 3));
+    let (control, source) = if let Some(scratch) = &scratch {
+        ctx.block().store(I64, site, scratch);
+        let flags_ptr = ctx.block().gep(I8, scratch, &[(I64, "8")]);
+        ctx.block().store(I64, &flags, &flags_ptr);
+        let source = ctx.block().gep(I8, scratch, &[(I64, "16")]);
+        let pointer = ctx.block().ptrtoint(scratch, I64);
+        let control = ctx.block().or(
+            I64,
+            &pointer,
+            if _receiver_slot.is_some() { "6" } else { "2" },
         );
-        // Identical across modules: the linker keeps one body per program.
-        helper.linkage = "linkonce_odr".into();
-        helper.no_inline = true;
-        let saved_func = std::mem::replace(ctx.func, helper);
-        let saved_block = ctx.current_block;
-        ctx.current_block = ctx.new_block("entry");
-        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
-        let keyed = ctx.new_block("runtime_key");
-        let numeric = ctx.new_block("numeric_miss");
-        let convert = ctx.new_block("convert");
-        let done = ctx.new_block("return");
-        let kl = ctx.block_label(keyed);
-        let nl = ctx.block_label(numeric);
-        let cl = ctx.block_label(convert);
-        let dl = ctx.block_label(done);
-        ctx.block().cond_br("%numeric", &nl, &kl);
-        ctx.current_block = keyed;
-        let keyed_value =
-            super::runtime_key::emit_claimable_array_key_body(ctx, "%receiver", "%key");
-        let kp = ctx.block().label.clone();
-        ctx.block().br(&cl);
-        ctx.current_block = numeric;
-        let boxed = ctx.block().call(
-            DOUBLE,
-            "js_typed_feedback_array_index_get_fallback_boxed",
-            &[(I64, "%site"), (DOUBLE, "%receiver"), (DOUBLE, "%key")],
-        );
-        let np = ctx.block().label.clone();
-        ctx.block().br(&cl);
-        ctx.current_block = convert;
-        let value = ctx
-            .block()
-            .phi(DOUBLE, &[(&boxed, &np), (&keyed_value, &kp)]);
-        let cp = ctx.block().label.clone();
-        let coercion = ctx.new_block("coercion");
-        let col = ctx.block_label(coercion);
-        ctx.block().cond_br("%coerce", &col, &dl);
-        ctx.current_block = coercion;
-        let numeric = ctx
-            .block()
-            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &value)]);
-        let np = ctx.block().label.clone();
-        ctx.block().br(&dl);
-        ctx.current_block = done;
-        let result = ctx.block().phi(DOUBLE, &[(&value, &cp), (&numeric, &np)]);
-        ctx.block().ret(DOUBLE, &result);
-        let helper = std::mem::replace(ctx.func, saved_func);
-        ctx.current_block = saved_block;
-        ctx.pending_helpers.push(helper);
-    }
-    ctx.block().call(
+        (control, Some(source))
+    } else {
+        (flags, None)
+    };
+    let value = ctx.block().call(
         DOUBLE,
-        name,
-        &[
-            (DOUBLE, receiver),
-            (DOUBLE, boxed_index),
-            (I64, site),
-            (I1, if numeric_layout { "true" } else { "false" }),
-            (I1, if coerce { "true" } else { "false" }),
-        ],
-    )
+        "perry_array_read_cold_shared",
+        &[(DOUBLE, receiver), (DOUBLE, boxed_index), (I64, &control)],
+    );
+    if let (Some(source), Some(root)) = (source, _receiver_slot) {
+        let live = ctx.block().load(DOUBLE, &source);
+        ctx.block().store(DOUBLE, &live, root);
+    }
+    value
 }
 
 pub(super) fn packed_f64_loop_fact(
@@ -1196,9 +1209,9 @@ mod compact_read_tests {
             ll.lines()
                 .filter(|l| l.starts_with("define ") && l.contains("@perry_array_read_cold_"))
                 .count(),
-            1
+            0
         );
-        assert!(ll.contains("define linkonce_odr double @perry_array_read_cold_shared"));
+        assert!(ll.contains("declare double @perry_array_read_cold_shared"));
         assert!(!ll.contains("perry_array_key_cold_"));
         assert!(
             !ll.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),

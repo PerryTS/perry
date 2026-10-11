@@ -33,4 +33,28 @@ impl LlBlock {
         let end = self.sub(I64, &end, "8");
         self.sub(I64, &end, &bytes)
     }
+
+    /// Address one checked GET slot in the same canonical backing. The caller
+    /// proves a live Array and `index < capacity`. In eight-byte slot units,
+    /// `size/8 - capacity + index` lies in `[2, size/8)`, so this u32 arithmetic
+    /// cannot overflow. Scale only the final displacement. This also matches
+    /// runtime storage's rounded physical capacity for shifted/named arrays.
+    /// Store and append builders remain unchanged.
+    pub(crate) fn array_element_addr_with_capacity(
+        &mut self,
+        array: &str,
+        capacity: &str,
+        index: &str,
+    ) -> String {
+        let size_addr = self.sub(I64, array, "4");
+        let size_ptr = self.inttoptr(I64, &size_addr);
+        let size = self.load(I32, &size_ptr);
+        let slots = self.lshr(I32, &size, "3");
+        let slots = self.sub(I32, &slots, capacity);
+        let slots = self.add(I32, &slots, index);
+        let slots = self.zext(I32, &slots, I64);
+        let bytes = self.shl(I64, &slots, "3");
+        let tail = self.sub(I64, array, "8");
+        self.add(I64, &tail, &bytes)
+    }
 }
