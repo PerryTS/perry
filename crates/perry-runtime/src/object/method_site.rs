@@ -1972,7 +1972,7 @@ mod constfn_tests {
                 assert_eq!(d.special_constfn_mask != 0, admitted);
                 if admitted {
                     assert_ne!(base, id, "ordinary allocation must finalize after stores");
-                    assert!(super::super::field_rep_store::final_shape_matches_birth(
+                    assert!(super::super::field_rep_store::completed_shape_matches_layout(
                         id, base
                     ));
                     assert_eq!(primed_slot(finalized), METHOD_SITE_CONSTFN);

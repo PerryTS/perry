@@ -38,6 +38,10 @@ const SYNC_NAMES: &[&str] = &[
     "Function",
     "Class",
     "ClassField",
+    // Field origins are metadata. Initializers, computed keys, decorators
+    // and constructor bodies remain in the Debug walk below.
+    "Definition",
+    "ConstructorStore",
     "ClassMethod",
     "ClassAccessor",
     "ClassStaticBlock",
@@ -642,6 +646,26 @@ mod tests {
         assert_eq!(why_module_not_synchronous(hir), None);
         let read = r#"Module { init: [Expr(PropertyGet { object: LocalGet(0), property: "constructor", byte_offset: 0 })] }"#;
         assert!(why_module_not_synchronous(read).is_some());
+    }
+
+    #[test]
+    fn class_field_origins_preserve_executable_expression_checks() {
+        for origin in ["Definition", "ConstructorStore"] {
+            let synchronous = format!(
+                "Class {{ fields: [ClassField {{ origin: {origin}, init: Some(Number(0)) }}], constructor: Some(Function {{ id: 3, name: \"constructor\", body: [Expr(LocalGet(0))], is_async: false }}) }}"
+            );
+            assert_eq!(why_module_not_synchronous(&synchronous), None);
+            for expression in [
+                "init: Some(QueueMicrotask(LocalGet(0)))",
+                "key_expr: Some(Await(LocalGet(0)))",
+                "body: [Expr(ProcessNextTick { callback: LocalGet(0) })]",
+            ] {
+                let asynchronous = format!(
+                    "Class {{ fields: [ClassField {{ origin: {origin}, {expression} }}] }}"
+                );
+                assert!(why_module_not_synchronous(&asynchronous).is_some());
+            }
+        }
     }
 
     #[test]

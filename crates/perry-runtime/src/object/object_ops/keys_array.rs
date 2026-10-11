@@ -15,7 +15,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) {
-    ensure_key_in_keys_array_inner(obj, key, false, 0)
+    ensure_key_in_keys_array_inner(obj, key, false, 0, None)
 }
 
 /// Claim a keys slot for `key` together with its ATTRIBUTES
@@ -36,7 +36,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array_with_entry(
 ) {
     #[cfg(feature = "attr-census")]
     crate::object::attr_census::note_global("claim.with_entry");
-    ensure_key_in_keys_array_inner(obj, key, false, entry)
+    ensure_key_in_keys_array_inner(obj, key, false, entry, None)
 }
 
 /// [`ensure_key_in_keys_array`] for a claim the caller will follow with a value
@@ -63,8 +63,12 @@ pub(crate) unsafe fn ensure_key_in_keys_array_with_entry(
 pub(crate) unsafe fn ensure_key_in_keys_array_for_value(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
+    value: f64,
 ) {
-    ensure_key_in_keys_array_inner(obj, key, true, 0)
+    // A Number is a non-moving value. Carry its proof into the append, so
+    // the shape is published together with its numeric slot, just as in [[Set]].
+    let numeric = super::super::field_rep::f64_slot_bits(value.to_bits());
+    ensure_key_in_keys_array_inner(obj, key, true, 0, numeric)
 }
 
 /// `refresh_define_property_roots!` re-reads BOTH roots at every allocation
@@ -77,6 +81,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     key: *const crate::StringHeader,
     writes_value: bool,
     entry: u8,
+    numeric: Option<u64>,
 ) {
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
@@ -134,7 +139,7 @@ unsafe fn ensure_key_in_keys_array_inner(
                     super::super::transition_cache_lookup_for_value(
                         prev_shape_id,
                         interned_key,
-                        None,
+                        numeric,
                     )
                 });
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
@@ -144,6 +149,13 @@ unsafe fn ensure_key_in_keys_array_inner(
                         && (writes_value || slot_idx < alloc_limit)
                         && cached_target_fits(target_shape_id, alloc_limit)
                     {
+                        if let Some(bits) = numeric.filter(|_| slot_idx < alloc_limit) {
+                            super::super::slot_store::store_object_field_slot(
+                                obj,
+                                slot_idx as usize,
+                                bits,
+                            );
+                        }
                         if !super::super::shapes::install_cached_object_shape_transition(
                             obj,
                             prev_shape_id,
@@ -161,31 +173,29 @@ unsafe fn ensure_key_in_keys_array_inner(
                     }
                 }
             }
-            if entry != 0 {
-                // A first key WITH attributes: its canonical one-key list.
-                // (A keyless receiver is never a dictionary.)
-                if let Some(proof) = crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
-                    let list = crate::object::canonical_keys::extend_key_with_entry(
-                        &proof,
-                        crate::object::canonical_keys::CanonicalKeys::EMPTY,
-                        key,
-                        entry,
-                    );
+            // The first definition uses the same canonical prefix as every
+            // later append and the completed class layout. A private one-key
+            // array would give an otherwise identical layout another identity.
+            let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+                Some(proof) => crate::object::canonical_keys::extend_key_with_entry(
+                    &proof,
+                    crate::object::canonical_keys::CanonicalKeys::EMPTY,
+                    key,
+                    entry,
+                )
+                .view(),
+                None if entry != 0 => return,
+                None => {
+                    let array = crate::array::js_array_alloc(4);
                     refresh_define_property_roots!();
-                    set_object_keys(obj, list.view());
-                    if crate::object::object_live_slot_count(obj) == 0 {
-                        set_object_live_slot_count(obj, 1);
-                    }
+                    let array =
+                        crate::array::js_array_push(array, JSValue::string_ptr(key as *mut _));
+                    crate::object::ObjectKeys::owned(array)
                 }
-                return;
-            }
-            let new_keys = crate::array::js_array_alloc(4);
+            };
             refresh_define_property_roots!();
-            let new_keys =
-                crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
+            publish_definition_keys(obj, new_keys, 0, numeric);
             refresh_define_property_roots!();
-            // A fresh one-key list, exclusively this receiver's.
-            set_object_keys(obj, crate::object::ObjectKeys::owned(new_keys));
             if crate::object::object_live_slot_count(obj) == 0 {
                 set_object_live_slot_count(obj, 1);
             }
@@ -277,7 +287,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     // lineage on its first define and can never again share a shape, a
     // transition edge or a keys array with its siblings.
     //
-    // The edge is purely structural. Descriptor semantics are published
+    // The edge carries the ordered keys and data lanes. Descriptor semantics are published
     // separately by the caller's `set_property_attrs`, whose keyed semantic
     // transition gives every receiver performing the same install the same
     // successor shape.
@@ -298,7 +308,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     }
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         let probe = handle.with_const_ptr::<crate::StringHeader, _>(|interned| {
-            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, None)
+            super::super::transition_cache_lookup_for_value(prev_shape_id, interned, numeric)
         });
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
@@ -312,6 +322,9 @@ unsafe fn ensure_key_in_keys_array_inner(
                 && (writes_value || slot_idx < alloc_limit)
                 && cached_target_fits(target_shape_id, alloc_limit)
             {
+                if let Some(bits) = numeric.filter(|_| slot_idx < alloc_limit) {
+                    super::super::slot_store::store_object_field_slot(obj, slot_idx as usize, bits);
+                }
                 if !super::super::shapes::install_cached_object_shape_transition(
                     obj,
                     prev_shape_id,
@@ -367,7 +380,8 @@ unsafe fn ensure_key_in_keys_array_inner(
         }
     };
     refresh_define_property_roots!();
-    set_object_keys(obj, new_keys);
+    publish_definition_keys(obj, new_keys, key_count as u32, numeric);
+    refresh_define_property_roots!();
     // Keep the sidecar fresh (mirrors the [[Set]] append path): the entry is
     // keyed by the OBJECT address and length-stamped, so this contiguous
     // insert lets the next probe answer without a rebuild. No-op below the
@@ -456,6 +470,32 @@ unsafe fn ensure_key_in_keys_array_inner(
                 });
             }
         }
+    }
+}
+
+/// Publish an ordered definition through the same lane funnel as a key-add
+/// store. Keys-only claims add an Any lane and retain preceding lanes. Numeric data claims prewrite the Number
+/// before publishing F64, including the first definition on a keyless class.
+unsafe fn publish_definition_keys(
+    obj: *mut ObjectHeader,
+    keys: crate::object::ObjectKeys,
+    slot: u32,
+    numeric: Option<u64>,
+) {
+    if numeric.is_some() {
+        let rep = crate::object::field_rep_store::shape_rep(
+            crate::object::shapes::object_shape_stamp(obj),
+        );
+        let live = crate::object::object_live_slot_count(obj);
+        let inline = slot < live.max(crate::object::INLINE_SLOT_FLOOR as u32);
+        crate::object::field_rep_store::publish_key_add_edge(obj, keys, rep, slot, numeric, inline);
+    } else {
+        let live = crate::object::object_live_slot_count(obj);
+        let pred = crate::object::field_rep_store::shape_rep(
+            crate::object::shapes::object_shape_stamp(obj),
+        );
+        let rep = crate::object::field_rep_store::key_add_rep(pred, slot, None, false);
+        crate::object::set_object_keys_with_live_rep(obj, keys, live, rep);
     }
 }
 

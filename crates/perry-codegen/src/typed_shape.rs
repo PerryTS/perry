@@ -236,15 +236,16 @@ pub(crate) const BIRTH_REP_SLOTS: u32 = 32;
 /// The `F64` lane value (`field_rep::REP_F64`).
 const BIRTH_REP_F64: u64 = 0b01;
 
-/// Charter step 5: a class's birth representation word — `F64` for exactly
-/// the `number` fields that are written before any code can observe the
-/// instance (`lower_call::birth_lanes::chain_birth_f64_fields`), `Any`
-/// everywhere else.
+/// Charter step 5: the class's completed representation contract. Declared
+/// defaults require the before-observation proof; numeric constructor
+/// reservations describe checked stores that must create their keys before
+/// the completed shape can match. A deferred allocation itself stays keyless
+/// and Any (`class_birth_image`), independently of this contract.
 ///
 /// This is THE decision. The string pool passes it to the runtime mint
 /// (`js_object_shape_id_for_class_keys{,_live}`),
-/// the inline allocation birth-fills its `F64` lanes with `+0.0`, the
-/// field-initializer phase skips the `undefined` define of those fields, and
+/// a fused allocation birth-fills its proven `F64` lanes with `+0.0`, ordered
+/// definitions preserve that fill only while it is unobservable, and
 /// every class-field site that reads or writes a lane raw takes its answer
 /// from this word. The runtime takes the word as given; nothing re-derives it
 /// from the environment. An imported class stub has no constructor body to
@@ -393,13 +394,14 @@ pub(crate) fn raw_f64_mask_global_name_from_keys_global(keys_global_name: &str) 
         .unwrap_or_else(|| format!("perry_typed_shape_raw_f64_mask_{}", keys_global_name))
 }
 
-/// The module-global ShapeId paired with one canonical class keys array.
+/// The completed-layout ShapeId paired with one canonical class keys array.
 ///
 /// Keeping the name derived from the already-unique keys global means aliases
 /// and sanitized-name collisions necessarily share the same pair. The id is
 /// minted once, immediately after `js_build_class_keys_array`, and loaded by
-/// every compiled construction path so class instances arrive birth-stamped
-/// instead of waiting for their first by-name lookup (#6759 C3 rung 2).
+/// guards. A fused allocation may carry it immediately; a deferred allocation
+/// starts keyless and reaches it through the ordered field stores. Reservation
+/// is capacity only, never membership (#12327).
 pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> String {
     keys_global_name
         .strip_prefix("perry_class_keys_")
@@ -436,7 +438,7 @@ pub(crate) fn load_class_shape_id(
 
 /// The ShapeId a GUARD compares a receiver against (design step 4).
 ///
-/// The driver's static id for the class's birth content when it assigned one
+/// The driver's static id for the class's completed layout when it assigned one
 /// to this module's keys global: an immediate, so the compare needs no load.
 /// Otherwise the entry-cached load of the mint's global ([`load_class_shape_id`]).
 ///

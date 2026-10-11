@@ -869,8 +869,22 @@ pub(crate) fn apply_field_initializers_recursive(
             if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
                 continue;
             }
+            // Reuse the completed layout's numeric fact, proved once by
+            // birth_lanes before emitting this class. Preserve membership at
+            // this definition, but use the same fill as a fused birth when
+            // the constructor overwrites the default before any observation.
+            // Undefined would generalize a fused F64 lane, or teach a deferred
+            // key-add an Any lane that later overwrites retain.
+            let numeric_default = field.init.is_none()
+                && crate::type_analysis::class_field_global_index(ctx, class_name, &field.name)
+                    .is_some_and(|slot| {
+                        crate::expr::class_field_inline_guard::class_birth_slot_is_f64(
+                            ctx, class_name, slot,
+                        )
+                    });
             let init = match &field.init {
                 Some(e) => e.clone(),
+                None if numeric_default => Expr::Number(0.0),
                 None => Expr::Undefined,
             };
             match &field.key_expr {

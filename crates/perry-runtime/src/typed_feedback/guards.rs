@@ -191,7 +191,7 @@ fn class_field_get_contract(
         let keys = descriptor.keys as usize as *const ArrayHeader;
         let valid = crate::object::object_is_regular(obj)
             && class_id == expected_class_id
-            && crate::object::field_rep_store::final_shape_matches_birth(
+            && crate::object::field_rep_store::completed_shape_matches_layout(
                 shape_id,
                 expected_shape_id,
             )
@@ -236,11 +236,11 @@ fn class_field_fast_contract(
         let obj = object_addr as *const ObjectHeader;
         let descriptor = crate::object::shapes::object_shape_descriptor(obj);
         let shape_id = crate::object::shapes::object_shape_stamp(obj);
-        // Birth or a compatible completed shape proves the offsets and
+        // The completed layout or a compatible ConstFn shape proves the offsets and
         // numeric lanes. The setter separately requires the live boxed lane
         // to be Any before skipping the checked store funnel.
         let shape_ok = (*obj).class_id == expected_class_id
-            && crate::object::field_rep_store::final_shape_matches_birth(
+            && crate::object::field_rep_store::completed_shape_matches_layout(
                 shape_id,
                 expected_shape_id,
             )

@@ -1,7 +1,8 @@
-//! Charter step 5, P4 option (a): which `number` fields of a class are born
-//! on an `F64` representation lane.
+//! Charter step 5, P4 option (a): the numeric lanes of a class's completed
+//! layout. A fused birth carries that layout immediately; a deferred birth
+//! reaches it through its ordered definitions and constructor stores.
 //!
-//! A field may be born `F64` (its slot filled with a double before any
+//! A declared field may be born `F64` (its slot filled with a double before any
 //! constructor code runs) exactly when no JavaScript code can observe the
 //! slot before the constructor writes it. The analysis walks the
 //! construction of the leaf in the order the language runs it — root
@@ -14,15 +15,25 @@
 //!   `this`-free `e` is a WRITE of `f`. When `e` produces a Number it is `f`'s
 //!   first write; any other first write means `f` is not a Number field at
 //!   birth, so it stays `Any`;
-//! - a declared field without an initializer is a define of `undefined`.
-//!   For an `F64` field that define is elided (see
-//!   `field_init::apply_field_initializers_recursive`); it is neither a write
-//!   nor an observation here;
+//! - a declared field without an initializer still creates its key at its
+//!   definition. For a proven `F64` field, the unobservable default value is
+//!   the numeric fill (see `field_init::apply_field_initializers_recursive`),
+//!   so it does not generalize the lane. It is neither the constructor's
+//!   deciding write nor an observation here;
+//! - an assignment to a key not yet defined as own data may invoke an
+//!   inherited setter. Its checked store can learn a numeric lane, but the
+//!   walk stops before admitting any later unobservable default;
 //! - anything else that mentions `this` (a read, a call on `this`, `this`
 //!   passed out, an arrow capturing it, a `super` member access) is an
 //!   OBSERVATION, and so is any statement other than a straight-line
 //!   expression or `let` (control flow can make a later write conditional or
 //!   skip it). The walk stops there: every field not yet written stays `Any`.
+//!
+//! Constructor-store reservations contribute their declared numeric lanes to
+//! the COMPLETED contract independently of that observation walk. They are
+//! absent from a deferred birth's keys and rep; a checked first store publishes
+//! membership together with its actual representation. A partial constructor,
+//! intercepted setter or contradictory value cannot match the full contract.
 //!
 //! The birth fill is `+0.0`. By construction no code reads it: the field's
 //! first write precedes every observation. A later non-Number store is legal
@@ -85,11 +96,23 @@ pub(crate) fn chain_birth_f64_fields(
             }
         }
     }
+    // Reservation is not membership. These lanes predict the checked stores'
+    // completed shape, and never authorize an observable default definition.
+    let completed_reservations = resolved
+        .iter()
+        .flat_map(|class| &class.fields)
+        .filter(|field| {
+            field.origin == perry_hir::ClassFieldOrigin::ConstructorStore
+                && candidate.contains(&field.name)
+        })
+        .map(|field| field.name.clone())
+        .collect();
     let mut walk = Walk {
         candidate,
         decided: HashSet::new(),
-        f64: HashSet::new(),
+        f64: completed_reservations,
         numbers: HashSet::new(),
+        own_definitions: HashSet::new(),
     };
     'chain: for (depth, class) in resolved.iter().enumerate() {
         let ctor = class.constructor.as_ref();
@@ -124,6 +147,12 @@ pub(crate) fn chain_birth_f64_fields(
             }
         }
         for f in &class.fields {
+            if (class.is_literal_shape() || f.origin == perry_hir::ClassFieldOrigin::Definition)
+                && f.key_expr.is_none()
+                && f.decorators.is_empty()
+            {
+                walk.own_definitions.insert(f.name.clone());
+            }
             if f.key_expr.is_some() || f.is_private || !f.decorators.is_empty() {
                 if f.init.as_ref().is_some_and(observes_this)
                     || f.key_expr.as_ref().is_some_and(observes_this)
@@ -221,6 +250,9 @@ struct Walk {
     f64: HashSet<String>,
     /// Locals known to hold a Number in the current constructor.
     numbers: HashSet<u32>,
+    /// Definitions already performed in language order. A reservation cannot
+    /// prove an own data property: assigning it may call an inherited setter.
+    own_definitions: HashSet<String>,
 }
 
 impl Walk {
@@ -243,7 +275,7 @@ impl Walk {
                 value,
             }) if matches!(object.as_ref(), Expr::This) && !observes_this(value) => {
                 self.write(property, value);
-                true
+                self.own_definitions.contains(property)
             }
             Stmt::Expr(Expr::PutValueSet {
                 target,
@@ -258,7 +290,7 @@ impl Walk {
                 match key.as_ref() {
                     Expr::String(property) => {
                         self.write(property, value);
-                        true
+                        self.own_definitions.contains(property)
                     }
                     _ => false,
                 }

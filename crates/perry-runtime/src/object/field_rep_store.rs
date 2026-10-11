@@ -248,11 +248,13 @@ pub(crate) fn migrate_on_miss_value(bits: u64) {
     }
 }
 
-/// A completed ordinary ConstFn shape can serve the allocation's field
+/// The expected id is the completed class layout, never a keyless allocation's
+/// birth id. Exact identity is the hot contract; a completed ConstFn shape can
+/// additionally serve that layout's field
 /// offsets and numeric lanes. The two records supply every fact; no mapping
 /// from allocation id to final id is maintained. Writes still check the live
 /// slot's rep before skipping the checked store funnel.
-pub(crate) fn final_shape_matches_birth(actual: u32, expected: u32) -> bool {
+pub(crate) fn completed_shape_matches_layout(actual: u32, expected: u32) -> bool {
     if actual == expected {
         return true;
     }
@@ -263,7 +265,7 @@ pub(crate) fn final_shape_matches_birth(actual: u32, expected: u32) -> bool {
         return false;
     };
     if a.proto_id != b.proto_id {
-        return linked_shape_matches_birth(&a, &b);
+        return linked_shape_matches_layout(&a, &b);
     }
     let base_rep = a.constfn_infos().iter().fold(a.rep, |rep, i| {
         field_rep::with_slot_rep(rep, i.slot as u32, REP_ANY)
@@ -286,12 +288,12 @@ pub(crate) fn final_shape_matches_birth(actual: u32, expected: u32) -> bool {
 }
 
 /// An instance of a per-evaluation class (`ClassExprFresh`) carries its
-/// class's birth shape `b` re-linked to its evaluation's prototype: the same
+/// class's completed layout `b` re-linked to its evaluation's prototype: the same
 /// keys, slots, lanes and attributes at a `MIXED` identity of the same class
 /// (`object_link_class_evaluation_prototype`). A class field guard reads and
 /// writes an OWN data slot, which no prototype can shadow, so `a` serves the
 /// guard exactly as `b` does. Any other fact that differs refuses.
-fn linked_shape_matches_birth(
+fn linked_shape_matches_layout(
     a: &super::shapes::ShapeDescriptor,
     b: &super::shapes::ShapeDescriptor,
 ) -> bool {

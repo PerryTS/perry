@@ -25,6 +25,111 @@ use super::ObjectHeader;
 const CID: u32 = 0x5117;
 const F64_A_B: u64 = REP_F64 | (REP_F64 << 2);
 
+#[test]
+fn mixed_ordered_definitions_retain_preceding_numeric_lanes() {
+    const CLASS: u32 = 0x12373;
+    let packed = b"mixed_a\0mixed_label\0mixed_b\0";
+    let rep = REP_F64 | (REP_F64 << 4);
+    let keys = crate::object::js_build_class_keys_array(
+        CLASS,
+        3,
+        packed.as_ptr(),
+        packed.len() as u32,
+        rep,
+    ) as usize as u64;
+    let completed = js_object_shape_id_for_class_keys(keys, 3, CLASS, rep);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_parent(CLASS, 0, 3));
+    let label = scope.root_string_ptr(crate::string::js_string_from_bytes(b"label".as_ptr(), 5));
+    for (name, numeric) in [
+        (b"mixed_a".as_slice(), true),
+        (b"mixed_label".as_slice(), false),
+        (b"mixed_b".as_slice(), true),
+    ] {
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            name.as_ptr(),
+            name.len() as u32,
+        ));
+        let value = if numeric {
+            0.0
+        } else {
+            crate::value::js_nanbox_string(label.get_raw_const_ptr::<crate::StringHeader>() as i64)
+        };
+        crate::object::js_class_field_add(
+            crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64),
+            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+            value,
+        );
+        assert_eq!(
+            slot_rep(
+                rep_of(unsafe { object_shape_stamp(obj.get_raw_mut_ptr()) }),
+                0
+            ),
+            REP_F64
+        );
+    }
+    assert_eq!(
+        unsafe { object_shape_stamp(obj.get_raw_mut_ptr()) },
+        completed
+    );
+}
+
+#[test]
+fn ordered_definitions_reach_the_completed_class_contract_and_mutations_revoke_it() {
+    const CLASS: u32 = 0x12372;
+    let packed = b"completed_a\0completed_b\0";
+    let keys = crate::object::js_build_class_keys_array(
+        CLASS,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+        F64_A_B,
+    ) as usize as u64;
+    let completed = js_object_shape_id_for_class_keys(keys, 2, CLASS, F64_A_B);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_with_parent(CLASS, 0, 2));
+    let a = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"completed_a".as_ptr(),
+        11,
+    ));
+    let b = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"completed_b".as_ptr(),
+        11,
+    ));
+    let admitted = || {
+        crate::typed_feedback::js_typed_feedback_class_field_get_guard(
+            0,
+            crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64),
+            CLASS,
+            completed,
+            a.get_raw_const_ptr(),
+            0,
+            1,
+        )
+    };
+    assert_eq!(admitted(), 0, "a reservation is not membership");
+    for key in [&a, &b] {
+        crate::object::js_class_field_add(
+            crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64),
+            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+            0.0,
+        );
+    }
+    assert_eq!(
+        unsafe { object_shape_stamp(obj.get_raw_mut_ptr()) },
+        completed
+    );
+    assert_eq!(admitted(), 1, "the completed shape admits the raw field");
+    // A post-construction contradiction must move the receiver off the contract.
+    let value = scope.root_string_ptr(crate::string::js_string_from_bytes(b"changed".as_ptr(), 7));
+    crate::object::js_object_set_field_by_name(
+        obj.get_raw_mut_ptr(),
+        a.get_raw_const_ptr(),
+        crate::value::js_nanbox_string(value.get_raw_const_ptr::<crate::StringHeader>() as i64),
+    );
+    assert_eq!(admitted(), 0);
+}
+
 fn keys(packed: &[u8], count: u32) -> u64 {
     crate::object::js_build_class_keys_array(CID, count, packed.as_ptr(), packed.len() as u32, 0)
         as usize as u64

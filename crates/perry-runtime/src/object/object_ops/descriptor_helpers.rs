@@ -941,7 +941,7 @@ pub(crate) unsafe fn define_property_force_store_value(
     let (key_str, obj_reloaded) = obj_handle.across_mut::<ObjectHeader, _>(|| {
         key_handle
             .across_const::<crate::StringHeader, _>(|| {
-                ensure_key_in_keys_array_for_value(obj, key_str)
+                ensure_key_in_keys_array_for_value(obj, key_str, value_handle.get_nanbox_f64())
             })
             .1
     });

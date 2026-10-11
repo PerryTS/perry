@@ -90,3 +90,46 @@ fn the_inline_allocation_fills_exactly_the_minted_f64_lanes() {
         assert!(ir.contains("store i64 %default, ptr %typed_slot"));
     }
 }
+
+#[test]
+fn a_store_to_a_reservation_can_observe_later_defaults_through_a_setter() {
+    let mut m = loop_new_module("ObservedStore", Type::Number, Expr::Integer(2));
+    m.classes[0].constructor.as_mut().unwrap().body.insert(
+        0,
+        perry_hir::Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "signal".into(),
+            value: Box::new(Expr::Number(1.0)),
+        }),
+    );
+    let ir = emit(&m);
+    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys_live"), "i64 0");
+}
+
+#[test]
+fn numeric_reservations_keep_the_completed_contract_after_constructor_observations() {
+    let mut m = loop_new_module("ReservedNumbers", Type::Number, Expr::Integer(2));
+    for field in &mut m.classes[0].fields {
+        field.origin = perry_hir::ClassFieldOrigin::ConstructorStore;
+    }
+    m.classes[0].constructor.as_mut().unwrap().body.insert(
+        0,
+        perry_hir::Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "signal".into(),
+            value: Box::new(Expr::Number(1.0)),
+        }),
+    );
+    let ir = emit(&m);
+    assert_eq!(
+        mint_rep(&ir, "js_object_shape_id_for_class_keys_live"),
+        "i64 5"
+    );
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("@js_object_shape_id_for_class_keys_live(i64 0, i32 0,")
+                && line.ends_with("i64 0)")
+        }),
+        "the reservation birth must stay keyless and Any"
+    );
+}

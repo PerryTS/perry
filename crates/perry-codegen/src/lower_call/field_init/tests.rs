@@ -207,6 +207,44 @@ fn literal_birth_fills_do_not_repeat_definitions_in_the_shared_constructor() {
     assert!(compile(literal).contains("call double @js_class_field_add("));
 }
 
+#[test]
+fn completed_numeric_layout_preserves_key_creation_without_generalizing_defaults() {
+    let mut c = class(
+        vec![field("v"), field("w")],
+        Some(func(
+            vec![param(1, "v"), param(2, "w")],
+            // Definition order must stay v,w even though stores run w,v.
+            vec![user_this_assign("w", 2), user_this_assign("v", 1)],
+        )),
+    );
+    // Class id zero denotes an imported stub, which has no local proof.
+    c.id = 1;
+    assert!(!c.is_imported_stub());
+    let mut module = Module::new("completed_numeric_layout.ts");
+    module.classes.push(c);
+    module.init_kind = ModuleInitKind::Eager;
+    let ir = String::from_utf8(
+        crate::compile_module(
+            &module,
+            crate::CompileOptions {
+                emit_ir_only: true,
+                output_type: "executable".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let definitions: Vec<_> = ir
+        .lines()
+        .filter(|line| line.contains("call double @js_class_field_add("))
+        .collect();
+    assert_eq!(definitions.len(), 2, "both membership events must run");
+    for definition in definitions {
+        assert!(definition.contains(", double 0.0)"), "{definition}");
+    }
+}
+
 /// The prologue is the MAXIMAL LEADING run: a statement that is not a plain
 /// `this.f = <param>` ends it, and every field assigned after it keeps its
 /// default `undefined` write.

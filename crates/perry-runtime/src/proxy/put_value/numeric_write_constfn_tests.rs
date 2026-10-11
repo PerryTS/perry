@@ -111,7 +111,7 @@ fn numeric_write_guards_refuse_constfn_targets_and_preserve_mixed_shapes() {
         "the refusal must exercise a live ConstFn shape"
     );
     assert!(
-        crate::object::field_rep_store::final_shape_matches_birth(completed, birth),
+        crate::object::field_rep_store::completed_shape_matches_layout(completed, birth),
         "the completed shape remains compatible for read-only field access"
     );
     assert_family(array_box, [method, any], 0);
