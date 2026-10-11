@@ -729,55 +729,57 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
             ValueTypeofTag::Object
         }
     } else if jsval.is_pointer() {
-        // Object/array/closure/symbol pointer - check via the side-table first.
-        // The `>= 0x100000` floor (raised from 0x10000, #1843) skips the deref
-        // for native-module registry handles (net.Socket, zlib stream, crypto,
-        // …) — small ids bit-OR'd with POINTER_TAG, not real heap pointers,
-        // which always live above 0x100000. `typeof aHandle` is "object".
-        // Reading a fake handle's `[ptr+12]` type tag otherwise segfaults
-        // (e.g. zlib's reserved stream base).
-        let ptr = jsval.as_pointer::<u8>();
-        // A Proxy id is a SMALL pointer (below the heap floor), so check the
-        // registry before the floor gate. typeof proxy is "function" iff its
-        // (possibly nested) [[ProxyTarget]] is callable.
-        if crate::proxy::js_proxy_is_proxy(value) == 1 {
+        let addr = jsval.as_pointer::<u8>() as usize;
+        // Proxy ids alone need the proxy's callable-target fact. Ordinary
+        // heap values never enter a handle registry.
+        if crate::value::addr_class::is_proxy_id_band(addr) {
             return if crate::proxy::proxy_wraps_callable(value) {
                 ValueTypeofTag::Function
             } else {
                 ValueTypeofTag::Object
             };
         }
-        if crate::value::addr_class::is_above_handle_band(ptr as usize) {
-            // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd
-            // and Box-leaked symbols, which have no GcHeader).
-            if crate::symbol::is_registered_symbol(ptr as usize) {
-                ValueTypeofTag::Symbol
-            } else if crate::date::is_date_cell_addr(ptr as usize) {
-                // Date is a NaN-boxed pointer to an 8-byte `DateCell` (#2089).
-                // `typeof aDate === "object"`. Check this BEFORE reading the
-                // `type_tag` at offset 12 below — the cell is only 8 bytes, so
-                // that read would fall off the end of the allocation.
-                ValueTypeofTag::Object
-            } else {
-                // #10956: ask `is_closure_ptr`, not a bare `CLOSURE_MAGIC` read
-                // at the tag offset. Arena slots are recycled without zeroing,
-                // and that offset is padding in an `ErrorHeader` and element
-                // data in an array or buffer, so its four bytes can spell
-                // "CLOS" in a cell that is no closure: an Error born where a
-                // dead closure lived answered "function". `is_closure_ptr`
-                // also requires an arena cell's GC header to say closure.
-                if crate::closure::is_closure_ptr(ptr as usize) {
+        if crate::value::addr_class::is_id_band(addr) {
+            return ValueTypeofTag::Object;
+        }
+        // One allocator admission and one kind read. Off-heap buffers have no
+        // GC prefix; the tracked reader rejects them before touching p-8.
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
+        {
+            let header = unsafe { header.as_ref() };
+            return match header.obj_type {
+                crate::gc::GC_TYPE_CLOSURE => ValueTypeofTag::Function,
+                crate::gc::GC_TYPE_OBJECT
+                    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                        && unsafe {
+                            crate::object::shapes::object_shape_record(
+                                addr as *const crate::object::ObjectHeader,
+                            )
+                            .is_some_and(|record| {
+                                record.object_kind()
+                                    == crate::object::shapes::ShapeObjectKind::Class
+                            })
+                        } =>
+                {
                     ValueTypeofTag::Function
-                } else if crate::object::is_class_object_ptr(ptr) {
-                    // #1789: a class-expression VALUE is a heap object stamped
-                    // with OBJECT_TYPE_CLASS — `typeof aClassObject ===
-                    // "function"` (classes are callable in JS), matching the
-                    // INT32 ClassRef case below.
-                    ValueTypeofTag::Function
-                } else {
-                    ValueTypeofTag::Object
                 }
-            }
+                crate::gc::GC_TYPE_SYMBOL => ValueTypeofTag::Symbol,
+                // Fresh symbols retain the legacy string allocation kind. Only
+                // a matching magic word needs its collision-safe symbol proof.
+                crate::gc::GC_TYPE_STRING
+                    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
+                        && crate::symbol::is_registered_symbol(addr) =>
+                {
+                    ValueTypeofTag::Symbol
+                }
+                _ => ValueTypeofTag::Object,
+            };
+        }
+        // Persistent symbols live outside the GC allocator. Its rejection is
+        // not a readable-address proof: use their existing registry without
+        // dereferencing an unadmitted pointer. Ordinary heap values exited above.
+        if crate::symbol::is_registered_symbol(addr) {
+            ValueTypeofTag::Symbol
         } else {
             ValueTypeofTag::Object
         }

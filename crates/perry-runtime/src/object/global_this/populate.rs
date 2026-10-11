@@ -238,24 +238,14 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             continue;
         }
         let info = declaration.info as *const crate::closure::JsFunctionInfo;
-        // A shared body needs its intrinsic declaration as immutable input.
-        // The existing capture storage owns the scalar; no table or public
-        // property lookup participates in constructor identity.
-        let shared_identity =
-            super::super::class_registry::shared_global_builtin_constructor_body(unsafe {
-                (*info).code
-            }
-                as usize);
-        let captures = if shared_identity {
-            1 | crate::closure::NO_THIS_REBIND_FLAG
-        } else {
-            0
-        };
+        // Every constructor takes its declaration identity as immutable scalar
+        // input, using the same capture representation as shared bodies.
+        let captures = 1 | crate::closure::NO_THIS_REBIND_FLAG;
         let closure_ptr = crate::closure::js_closure_alloc(info, captures);
         if closure_ptr.is_null() {
             continue;
         }
-        if shared_identity {
+        {
             crate::closure::js_closure_set_capture_bits(
                 closure_ptr,
                 0,

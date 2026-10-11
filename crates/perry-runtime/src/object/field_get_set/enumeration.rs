@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[path = "ordinary_keys.rs"]
+mod ordinary_keys;
+
 /// Map/Set receivers: the collection's DATA lives in internal slots (never
 /// own enumerable properties — Node: `Object.keys(new Map([...])) === []`),
 /// but user EXPANDOS (`cache.custom = x`) live in the exotic side table
@@ -134,6 +137,12 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_null() || jv.is_undefined() {
         super::super::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    // A tracked ordinary shape answers before the generic registry dispatch.
+    if jv.is_pointer() {
+        if let Some(keys) = ordinary_keys::try_keys(jv.as_pointer::<ObjectHeader>()) {
+            return keys;
+        }
+    }
     // A Proxy is a small registered id — route through the `ownKeys` trap +
     // enumerability filter rather than the handle-dispatch fallback below.
     if crate::proxy::js_proxy_is_proxy(value) != 0 {
@@ -260,7 +269,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             }
             return out;
         }
-        return js_object_keys(ptr as *const ObjectHeader);
+        return object_keys_fallback(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
 }
@@ -1279,9 +1288,16 @@ pub(super) fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*m
 
 /// Get the keys of an object as an array of strings.
 /// If any key has a per-property descriptor with `enumerable: false`, that key is filtered out.
-/// Otherwise (the common case), this returns the stored keys array directly.
+/// Ordinary shapes bulk-copy their bounded key list into a fresh result.
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
+    if let Some(keys) = ordinary_keys::try_keys(obj) {
+        return keys;
+    }
+    object_keys_fallback(obj)
+}
+
+fn object_keys_fallback(obj: *const ObjectHeader) -> *mut ArrayHeader {
     // An elements-backed Array-subclass instance: its present indices come
     // first (ascending, as strings), then the shape's own enumerable keys.
     // `length` is non-enumerable and not in the shape, so it never appears.
@@ -1507,14 +1523,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         if keys.is_null() {
             return crate::array::js_array_alloc(0);
         }
-        // Per JS spec, `Object.keys` must return a fresh array — callers
-        // can `.sort()`, `.push()`, etc. without mutating the receiver.
-        // Pre-fix this fast path returned the object's own internal
-        // `keys_array` pointer, so `Object.keys(o).sort()` reordered
-        // `o`'s key→slot mapping and subsequent `o.foo` reads returned
-        // the wrong slot's value. The slow path below already builds a
-        // fresh array; the fast path now mirrors it, just without the
-        // per-key descriptor check.
+        // Results must be fresh: callers may reorder or append keys.
         // Exotic receivers were handled above. Every ordinary receiver's
         // key attributes belong to its shape; only non-enumerability matters
         // to this operation. Read the summary rather than reclassifying the

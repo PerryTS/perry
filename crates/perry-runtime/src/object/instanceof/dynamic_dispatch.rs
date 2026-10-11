@@ -30,40 +30,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             depth += 1;
         }
     }
-    // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
-    // brand arms (not a real prototype chain), so resolve the constructor to
-    // its kind and compare against the value's brand. A non-Temporal value, or
-    // a Temporal value of a different kind, yields `false`.
-    if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
-        if crate::temporal::temporal_kind(value) == Some(kind) {
-            return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        // `class X extends Temporal.<Type>` instance: a plain heap object whose
-        // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
-        // the brand via a stashed cell rather than the Temporal-cell tag, so
-        // recover that cell and compare its kind. The receiver reaches here both
-        // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
-        // how module-level object vars are stored) — accept both. (#5587)
-        {
-            let bits = value.to_bits();
-            let top16 = bits >> 48;
-            let raw = if top16 == 0x7FFD {
-                (bits & crate::value::POINTER_MASK) as usize
-            } else if top16 == 0 {
-                bits as usize
-            } else {
-                0
-            };
-            if raw != 0 {
-                if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
-                    if crate::temporal::temporal_kind(cell) == Some(kind) {
-                        return f64::from_bits(crate::value::TAG_TRUE);
-                    }
-                }
-            }
-        }
-        return f64::from_bits(TAG_FALSE);
-    }
     let admit_closure = |rhs: f64| {
         let value = crate::JSValue::from_bits(rhs.to_bits());
         if !value.is_pointer() {
@@ -77,7 +43,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // overrides even native constructor brand checks. The native generic hook
     // lives on Function.prototype, so the own-property gate distinguishes an
     // explicit override from that inherited default without recursion.
-    {
+    let symbols_absent = rhs_closure.is_some_and(|(closure, _)| unsafe {
+        let bag = (*closure).props;
+        bag.is_null()
+            || crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
+                // A legacy dictionary can have an ordinary keyless shape;
+                // its private key list carries no immutable absence proof.
+                record.keys() != 0 && record.proves_no_symbols()
+            })
+    });
+    if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
@@ -156,6 +131,40 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             }
         }
     }
+    // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
+    // brand arms (not a real prototype chain), so resolve the constructor to
+    // its kind and compare against the value's brand. A non-Temporal value, or
+    // a Temporal value of a different kind, yields `false`.
+    if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
+        if crate::temporal::temporal_kind(value) == Some(kind) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        // `class X extends Temporal.<Type>` instance: a plain heap object whose
+        // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
+        // the brand via a stashed cell rather than the Temporal-cell tag, so
+        // recover that cell and compare its kind. The receiver reaches here both
+        // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
+        // how module-level object vars are stored) — accept both. (#5587)
+        {
+            let bits = value.to_bits();
+            let top16 = bits >> 48;
+            let raw = if top16 == 0x7FFD {
+                (bits & crate::value::POINTER_MASK) as usize
+            } else if top16 == 0 {
+                bits as usize
+            } else {
+                0
+            };
+            if raw != 0 {
+                if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
+                    if crate::temporal::temporal_kind(cell) == Some(kind) {
+                        return f64::from_bits(crate::value::TAG_TRUE);
+                    }
+                }
+            }
+        }
+        return f64::from_bits(TAG_FALSE);
+    }
     let bits = type_ref.to_bits();
     // `class_ref_id` requires `is_class_id_registered`, not just the tag —
     // a user-crafted NaN payload sharing the 0x7FFE band (a real JS number
@@ -207,45 +216,39 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // it before the remaining callable/bound/native-export probes. Its own
     // @@hasInstance already had first refusal; the shared native dispatch owns
     // the primitive and prototype checks.
-    if let Some(name) = identify_global_builtin_constructor(type_ref) {
-        match name {
-            "Crypto" => {
-                return if is_native_module_namespace_value(value, "crypto.webcrypto") {
-                    f64::from_bits(crate::value::TAG_TRUE)
-                } else {
-                    f64::from_bits(TAG_FALSE)
-                };
+    if let Some(declaration) = rhs_closure.and_then(|(closure, info)| unsafe {
+        super::super::global_this_tables::declaration_of_constructor(closure, info)
+    }) {
+        use super::super::global_this_tables::BuiltinInstanceIdentity;
+        let matched = match declaration.instance_identity {
+            Some(BuiltinInstanceIdentity::Class(class_id)) => {
+                if instanceof_lhs_is_primitive(value) {
+                    return f64::from_bits(TAG_FALSE);
+                }
+                return super::static_dispatch::native_with_constructor(
+                    value,
+                    class_id,
+                    Some(type_ref),
+                );
             }
-            "SubtleCrypto" => {
-                return if is_native_module_namespace_value(value, "crypto.subtle") {
-                    f64::from_bits(crate::value::TAG_TRUE)
-                } else {
-                    f64::from_bits(TAG_FALSE)
-                };
+            Some(BuiltinInstanceIdentity::Crypto) => {
+                is_native_module_namespace_value(value, "crypto.webcrypto")
             }
-            "CryptoKey" => {
+            Some(BuiltinInstanceIdentity::SubtleCrypto) => {
+                is_native_module_namespace_value(value, "crypto.subtle")
+            }
+            Some(BuiltinInstanceIdentity::CryptoKey) => {
                 let addr = value_addr(value);
-                return if addr != 0 && crate::buffer::crypto_key_meta(addr).is_some() {
-                    f64::from_bits(crate::value::TAG_TRUE)
-                } else {
-                    f64::from_bits(TAG_FALSE)
-                };
+                addr != 0 && crate::buffer::crypto_key_meta(addr).is_some()
             }
-            _ => {}
-        }
-        let class_id = global_builtin_constructor_class_id(name);
-        if class_id != 0 {
-            // Own hooks and proxy unwrapping have already completed. Once this
-            // actual constructor is proved callable, primitives are a miss;
-            // native dispatch need not repeat the static class-hook prefix.
-            if instanceof_lhs_is_primitive(value) {
-                return f64::from_bits(TAG_FALSE);
-            }
-            return super::static_dispatch::native_with_constructor(
-                value,
-                class_id,
-                Some(type_ref),
-            );
+            None => false,
+        };
+        if declaration.instance_identity.is_some() {
+            return f64::from_bits(if matched {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
         }
     }
     // Intrinsics and class values have completed their own dispatch. Only
