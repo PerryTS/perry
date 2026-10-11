@@ -58,6 +58,32 @@ macro_rules! closure_call_dispatch {
     };
 }
 
+// A resolved call adapter already owns the function operand and its static
+// entry info. For a native fixed-arity body, shift the first JS argument into
+// `this` and tail-call the captured brand-checking entry. No second validation,
+// argument buffer, receiver coercion or bound-function ladder is needed.
+macro_rules! native_bound_call {
+    ($closure:ident, $info:ident;) => {};
+    ($closure:ident, $info:ident; $receiver:ident $(, $arg:ident)*) => {
+        if std::ptr::eq($info, &super::bound_intrinsic::CALL_INFO) {
+            let entry = unsafe { &*(js_closure_get_capture_ptr($closure, 5) as *const JsFunctionInfo) };
+            let argc = 0usize $(+ { let _ = stringify!($arg); 1 })*;
+            if entry.flags & (crate::closure::FN_BUILTIN | crate::closure::FN_REST_MASK)
+                == crate::closure::FN_BUILTIN
+                && !arity_needs_dispatch(u32::from(entry.params), argc as u32)
+            {
+                let operand = crate::value::JSValue::from_bits(js_closure_get_capture_f64($closure, 1).to_bits())
+                    .as_pointer::<ClosureHeader>();
+                let body = unsafe { crate::closure::body_call::js_body_fn!(entry.code; $receiver $(, $arg)*) };
+                // `become` requires the caller's exact native signature. Keep
+                // its width with one surplus argument, ignored by this fixed
+                // native body (over-application is the ordinary C ABI contract).
+                unsafe { become body(operand, JsThis::from_f64($receiver) $(, $arg)*, $receiver) }
+            }
+        }
+    };
+}
+
 /// Define the per-arity entry `js_closure_call{N}`.
 ///
 /// Where the target has guaranteed tail calls, a plain body is reached with
@@ -114,6 +140,7 @@ macro_rules! closure_call_entry {
             // or user code separates that proof from this immutable info
             // load, so neither admission needs to be repeated.
             let info = unsafe { &*(*closure).info };
+            native_bound_call!(closure, info; $($a),*);
             $dispatch(closure, this $(, $a)*, Some(info))
         }
     };

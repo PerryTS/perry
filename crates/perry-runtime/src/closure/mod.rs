@@ -8,6 +8,7 @@
 mod alloc;
 pub(crate) mod body_call;
 mod dispatch;
+pub(crate) use dispatch::bound_intrinsic::try_native_apply;
 mod dynamic_props;
 pub(crate) mod props;
 mod registry;

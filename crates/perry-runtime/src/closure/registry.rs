@@ -370,7 +370,7 @@ pub unsafe fn dispatch_rest_bundled(
 /// body's, so the body sees them exactly as the caller held them; a body that
 /// allocates before it is done with them roots them itself.
 #[inline]
-unsafe fn call_native_args_body(
+pub(super) unsafe fn call_native_args_body(
     closure: *const ClosureHeader,
     func_ptr: *const u8,
     this: crate::closure::JsThis,

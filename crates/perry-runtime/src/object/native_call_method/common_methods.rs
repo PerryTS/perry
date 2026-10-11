@@ -444,6 +444,19 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
         }
         "apply" => {
+            let this_arg = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let list = if args_len >= 2 && !args_ptr.is_null() {
+                *args_ptr.add(1)
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            if let Some(result) = crate::closure::try_native_apply(object, this_arg, list) {
+                return Some(result);
+            }
             if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("apply");
             }

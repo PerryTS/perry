@@ -1,6 +1,7 @@
 //! A bound call/apply adapter's internal-slot layouts. Resolve the intrinsic
 //! and its function operand once, at bind birth. The original target remains
-//! in slot 0 for name/length/construct semantics; slot 5 is the call operand.
+//! in slot 0 for name/length/construct semantics; slot 1 is the call operand
+//! and slot 5 is its immutable body info (outside the managed heap).
 //! The immutable info distinguishes these layouts from an ordinary bind.
 use super::*;
 use crate::value::JSValue;
@@ -13,6 +14,7 @@ pub(in crate::closure) static APPLY_INFO: JsFunctionInfo =
 #[derive(Clone, Copy)]
 pub(super) struct Resolved {
     pub info: &'static JsFunctionInfo,
+    pub entry: &'static JsFunctionInfo,
 }
 
 /// Only a body reached through its ordinary ABI can eliminate the adapter.
@@ -52,7 +54,7 @@ pub(super) unsafe fn resolve(
     {
         return None;
     }
-    Some(Resolved { info })
+    Some(Resolved { info, entry: body })
 }
 
 /// Only resolved adapters have this six-slot birth. Keep it separate from
@@ -75,7 +77,14 @@ pub(super) unsafe fn allocate(
     let name = name.get_nanbox_f64().to_bits();
     crate::closure::closure_install_boxed_captures(
         bound,
-        &[target, operand, 0, name, length, operand],
+        &[
+            target,
+            operand,
+            0,
+            name,
+            length,
+            resolved.entry as *const JsFunctionInfo as u64,
+        ],
     );
     bound
 }
@@ -89,7 +98,7 @@ pub(super) unsafe fn dispatch(closure: *const ClosureHeader, args: &[f64]) -> Op
     } else {
         return None;
     };
-    let target = js_closure_get_capture_f64(closure, 5);
+    let target = js_closure_get_capture_f64(closure, 1);
     let this_arg = args
         .first()
         .copied()
@@ -111,7 +120,7 @@ pub(super) unsafe fn dispatch(closure: *const ClosureHeader, args: &[f64]) -> Op
         args.get(1..).unwrap_or(&[])
     };
     let operand = JSValue::from_bits(target.to_bits()).as_pointer::<ClosureHeader>();
-    let body = &*(*operand).info;
+    let body = &*(js_closure_get_capture_ptr(closure, 5) as *const JsFunctionInfo);
     if crate::closure::info_receives_primitive_this(body)
         || !super::explicit_this::receiver_may_box(target, this_arg)
     {
@@ -139,6 +148,34 @@ pub(super) unsafe fn dispatch(closure: *const ClosureHeader, args: &[f64]) -> Op
     ))
 }
 
+/// Native apply forwarding shares the bound adapter's packed-list proof.
+/// No user code or collection separates validation from the native entry.
+pub(crate) unsafe fn try_native_apply(target: f64, this: f64, list: f64) -> Option<f64> {
+    let value = JSValue::from_bits(target.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let operand = value.as_pointer::<ClosureHeader>();
+    let body = crate::closure::closure_info(operand)?;
+    if body.flags & crate::closure::FN_BUILTIN == 0
+        || body.code == BOUND_FUNCTION_FUNC_PTR
+        || body.code == BOUND_METHOD_FUNC_PTR
+        || body.code == crate::object::global_this_builtin_noop_thunk as *const u8
+        || body.code == crate::object::global_this_array_thunk as *const u8
+        || crate::closure::closure_reads_this_from_capture(operand)
+    {
+        return None;
+    }
+    let mut packed = [0.0; 4];
+    let n = packed_apply_values(list, &mut packed)?;
+    Some(call_resolved_body(
+        operand,
+        body,
+        JsThis::from_f64(this),
+        &packed[..n],
+    ))
+}
+
 /// Bind birth proved that this operand needs no captured-receiver rebind.
 /// Keep its direct entry within this layout; general ConstFn callers use the
 /// existing forwarding path and may still carry a captured receiver.
@@ -149,6 +186,9 @@ unsafe fn call_resolved_body(
     this: JsThis,
     args: &[f64],
 ) -> f64 {
+    if info.flags & crate::codegen_abi::FN_REST_NATIVE_ARGS != 0 {
+        return crate::closure::registry::call_native_args_body(closure, info.code, this, args);
+    }
     if info.flags & crate::closure::FN_REST_MASK == 0 && args.len() <= 6 && info.params <= 6 {
         let mut a = [f64::from_bits(crate::value::TAG_UNDEFINED); 6];
         a[..args.len()].copy_from_slice(args);
@@ -157,7 +197,11 @@ unsafe fn call_resolved_body(
         #[cfg(target_os = "wasi")]
         let width = usize::from(info.params);
         #[cfg(not(target_os = "wasi"))]
-        let width = args.len().max(usize::from(info.params));
+        let width = if info.flags & crate::closure::FN_BUILTIN != 0 {
+            usize::from(info.params)
+        } else {
+            args.len().max(usize::from(info.params))
+        };
         return match width {
             0 => js_body_call!(code, closure, this),
             1 => js_body_call!(code, closure, this, a[0]),
@@ -234,8 +278,8 @@ mod tests {
         );
         assert_eq!(unsafe { (*closure).capture_count }, 6);
         assert_eq!(
-            js_closure_get_capture_f64(closure, 5).to_bits(),
-            target_value.to_bits()
+            js_closure_get_capture_ptr(closure, 5) as *const JsFunctionInfo,
+            unsafe { (*target).info }
         );
         let before = crate::closure::CLOSURE_ALLOC_COUNT.load(std::sync::atomic::Ordering::Relaxed);
         assert!(before > 0, "allocation counting must be live");
@@ -256,6 +300,37 @@ mod tests {
             Some(ShapeObjectKind::FunctionBoundCall)
         );
         assert_eq!(unsafe { dispatch(closure, &[10.0, 2.0, 3.0]) }, Some(15.0));
+    }
+
+    #[test]
+    fn native_call_birth_records_the_entry_and_keeps_the_operand() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let entry = crate::fn_info!(body, 2; with_flags(crate::closure::FN_BUILTIN));
+        let target = js_closure_alloc(entry, 0);
+        let target_value = crate::value::js_nanbox_pointer(target as i64);
+        let adapter = unsafe { crate::closure::reify_function_method_value(target_value, b"call") };
+        let bound = unsafe { js_function_bind(adapter, &target_value, 1) };
+        let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
+        assert!(std::ptr::eq(unsafe { (*closure).info }, &CALL_INFO));
+        assert_eq!(
+            js_closure_get_capture_f64(closure, 1).to_bits(),
+            target_value.to_bits()
+        );
+        assert_eq!(
+            js_closure_get_capture_ptr(closure, 5) as *const JsFunctionInfo,
+            entry,
+            "the entry must be a birth slot, not resolved from the operand on every call"
+        );
+        // Fixed-arity native forwarding enters with the first argument as this.
+        assert_eq!(
+            crate::closure::js_closure_call3(closure, JsThis::UNDEFINED, 10.0, 2.0, 3.0),
+            15.0
+        );
+        assert_eq!(
+            crate::closure::js_closure_call4(closure, JsThis::UNDEFINED, 10.0, 2.0, 3.0, 99.0),
+            15.0
+        );
     }
 
     #[test]
