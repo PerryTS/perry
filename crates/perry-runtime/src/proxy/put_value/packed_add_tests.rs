@@ -200,10 +200,10 @@ fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
     );
 }
 
-/// A class store records the clear-chain proof before publishing the append.
-/// The publication must consume that proof and still serve a fresh receiver.
+/// A class store proves its chain clear before publishing the append, and
+/// the memo then serves a fresh receiver of the same class.
 #[test]
-fn a_class_key_add_uses_the_store_sites_clear_chain_verdict() {
+fn a_class_key_add_publishes_after_its_clear_chain_verdict() {
     const CID: u32 = 0x0004_2231;
     let proto = crate::object::js_object_alloc(0, 2);
     crate::object::class_prototype_object_root_store(CID, proto);
@@ -222,16 +222,6 @@ fn a_class_key_add_uses_the_store_sites_clear_chain_verdict() {
         1,
         &mut slot,
         &site.set,
-    );
-    assert!(
-        unsafe {
-            crate::object::chain_store::chain_store_proven(
-                crate::object::chain_store::ChainSite::Packed(&mut slot),
-                first.get_raw_const_ptr::<crate::ObjectHeader>(),
-                key,
-            )
-        },
-        "the reused proof must be live"
     );
     assert_eq!(site.add_shapes.load(Ordering::Relaxed) as u32, pre);
     assert_eq!(

@@ -38,7 +38,6 @@ pub(crate) use put_value::{
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) use put_value::{js_put_value_set_packed_fast, store_and_prime, PackedSetWays};
 pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
-pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 pub(crate) use put_value::{store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP};
 pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;

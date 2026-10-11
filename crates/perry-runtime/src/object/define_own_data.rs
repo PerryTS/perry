@@ -113,7 +113,7 @@ unsafe fn define_other(
     // allocating (a pooled literal or an SSO immediate resolves to its
     // interned twin). Private names and canonical indices are refused there:
     // they are not ordinary named properties.
-    let Some(key) = super::chain_store::interned_key_for_store(key_value) else {
+    let Some(key) = super::store_key::interned_key_for_store(key_value) else {
         // The interned-key store funnels validate this same header themselves.
         // Content lookup reads the shape directly, so validate only this lane.
         let header = crate::value::addr_class::try_read_gc_header(addr)?;

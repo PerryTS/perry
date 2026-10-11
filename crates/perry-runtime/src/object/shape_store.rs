@@ -1534,7 +1534,7 @@ pub(crate) unsafe fn try_store_with_refresh(
             let obj_root = scope.root_raw_mut_ptr(obj);
             let key_root = scope.root_string_ptr(key_ptr);
             let value_root = scope.root_nanbox_f64(value);
-            if !super::chain_store::mark_chain_hops(&scope, target) {
+            if !super::store_key::mark_chain_hops(&scope, target) {
                 return None;
             }
             let obj = obj_root.get_raw_mut_ptr::<ObjectHeader>();
@@ -1648,7 +1648,7 @@ unsafe fn apply_proven_add(
             crate::JSValue::from_bits(value.get_nanbox_f64().to_bits()),
         );
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
-        if let Some(atom) = super::chain_store::interned_key_for_store(
+        if let Some(atom) = super::store_key::interned_key_for_store(
             crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
         ) {
             super::transition_cache_insert(
@@ -1912,7 +1912,7 @@ unsafe fn try_function_store(
             Some(true) => return None,
             Some(false) => {}
             None => {
-                if !super::chain_store::mark_chain_hops(&scope, owner.get_nanbox_f64()) {
+                if !super::store_key::mark_chain_hops(&scope, owner.get_nanbox_f64()) {
                     return None;
                 }
                 let key = key_root.get_raw_const_ptr::<crate::StringHeader>();

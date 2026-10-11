@@ -136,7 +136,7 @@ pub extern "C" fn js_put_value_set(
     // existing allocation-free atom resolver before asking the shape, as
     // the transition-only entry did, so a warm short key keeps that answer.
     let key = if crate::JSValue::from_bits(key.to_bits()).is_short_string() {
-        unsafe { crate::object::chain_store::interned_key_for_store(key) }
+        unsafe { crate::object::store_key::interned_key_for_store(key) }
             .map(|atom| crate::value::js_nanbox_string(atom as i64))
             .unwrap_or(key)
     } else {
@@ -485,12 +485,11 @@ pub(crate) use packed_set::PackedSetWays;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) use packed_set::{js_put_value_set_packed_fast, store_and_prime};
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
-pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 /// Words in a per-site static-key write cache (`[shape_token, slot]` × the
 /// four inline ways) and in its outlined poly tail. Both are views of the
 /// same `PicCacheSlot` family the read PIC uses; the arena hands out exactly
 /// this many words for them (#9708).
-pub const WRITE_PIC_WORDS: usize = 9;
+pub const WRITE_PIC_WORDS: usize = 8;
 
 /// A per-site write cache, as the emitted slot resolves it.
 pub type WritePicCache = [i64; WRITE_PIC_WORDS];
@@ -538,32 +537,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
 ) -> f64 {
     // Charter step 5: migrate-on-miss (DESIGN §1.5 step 4).
     crate::object::field_rep_store::migrate_on_miss_value(target.to_bits());
-    // Inherited-access lane: a key-adding store on a class instance whose
-    // chain this site has already proved clear takes the transition append
-    // (`object::chain_store`). Before any scope: the try allocates nothing on
-    // a decline.
-    let chain_key = if key.is_null() {
-        None
-    } else {
-        unsafe {
-            crate::object::chain_store::interned_key_for_store(f64::from_bits(
-                crate::value::js_nanbox_string(key as i64).to_bits(),
-            ))
-        }
-    };
-    if let Some(chain_key) = chain_key {
-        if let Some(stored) = unsafe {
-            crate::object::chain_store::chain_store_try(
-                crate::object::chain_store::ChainSite::Pic(cache_slot),
-                target,
-                chain_key,
-                value,
-            )
-        } {
-            return stored;
-        }
-    }
-    let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_string_ptr(key);
@@ -584,25 +557,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
             strict,
         )
     });
-    unsafe {
-        // Re-resolved after the store: interning the key is one of the things
-        // the slow path does, so a key with no twin before may have one now.
-        let chain_key = if key.is_null() {
-            std::ptr::null()
-        } else {
-            crate::object::chain_store::interned_key_for_store(f64::from_bits(
-                crate::value::js_nanbox_string(key as i64).to_bits(),
-            ))
-            .unwrap_or(std::ptr::null())
-        };
-        crate::object::chain_store::chain_store_after_miss(
-            crate::object::chain_store::ChainSite::Pic(cache_slot),
-            pre_shape,
-            target_handle.get_nanbox_f64(),
-            chain_key,
-        );
-    }
-
     if cache_slot.is_null() {
         return result;
     }
@@ -1212,24 +1166,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
     let mut value = value;
     if (target_bits & !POINTER_MASK) == POINTER_TAG {
         let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
-        // Inherited-access lane: a class instance whose chain this site has
-        // proved clear takes the same append with the proof
-        // (`object::chain_store`). The key may be an SSO immediate — tsc's
-        // `pos` / `kind` / `flags` are — resolved to its interned pointer
-        // without allocating.
-        let chain_key = unsafe { crate::object::chain_store::interned_key_for_store(key) };
-        if let Some(key_ptr) = chain_key {
-            if let Some(stored) = unsafe {
-                crate::object::chain_store::chain_store_try(
-                    crate::object::chain_store::ChainSite::Pic(cache_slot),
-                    target,
-                    key_ptr,
-                    value,
-                )
-            } {
-                return stored;
-            }
-        }
         let kb = key.to_bits();
         if (kb & !POINTER_MASK) == crate::value::STRING_TAG {
             let key_ptr = (kb & POINTER_MASK) as *const crate::StringHeader;
@@ -1251,7 +1187,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         }
     }
 
-    let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -1264,17 +1199,6 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         target_handle.get_nanbox_f64(),
         strict,
     );
-    unsafe {
-        let key_ptr =
-            crate::object::chain_store::interned_key_for_store(key_handle.get_nanbox_f64())
-                .unwrap_or(std::ptr::null());
-        crate::object::chain_store::chain_store_after_miss(
-            crate::object::chain_store::ChainSite::Pic(cache_slot),
-            pre_shape,
-            target_handle.get_nanbox_f64(),
-            key_ptr,
-        );
-    }
     if cache_slot.is_null() {
         return result;
     }
@@ -1386,15 +1310,8 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         }
         let c = &mut *crate::object::pic_slot_resolve(cache_slot);
         if c[0] as u64 != shape_token {
-            // New shape at this site: restart the way set. The chain-verdict
-            // word is not part of it: it is keyed on the receiver class, not
-            // the shape, and dropping it would orphan its entry.
-            for word in c
-                .iter_mut()
-                .take(crate::object::chain_store::CHAIN_ENTRY_WORD)
-            {
-                *word = 0;
-            }
+            // New shape at this site: restart the way set.
+            c.fill(0);
         }
         // MRU insert: shift ways down, newest first. A duplicate key way is
         // moved to the front rather than duplicated.

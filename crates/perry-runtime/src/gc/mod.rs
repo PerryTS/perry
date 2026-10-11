@@ -1124,10 +1124,7 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    // A store site's chain verdict names its interned
-    // key and the receiver's recorded prototype, and compares them on every
-    // use, so both are STRONG roots (`object::chain_store`).
-    reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
+    reg_scanner!(crate::proxy::scan_packed_add_roots_mut);
     reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
     // A site's chain memo names every prototype from the receiver's
     // [[Prototype]] to the holder of the method it answers; it compares each

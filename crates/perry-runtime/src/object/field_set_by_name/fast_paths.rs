@@ -305,7 +305,8 @@ pub(crate) fn object_set_field_by_name_transition_only_fast_value(
 
 /// [`object_set_field_by_name_transition_only_fast_value`] for a CLASS
 /// instance whose store site has already proved the prototype chain does not
-/// intercept this key (`object::chain_store`). The plain-object lane refuses
+/// intercept this key (`object::store_key::mark_chain_hops`, then
+/// `class_instance_set_may_intercept`). The plain-object lane refuses
 /// class instances because it cannot prove that itself; with the proof in
 /// hand the append is the same one a plain object takes. Every other check —
 /// receiver kind and flags, an own descriptor for the key, the transition
@@ -760,7 +761,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         // can already have a twin in the existing atom table. Resolve that
         // word without allocating before declining to the rooted fallback.
         let key = if CHAIN_PROVEN && !already_interned {
-            super::chain_store::interned_key_for_store(crate::value::js_nanbox_string(key as i64))?
+            super::store_key::interned_key_for_store(crate::value::js_nanbox_string(key as i64))?
         } else {
             key
         };

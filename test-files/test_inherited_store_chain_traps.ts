@@ -1,4 +1,4 @@
-// Inherited-access lane (object/chain_store.rs): stores that must consult the
+// Inherited-access stores: stores that must consult the
 // prototype chain. Each trap runs ONE store site in a loop whose trip count is
 // only known at run time (so the site is neither unrolled nor cloned), primes
 // it on the first iterations, changes the chain mid-loop, and records what the

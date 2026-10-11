@@ -359,8 +359,10 @@ pub(crate) unsafe fn object_is_marked_prototype(obj: usize) -> bool {
 /// Can a descriptor install or clear, or a `delete`, on `owner` change what
 /// a cached chain verdict answers?
 ///
-/// The chain-store verdict records through MARKED ordinary prototype hops;
-/// `object::chain_store` marks each hop it depends on before recording. What such a mutation can
+/// A chain verdict (the key-add memo `proxy::put_value::packed_add`, the
+/// shape store `object::shape_store`) records through MARKED ordinary
+/// prototype hops; `object::store_key::mark_chain_hops` marks each hop it
+/// depends on before recording. What such a mutation can
 /// change on its RECEIVER is covered by the receiver's own ShapeId, which
 /// every descriptor install, clear and delete transitions. So the mutation
 /// matters to a verdict only when `owner` can be one of those hops: a marked

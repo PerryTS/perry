@@ -703,7 +703,7 @@ pub const PIC_HOLDER_SLOT_SPILL_BIT: i64 = 1 << 31;
 /// holder's inline slot (u32), the raw address of the accessor pair that slot
 /// held at prime time, and the compiled setter it names
 /// (`double set(double this, double v)`).
-pub const PACKED_SET_SETTER_WORD: usize = 9;
+pub const PACKED_SET_SETTER_WORD: usize = 8;
 pub const SETTER_SITE_TAG: u64 = 0xA2C2_0000_0000_0000;
 pub const SETTER_SITE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const SETTER_SITE_RECV_SHAPE_OFFSET: usize = 0;

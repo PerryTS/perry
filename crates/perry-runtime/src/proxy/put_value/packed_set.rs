@@ -102,21 +102,19 @@ const PACKED_SET_FLAGS: u64 = PACKED_SET_F64_SLOT | PACKED_SET_CONSTFN_SLOT;
 pub const PACKED_SET_WAYS: usize = 8;
 pub const PACKED_SET_INLINE_WAYS: usize = 4;
 
-/// The word after the ways: the site's inherited-access chain entry
-/// (`object::chain_store`), 0 until the site primes one. Never compared by
-/// the emitted code, which reads only ways `0..PACKED_SET_INLINE_WAYS`.
-pub const PACKED_SET_CHAIN_WORD: usize = PACKED_SET_WAYS;
-/// Collecting-only direct class setter memo; emitted code never reads it.
-pub const PACKED_SET_SETTER_WORD: usize = PACKED_SET_WAYS + 1;
+/// The word after the ways: the site's compiled-setter entry
+/// (`setter_site`), 0 until the site primes one. The emitted ways compare
+/// reads only ways `0..PACKED_SET_INLINE_WAYS`; the emitted setter arm reads
+/// this word (`perry_abi::PACKED_SET_SETTER_WORD`).
+pub const PACKED_SET_SETTER_WORD: usize = PACKED_SET_WAYS;
 
 /// A site's way cache: packed words in the compact word's format, then the
-/// chain entry word.
-pub type PackedSetWays = [u64; PACKED_SET_WAYS + 2];
+/// setter word.
+pub type PackedSetWays = [u64; PACKED_SET_WAYS + 1];
 
-/// A site cache no prime has touched: every way empty, no chain entry.
+/// A site cache no prime has touched: every way empty, no setter entry.
 pub const fn packed_set_cache_empty() -> PackedSetWays {
-    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 2];
-    cache[PACKED_SET_CHAIN_WORD] = 0;
+    let mut cache = [PACKED_SET_EMPTY; PACKED_SET_WAYS + 1];
     cache[PACKED_SET_SETTER_WORD] = 0;
     cache
 }
@@ -209,7 +207,7 @@ fn packed_set_miss_body(
     let (target, key, value) = {
         let mut refreshed = None;
         if target_bits & !POINTER_MASK == POINTER_TAG && !key.is_null() {
-            let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
+            let pre_shape = unsafe { crate::object::store_key::pre_store_shape(target) };
             if let Some(stored) = unsafe {
                 crate::object::shape_store::try_warm_transition(
                     (target_bits & POINTER_MASK) as *mut crate::ObjectHeader,
@@ -244,7 +242,6 @@ fn packed_set_miss_body(
                         target,
                         (key.to_bits() & POINTER_MASK) as *const crate::StringHeader,
                         pre_shape,
-                        crate::object::chain_store::ChainSite::Packed(cache_slot),
                     );
                 }
                 return stored;
@@ -262,7 +259,6 @@ fn packed_set_miss_body(
     // The ways the emitted code does not compare. Nothing here allocates or
     // runs user code, so `target` and `value` are still the caller's values
     // when the full walk below needs them.
-    let chain_site = crate::object::chain_store::ChainSite::Packed(cache_slot);
     unsafe {
         let cache = crate::object::pic_slot_peek(cache_slot);
         if !cache.is_null() {
@@ -295,28 +291,9 @@ fn packed_set_miss_body(
     if let Some(stored) = unsafe { setter_site::try_set(cache_slot, target, key, value) } {
         return stored;
     }
-    // Inherited-access lane: a key-adding store whose chain this site has
-    // already proved clear takes the transition append (`object::chain_store`).
-    // Allocation-free on a decline.
-    let chain_key = if key.is_null() {
-        None
-    } else {
-        unsafe {
-            crate::object::chain_store::interned_key_for_store(f64::from_bits(
-                crate::value::js_nanbox_string(key as i64).to_bits(),
-            ))
-        }
-    };
-    if let Some(chain_key) = chain_key {
-        if let Some(stored) = unsafe {
-            crate::object::chain_store::chain_store_try(chain_site, target, chain_key, value)
-        } {
-            return stored;
-        }
-    }
     // The receiver's ShapeId before the store: the pre-shape a key-add memo
     // is keyed on. Allocation-free.
-    let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
+    let pre_shape = unsafe { crate::object::store_key::pre_store_shape(target) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_string_ptr(key);
@@ -330,28 +307,7 @@ fn packed_set_miss_body(
         packed,
     );
     unsafe {
-        // Re-resolved after the store: the slow path may have interned the key.
-        let chain_key = if key.is_null() {
-            std::ptr::null()
-        } else {
-            crate::object::chain_store::interned_key_for_store(f64::from_bits(
-                crate::value::js_nanbox_string(key as i64).to_bits(),
-            ))
-            .unwrap_or(std::ptr::null())
-        };
-        crate::object::chain_store::chain_store_after_miss(
-            chain_site,
-            pre_shape,
-            target_handle.get_nanbox_f64(),
-            chain_key,
-        );
-        super::packed_add::packed_add_prime(
-            site,
-            target_handle.get_nanbox_f64(),
-            key,
-            pre_shape,
-            chain_site,
-        );
+        super::packed_add::packed_add_prime(site, target_handle.get_nanbox_f64(), key, pre_shape);
     }
     result
 }

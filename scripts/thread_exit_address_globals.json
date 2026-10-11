@@ -2527,14 +2527,6 @@
    "why": "Lazily built unwinder over loaded images' .eh_frame sections plus a rows cache keyed by code PC; addresses are of mapped image sections/code, not the GC heap."
   },
   {
-   "file": "crates/perry-runtime/src/object/chain_store.rs",
-   "names": [
-    "CHAIN_STORE_SKIPPED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Six stats counters incremented by note_skip when stats are enabled; counts."
-  },
-  {
    "file": "crates/perry-runtime/src/object/native_module_dispatch/dispatch_m_p.rs",
    "names": [
     "LAST_CALL"
