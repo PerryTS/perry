@@ -164,3 +164,118 @@ fn only_compiled_ordinary_bodies_take_the_lane() {
     let arrow = crate::value::js_nanbox_pointer(arrow as i64);
     assert!(ordinary_compiled_function(arrow).is_none());
 }
+
+#[test]
+fn construct_site_revalidates_the_current_function_bag_and_prototype() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let site = std::array::from_fn::<_, 4, _>(|_| AtomicU64::new(0));
+    let func = compiled_function();
+    let make = |f| unsafe {
+        super::super::site::js_new_function_construct_site(f, std::ptr::null(), 0, site.as_ptr())
+    };
+    make(func);
+    let first = make(func);
+    assert_ne!(
+        site[0].load(Ordering::Relaxed) & FUNCTION_SITE,
+        0,
+        "the memo must be live"
+    );
+    let closure = (func.to_bits() & crate::value::POINTER_MASK) as usize;
+    assert!(unsafe { site_prototype_object(closure, site.as_ptr()) }.is_some());
+    let old = own_prototype(func);
+    let replacement = crate::object::js_object_alloc(0, 0);
+    crate::object::js_set_function_prototype(
+        func,
+        crate::value::js_nanbox_pointer(replacement as i64),
+    );
+    let second = make(func);
+    assert_eq!(
+        prototype_of(
+            JSValue::from_bits(first.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        ),
+        old
+    );
+    assert_eq!(
+        prototype_of(
+            JSValue::from_bits(second.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        ),
+        replacement
+    );
+    // A prototype descriptor mutation re-stamps the prototype but must not
+    // change the instance's [[Prototype]]. It also revokes the site proof.
+    let key = crate::string::intern_ascii_literal(b"marker");
+    crate::object::js_object_set_field_by_name(replacement, key as *mut _, 7.0);
+    assert!(unsafe { site_prototype_object(closure, site.as_ptr()) }.is_none());
+    let third = make(func);
+    assert_eq!(
+        prototype_of(
+            JSValue::from_bits(third.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        ),
+        replacement
+    );
+    let other = compiled_function();
+    let fourth = make(other);
+    assert_eq!(
+        prototype_of(
+            JSValue::from_bits(fourth.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        ),
+        own_prototype(other)
+    );
+    let arrow = crate::closure::js_closure_alloc(
+        crate::fn_info!(empty_body, 0; with_declared(0), with_flags(FN_COMPILED_BODY | FN_ARROW)),
+        0,
+    );
+    assert!(unsafe {
+        ordinary_compiled_function_at_site(
+            crate::value::js_nanbox_pointer(arrow as i64),
+            site.as_ptr(),
+        )
+    }
+    .is_none());
+}
+
+#[test]
+fn construct_site_uses_a_spilled_prototype_from_the_current_bag() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let site = std::array::from_fn::<_, 4, _>(|_| AtomicU64::new(0));
+    let func = compiled_function();
+    let closure = (func.to_bits() & crate::value::POINTER_MASK) as usize;
+    unsafe {
+        for key in ["extra0", "extra1", "extra2"] {
+            crate::closure::props::bag_set(closure, key, 1.0);
+        }
+        super::super::site::js_new_function_construct_site(
+            func,
+            std::ptr::null(),
+            0,
+            site.as_ptr(),
+        );
+        let instance = super::super::site::js_new_function_construct_site(
+            func,
+            std::ptr::null(),
+            0,
+            site.as_ptr(),
+        );
+        assert_ne!(
+            site[0].load(Ordering::Relaxed) & FUNCTION_SITE,
+            0,
+            "a spill bag must prime the memo"
+        );
+        let position = (site[2].load(Ordering::Relaxed) >> 32) as u32;
+        let live = (site[3].load(Ordering::Relaxed) >> 32) as u32;
+        assert!(
+            position >= live,
+            "the fixture must exercise the spill proof"
+        );
+        assert!(site_prototype_object(closure, site.as_ptr()).is_some());
+        assert_eq!(
+            prototype_of(
+                JSValue::from_bits(instance.to_bits()).as_pointer::<ObjectHeader>()
+                    as *mut ObjectHeader
+            ),
+            own_prototype(func)
+        );
+    }
+}

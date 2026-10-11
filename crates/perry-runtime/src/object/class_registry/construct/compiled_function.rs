@@ -20,6 +20,97 @@
 use super::*;
 
 use crate::closure::ClosureHeader;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Reuse the four words already emitted for every dynamic construct site.
+// The high bit distinguishes an ordinary-function entry from a class entry.
+const FUNCTION_SITE: u64 = 1 << 63;
+
+/// Admit a previously resolved ordinary body by its immutable info identity.
+/// Captures always come from the currently evaluated closure, never the site.
+#[inline]
+pub(super) unsafe fn ordinary_compiled_function_at_site(
+    value: f64,
+    site: *const AtomicU64,
+) -> Option<usize> {
+    if !site.is_null() && (*site).load(Ordering::Relaxed) & FUNCTION_SITE != 0 {
+        let bits = value.to_bits();
+        if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+            let closure = (bits & crate::value::POINTER_MASK) as *const ClosureHeader;
+            let header = crate::value::addr_class::try_read_gc_header(closure as usize)?;
+            if header.obj_type == crate::gc::GC_TYPE_CLOSURE
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && ((*closure).shape_id as u64 | FUNCTION_SITE) == (*site).load(Ordering::Relaxed)
+                && (*closure).info as u64 == (*site.add(1)).load(Ordering::Relaxed)
+            {
+                return Some(closure as usize);
+            }
+        }
+    }
+    ordinary_compiled_function(value)
+}
+
+/// Read the own prototype from a proven bag slot on the current bag shape.
+/// Value replacements keep that slot, but are read anew on every construction.
+#[inline]
+unsafe fn site_prototype_object(
+    closure: usize,
+    site: *const AtomicU64,
+) -> Option<*mut ObjectHeader> {
+    if site.is_null()
+        || (*site).load(Ordering::Relaxed)
+            != (FUNCTION_SITE | (*(closure as *const ClosureHeader)).shape_id as u64)
+    {
+        return None;
+    }
+    let proof = (*site.add(2)).load(Ordering::Relaxed);
+    let bag = (*(closure as *const ClosureHeader)).props;
+    if bag.is_null() || crate::object::shapes::object_shape_stamp(bag) != proof as u32 {
+        return None;
+    }
+    let slot = (proof >> 32) as u32;
+    let prototype_proof = (*site.add(3)).load(Ordering::Relaxed);
+    let live = (prototype_proof >> 32) as u32;
+    let value = crate::object::object_field_at_with_live(bag, slot, live);
+    if !value.is_pointer() {
+        return None;
+    }
+    let proto = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    let header = crate::value::addr_class::try_read_gc_header(proto as usize)?;
+    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && crate::object::shapes::object_shape_stamp(proto) as u64 == prototype_proof as u32 as u64)
+        .then_some(proto)
+}
+
+/// Publish only scalar layout facts and static body identity into the existing site.
+unsafe fn prime_function_site(closure: usize, proto: *const ObjectHeader, site: *const AtomicU64) {
+    if site.is_null() {
+        return;
+    }
+    let closure = closure as *const ClosureHeader;
+    let bag = (*closure).props;
+    if bag.is_null() {
+        return;
+    }
+    let shape = crate::object::shapes::object_shape_stamp(bag);
+    let Some(record) = crate::object::shapes::shape_record_by_id(shape) else {
+        return;
+    };
+    let Some(Some(slot)) = record.own_data_position_of_value(0, b"prototype") else {
+        return;
+    };
+    (*site.add(1)).store((*closure).info as u64, Ordering::Relaxed);
+    (*site.add(2)).store(shape as u64 | (slot as u64) << 32, Ordering::Relaxed);
+    (*site.add(3)).store(
+        crate::object::shapes::object_shape_stamp(proto) as u64
+            | (record.live_inline_slot_count() as u64) << 32,
+        Ordering::Relaxed,
+    );
+    (*site).store(
+        FUNCTION_SITE | (*closure).shape_id as u64,
+        Ordering::Relaxed,
+    );
+}
 use crate::codegen_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_COMPILED_BODY, FN_GENERATOR,
     FN_NON_CONSTRUCTOR,
@@ -190,10 +281,12 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
     closure: usize,
     args_ptr: *const f64,
     args_len: usize,
+    site: *const AtomicU64,
 ) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let func_handle = scope.root_nanbox_f64(func_value);
-    let proto = match own_prototype_object(closure) {
+    let cached_proto = site_prototype_object(closure, site);
+    let proto = match cached_proto.or_else(|| own_prototype_object(closure)) {
         Some(proto) => proto,
         // Never read: materialize the default prototype the general path
         // would, then read it back off the (possibly moved) function.
@@ -205,6 +298,13 @@ pub(super) unsafe fn construct_ordinary_compiled_function(
         }
         None => return None,
     };
+    if cached_proto.is_none() {
+        prime_function_site(
+            (func_handle.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+            proto,
+            site,
+        );
+    }
     let instance = match birth_record(proto) {
         Some((class_id, shape_id, slots)) => {
             crate::value::js_nanbox_pointer(born_from_record(class_id, shape_id, slots) as i64)
@@ -251,7 +351,13 @@ pub(super) unsafe fn run_constructor_body(
     let this = crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64());
     let result = if compiled {
         let closure = (func_value.to_bits() & crate::value::POINTER_MASK) as *const ClosureHeader;
-        crate::closure::call_compiled_closure_this(closure, this, args_ptr, args_len)
+        crate::closure::call_compiled_body_this(
+            closure,
+            &*(*closure).info,
+            this,
+            args_ptr,
+            args_len,
+        )
     } else {
         crate::closure::native_call_value_this(func_value, this, args_ptr, args_len)
     };

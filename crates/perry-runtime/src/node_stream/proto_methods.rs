@@ -145,7 +145,7 @@ pub(crate) fn stream_prototype_value(name: &str) -> f64 {
 
 /// `Object.create(stream.<name>.prototype)`: a direct instance, which owns
 /// only the state its init defines.
-pub(super) fn alloc_stream_instance(name: &str) -> f64 {
+pub(super) fn alloc_stream_instance(name: &str, side: &[&str]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(stream_prototype_value(name));
     if !JSValue::from_bits(proto.get_nanbox_u64()).is_pointer() {
@@ -159,7 +159,7 @@ pub(super) fn alloc_stream_instance(name: &str) -> f64 {
             ordinary.get_nanbox_f64(),
         ));
     }
-    super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64())
+    super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64(), side)
 }
 
 /// Does `value`'s prototype chain reach `stream.<name>.prototype`? (node's

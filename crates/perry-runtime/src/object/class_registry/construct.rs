@@ -94,9 +94,9 @@ unsafe fn construct_function_impl(
     }
     // #10507: an ordinary compiled function is none of the exotic callees
     // below — a fact of its body, read once from its info.
-    if let Some(closure) = compiled_function::ordinary_compiled_function(func_value) {
+    if let Some(closure) = compiled_function::ordinary_compiled_function_at_site(func_value, site) {
         if let Some(result) = compiled_function::construct_ordinary_compiled_function(
-            func_value, closure, args_ptr, args_len,
+            func_value, closure, args_ptr, args_len, site,
         ) {
             return result;
         }

@@ -132,6 +132,21 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
     entries: &[(&str, f64)],
     attrs: &[u8],
 ) -> *mut ObjectHeader {
+    object_alloc_null_proto_with_key_attrs_and_inline(entries, attrs, entries.len() as u32)
+}
+
+/// The same canonical birth with a bounded inline prefix. Remaining fixed
+/// positions use the existing traced spill store; no key-add or per-key
+/// attribute transitions are needed to establish them.
+///
+/// # Safety
+/// Same suppression and distinct-key requirements as the full-inline birth.
+pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+    inline: u32,
+) -> *mut ObjectHeader {
+    debug_assert!(inline <= entries.len() as u32);
     debug_assert!(attrs.is_empty() || attrs.len() == entries.len());
     debug_assert!(crate::gc::gc_is_suppressed());
     let count = entries.len() as u32;
@@ -140,7 +155,7 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
     }
     // Under suppression the unpublished bag cannot move or be traced before
     // its final keys and live bound are stamped. Publish no empty predecessor.
-    let obj = super::alloc_basic::object_alloc_unpublished(0, count);
+    let obj = super::alloc_basic::object_alloc_unpublished(0, inline);
     let with_attrs = attrs.iter().any(|&entry| entry != 0);
     let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
@@ -177,7 +192,7 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
         }
         canonical_keys::canonicalize(&proof, list, count)
     };
-    set_object_keys_with_live(obj, canonical.view(), count);
+    set_object_keys_with_live(obj, canonical.view(), inline);
     // The shape's keys are an external child edge. A previously traced
     // newborn bag can acquire this edge while incremental marking is active.
     crate::gc::runtime_shade_external_edge(
@@ -197,7 +212,11 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
         }
     }
     for (i, (_, value)) in entries.iter().enumerate() {
-        store_object_field_slot(obj, i, value.to_bits());
+        if i < inline as usize {
+            store_object_field_slot(obj, i, value.to_bits());
+        } else {
+            super::spill::overflow_set(obj as usize, i, value.to_bits());
+        }
     }
     obj
 }

@@ -1,8 +1,8 @@
-//! A direct stream is born with its two lifecycle data slots. Option
+//! A direct stream is born with its lifecycle and first-side data slots. Option
 //! reads and hook installation still run in the ordinary constructor order.
 //! The canonical keys trie owns this layout, as it owns function bags: no
 //! construction cache or remembered final shape. Per-side public fields keep
-//! the existing overflow layout: widening them inline slows stream unpacking.
+//! the existing two-slot inline prefix and overflow layout.
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -54,23 +54,49 @@ impl PublicInit {
     }
 }
 
-pub(crate) fn alloc_initialized_stream_shell(proto: f64) -> f64 {
+pub(crate) const READABLE_FIELDS: &[&str] = &[
+    "readableAborted",
+    "readableLength",
+    "readableHighWaterMark",
+    "readableFlowing",
+    "readable",
+    "readableEnded",
+    "readableDidRead",
+    "readableEncoding",
+];
+pub(crate) const WRITABLE_FIELDS: &[&str] = &[
+    "writableObjectMode",
+    "writableHighWaterMark",
+    "writableLength",
+    "writableNeedDrain",
+    "writableCorked",
+    "writable",
+    "writableEnded",
+    "writableFinished",
+];
+
+pub(crate) fn alloc_initialized_stream_shell(proto: f64, side: &[&str]) -> f64 {
     let _no_move = crate::gc::GcSuppressScope::new();
     let hidden = crate::object::key_attrs::attr_bits_to_entry(
         crate::object::PropertyAttrs::new(true, false, true).bits,
     );
-    const COUNT: usize = COMMON.len();
-    let mut entries = [("", f64::from_bits(TAG_UNDEFINED)); COUNT];
-    let attrs = [hidden; COUNT];
-    let mut count = 0;
-    for &key in COMMON {
-        entries[count].0 = key.name();
-        count += 1;
+    const CAPACITY: usize = COMMON.len() + READABLE_FIELDS.len();
+    let mut entries = [("", f64::from_bits(TAG_UNDEFINED)); CAPACITY];
+    let attrs = [hidden; CAPACITY];
+    let count = COMMON.len() + side.len();
+    for (entry, name) in entries.iter_mut().zip(
+        COMMON
+            .iter()
+            .map(|key| key.name())
+            .chain(side.iter().copied()),
+    ) {
+        entry.0 = name;
     }
     let obj = unsafe {
-        crate::object::alloc::object_alloc_null_proto_with_key_attrs(
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs_and_inline(
             &entries[..count],
             &attrs[..count],
+            COMMON.len() as u32,
         )
     };
     crate::object::prototype_chain::object_link_created_prototype(obj as usize, proto.to_bits());
@@ -108,6 +134,23 @@ mod tests {
                 );
             }
             let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
+            assert_eq!(
+                unsafe { crate::object::object_live_slot_count(obj) },
+                2,
+                "fixed births preserve the stream inline prefix"
+            );
+            let expected = if name == "Writable" {
+                WRITABLE_FIELDS
+            } else {
+                READABLE_FIELDS
+            };
+            for key in expected {
+                let field = get_hidden_value(stream.get_nanbox_f64(), hidden_key(key.as_bytes()));
+                assert!(
+                    field.is_some(),
+                    "the fixed state slot {key} must be initialized"
+                );
+            }
             let keys = unsafe { crate::object::object_keys(obj) };
             let destroyed = (0..keys.count())
                 .find(|&i| unsafe {

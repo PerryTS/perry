@@ -77,7 +77,7 @@ pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let readable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Readable"));
+    let readable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Readable", super::birth::READABLE_FIELDS));
     init_readable_in_place(
         readable.get_nanbox_f64(),
         opts.get_nanbox_f64(),
@@ -381,7 +381,7 @@ pub(crate) fn init_writable_in_place(this: f64, opts: f64, how: StreamInit) {
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let writable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Writable"));
+    let writable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Writable", super::birth::WRITABLE_FIELDS));
     init_writable_in_place(
         writable.get_nanbox_f64(),
         opts.get_nanbox_f64(),
@@ -489,7 +489,7 @@ enum DuplexKind {
 fn new_duplex_kind(name: &str, opts: f64, kind: DuplexKind) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
-    let stream = scope.root_nanbox_f64(proto_methods::alloc_stream_instance(name));
+    let stream = scope.root_nanbox_f64(proto_methods::alloc_stream_instance(name, super::birth::READABLE_FIELDS));
     match kind {
         DuplexKind::Duplex => init_duplex_in_place(
             stream.get_nanbox_f64(),
