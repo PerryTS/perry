@@ -1287,6 +1287,38 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             return Ok(Expr::Object(props));
         }
 
+        // Static data definitions and spreads already have a source-ordered
+        // HIR builder. No hidden home object is needed, so allocating and
+        // calling an IIFE merely to build the fresh literal is redundant.
+        // Check every op: computed definitions, accessors, prototype setters
+        // and receiver-bound methods retain the complete builder above.
+        let can_emit_spread_object = has_spread
+            && ops.iter().all(|op| match op {
+                SpreadOp::Set {
+                    key: Expr::String(_),
+                    value,
+                    infer_name: false,
+                } => value_is_home_independent(value),
+                SpreadOp::Assign { src } => value_is_home_independent(src),
+                _ => false,
+            });
+        if can_emit_spread_object {
+            let parts = ops
+                .into_iter()
+                .map(|op| match op {
+                    SpreadOp::Set {
+                        key: Expr::String(key),
+                        value,
+                        infer_name: false,
+                    } => (Some(key), value),
+                    SpreadOp::Assign { src } => (None, src),
+                    _ => unreachable!("spread builder admission checked every op"),
+                })
+                .collect();
+            ctx.exit_scope(scope_mark);
+            return Ok(Expr::ObjectSpread { parts });
+        }
+
         // Imported-object capabilities need a producer-authoritative non-zero
         // class and stable slot order. Keep directly exported, static-key
         // method literals in the source-ordered IIFE, but seed it with a

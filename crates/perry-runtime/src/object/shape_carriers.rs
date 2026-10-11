@@ -32,7 +32,11 @@ pub(crate) fn unstable_target_resolves(entry: TransitionEntry) -> bool {
 /// exact target array and descriptor facts still agree with the cached edge.
 #[inline]
 fn stable_target_resolves(entry: TransitionEntry) -> bool {
-    let expected_len = (entry.slot_idx & TRANSITION_SLOT_IDX_MASK).wrapping_add(1);
+    let expected_len = if spread::source_shape(&entry).is_some() {
+        entry.target_len
+    } else {
+        (entry.slot_idx & TRANSITION_SLOT_IDX_MASK).wrapping_add(1)
+    };
     if entry.target_len != expected_len {
         return false;
     }

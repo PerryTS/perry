@@ -326,7 +326,13 @@ fn unmarked_numeric_read_refuses_spill_even_when_the_generic_value_is_number() {
             crate::object::js_object_set_field_by_name(obj, last, i as f64);
         }
         let d = object_shape_descriptor(obj).unwrap();
-        let location = region_key_location(&d, bits(last)).unwrap();
+        let location = region_key_location(
+            d.keys,
+            d.logical_key_count,
+            d.live_inline_slot_count,
+            bits(last),
+        )
+        .unwrap();
         assert!(location.0, "premise: requested numeric value is spilled");
         let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
         assert_eq!(

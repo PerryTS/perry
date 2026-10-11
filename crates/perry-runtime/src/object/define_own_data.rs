@@ -31,6 +31,7 @@ use super::ObjectHeader;
 ///
 /// # Safety
 /// `obj_value`, `key_value` and `value` are live values.
+#[inline(never)]
 pub(crate) unsafe fn define_own_data_from_shape(
     obj_value: f64,
     key_value: f64,
@@ -45,6 +46,69 @@ pub(crate) unsafe fn define_own_data_from_shape(
         return None;
     }
     let obj = addr as *mut ObjectHeader;
+    // Replacement is already answered by an ordinary all-default shape.
+    // Reuse the named store's own-slot proof before probing a key-ADD edge:
+    // the latter cannot answer an overwrite and was doing its full key
+    // interning, transition and receiver checks first on every literal tail.
+    let id = (*obj).parent_class_id;
+    // Declared class fields commonly CREATE; retain their key-add-first
+    // admission instead of scanning all preceding own keys at each birth.
+    let record = if (*obj).class_id == 0
+        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
+            < super::shapes::EXOTIC_SHAPE_ID_BASE - super::shapes::SHAPE_ID_BASE
+    {
+        super::shapes::shape_record_by_id(id)
+    } else {
+        None
+    };
+    if let Some(record) = record {
+        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+            && record.summary() == 0
+            && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
+            && record.logical_key_count() != 0
+        {
+            if let Some(slot) = record.plain_own_identity_slot(key_value.to_bits()) {
+                if super::shape_store::store_proven_own_slot(obj, record, slot as usize, value) {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    define_other(obj_value, key_value, value, record)
+}
+
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn define_other(
+    obj_value: f64,
+    key_value: f64,
+    value: f64,
+    record: Option<super::shapes::ShapeRecordRef>,
+) -> Option<f64> {
+    let addr = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    let obj = addr as *mut ObjectHeader;
+    if let Some(record) = record {
+        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+            && record.summary() == 0
+            && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
+            && record.logical_key_count() != 0
+        {
+            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+            if let Some(bytes) = crate::string::js_string_key_bytes(
+                crate::JSValue::from_bits(key_value.to_bits()),
+                &mut scratch,
+            ) {
+                if let Some(Some(slot)) = record.own_data_slot_of_value(key_value.to_bits(), bytes)
+                {
+                    if super::shape_store::store_proven_own_slot(obj, record, slot as usize, value)
+                    {
+                        return Some(value);
+                    }
+                }
+            }
+        }
+    }
     // The word the lattice is keyed on: the interned string, found without
     // allocating (a pooled literal or an SSO immediate resolves to its
     // interned twin). Private names and canonical indices are refused there:

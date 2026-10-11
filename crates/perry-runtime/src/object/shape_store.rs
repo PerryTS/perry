@@ -2,9 +2,7 @@
 
 use super::{shapes, ObjectHeader};
 
-/// The traced named-property holder of a live Array or Function. ShapeIds in
-/// the ordinary band already identify ObjectHeaders, so ordinary reads never
-/// need this classification.
+/// Traced Array/Function named-property holder; ordinary-band ids already prove ObjectHeaders.
 pub(crate) unsafe fn named_bag(
     receiver: *const ObjectHeader,
     key_bits: u64,
@@ -38,10 +36,8 @@ pub(crate) unsafe fn named_bag(
     (!bag.is_null()).then_some(bag.cast_const())
 }
 
-/// A runtime store carries the same POINTER-tag receiver as an emitted hit.
-/// #10828 rule 3 makes an ordinary-band stamp the kind proof, and forwarding
-/// overwrites it with a user-address high half below the band. The shape slab
-/// is the existing authoritative answer; no allocator classification is needed.
+/// A POINTER-tag receiver's ordinary stamp proves kind (#10828 rule 3).
+/// Forwarding writes a high half below the band; the slab needs no allocator classification.
 #[inline(always)]
 unsafe fn ordinary_receiver_record(obj: *const ObjectHeader) -> Option<shapes::ShapeRecordRef> {
     if !crate::value::addr_class::is_plausible_heap_addr(obj as usize)
@@ -120,8 +116,7 @@ pub(crate) unsafe fn try_own_store(
     if record.object_kind() == shapes::ShapeObjectKind::Ordinary {
         if let Some(slot) = record.own_store_slot(key) {
             let Some(slot) = slot else {
-                // The shape has answered absence. A second own-key lookup
-                // cannot turn that into an overwrite.
+                // Shape-proven absence cannot become an overwrite on another own-key lookup.
                 return false;
             };
             // Attributes belong to the matched binding. An accessor,
@@ -137,48 +132,78 @@ pub(crate) unsafe fn try_own_store(
             {
                 return false;
             }
-            let bits = if value.to_bits() == crate::value::POINTER_TAG {
-                crate::value::TAG_UNDEFINED
-            } else {
-                value.to_bits()
-            };
-            if slot < record.live_inline_slot_count() as usize {
-                // The same admission as the emitted own-slot hit: a finite
-                // double is already canonical and creates no GC edge. The
-                // Ordinary shape also proves there is no numeric-prefix
-                // proof to retire. SPECIAL still needs the checked funnel
-                // to generalize its ConstFn claim before a Number is stored.
-                let rep = super::field_rep::slot_rep(record.rep(), slot as u32);
-                let fields = obj.cast::<u8>().add(std::mem::size_of::<ObjectHeader>());
-                let address = fields.cast::<u64>().add(slot);
-                if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000
-                    && rep != super::field_rep::REP_SPECIAL
-                {
-                    address.write(bits);
-                } else if rep == super::field_rep::REP_ANY {
-                    // The record has already proved Any and no numeric-prefix
-                    // proof. Reuse the existing alias/barrier funnel without
-                    // resolving those same shape facts again.
-                    crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-                        obj as usize,
-                        address as usize,
-                        slot,
-                        bits,
-                    );
-                } else {
-                    super::store_object_field_slot(obj, slot, bits);
-                }
-                return true;
-            }
-            if super::spill_store_would_be_in_capacity(obj as usize, slot) {
-                // This own key already has physical storage. The capacity
-                // proof keeps the ordinary spill barrier a nonmoving leaf.
-                super::spill::spill_set(obj as usize, slot, bits);
+            if store_proven_own_slot(obj, record, slot, value) {
                 return true;
             }
         }
     }
     super::try_existing_own_data_overwrite(obj, key, value)
+}
+
+/// Proven writable ordinary own slot: shared representation/barrier funnel for Set and Define.
+#[inline(always)]
+pub(crate) unsafe fn store_proven_own_slot(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    slot: usize,
+    value: f64,
+) -> bool {
+    let bits = if value.to_bits() == crate::value::POINTER_TAG {
+        crate::value::TAG_UNDEFINED
+    } else {
+        value.to_bits()
+    };
+    if slot < record.live_inline_slot_count() as usize {
+        let rep = super::field_rep::slot_rep(record.rep(), slot as u32);
+        let address = obj
+            .cast::<u8>()
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>()
+            .add(slot);
+        if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000
+            && rep != super::field_rep::REP_SPECIAL
+        {
+            // GC_STORE_AUDIT(POINTER_FREE): a canonical finite Number.
+            address.write(bits);
+            return true;
+        }
+        if rep == super::field_rep::REP_ANY {
+            // Existing named-Set barrier: pointer traffic needs no extra slow call.
+            crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+                obj as usize,
+                address as usize,
+                slot,
+                bits,
+            );
+            return true;
+        }
+    }
+    store_proven_own_slot_slow(obj, record, slot, f64::from_bits(bits))
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn store_proven_own_slot_slow(
+    obj: *mut ObjectHeader,
+    record: shapes::ShapeRecordRef,
+    slot: usize,
+    value: f64,
+) -> bool {
+    let bits = if value.to_bits() == crate::value::POINTER_TAG {
+        crate::value::TAG_UNDEFINED
+    } else {
+        value.to_bits()
+    };
+    if slot < record.live_inline_slot_count() as usize {
+        super::store_object_field_slot(obj, slot, bits);
+        return true;
+    }
+    if super::spill_store_would_be_in_capacity(obj as usize, slot) {
+        // Existing physical storage makes the ordinary spill barrier a nonmoving leaf.
+        super::spill::spill_set(obj as usize, slot, bits);
+        return true;
+    }
+    false
 }
 
 /// Null and realm-default chains already have an authoritative answer. Reuse

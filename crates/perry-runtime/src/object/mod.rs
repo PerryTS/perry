@@ -54,6 +54,10 @@ pub(crate) mod alloc;
 mod alloc_basic;
 pub(crate) mod alloc_plain;
 mod assign;
+mod spread;
+pub use spread::js_object_spread_fresh;
+#[cfg(test)]
+mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_plain, js_object_alloc_with_parent,

@@ -2602,6 +2602,8 @@ js_object_literal_infer_computed_function_name	f64	f64,f64
 js_object_literal_set_computed	f64	f64,f64,f64
 js_object_literal_set_prototype	f64	f64,f64
 js_object_literal_spread	f64	f64,f64
+js_object_spread_fresh	f64	f64,f64
+js_object_spread_fresh_leading	f64	f64,f64
 js_object_literal_to_property_key	f64	f64
 js_object_live_slot_count	i32u	ptr
 js_object_lookup_getter	f64	f64,f64

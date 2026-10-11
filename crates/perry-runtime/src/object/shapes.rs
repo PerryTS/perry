@@ -34,6 +34,9 @@
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 
+#[path = "shapes_spread.rs"]
+mod shapes_spread;
+
 #[path = "shapes_own_data.rs"]
 mod shapes_own_data;
 pub(crate) use shapes_own_data::own_data_shape;
@@ -3116,7 +3119,9 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 /// shadowed field's most-derived position wins). The list is bounded by the
 /// shape's own key count, never its backing's length (#10969).
 /// Allocation-free; never calls user code.
-fn region_key_location(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<(bool, usize)> {
+#[inline(never)]
+#[optimize(size)]
+fn region_key_location(keys: u64, count: u32, inline: u32, key_bits: u64) -> Option<(bool, usize)> {
     let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     unsafe {
@@ -3125,12 +3130,12 @@ fn region_key_location(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<(b
             &mut wanted_buf,
         )?;
         let (slots, len) =
-            super::keys_array_dense_slots_resolved(descriptor.keys as usize as *const ArrayHeader);
+            super::keys_array_dense_slots_resolved(keys as usize as *const ArrayHeader);
         if slots.is_null() {
             return None;
         }
-        let hi = len.min(descriptor.logical_key_count as usize);
-        let lo = hi.min(descriptor.live_inline_slot_count as usize);
+        let hi = len.min(count as usize);
+        let lo = hi.min(inline as usize);
         let mut matches = |i: usize| {
             let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
             stored.bits() == key_bits
@@ -3349,6 +3354,8 @@ enum RegionRefusal {
     Rep,
 }
 
+#[inline(never)]
+#[optimize(size)]
 fn region_loop_pack(
     shape_id: u32,
     n: u32,
@@ -3361,19 +3368,18 @@ fn region_loop_pack(
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return Err(Band);
     }
-    match shape_record_by_id(shape_id) {
-        Some(record) if record.summary() == 0 => {}
-        Some(_) => return Err(Summary),
-        None => return Err(Band),
+    let record = shape_record_by_id(shape_id).ok_or(Band)?;
+    if record.summary() != 0 {
+        return Err(Summary);
     }
-    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
-        return Err(Band);
-    };
-    let unmarked_numeric_read = descriptor.object_kind == ShapeObjectKind::OrdinaryUnmarked
+    // Borrow the same record throughout priming; no descriptor clone or
+    // second slab probe, and no allocation/callback in this operation.
+    let descriptor = unsafe { &*record.0.as_ptr() };
+    let unmarked_numeric_read = descriptor.object_kind() == ShapeObjectKind::OrdinaryUnmarked
         && stored_mask == 0
         && boxed_mask == 0
         && r_mask == (1 << n) - 1;
-    if (descriptor.object_kind != ShapeObjectKind::Ordinary && !unmarked_numeric_read)
+    if (descriptor.object_kind() != ShapeObjectKind::Ordinary && !unmarked_numeric_read)
         || descriptor.proto_id == PROTO_ID_PER_OBJECT
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
@@ -3384,7 +3390,13 @@ fn region_loop_pack(
     let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
     let mut any_spill = false;
     for (i, &key) in keys.iter().enumerate().take(n as usize) {
-        let (spilled, position) = region_key_location(&descriptor, key).ok_or(Absent)?;
+        let (spilled, position) = region_key_location(
+            descriptor.keys,
+            descriptor.logical_key_count,
+            descriptor.live_inline_slot_count,
+            key,
+        )
+        .ok_or(Absent)?;
         if spilled {
             if stored_mask & (1 << i) != 0 {
                 return Err(SpillStored);

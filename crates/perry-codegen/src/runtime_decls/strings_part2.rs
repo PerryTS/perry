@@ -380,6 +380,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_object_assign_validate_target", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_assign_one", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_literal_spread", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_spread_fresh", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_spread_fresh_leading", DOUBLE, &[DOUBLE, DOUBLE]);
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_code_point_at", DOUBLE, &[I64, I32]);
