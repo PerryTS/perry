@@ -12,8 +12,8 @@
 //! resolves the receiver's own evaluation and reads that evaluation's array
 //! unless it is the owner.
 //!
-//! An instance names its evaluation through the private-evaluation brand in
-//! its metadata record: dynamic construction stamps it always, and a static
+//! An instance names its evaluation through its birth shape. Constructor
+//! return overrides retain the per-object metadata path. A static
 //! `new` stamps it (`js_class_env_stamp`) once the class is in the multi-
 //! evaluation state. An unstamped instance belongs to the first evaluation.
 
@@ -267,7 +267,7 @@ pub extern "C" fn js_class_env_current(receiver: f64, cid: u32) -> f64 {
 
 /// Codegen FFI: record `evaluation` as the evaluation of `instance`, built by
 /// a static `new` of class `cid` while the class has several evaluations.
-/// Returns the instance (the metadata allocation may move it).
+/// Returns the instance (materializing the evaluation holder may move it).
 #[no_mangle]
 pub unsafe extern "C" fn js_class_env_stamp(instance: f64, cid: u32, evaluation: f64) -> f64 {
     if with_env(cid, |env| env.owner == evaluation.to_bits())
@@ -281,11 +281,28 @@ pub unsafe extern "C" fn js_class_env_stamp(instance: f64, cid: u32, evaluation:
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_nanbox_f64(instance);
-    let object = value.as_pointer::<super::ObjectHeader>() as *mut super::ObjectHeader;
-    if object.is_null() {
+    let evaluation = scope.root_nanbox_f64(evaluation);
+    let Some(object) = super::prototype_chain::meta_capable_object(
+        value.as_pointer::<super::ObjectHeader>() as usize,
+    ) else {
         return instance;
+    };
+    let previous = super::shapes::object_evaluation_brand(object);
+    let same_template = previous != 0
+        && super::class_registry::is_class_object_value(f64::from_bits(previous))
+        && super::js_object_get_class_id(
+            crate::value::JSValue::from_bits(previous).as_pointer::<super::ObjectHeader>(),
+        ) == cid;
+    if super::js_object_get_class_id(object) == cid && !same_template {
+        super::field_get_set::stamp_private_birth_evaluation_brand(
+            object,
+            evaluation.get_nanbox_f64(),
+        );
+    } else {
+        // A constructor can return an existing receiver, including an instance
+        // from another evaluation of the same template. Its birth stays intact.
+        super::field_get_set::stamp_private_evaluation_brand(object, evaluation.get_nanbox_f64());
     }
-    super::field_get_set::stamp_private_evaluation_brand(object, evaluation);
     handle.get_nanbox_f64()
 }
 

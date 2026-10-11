@@ -45,14 +45,8 @@ unsafe fn construct_class_object_entry(
         }
     }
 
-    // Every evaluation gets a distinct brand despite sharing its
-    // class id. Stamp it before replay, where private access may occur.
-    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-        super::super::field_get_set::stamp_private_evaluation_brand(
-            inst,
-            class_handle.get_nanbox_f64(),
-        );
-    });
+    // The linked birth shape already names this exact evaluation before
+    // replay; later instances need no per-object evaluation stamp or lookup.
     inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
         super::pin_instance_constructing_class(inst, class_handle.get_nanbox_f64());
     });
@@ -176,6 +170,11 @@ fn construct_class_object_instance(
         )
     });
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
+        crate::object::shapes::stamp_evaluation_holder(
+            instance, class.get_nanbox_f64().to_bits(),
+        );
+    });
+    instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         super::super::field_get_set::record_instance_link(
             class_obj(),
             instance,
@@ -210,18 +209,20 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
         .or_else(global_object_prototype_bits)
         .map(|bits| scope.root_nanbox_u64(bits));
-    let new_target_value = new_target.get_nanbox_f64();
-    if is_class_object_value(new_target_value) {
-        instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
-            super::super::field_get_set::stamp_private_evaluation_brand(instance, new_target_value)
-        });
-    }
     if let Some(prototype) = prototype {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
             super::super::prototype_chain::object_set_static_prototype(
                 instance as usize,
                 prototype.get_nanbox_u64(),
             )
+        });
+    }
+    if is_class_object_value(new_target.get_nanbox_f64()) {
+        instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
+            super::super::field_get_set::stamp_private_birth_evaluation_brand(
+                instance,
+                new_target.get_nanbox_f64(),
+            );
         });
     }
     instance.with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64))
@@ -251,7 +252,7 @@ unsafe fn prepare_super_class_receiver(
     receiver.with_mut_ptr::<ObjectHeader, _>(|receiver| {
         let value = crate::value::js_nanbox_pointer(receiver as i64);
         if super::super::field_get_set::private_evaluation_brand_value(value).is_none() {
-            super::super::field_get_set::stamp_private_evaluation_brand(
+            super::super::field_get_set::stamp_private_birth_evaluation_brand(
                 receiver,
                 parent.get_nanbox_f64(),
             );

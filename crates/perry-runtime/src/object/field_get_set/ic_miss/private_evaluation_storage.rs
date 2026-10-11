@@ -130,7 +130,10 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
             .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
-                |id| id.checked_add(1).filter(|next| *next != PRIVATE_TEMPLATE_EVALUATION_ID),
+                |id| {
+                    id.checked_add(1)
+                        .filter(|next| *next < crate::object::shapes::EVALUATION_HOLDER_BRAND)
+                },
             )
             .expect("private evaluation identity exhausted");
         (*meta).native_state = id;

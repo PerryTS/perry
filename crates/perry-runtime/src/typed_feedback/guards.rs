@@ -1452,7 +1452,8 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     let Some(shape) = crate::object::shapes::object_shape_descriptor(object) else {
         return 0;
     };
-    if shape.summary & crate::object::key_attrs::SUMMARY_KEY_BITS != 0
+    if shape.has_evaluation_brand()
+        || shape.summary & crate::object::key_attrs::SUMMARY_KEY_BITS != 0
         || field_index >= shape.logical_key_count
         || field_index >= shape.live_inline_slot_count
     {

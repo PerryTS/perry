@@ -220,8 +220,7 @@ unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader,
 /// class object, so it answers `None`.
 #[inline]
 unsafe fn private_receiver_has_no_evaluation_brand(object: *const ObjectHeader) -> bool {
-    let meta = (*object).meta;
-    meta.is_null() || !JSValue::from_bits((*meta).private_evaluation_brand).is_pointer()
+    !JSValue::from_bits(private_receiver_evaluation_bits(object)).is_pointer()
 }
 
 /// Prove that an INSTANCE private access of `(class_id, name, kind)` on `obj`
@@ -749,19 +748,15 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
 }
 
 /// [`private_evaluation_brand_value`] without its shape-descriptor lookup for
-/// the common receiver: an ordinary object (by the per-agent ShapeId kind
-/// cache) is not a class object, so only its metadata brand can answer.
+/// the common receiver: an ordinary object is not a class object, so its
+/// shape or replacement-receiver metadata supplies the evaluation.
 #[inline]
 fn private_receiver_evaluation_brand(receiver: f64) -> Option<f64> {
     if let Some((object, shape_id)) = unsafe { private_plain_receiver_shape(receiver) } {
         if crate::object::shapes::shape_object_kind_by_id(shape_id)
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
-            let meta = unsafe { (*object).meta };
-            if meta.is_null() {
-                return None;
-            }
-            let brand = f64::from_bits(unsafe { (*meta).private_evaluation_brand });
+            let brand = f64::from_bits(unsafe { private_receiver_evaluation_bits(object) });
             return super::super::class_registry::is_class_object_value(brand).then_some(brand);
         }
     }

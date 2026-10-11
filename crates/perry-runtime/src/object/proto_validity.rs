@@ -114,6 +114,18 @@ pub(crate) const FIRST_DYNAMIC_PROTOTYPE_SERIAL: u64 = 64;
 static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
 
+/// Give a shared evaluation holder an identity without declaring it a
+/// prototype or invalidating prototype-chain caches. The existing identity
+/// word directory uses this same serial namespace.
+pub(crate) unsafe fn ensure_object_identity_serial(obj: *mut crate::object::ObjectHeader) -> u64 {
+    let meta = crate::object::object_meta_ensure(obj);
+    // GC_STORE_AUDIT(POINTER_FREE): a scalar identity, never a heap reference.
+    if (*meta).proto_serial == 0 {
+        (*meta).proto_serial = PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed);
+    }
+    (*meta).proto_serial
+}
+
 /// Mark the freshly created intrinsic prototype `obj` and give it the
 /// reserved `serial` (below [`FIRST_DYNAMIC_PROTOTYPE_SERIAL`]). Every shape
 /// minted for a receiver inheriting from it — a base Function shape minted

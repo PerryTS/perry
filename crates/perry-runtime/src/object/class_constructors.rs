@@ -1464,7 +1464,7 @@ unsafe fn replay_class_object_constructor_impl(
     inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
         let value = crate::value::js_nanbox_pointer(inst as i64);
         if super::field_get_set::private_evaluation_brand_value(value).is_none() {
-            super::field_get_set::stamp_private_evaluation_brand(
+            super::field_get_set::stamp_private_birth_evaluation_brand(
                 inst,
                 classobj_handle.get_nanbox_f64(),
             );

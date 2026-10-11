@@ -60,10 +60,11 @@ pub struct ObjectMeta {
     /// pointer-keyed side state, no owner re-keying on evacuation, no
     /// per-object finalization.
     pub spill: u64,
-    /// Fresh ClassDefinitionEvaluation identity for instances constructed
-    /// from a heap class object and for that evaluation's prototype. This is object metadata rather than an own
-    /// property: private branding must not consume a user field slot, alter
-    /// the ShapeId/key order, or become visible to enumeration.
+    /// Lexical ClassDefinitionEvaluation of a shared evaluation prototype,
+    /// or the per-object brand of an exceptional constructor-returned/native
+    /// receiver. Ordinary class births name their class object from their
+    /// shape and allocate no metadata solely for this word. This remains a
+    /// traced edge without consuming a user field slot.
     pub private_evaluation_brand: u64,
     /// Exact class-declared named-prefix identity for an Array-subclass
     /// receiver. Numeric tail mutations change the ordinary ShapeId on every
@@ -139,9 +140,9 @@ pub struct ObjectMeta {
     /// a shape that publishes none; `dictionary::is_dictionary` is the single
     /// spelling of the test. See `object/dictionary.rs`.
     pub dictionary_keys: u64,
-    /// #10868 lever (iv): a stable identity for an object that is some other
-    /// object's prototype, assigned once by `mark_object_as_prototype` and
-    /// never changed. 0 = none assigned.
+    /// #10868 lever (iv): a stable identity for a prototype or shared class
+    /// evaluation holder, assigned once and never changed. Assigning a class
+    /// identity alone does not mark it as a prototype. 0 = none assigned.
     ///
     /// Why a serial and not the prototype's address or ShapeId: the address
     /// moves under the collector (and keying on it is an address-keyed derived

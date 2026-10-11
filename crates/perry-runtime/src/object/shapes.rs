@@ -56,10 +56,16 @@ pub(crate) use shapes_linked_birth::{
 #[cfg(all(test, feature = "regex-engine"))]
 #[path = "regex_direct_admission_tests.rs"]
 mod regex_direct_admission_tests;
+#[path = "shapes_evaluation_brand.rs"]
+mod shapes_evaluation_brand;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+pub(crate) use shapes_evaluation_brand::{
+    evaluation_holder_slot, object_evaluation_brand, stamp_evaluation_holder,
+    EVALUATION_HOLDER_BRAND,
+};
 #[path = "shapes_worker_seed.rs"]
 mod shapes_worker_seed;
 #[cfg(test)]
@@ -2194,9 +2200,11 @@ fn shape_descriptor_mint_fresh(
     // it yet.
     let adopted = requested.filter(|&id| {
         is_static_shape_id(id)
-            && brands
-                .iter()
-                .all(|&b| b & crate::object::field_get_set::PRIVATE_FRESH_EVALUATION_BRAND == 0)
+            && brands.iter().all(|&b| {
+                b & (crate::object::field_get_set::PRIVATE_FRESH_EVALUATION_BRAND
+                    | EVALUATION_HOLDER_BRAND)
+                    == 0
+            })
             && !object_kind.is_exotic()
             && (semantic_generation == 0
                 // A declared holder's stable identity is its compiled class
@@ -2345,26 +2353,63 @@ pub(crate) struct ReceiverFacts {
 }
 
 /// A receiver's private brands, sorted, copied out of its shape record
-/// (#11791). Almost every receiver has none, and then the list is `None`: no
-/// allocation, and nothing to free after the mint.
-pub(crate) struct BrandList(Option<Box<[u64]>>);
+/// (#11791). Almost every receiver has none, and then the list is empty: no
+/// allocation, and nothing to free after the mint. A single brand (including
+/// the ordinary class birth evaluation) is copied inline, so subsequent key
+/// transitions do not introduce a native allocation just to carry that fact.
+pub(crate) enum BrandList {
+    Empty,
+    One(u64),
+    Many(Box<[u64]>),
+}
 
 impl BrandList {
-    pub(crate) const NONE: BrandList = BrandList(None);
+    pub(crate) const NONE: BrandList = BrandList::Empty;
 
     /// A copy of `brands`, which may borrow a record a mint can retire.
     #[inline]
     pub(crate) fn copy_of(brands: &[u64]) -> BrandList {
-        if brands.is_empty() {
-            BrandList::NONE
-        } else {
-            BrandList(Some(brands.into()))
+        match brands {
+            [] => BrandList::Empty,
+            [brand] => BrandList::One(*brand),
+            _ => BrandList::Many(brands.into()),
         }
     }
 
     #[inline]
     pub(crate) fn as_slice(&self) -> &[u64] {
-        self.0.as_deref().unwrap_or(&[])
+        match self {
+            BrandList::Empty => &[],
+            BrandList::One(brand) => std::slice::from_ref(brand),
+            BrandList::Many(brands) => brands,
+        }
+    }
+
+    /// A static class-env birth can replace an ancestor's lexical evaluation
+    /// with its own. Installed private-element brands remain monotonic.
+    fn replace_evaluation_holder(&mut self, brand: u64) -> bool {
+        if self.as_slice().binary_search(&brand).is_ok() {
+            return false;
+        }
+        if self.as_slice().len() <= 1
+            && self
+                .as_slice()
+                .iter()
+                .all(|&old| shapes_evaluation_brand::is_evaluation_holder_brand(old))
+        {
+            *self = BrandList::One(brand);
+            return true;
+        }
+        let mut brands: Vec<u64> = self
+            .as_slice()
+            .iter()
+            .copied()
+            .filter(|&old| !shapes_evaluation_brand::is_evaluation_holder_brand(old))
+            .collect();
+        let at = brands.partition_point(|&old| old < brand);
+        brands.insert(at, brand);
+        *self = BrandList::Many(brands.into_boxed_slice());
+        true
     }
 
     /// Add `brand`, keeping the list sorted. `false` when it is already there.
@@ -2372,9 +2417,13 @@ impl BrandList {
         let Err(at) = self.as_slice().binary_search(&brand) else {
             return false;
         };
+        if matches!(self, BrandList::Empty) {
+            *self = BrandList::One(brand);
+            return true;
+        }
         let mut brands = self.as_slice().to_vec();
         brands.insert(at, brand);
-        self.0 = Some(brands.into_boxed_slice());
+        *self = BrandList::Many(brands.into_boxed_slice());
         true
     }
 }
@@ -5148,8 +5197,9 @@ pub(crate) unsafe fn transition_object_shape_to_class(
 /// carries the brand (PrivateMethodOrAccessorAdd's "twice" error is the
 /// caller's) or is not a shaped object; nothing changes then.
 ///
-/// A class brands its instance after the heritage's constructor returned, so
-/// this is a transition, never a birth fact. Every later transition reads the
+/// Installed private elements brand a receiver after heritage construction;
+/// lexical evaluation ownership is recorded on the linked birth shape.
+/// Every later transition reads the
 /// receiver's brands back off its shape (`receiver_facts`), so the brand is
 /// carried by every shape the receiver moves to.
 ///
@@ -5168,7 +5218,12 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
     let mut receiver = receiver_facts_of_current(obj, &current);
-    if !receiver.brands.insert(brand) {
+    let changed = if shapes_evaluation_brand::is_evaluation_holder_brand(brand) {
+        receiver.brands.replace_evaluation_holder(brand)
+    } else {
+        receiver.brands.insert(brand)
+    };
+    if !changed {
         return false;
     }
     crate::array::clear_array_subclass_named_prefix_token(obj);
@@ -5218,9 +5273,15 @@ fn debug_assert_brands_carried(previous: u32, next: u32) {
             return;
         };
         debug_assert!(
-            before
-                .iter()
-                .all(|brand| after.binary_search(brand).is_ok()),
+            before.iter().all(|brand| {
+                if shapes_evaluation_brand::is_evaluation_holder_brand(*brand) {
+                    after
+                        .iter()
+                        .any(|&new| shapes_evaluation_brand::is_evaluation_holder_brand(new))
+                } else {
+                    after.binary_search(brand).is_ok()
+                }
+            }),
             "shape {next:#x} dropped a private brand of {previous:#x}: {before:?} -> {after:?}"
         );
     }

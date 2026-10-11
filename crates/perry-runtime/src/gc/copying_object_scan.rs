@@ -12,7 +12,8 @@
 //! same shape record, field range and payload selection
 //! (`heap_payload_slot_selection_from` itself, so the mask logic has ONE copy),
 //! the same shape-keys-edge bookkeeping, and the same slots in the same order —
-//! residual prototype, keys edge, meta record, payload, overflow fields.
+//! residual prototype, keys edge, prototype edge, evaluation holder, meta record,
+//! arguments tail, payload.
 //!
 //! It declines (returns `false` having done nothing) only up front, from the
 //! header and thread state: a full trace or layout-scan trace in progress (the
@@ -31,12 +32,12 @@ use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::*;
 
 /// The slots, in visit order, the generic walk's layout arm hands the drain for
-/// this object: the keys edge, the shape's prototype edge and the meta record
-/// (null when absent), then the payload slots its selection names. Iterated,
+/// this object: the keys edge, prototype edge, evaluation holder, meta record
+/// and arguments tail, then the payload slots its selection names. Iterated,
 /// not stored.
 #[derive(Clone)]
 struct PlainObjectPlan {
-    prefix: [Option<GcMutableSlot>; 4],
+    prefix: [Option<GcMutableSlot>; 5],
     next_prefix: usize,
     payload: HeapSlotRange,
     walk: PayloadWalk,
@@ -117,8 +118,8 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
-            prefix: [None; 4],
-            next_prefix: 4,
+            prefix: [None; 5],
+            next_prefix: 5,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
         };
@@ -165,11 +166,13 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
     let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);
     let prototype_edge = crate::object::gc_shape_prototype_edge_slot(shape, false);
     // Visit order of the generic walk: prefix (none for objects), keys edge,
-    // prototype edge, meta, the private arguments tail, payload.
+    // prototype edge, evaluation holder, meta, the private arguments tail, payload.
     PlainObjectPlan {
         prefix: [
             keys_edge.map(GcMutableSlot::runtime_root),
             prototype_edge.map(GcMutableSlot::runtime_root),
+            crate::object::shapes::evaluation_holder_slot(shape, false)
+                .map(GcMutableSlot::runtime_root),
             meta.map(|slot| GcMutableSlot::pointer(slot.cast())),
             crate::object::arguments_mapping_slot(obj).map(|slot| GcMutableSlot::new(slot, None)),
         ],
@@ -254,7 +257,7 @@ impl CopyingNurseryCollector {
 }
 
 /// The drift check: the generic walk, run for its slot list only, must name
-/// exactly the plan's slots followed by the overflow fields, after the
+/// exactly the plan's slots, after the
 /// residual-prototype slots the scan already visited. Those are a stack
 /// temporary of the registry's visitor, different on every call, so they are
 /// matched by count, not address.

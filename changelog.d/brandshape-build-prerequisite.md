@@ -1,0 +1,1 @@
+Pass the rooted store value to the value-aware key-append helper in the shape-store fallback, matching its current three-argument signature. This repairs a build prerequisite on main; both performance arms use the identical correction.

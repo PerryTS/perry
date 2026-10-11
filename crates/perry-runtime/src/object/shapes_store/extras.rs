@@ -7,7 +7,9 @@ use super::{new_extras, ConstFnSlotInfo, ShapeRecord, StoreChainFact};
 /// `brands` is the sorted list of private brands (#11791) every receiver of
 /// the shape carries: one scalar per class evaluation whose private methods
 /// or fields were installed on it (`private_brand_id`). An identity fact like
-/// `constfn_infos`; scalars, so nothing here is a GC edge.
+/// `constfn_infos`. Bit 62 instead names the birth evaluation holder's
+/// stable serial; the holder edge is emitted through the existing identity
+/// word pages (shapes_evaluation_brand), never through this scalar list.
 #[derive(Debug)]
 pub(in crate::object) struct ShapeExtras {
     pub(in crate::object) constfn_infos: Box<[ConstFnSlotInfo]>,

@@ -1640,6 +1640,7 @@ unsafe fn apply_proven_add(
     super::object_ops::ensure_key_in_keys_array_for_value(
         owner.get_raw_mut_ptr::<ObjectHeader>(),
         key.get_raw_const_ptr::<crate::StringHeader>(),
+        value.get_nanbox_f64(),
     );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     // Appending can transfer the list to the receiver's dictionary. That

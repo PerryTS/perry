@@ -96,6 +96,9 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
+        if descriptor.has_evaluation_brand() {
+            return false;
+        }
         let mut present = false;
         let keys = descriptor.keys as usize as *mut crate::array::ArrayHeader;
         if !keys.is_null() {

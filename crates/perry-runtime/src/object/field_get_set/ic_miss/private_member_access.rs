@@ -406,20 +406,20 @@ pub extern "C" fn js_private_brand_check(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
-    let evaluation_verdict = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
-    let has_declaring_brand = evaluation_verdict.unwrap_or_else(|| {
-        if is_static != 0 {
-            super::super::class_ref_id(obj) == Some(declaring_class_id)
-        } else {
-            private_instance_element_is_present(
-                obj,
-                declaring_class_id,
-                field_name_ptr,
-                field_name_len,
-                kind,
-            )
-        }
-    });
+    let has_declaring_brand = if is_static != 0 {
+        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
+            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+    } else {
+        // Installed elements are authoritative for returned receivers carrying
+        // more than one evaluation's private elements.
+        private_instance_element_is_present(
+            obj,
+            declaring_class_id,
+            field_name_ptr,
+            field_name_len,
+            kind,
+        )
+    };
     if !has_declaring_brand {
         return false_value;
     }
@@ -427,19 +427,6 @@ pub extern "C" fn js_private_brand_check(
         let name = interned.unwrap_or("");
         if !static_private_field_key(declaring_class_id, name).is_present(obj_root.get_nanbox_f64())
         {
-            return false_value;
-        }
-    }
-
-    // Without an evaluation verdict the brand above WAS this check.
-    if is_static == 0 && evaluation_verdict.is_some() {
-        if !private_instance_element_is_present(
-            obj_root.get_nanbox_f64(),
-            declaring_class_id,
-            field_name_ptr,
-            field_name_len,
-            kind,
-        ) {
             return false_value;
         }
     }

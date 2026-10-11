@@ -1738,10 +1738,16 @@ pub(crate) fn current_private_lexical_brand_value(declaring_class_id: u32) -> Op
 /// Record the owner of a `ClassExprFresh` instance or evaluation prototype.
 /// Prototypes carry lexical ownership only; private access still separately
 /// requires an initialized instance element. The brand lives in the
-/// object's traced metadata record so it neither shifts user field slots nor
-/// changes the instance's ShapeId / own-key enumeration.
+/// shared evaluation holder named by the ordinary instance's birth shape.
+/// Replacement receivers and lexical prototypes keep their per-object record.
 pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, class_value: f64) {
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
+        return;
+    }
+    let meta = (*obj).meta;
+    if (meta.is_null() || (*meta).private_evaluation_brand == 0)
+        && crate::object::shapes::object_evaluation_brand(obj) == class_value.to_bits()
+    {
         return;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1758,9 +1764,23 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     );
 }
 
+/// Record an evaluation on a fresh class receiver's shape. This also serves
+/// static subclass births and class-env stamps, whose actual prototype may
+/// differ from the evaluation holder. Return-override stamps use the metadata
+/// helper above instead.
+pub(crate) unsafe fn stamp_private_birth_evaluation_brand(
+    obj: *mut ObjectHeader,
+    class_value: f64,
+) {
+    if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
+        return;
+    }
+    crate::object::shapes::stamp_evaluation_holder(obj, class_value.to_bits());
+}
+
 /// Return the per-evaluation brand carried by `value`, provided it belongs to
 /// `declaring_class_id`'s compile-time template. A fresh class object is its
-/// own static brand; instances carry that object in the hidden slot above.
+/// own static brand; instances name it through their shape's evaluation holder.
 fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> {
     if declaring_class_id == 0 {
         return None;
@@ -1778,11 +1798,10 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
     }
     let object = value.as_pointer::<ObjectHeader>();
     let brand = unsafe {
-        if object.is_null() || !crate::object::object_is_shaped(object) || (*object).meta.is_null()
-        {
+        if object.is_null() || !crate::object::object_is_shaped(object) {
             return None;
         }
-        f64::from_bits((*(*object).meta).private_evaluation_brand)
+        f64::from_bits(private_receiver_evaluation_bits(object))
     };
     if !super::super::class_registry::is_class_object_value(brand) {
         return None;
@@ -1795,6 +1814,17 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
     let object = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
     (!object.is_null() && js_object_get_class_id(object) == declaring_class_id)
         .then_some(brand.to_bits())
+}
+
+/// Per-object brands cover replacement receivers and lexical prototypes;
+/// ordinary instances carry their evaluation on the shape.
+#[inline]
+unsafe fn private_receiver_evaluation_bits(object: *const ObjectHeader) -> u64 {
+    let meta = (*object).meta;
+    if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
+        return (*meta).private_evaluation_brand;
+    }
+    crate::object::shapes::object_evaluation_brand(object)
 }
 
 /// Return the fresh ClassDefinitionEvaluation object carried by a constructor
@@ -1811,11 +1841,10 @@ pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
     }
     let object = value.as_pointer::<ObjectHeader>();
     let brand = unsafe {
-        if object.is_null() || !crate::object::object_is_shaped(object) || (*object).meta.is_null()
-        {
+        if object.is_null() || !crate::object::object_is_shaped(object) {
             return None;
         }
-        f64::from_bits((*(*object).meta).private_evaluation_brand)
+        f64::from_bits(private_receiver_evaluation_bits(object))
     };
     super::super::class_registry::is_class_object_value(brand).then_some(brand)
 }
@@ -2190,23 +2219,22 @@ fn private_guard_checked(
         );
     }
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
-    let evaluation_verdict = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
-    let has_brand = evaluation_verdict.unwrap_or_else(|| {
-        if is_static {
-            // Static private brand: the receiver must be exactly the
-            // declaring class constructor (identity), not an instance or
-            // a subclass.
-            super::super::class_ref_id(obj) == Some(declaring_class_id)
-        } else {
-            private_instance_element_is_present(
-                obj,
-                declaring_class_id,
-                _field_name_ptr,
-                _field_name_len,
-                kind,
-            )
-        }
-    });
+    let has_brand = if is_static {
+        // Static elements require the exact constructor evaluation.
+        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
+            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+    } else {
+        // An existing receiver can acquire elements from several evaluations
+        // via constructor return overrides. Its installed shape entries decide
+        // presence in the lexical namespace; its birth evaluation cannot deny it.
+        private_instance_element_is_present(
+            obj,
+            declaring_class_id,
+            _field_name_ptr,
+            _field_name_len,
+            kind,
+        )
+    };
     if !has_brand {
         throw_private_brand_mismatch(
             obj,
@@ -2230,26 +2258,6 @@ fn private_guard_checked(
             true,
             is_write,
         );
-    }
-    // Without an evaluation verdict the brand above WAS the element-present
-    // check, under this same lexical scope, so repeating it cannot differ.
-    if !is_static && evaluation_verdict.is_some() {
-        if !private_instance_element_is_present(
-            obj_root.get_nanbox_f64(),
-            declaring_class_id,
-            _field_name_ptr,
-            _field_name_len,
-            kind,
-        ) {
-            throw_private_brand_mismatch(
-                obj,
-                declaring_class_id,
-                field_name,
-                kind,
-                false,
-                is_write,
-            );
-        }
     }
     let access_owner = private_access_owner(brand_owner_root.get_nanbox_f64(), declaring_class_id);
     private_guard_record_access(
