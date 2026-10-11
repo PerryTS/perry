@@ -1,0 +1,32 @@
+module.exports = function run() {
+  const out = [];
+  out.push("Object " + [typeof Object.isBuffer, typeof Object.isView, typeof Object.hasOwn, typeof Object.fromBase64, typeof Object.supports].join(","));
+  out.push("Array " + [typeof Array.isBuffer, typeof Array.isView, typeof Array.hasOwn, typeof Array.fromBase64, typeof Array.supports].join(","));
+  out.push("Number " + [typeof Number.isBuffer, typeof Number.isView, typeof Number.hasOwn, typeof Number.fromBase64, typeof Number.supports].join(","));
+  out.push("String " + [typeof String.isBuffer, typeof String.isView, typeof String.hasOwn, typeof String.fromBase64, typeof String.supports].join(","));
+  out.push("Boolean " + [typeof Boolean.isBuffer, typeof Boolean.isView, typeof Boolean.hasOwn, typeof Boolean.fromBase64, typeof Boolean.supports].join(","));
+  out.push("Date " + [typeof Date.isBuffer, typeof Date.isView, typeof Date.hasOwn, typeof Date.fromBase64, typeof Date.supports].join(","));
+  out.push("Map " + [typeof Map.isBuffer, typeof Map.isView, typeof Map.hasOwn, typeof Map.fromBase64, typeof Map.supports].join(","));
+  out.push("Set " + [typeof Set.isBuffer, typeof Set.isView, typeof Set.hasOwn, typeof Set.fromBase64, typeof Set.supports].join(","));
+  out.push("RegExp " + [typeof RegExp.isBuffer, typeof RegExp.isView, typeof RegExp.hasOwn, typeof RegExp.fromBase64, typeof RegExp.supports].join(","));
+  out.push("Math " + [typeof Math.isBuffer, typeof Math.isView, typeof Math.hasOwn, typeof Math.fromBase64, typeof Math.supports].join(","));
+  out.push("JSON " + [typeof JSON.isBuffer, typeof JSON.isView, typeof JSON.hasOwn, typeof JSON.fromBase64, typeof JSON.supports].join(","));
+  out.push("Reflect " + [typeof Reflect.isBuffer, typeof Reflect.isView, typeof Reflect.hasOwn, typeof Reflect.fromBase64, typeof Reflect.supports].join(","));
+  out.push("Promise " + [typeof Promise.isBuffer, typeof Promise.isView, typeof Promise.hasOwn, typeof Promise.fromBase64, typeof Promise.supports].join(","));
+  out.push("Uint8Array " + [typeof Uint8Array.isBuffer, typeof Uint8Array.isView, typeof Uint8Array.hasOwn, typeof Uint8Array.fromBase64, typeof Uint8Array.supports].join(","));
+  out.push("Buffer " + [typeof Buffer.isBuffer, typeof Buffer.isView, typeof Buffer.hasOwn, typeof Buffer.fromBase64, typeof Buffer.supports].join(","));
+  out.push("ArrayBuffer " + [typeof ArrayBuffer.isBuffer, typeof ArrayBuffer.isView, typeof ArrayBuffer.hasOwn, typeof ArrayBuffer.fromBase64, typeof ArrayBuffer.supports].join(","));
+  out.push("process " + [typeof process.on, typeof process.emit, typeof process.listeners, typeof process.rawListeners, typeof process.listenerCount].join(","));
+  out.push("console " + typeof console.log);
+  const saved = Object.isBuffer;
+  Object.isBuffer = 17;
+  out.push("own " + Object.isBuffer);
+  Object.isBuffer = saved;
+  function shadowed(Object) { return Object.isBuffer; }
+  out.push("local " + shadowed({ isBuffer: 23 }));
+  out.push("global " + typeof globalThis.isBuffer);
+  out.push("identity " + (Number.parseFloat === parseFloat) + "," + (Number.parseInt === parseInt));
+  out.push("valid " + Buffer.isBuffer(Buffer.from("x")) + "," + ArrayBuffer.isView(new Uint8Array(1)) + "," + Object.hasOwn({ x: 1 }, "x"));
+  return out.join("\n");
+};
+module.exports.marker = true;

@@ -1,0 +1,3 @@
+Fix builtin property values in CommonJS modules by preserving the builtin receiver and reading its actual property surface. Absent members such as `Object.isBuffer` now return `undefined`; writes, inherited members, valid statics, and shadowed bindings use the same ordinary property mechanism. Remove the codegen table that selected unrelated builtin owners by member name, including the analogous process method shortcut.
+
+Add HIR/codegen unit coverage and Node gap tests for builtin property ownership, plus unit and gap coverage for default imports of sole named and anonymous CommonJS function exports.

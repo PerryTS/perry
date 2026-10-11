@@ -77,3 +77,43 @@ fn other_receivers_are_preserved() {
         "shadowed Buffer: {value:?}"
     );
 }
+
+#[test]
+fn builtin_property_values_keep_their_owner_even_for_absent_statics() {
+    for builtin in [
+        "Object",
+        "Array",
+        "Number",
+        "String",
+        "Boolean",
+        "Date",
+        "Map",
+        "Set",
+        "RegExp",
+        "Math",
+        "JSON",
+        "Reflect",
+        "Promise",
+        "Uint8Array",
+        "Buffer",
+        "ArrayBuffer",
+    ] {
+        for member in ["isBuffer", "isView", "hasOwn", "fromBase64", "supports"] {
+            let value = lowered_value(&format!("const value = {builtin}.{member};"));
+            assert_builtin_receiver(&value, builtin, member);
+        }
+    }
+}
+
+#[test]
+fn shadowed_builtin_static_value_uses_its_local_binding() {
+    let value = lowered_value("const Object = { isBuffer: 17 }; const value = Object.isBuffer;");
+    let Expr::PropertyGet {
+        object, property, ..
+    } = value
+    else {
+        panic!("expected local read: {value:?}")
+    };
+    assert_eq!(property, "isBuffer");
+    assert!(matches!(object.as_ref(), Expr::LocalGet(_)));
+}

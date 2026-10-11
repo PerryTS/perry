@@ -1105,29 +1105,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
             }
-            // GlobalGet receivers (`console.X`, `Math.PI`, `JSON.parse`,
-            // `process.env`, …) used as expression VALUES (not in a
-            // call) — there's no real value to materialize for most
-            // shapes; the call dispatch in lower_call handles the same
-            // receivers correctly when they're invoked. The HIR uses
-            // `Expr::GlobalGet(0)` as a sentinel for ALL builtin
-            // globals (see lower.rs:5037), so the original receiver
-            // name is no longer recoverable here — codegen has to
-            // route by the property string alone.
-            //
-            // Special-case `console.log` (the canonical pattern from
-            // #236): return a runtime-allocated singleton closure that
-            // thunks into `js_console_log_dynamic` so
-            // `.then(console.log)` actually prints. Caveat: this also
-            // catches the rare `let f = Math.log; f(x)` shape and
-            // dispatches through console.log's thunk — but that
-            // pattern previously lowered to the `0.0` sentinel
-            // (silently broken either way) so this is not a regression
-            // for the only realistic alternative caller. The full fix
-            // would side-channel the original global name through
-            // lowering; deferred until a second-callable-builtin
-            // arrives. Other unrecognized property shapes fall through
-            // to the `undefined` sentinel (a spec-correct property miss).
+            // GlobalGet names the global object. Builtin property values
+            // retain their own receiver and take ordinary property lowering.
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
                 return lower_globalget_property(ctx, property);
             }

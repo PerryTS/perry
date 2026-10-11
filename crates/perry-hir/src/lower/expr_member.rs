@@ -686,27 +686,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             byte_offset: 0,
                         });
                     }
-                    "on"
-                    | "addListener"
-                    | "once"
-                    | "prependListener"
-                    | "prependOnceListener"
-                    | "emit"
-                    | "listeners"
-                    | "rawListeners"
-                    | "eventNames"
-                    | "listenerCount"
-                    | "removeListener"
-                    | "off"
-                    | "removeAllListeners"
-                    | "setMaxListeners"
-                    | "getMaxListeners" => {
-                        return Ok(Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::GlobalGet(0)),
-                            property: prop_ident.sym.to_string(),
-                        });
-                    }
                     _ => {}
                 }
             }

@@ -84,3 +84,30 @@ module.exports = __toCommonJS(src_exports);
     );
     assert!(perry_parser::parse_typescript(&wrapped, "index.js").is_ok());
 }
+
+#[test]
+fn sole_commonjs_function_default_remains_a_getter_backed_value() {
+    // An importer's local name is never a linker symbol for module.exports.
+    // This applies equally with no named exports and with an attached property.
+    for source in [
+        "module.exports = function originalName() { return 42; };",
+        "module.exports = function () { return 43; };",
+        "module.exports = function originalName() { return 44; }; module.exports.marker = 1;",
+    ] {
+        let wrapped = wrap_commonjs(source, &PathBuf::from("/tmp/function-default/value.js"));
+        let ast = perry_parser::parse_typescript(&wrapped, "value.js").unwrap();
+        let hir = perry_hir::lower_module(&ast, "value", "/tmp/function-default/value.js").unwrap();
+        assert!(hir.is_commonjs_wrap());
+        assert!(hir.exported_objects.iter().any(|name| name == "default"));
+        assert!(!hir
+            .exported_functions
+            .iter()
+            .any(|(name, _)| name == "default"));
+        assert!(hir.exports.iter().any(|export| matches!(export,
+            perry_hir::Export::Named { local, exported } if local == "default" && exported == "default"
+        )));
+        assert!(hir.init.iter().any(|stmt| matches!(stmt,
+            perry_hir::Stmt::Let { name, init: Some(perry_hir::Expr::LocalGet(_)), .. } if name == "default"
+        )));
+    }
+}

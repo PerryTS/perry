@@ -123,21 +123,9 @@ pub(crate) fn lower_member_tail(
         ctx.uses_fetch = true;
     }
 
-    // #973 (5ddccbbc) rerouted bare built-in identifiers used as VALUES
-    // (`Number`, `Object`, `Array`, ...) to `PropertyGet { GlobalGet(0),
-    // name }` so identity comparisons like `inst.constructor === Date`
-    // resolve both sides to the same `populate_global_this_builtins`
-    // closure. But when the built-in ident is the OBJECT of a member
-    // access (`Number.parseFloat`, `Object.keys`, `Array.isArray`, ...),
-    // that reroute turns the intrinsic static-method/property lookup into
-    // `globalThis.Number.parseFloat`, which is no longer the same value
-    // as the intrinsic global `parseFloat` — silently breaking
-    // `Number.parseFloat === parseFloat`, `Number.parseInt === parseInt`,
-    // and similar identity checks (regressed test_gap_number_math).
-    // Static surfaces must keep the pre-#973 intrinsic `GlobalGet(0)`
-    // dispatch. Detect and undo the reroute only in member-object
-    // position; local shadowing is unaffected because a shadowing local
-    // would have lowered to `LocalGet`, never this reroute.
+    // Intrinsic direct calls still use their existing HIR surface. Property
+    // values retain the actual builtin receiver, including absent and user
+    // properties; codegen must never infer an owner from the member name.
     if let Expr::PropertyGet {
         object: inner,
         property,
@@ -502,7 +490,8 @@ pub(crate) fn lower_member_tail(
                         crate::analysis::builtin_constructor_length(property).is_some()
                             && !crate::analysis::has_intrinsic_static_surface(property)
                             && !matches!(outer_static_member, Some("name" | "length"));
-                    if !receiver_is_plain_builtin_object
+                    if member_is_call_callee
+                        && !receiver_is_plain_builtin_object
                         && !outer_is_prototype_or_proto
                         && !outer_is_constructor_property
                         && !receiver_is_namespace_value
