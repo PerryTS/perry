@@ -237,7 +237,7 @@ pub(crate) fn current_setjmp_stack_limit() -> Option<usize> {
             return None;
         }
         let depth = (*s).try_depth - 1;
-        if (*s).handler_kinds[depth] != HandlerKind::Setjmp {
+        if (&(*s).handler_kinds)[depth] != HandlerKind::Setjmp {
             return None;
         }
         // GC_STORE_AUDIT(STACK): C trampoline CFA, not a managed heap pointer.
