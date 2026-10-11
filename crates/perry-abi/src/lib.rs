@@ -364,6 +364,13 @@ pub const FN_REST_NATIVE_ARGS: u32 = 1 << 16;
 /// proved, avoiding a second walk. This does not waive its descriptor,
 /// prototype, frozen or extensibility checks, or change generic callers.
 pub const FN_RESOLVES_ARRAY_THIS: u32 = 1 << 17;
+/// Synthetic-arguments bodies that materialize an Arguments object accept
+/// one born directly from the dispatcher's argument list instead of an Array.
+pub const FN_ARGUMENTS_OBJECT: u32 = 1 << 18;
+/// The directly born object's `callee` is restricted.
+pub const FN_ARGUMENTS_RESTRICTED: u32 = 1 << 19;
+/// The directly born object needs slots for mapped parameter aliases.
+pub const FN_ARGUMENTS_MAPPED: u32 = 1 << 20;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
     FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;

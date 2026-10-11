@@ -908,6 +908,15 @@ pub(crate) fn emit_split_call_half(
     )
 }
 
+pub(super) fn lower_arguments_apply_site(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    args: &[Expr],
+    offset: u32,
+) -> Result<String> {
+    lower_split_method_call(ctx, object, "apply", args, offset, &[], None, None)
+}
+
 /// `recv.m(args)` whose arguments can run code (#11910): the method site's
 /// lookup half runs BEFORE the arguments (ECMA-262 13.3.6.1 reads `recv.m`
 /// first), its loaded value is rooted across them, and the call half follows.
@@ -980,16 +989,61 @@ fn lower_split_method_call(
         for i in arg_idx {
             lowered_args.push(group.reread(ctx, i)?);
         }
-        let r = emit_split_call_half(
-            ctx,
-            &lookup,
-            &recv_box,
-            &value,
-            &lowered_args,
-            property,
-            call_byte_offset,
-            &method_id,
-        );
+        let forward = property == "apply"
+            && args.len() == 2
+            && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
+                Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object");
+        let r = if forward {
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_arguments_forward_apply",
+                &[
+                    (DOUBLE, &value),
+                    (DOUBLE, &recv_box),
+                    (DOUBLE, &lowered_args[0]),
+                    (DOUBLE, &lowered_args[1]),
+                ],
+            );
+            let bits = ctx.block().bitcast_double_to_i64(&result);
+            let miss = ctx
+                .block()
+                .icmp_eq(I64, &bits, &crate::nanbox::TAG_HOLE.to_string());
+            let cold = ctx.new_block("arguments.apply.override");
+            let hot = ctx.current_block;
+            let merge = ctx.new_block("arguments.apply.merge");
+            let cold_label = ctx.block_label(cold);
+            let merge_label = ctx.block_label(merge);
+            ctx.block().cond_br(&miss, &cold_label, &merge_label);
+            ctx.current_block = cold;
+            let value = emit_split_call_half(
+                ctx,
+                &lookup,
+                &recv_box,
+                &value,
+                &lowered_args,
+                property,
+                call_byte_offset,
+                &method_id,
+            );
+            let cold_end = ctx.current_block;
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge;
+            let hot_label = ctx.block_label(hot);
+            let cold_end_label = ctx.block_label(cold_end);
+            ctx.block()
+                .phi(DOUBLE, &[(&result, &hot_label), (&value, &cold_end_label)])
+        } else {
+            emit_split_call_half(
+                ctx,
+                &lookup,
+                &recv_box,
+                &value,
+                &lowered_args,
+                property,
+                call_byte_offset,
+                &method_id,
+            )
+        };
         // The rest of the chain (`recv.m?.(a).x`) runs on the live path,
         // with the call's result bound to its temp.
         let r = match continuation {

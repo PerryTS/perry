@@ -710,7 +710,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_dyn_index_get_site", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
-    module.declare_function("js_region_holder_read", I32, &[PTR, DOUBLE, PTR, I32, PTR, I32]);
+    module.declare_function(
+        "js_region_holder_read",
+        I32,
+        &[PTR, DOUBLE, PTR, I32, PTR, I32],
+    );
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`
@@ -1104,6 +1108,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_bool_box_alloc", I64, &[I32]);
     module.declare_function("js_bool_box_get", I32, &[I64]);
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
+    module.declare_function(
+        "js_arguments_call_spread",
+        DOUBLE,
+        &[DOUBLE, PTR, DOUBLE, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_arguments_forward_apply",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_arguments_length_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_arguments_object_alloc", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_arguments_object_alloc_mapped",
@@ -1600,8 +1615,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // invokes the constructor with IMPLICIT_THIS bound to the new
     // instance. Returns the NaN-boxed new instance pointer.
     module.declare_function("js_new_function_construct", DOUBLE, &[DOUBLE, PTR, I64]);
-    module.declare_function("js_new_function_construct_site", DOUBLE, &[DOUBLE, PTR, I64, PTR]);
-    module.declare_function("js_class_value_super_construct_site", DOUBLE, &[DOUBLE, DOUBLE, PTR, I64, PTR]);
+    module.declare_function(
+        "js_new_function_construct_site",
+        DOUBLE,
+        &[DOUBLE, PTR, I64, PTR],
+    );
+    module.declare_function(
+        "js_class_value_super_construct_site",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR, I64, PTR],
+    );
     module.declare_function("js_function_ctor_from_strings", DOUBLE, &[PTR, I64]);
     // `new <callee>(...spread)` — codegen folds every argument (regular +
     // spread-expanded) into one JS array and hands it here; the runtime

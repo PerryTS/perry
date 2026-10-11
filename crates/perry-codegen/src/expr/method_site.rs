@@ -969,7 +969,7 @@ pub(crate) struct SiteLookup {
     code: String,
     /// `i1`: [`emit_method_site_lookup_unless`] skipped the lookup.
     skip: Option<String>,
-    slot_ref: String,
+    pub(crate) slot_ref: String,
     lanes: Vec<crate::codegen::static_constfn::StaticMethodLane>,
 }
 

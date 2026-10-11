@@ -43,7 +43,7 @@ use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
 use crate::rooting::{self, Arg, Repr};
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, FnCtx};
 
@@ -122,6 +122,53 @@ pub(crate) fn bundle_args_rooted<'f, R>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::CallSpread { callee, args, .. } => {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
+                if let [CallArg::Expr(receiver), CallArg::Spread(list)] = args.as_slice() {
+                    if property == "call"
+                        && matches!(crate::type_analysis::static_type_of(ctx, list),
+                        Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object")
+                        && super::method_site::method_site_enabled(ctx, property, 2)
+                    {
+                        return rooting::with_rooted_group(ctx, 4, |ctx, group| {
+                            let target = group.lower(ctx, object, true)?;
+                            let target_value = group.reread(ctx, target)?;
+                            let key = ctx.strings.intern(property);
+                            let global = ctx.strings.static_dispatch_global(key);
+                            let method_id =
+                                crate::strings::emit_static_dispatch_id(ctx.block(), &global);
+                            let lookup = super::method_site::emit_method_site_lookup(
+                                ctx,
+                                &target_value,
+                                &method_id,
+                                2,
+                                &[],
+                            );
+                            let method = group.adopt_emitted(ctx, Repr::Boxed, &lookup.value, true);
+                            let receiver = group.lower(ctx, receiver, true)?;
+                            let list = group.lower(ctx, list, true)?;
+                            let target = group.reread(ctx, target)?;
+                            let method = group.reread_emitted(ctx, method);
+                            let receiver = group.reread(ctx, receiver)?;
+                            let list = group.reread(ctx, list)?;
+                            Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_arguments_call_spread",
+                                &[
+                                    (DOUBLE, &method),
+                                    (PTR, &lookup.slot_ref),
+                                    (DOUBLE, &target),
+                                    (I64, &method_id),
+                                    (DOUBLE, &receiver),
+                                    (DOUBLE, &list),
+                                ],
+                            ))
+                        });
+                    }
+                }
+            }
             let spread_count = args
                 .iter()
                 .filter(|a| matches!(a, CallArg::Spread(_)))

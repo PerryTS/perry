@@ -61,6 +61,22 @@ pub(crate) unsafe fn compiled_target_call(
         ));
     }
     let list = arg(1).to_bits();
+    if list & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+        let object = (list & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+        if let Some(values) = crate::object::arguments_object_born_slice(object) {
+            return Some(enter_compiled_body(
+                closure,
+                info,
+                this,
+                values.as_ptr(),
+                values.len(),
+            ));
+        }
+    }
+    // Mutated Arguments can run accessors in CreateListFromArrayLike.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(recv);
+    let receiver = scope.root_nanbox_f64(this_arg);
     let values: Vec<f64> = if list == crate::value::TAG_UNDEFINED || list == crate::value::TAG_NULL
     {
         Vec::new()
@@ -90,6 +106,9 @@ pub(crate) unsafe fn compiled_target_call(
     } else {
         (values.as_ptr(), values.len())
     };
+    let closure = crate::value::js_nanbox_get_pointer(callee.get_nanbox_f64())
+        as *const crate::closure::ClosureHeader;
+    let this = crate::closure::JsThis::from_f64(receiver.get_nanbox_f64());
     Some(enter_compiled_body(closure, info, this, ptr, len))
 }
 

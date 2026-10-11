@@ -46,6 +46,9 @@ js_argon2_verify	Reenters
 js_argon2_verify_sync	Reenters
 js_arguments_bundle_get_slow	Reenters
 js_arguments_bundle_index_get	Reenters
+js_arguments_call_spread	Reenters
+js_arguments_forward_apply	Reenters
+js_arguments_length_value	Reenters
 js_arguments_object_alloc	Reenters
 js_arguments_object_alloc_mapped	Reenters
 js_arguments_object_map_index	Reenters

@@ -26,6 +26,63 @@ pub(crate) enum ArgumentsCallee<'a> {
     CurrentClosure,
 }
 
+/// Every compiler-selected arguments length representation uses the same
+/// lowering. The object form validates the live birth shape at each read.
+pub(crate) fn lower_arguments_length(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> anyhow::Result<Option<String>> {
+    if property != "length" {
+        return Ok(None);
+    }
+    if let Expr::LocalGet(id) = object {
+        if matches!(ctx.local_type_hint(id), Some(perry_hir::types::Type::Named(name)) if name == SYNTHETIC_ARGUMENTS_LENGTH_TYPE)
+        {
+            return crate::expr::lower_expr(ctx, object).map(Some);
+        }
+        if let Some(length) = lower_elided_arguments_length(ctx, *id) {
+            return Ok(Some(length));
+        }
+    }
+    if matches!(crate::type_analysis::static_type_of(ctx, object), Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object")
+    {
+        let args = crate::expr::lower_expr(ctx, object)?;
+        return Ok(Some(ctx.block().call(
+            DOUBLE,
+            "js_arguments_length_value",
+            &[(DOUBLE, &args)],
+        )));
+    }
+    Ok(None)
+}
+
+/// Body metadata selects the synthetic object ABI. The ordinary Array ABI
+/// remains for elided reads and for bodies with an explicit user rest Array.
+pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
+    let Some(meta) = params.iter().find_map(|p| p.arguments_object.as_ref()) else {
+        return 0;
+    };
+    if params
+        .iter()
+        .any(|p| p.is_rest && p.arguments_object.is_none())
+        || arguments_elision(params, body).is_some()
+    {
+        return 0;
+    }
+    crate::runtime_abi::FN_ARGUMENTS_OBJECT
+        | if meta.restricted_callee {
+            crate::runtime_abi::FN_ARGUMENTS_RESTRICTED
+        } else {
+            0
+        }
+        | if !meta.mapped_parameter_ids.is_empty() {
+            crate::runtime_abi::FN_ARGUMENTS_MAPPED
+        } else {
+            0
+        }
+}
+
 /// A mapped parameter is boxed so the sloppy-mode object and the parameter
 /// share one cell. An elided object aliases nothing, so its parameters keep
 /// ordinary slots — `body` is the same proof input
@@ -629,6 +686,27 @@ mod elision_tests {
                 }),
             })),
         ]
+    }
+
+    #[test]
+    fn birth_abi_follows_materialization_and_parameter_mapping() {
+        use super::arguments_object_flags;
+        use crate::runtime_abi::{
+            FN_ARGUMENTS_MAPPED, FN_ARGUMENTS_OBJECT, FN_ARGUMENTS_RESTRICTED,
+        };
+        let escape = vec![Stmt::Return(Some(*args()))];
+        assert_eq!(arguments_object_flags(&params(false), &reads()), 0);
+        assert_eq!(
+            arguments_object_flags(&params(false), &escape),
+            FN_ARGUMENTS_OBJECT | FN_ARGUMENTS_RESTRICTED
+        );
+        assert_eq!(
+            arguments_object_flags(&params(true), &escape),
+            FN_ARGUMENTS_OBJECT | FN_ARGUMENTS_MAPPED
+        );
+        let mut rest = params(false);
+        rest[0].is_rest = true;
+        assert_eq!(arguments_object_flags(&rest, &escape), 0);
     }
 
     #[test]

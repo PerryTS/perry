@@ -383,6 +383,7 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             // keeps payload slot indices aligned with the layout masks.
             HeapChildSlotIterator::new_object(header, None, range, shape)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
+                .with_meta_slot2(crate::object::arguments_mapping_slot(obj))
         }
         GcLayoutSlotKind::RegExpFields => {
             let (source, count) =

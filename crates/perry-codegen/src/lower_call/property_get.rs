@@ -143,6 +143,20 @@ pub fn try_lower_property_get_method_call(
     // `js_set_call_location` from this captured value, immediately before the
     // throwing dispatch. `0` (and the default build) → no emission.
     let call_byte_offset = ctx.strings.pending_call_offset();
+    if property == "apply"
+        && args.len() == 2
+        && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
+            Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object")
+        && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+    {
+        return super::console_promise::lower_arguments_apply_site(
+            ctx,
+            object,
+            args,
+            call_byte_offset,
+        )
+        .map(Some);
+    }
     // #11394: a method the program writes onto a builtin prototype must be
     // looked up before ANY arm below binds the call to a native builtin.
     if patched_proto::guards(ctx, object, property) {

@@ -93,16 +93,16 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
 }
 
 pub(crate) use array_error::{
-    function_apply_proxy, generic_array_like_to_vec, global_this_clear_immediate_thunk,
-    global_this_clear_interval_thunk, global_this_clear_timeout_thunk,
-    global_this_queue_microtask_thunk, global_this_rest_array_values,
-    global_this_set_immediate_thunk, global_this_set_interval_thunk, global_this_set_timeout_thunk,
-    is_native_error_subclass_constructor, object_prototype_define_getter_thunk,
-    object_prototype_define_setter_thunk, object_prototype_has_own_property_thunk,
-    object_prototype_is_prototype_of_thunk, object_prototype_lookup_getter_thunk,
-    object_prototype_lookup_setter_thunk, object_prototype_property_is_enumerable_thunk,
-    object_prototype_to_locale_string_thunk, object_prototype_to_string_thunk,
-    object_prototype_value_of_thunk,
+    function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
+    generic_array_like_to_vec, global_this_clear_immediate_thunk, global_this_clear_interval_thunk,
+    global_this_clear_timeout_thunk, global_this_queue_microtask_thunk,
+    global_this_rest_array_values, global_this_set_immediate_thunk, global_this_set_interval_thunk,
+    global_this_set_timeout_thunk, is_native_error_subclass_constructor,
+    object_prototype_define_getter_thunk, object_prototype_define_setter_thunk,
+    object_prototype_has_own_property_thunk, object_prototype_is_prototype_of_thunk,
+    object_prototype_lookup_getter_thunk, object_prototype_lookup_setter_thunk,
+    object_prototype_property_is_enumerable_thunk, object_prototype_to_locale_string_thunk,
+    object_prototype_to_string_thunk, object_prototype_value_of_thunk,
 };
 pub(crate) use bigint_promise::{
     array_from_thunk, array_is_array_thunk, array_of_thunk, bigint_as_int_n_thunk,

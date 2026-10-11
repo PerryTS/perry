@@ -629,7 +629,7 @@ mod not_iterable_message_tests {
 }
 
 // Ordinary GetMethod/Call shared by array and other protocol records.
-fn get_iterator_from_method(val_f64: f64) -> Option<f64> {
+pub(crate) fn get_iterator_from_method(val_f64: f64) -> Option<f64> {
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let val_h = this_scope.root_nanbox_f64(val_f64);
     let iter_wk = well_known_symbol("iterator");

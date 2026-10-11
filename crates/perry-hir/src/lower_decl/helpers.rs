@@ -591,12 +591,15 @@ pub fn append_synthetic_arguments_param(
     restricted_callee: bool,
     mapped_parameter_ids: Vec<(u32, LocalId)>,
 ) {
-    let arguments_id = ctx.define_local("arguments".to_string(), Type::Any);
+    let arguments_id = ctx.define_local(
+        "arguments".to_string(),
+        Type::Named("__perry_arguments_object".into()),
+    );
     let has_user_rest = params.iter().any(|p| p.is_rest);
     params.push(Param {
         id: arguments_id,
         name: "arguments".to_string(),
-        ty: Type::Any,
+        ty: Type::Named("__perry_arguments_object".into()),
         default: None,
         decorators: Vec::new(),
         is_rest: !has_user_rest,

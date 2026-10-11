@@ -664,6 +664,14 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     }
                     return function_prototype_or_null();
                 }
+                // Arguments' private header identity describes their tail,
+                // never a constructor prototype. Explicit links were handled
+                // above; an untouched arguments object uses Object.prototype.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && (*gc)._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
+                {
+                    return namespace_default_prototype();
+                }
                 // Fast [[Prototype]] for a DECLARED-class instance: resolve
                 // directly from the class id instead of the generic
                 // `constructor_dynamic_prototype` probe, which reads the
@@ -887,6 +895,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
                 return function_prototype_or_null();
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && (*gc)._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
+            {
+                return namespace_default_prototype();
             }
             if let Some(proto) = constructor_dynamic_prototype(obj) {
                 return proto;

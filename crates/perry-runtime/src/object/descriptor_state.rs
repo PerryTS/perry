@@ -248,12 +248,6 @@ pub(crate) fn note_attrs_born_with_keys(obj: usize) {
     note_descriptor_target_edits(obj, &[]);
 }
 
-/// An accessor born in the object's attributed key layout also needs the
-/// ordinary descriptor bookkeeping, even though no install runs.
-pub(crate) fn note_accessor_born_with_keys(obj: usize) {
-    note_attrs_born_with_keys(obj);
-}
-
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {

@@ -86,7 +86,14 @@ pub fn info_rest(info: &JsFunctionInfo) -> Option<(u32, RestDispatchKind)> {
     let kind = if info.flags & FN_REST_USER != 0 {
         RestDispatchKind::UserRest
     } else if info.flags & FN_REST_SYNTHETIC_ARGUMENTS != 0 {
-        RestDispatchKind::SyntheticArguments
+        if info.flags & crate::codegen_abi::FN_ARGUMENTS_OBJECT != 0 {
+            RestDispatchKind::ArgumentsObject {
+                restricted: info.flags & crate::codegen_abi::FN_ARGUMENTS_RESTRICTED != 0,
+                mapped: info.flags & crate::codegen_abi::FN_ARGUMENTS_MAPPED != 0,
+            }
+        } else {
+            RestDispatchKind::SyntheticArguments
+        }
     } else if info.flags & FN_REST_USER_AND_ARGUMENTS != 0 {
         RestDispatchKind::UserRestAndArguments
     } else if info.flags & FN_REST_NATIVE_ARGS != 0 {
@@ -210,6 +217,10 @@ pub(crate) enum DispatchKind {
 pub enum RestDispatchKind {
     UserRest,
     SyntheticArguments,
+    ArgumentsObject {
+        restricted: bool,
+        mapped: bool,
+    },
     UserRestAndArguments,
     /// A runtime-native body taking the arguments in place
     /// (`FN_REST_NATIVE_ARGS`): nothing is bundled.
@@ -277,6 +288,8 @@ pub unsafe fn dispatch_rest_bundled(
         .map(|value| arg_scope.root_nanbox_f64(*value))
         .collect();
 
+    let closure_handle = arg_scope.root_raw_const_ptr(closure);
+    let this_handle = arg_scope.root_nanbox_f64(this.as_f64());
     // Both arrays are built from the arguments this scope already roots, so
     // they read current values however many times the builder collects — and
     // the second array's allocation can move the first, which the body is
@@ -289,16 +302,27 @@ pub unsafe fn dispatch_rest_bundled(
         } else {
             &[]
         };
-    let rest_handle = arg_scope.root_nanbox_f64(build_rest_array_rooted(
-        rest_handles,
-        kind == RestDispatchKind::SyntheticArguments,
-    ));
+    let rest = if let RestDispatchKind::ArgumentsObject { restricted, mapped } = kind {
+        crate::value::js_nanbox_pointer(crate::object::arguments_object_alloc_rooted(
+            &arg_handles,
+            crate::value::js_nanbox_pointer(
+                closure_handle.get_raw_const_ptr::<ClosureHeader>() as i64
+            ),
+            restricted,
+            if mapped { fixed_arity } else { 0 },
+        ) as i64)
+    } else {
+        build_rest_array_rooted(rest_handles, kind == RestDispatchKind::SyntheticArguments)
+    };
+    let rest_handle = arg_scope.root_nanbox_f64(rest);
     crate::gc::collection_point("closure.rest_bundle.between_arrays");
     let all_arguments_handle = if kind == RestDispatchKind::UserRestAndArguments {
         Some(arg_scope.root_nanbox_f64(build_rest_array_rooted(&arg_handles, true)))
     } else {
         None
     };
+    let closure = closure_handle.get_raw_const_ptr::<ClosureHeader>();
+    let this = crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64());
     let rest_double = rest_handle.get_nanbox_f64();
     let all_arguments_double = all_arguments_handle.map(|handle| handle.get_nanbox_f64());
 

@@ -149,7 +149,12 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if let Ok(name_str) = std::str::from_utf8(key_bytes) {
                 if crate::closure::closure_is_key_deleted(obj as usize, name_str) {
-                    return JSValue::undefined();
+                    // Deleting an own shadow revokes that slot, not the
+                    // inherited property. Use the same closure Get as value
+                    // reads so MethodSite observes the actual prototype.
+                    return JSValue::from_bits(
+                        crate::closure::closure_get_dynamic_prop(obj as usize, name_str).to_bits(),
+                    );
                 }
                 // ECMAScript "poison pill": reading `caller` / `arguments` off a
                 // strict-mode function throws a TypeError (the %ThrowTypeError%

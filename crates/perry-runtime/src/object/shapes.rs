@@ -5002,7 +5002,9 @@ pub(crate) unsafe fn object_proto_id_for(
     // A namespace's vtable/override registry can answer before its physical
     // own slots. Project that read classification into the shape, as for
     // process.env and arguments below; an own-slot region cannot admit it.
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || (*super::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
+    {
         return PROTO_ID_PER_OBJECT;
     }
     let meta = (*obj).meta;

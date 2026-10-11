@@ -114,28 +114,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
             }
         }
-        // Direct-call-only synthetic `arguments` clone: producer analysis
-        // proved that this exact `.length` form is the binding's sole use, and
-        // the caller placed the already boxed actual-argument count in its
-        // trailing slot. The public method retains normal Arguments semantics.
-        if property == "length"
-            && matches!(
-                object.as_ref(),
-                Expr::LocalGet(id)
-                    if matches!(
-                        ctx.local_type_hint(id),
-                        Some(perry_hir::types::Type::Named(name))
-                            if name == crate::codegen::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE
-                    )
-            )
+        if let Some(value) =
+            crate::codegen::arguments::lower_arguments_length(ctx, object, property)?
         {
-            return lower_expr(ctx, object);
-        }
-        // #10509: an elided `arguments` binding's length was read once.
-        if let (true, Expr::LocalGet(id)) = (property == "length", object.as_ref()) {
-            if let Some(len) = crate::codegen::arguments::lower_elided_arguments_length(ctx, *id) {
-                return Ok(len);
-            }
+            return Ok(value);
         }
         buffer_alias::invalidate_buffer_alias_for_read(ctx, object, property);
     }

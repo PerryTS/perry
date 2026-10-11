@@ -1628,6 +1628,12 @@ pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
+/// This OBJECT allocation has an Arguments private tail. Its class id stays
+/// zero: the identity does not invent a constructor or private class fields.
+/// Bit 12 is free on OBJECT, whose layout is entirely a ShapeId fact. Array
+/// and closure layout bits are interpreted only after their own kind guard;
+/// object layout transitions never write these bits, and copying preserves it.
+pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// # `GcHeader::_reserved` bit map by GC kind
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
@@ -1647,7 +1653,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
-/// | 12 | available | `GC_ARRAY_RAW_F64_HOLES` | |
+/// | 12 | `OBJ_FLAG_ARGUMENTS` | `GC_ARRAY_RAW_F64_HOLES` | |
 /// | 13 | available | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
 /// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
 ///
@@ -1656,7 +1662,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// preserves a pre-existing permanent pin.
 /// These types have no dynamic layout-slot state; no header or cell grows.
 ///
-/// Object layout is a ShapeId fact. Bits 7 and 12..15 have no object
+/// Object layout is a ShapeId fact. Bits 7 and 13..15 have no object
 /// layout meaning; array and closure layout metadata still uses its listed
 /// bits. Any new header use must be checked against every GC kind.
 pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();

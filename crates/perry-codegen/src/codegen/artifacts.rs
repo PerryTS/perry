@@ -93,6 +93,26 @@ pub(super) fn emit_module_artifacts(
         output_type,
     };
 
+    // The body and its value wrapper share the synthetic-arguments ABI.
+    for f in &hir.functions {
+        let flags = super::arguments::arguments_object_flags(&f.params, &f.body);
+        if flags != 0 {
+            if let Some(name) = func_names.get(&f.id) {
+                llmod.note_fn_info(&format!("__perry_wrap_{name}"), |info| info.flags |= flags);
+            }
+        }
+    }
+    for (fid, expr) in closures {
+        if let perry_hir::Expr::Closure { params, body, .. } = expr {
+            let flags = super::arguments::arguments_object_flags(params, body);
+            if flags != 0 {
+                llmod.note_fn_info(&format!("perry_closure_{module_prefix}__{fid}"), |info| {
+                    info.flags |= flags
+                });
+            }
+        }
+    }
+
     let module_reassigned_locals = crate::collectors::reassigned_locals_in_module(hir);
     // #9071 follow-up: module-wide GUARD-FREE closure bindings. #7170 R1's
     // `single_binding_closure_locals` is the strong fact: exactly one `Let`,
@@ -743,6 +763,8 @@ pub(super) fn emit_module_artifacts(
                 .params
                 .iter()
                 .any(|p| p.is_rest && p.arguments_object.is_none());
+            let flags = super::arguments::arguments_object_flags(&f.params, &f.body);
+            llmod.note_fn_info(&alias_wrap, |info| info.flags |= flags);
             user_fn_wrapper_rest.push((alias_wrap.clone(), rest_idx));
             if last_is_synth_args && has_user_rest {
                 user_fn_wrapper_rest_and_arguments.insert(alias_wrap);

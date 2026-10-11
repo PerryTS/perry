@@ -42,6 +42,9 @@ js_argon2_verify	ptr	ptr,ptr
 js_argon2_verify_sync	i32s	ptr,ptr
 js_arguments_bundle_get_slow	f64	f64,f64,f64,ptr,i32s
 js_arguments_bundle_index_get	f64	f64,f64
+js_arguments_call_spread	f64	f64,ptr,f64,i64,f64,f64
+js_arguments_forward_apply	f64	f64,f64,f64,f64
+js_arguments_length_value	f64	f64
 js_arguments_object_alloc	ptr	f64,f64,i32s
 js_arguments_object_alloc_mapped	ptr	f64,f64,i32u
 js_arguments_object_map_index	void	ptr,i32u,ptr

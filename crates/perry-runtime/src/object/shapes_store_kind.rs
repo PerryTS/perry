@@ -63,6 +63,9 @@ pub(crate) unsafe fn receiver_admits_plain_store(obj: *const ObjectHeader) -> bo
     let class_id = (*obj).class_id;
     // `class_id + 2 > 2` (unsigned): a class id other than 0, u32::MAX-1
     // (native module) and u32::MAX (never allocated).
+    if (*gc_header(obj))._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0 {
+        return false;
+    }
     if class_id.wrapping_add(2) > 2 {
         return true;
     }
