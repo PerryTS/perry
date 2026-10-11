@@ -258,12 +258,30 @@ pub(super) fn static_keys_served(
 }
 
 fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, Vec<u32>, u32, u32, bool)> {
-    // Use containment's exact class to select the supplier when available.
-    // This consumes only class provenance: the compared ShapeId below remains
-    // the sole authority for slot locations and Number representation.
-    let proven_class = ctx.ptr_shape_region_class(&rv.recv.expr());
+    // A body binding can be nominated before its Let is lowered. Keep that
+    // supplier fixed when deriving Number flow; only its live ShapeId guard
+    // will license the nominated slots and representations.
+    if let Some(slots) = &rv.static_slots {
+        if let Ok(word) = rv.word.parse::<i64>() {
+            return Some((
+                word as u64,
+                slots.clone(),
+                rv.r_mask,
+                rv.vt_mask,
+                rv.uses_ptr_shape_class,
+            ));
+        }
+    }
     let class_name = static_class_name(ctx, rv.recv, None)?;
-    let keys_global = ctx.class_keys_globals.get(&class_name)?;
+    static_word_for_class(ctx, rv, &class_name)
+}
+
+fn static_word_for_class(
+    ctx: &FnCtx<'_>,
+    rv: &Receiver,
+    class_name: &str,
+) -> Option<(u64, Vec<u32>, u32, u32, bool)> {
+    let keys_global = ctx.class_keys_globals.get(class_name)?;
     let (id, slots, f64_lanes) =
         crate::codegen::static_region_slots(keys_global, &rv.keys, rv.boxed_mask)?;
     // The runtime's rule (`region_loop_pack`), decided here for the static
@@ -284,8 +302,43 @@ fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<(u64, Vec<u32>, 
         slots,
         f64_lanes | tested,
         tested,
-        proven_class.is_some(),
+        ctx.ptr_shape_region_class(&rv.recv.expr()).is_some(),
     ))
+}
+
+/// Record supplier metadata, never a live receiver proof. The body's guard
+/// must compare this same ShapeId before materializing any Number facts.
+pub(super) fn nominate_static_supplier(ctx: &FnCtx<'_>, rv: &mut Receiver, body: &[Stmt]) {
+    // Number flow may already depend on this supplier. A later initializer
+    // refinement can nominate a different class, but cannot replace the id
+    // whose lane facts the parent tested. Its live mismatch must take G.
+    if rv.static_slots.is_some() {
+        return;
+    }
+    let nominated = static_class_name(ctx, rv.recv, None).or_else(|| {
+        body.iter().find_map(|s| match s {
+            Stmt::Let {
+                id,
+                ty: perry_hir::types::Type::Named(name),
+                ..
+            } if rv.recv == Recv::Local(*id) => Some(name.clone()),
+            Stmt::Let {
+                id,
+                init: Some(init),
+                ..
+            } if rv.recv == Recv::Local(*id) => static_class_name(ctx, rv.recv, Some(init)),
+            _ => None,
+        })
+    });
+    if let Some((word, slots, r_mask, tested, provenance)) =
+        nominated.and_then(|c| static_word_for_class(ctx, rv, &c))
+    {
+        rv.word = (word as i64).to_string();
+        rv.static_slots = Some(slots);
+        rv.r_mask = r_mask;
+        rv.vt_mask = tested;
+        rv.uses_ptr_shape_class = provenance;
+    }
 }
 
 /// Key `i`'s slot (`i64`): a static receiver's constant, or decoded from
@@ -400,6 +453,59 @@ pub(super) fn emit_value_tests(
             (&ok, vt_end.as_str()),
         ],
     ))
+}
+
+/// A read-only static body supplier branches directly into its verified F
+/// copy. Avoid merging a shape result into a boolean and testing it again.
+pub(super) fn emit_static_body_guard_direct(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    parent: Option<&str>,
+    entry_tests: &[u32],
+    fast: &str,
+    fail: &str,
+) -> Result<()> {
+    let mut admitted = "true".to_string();
+    if let Some(parent) = parent {
+        admitted = ctx.block().load(I1, parent);
+    }
+    if !entry_tests.is_empty() {
+        let number = emit_number_entry_tests(ctx, entry_tests)?;
+        admitted = ctx.block().and(I1, &admitted, &number);
+    }
+    if admitted != "true" {
+        let open = ctx.new_block("rloop.guard.static.open");
+        let open_l = ctx.block_label(open);
+        ctx.block().cond_br(&admitted, &open_l, fail);
+        ctx.current_block = open;
+    }
+    let recv = lower_recv(ctx, rv.recv)?;
+    let bits = ctx.block().bitcast_double_to_i64(&recv);
+    let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    let check = ctx.new_block("rloop.guard.static");
+    let check_l = ctx.block_label(check);
+    ctx.block().cond_br(&test.is_object_pointer, &check_l, fail);
+    ctx.current_block = check;
+    let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
+    let sid = field_i32(ctx, &handle, 4);
+    let word = rv.word.parse::<i64>().expect("nominated static supplier") as u64;
+    let eq = crate::typed_shape::emit_compatible_shape_eq(
+        ctx.block(),
+        &sid,
+        &(word as u32).to_string(),
+        &[],
+    );
+    if may_value_test(rv) {
+        let values = ctx.new_block("rloop.guard.static.values");
+        let values_l = ctx.block_label(values);
+        ctx.block().cond_br(&eq, &values_l, fail);
+        ctx.current_block = values;
+        let ok = value_tests_on(ctx, rv, &rv.word, &handle);
+        ctx.block().cond_br(&ok, fast, fail);
+    } else {
+        ctx.block().cond_br(&eq, fast, fail);
+    }
+    Ok(())
 }
 
 /// A guard whose receiver the compiler names (DESIGN §4.1, static-exclusive):

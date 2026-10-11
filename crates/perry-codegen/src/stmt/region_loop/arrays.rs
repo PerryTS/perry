@@ -129,6 +129,10 @@ pub(crate) struct ArrayUse {
     /// fills `[length, capacity)` with holes, and a hole reads `undefined`),
     /// and the loaded value's own shape guard is the proof of what it is.
     pub(super) element: bool,
+    /// A nonnumeric value load at a static index window (`xs[i & mask]`).
+    /// The window's capacity check proves its bounds; it needs no loop-bound
+    /// check, unlike `element`'s counter-indexed load.
+    pub(super) static_element: bool,
     /// A typed-array VIEW receiver (module doc): its bare accesses' ends.
     pub(super) view: bool,
     /// View: the largest constant end (`hi + 1`) of a proven index.
@@ -1087,7 +1091,10 @@ pub(super) fn candidates(
         }
         let u = out.entry(r).or_default();
         match ix {
-            Some(c) => u.max_index = u.max_index.max(c),
+            Some(c) => {
+                u.max_index = u.max_index.max(c);
+                u.static_element |= !store && !numeric;
+            }
             None if dense => u.counter = true,
             None => u.element = true,
         }

@@ -66,6 +66,7 @@ mod bare;
 mod guard;
 mod numeric_expression;
 mod plan;
+mod shared_element_tail;
 mod verify;
 
 pub(crate) use self::arrays::{
@@ -340,6 +341,11 @@ thread_local! {
     /// Loop region token -> the bound's Number scope (see `begin_with`).
     static BOUND_SCOPES: std::cell::RefCell<HashMap<u64, u32>> =
         std::cell::RefCell::new(HashMap::new());
+    /// The checked copy of an element loop must not plan that loop again.
+    /// Body regions may still guard its per-iteration receiver. This stack
+    /// exists only while lowering IR; no state is emitted into the program.
+    static PLAIN_ELEMENT_BODIES: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     static STATS: std::cell::RefCell<[u64; 6]> = const { std::cell::RefCell::new([0; 6]) };
 }
 
@@ -502,6 +508,8 @@ fn begin_with(
         .filter_map(|r| static_class_name(ctx, *r, None).map(|c| (*r, c)))
         .collect();
     let env = arrays::loop_env(ctx, cond, body, update);
+    let plain_element_body =
+        PLAIN_ELEMENT_BODIES.with(|stack| stack.borrow().contains(&(body.as_ptr() as usize)));
     // The counter bound `B` of `i < B`: an array guard with the counter
     // checks `B <= capacity` (or `<= length`) as an `f64` compare, which a
     // non-Number fails (a NaN-boxed non-double is a NaN). In the split loop,
@@ -513,7 +521,8 @@ fn begin_with(
         Some(arrays::Counter {
             bound: arrays::Bound::Local(b),
             ..
-        }) if arrays::element_loads_enabled()
+        }) if !plain_element_body
+            && arrays::element_loads_enabled()
             && !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(b)) =>
         {
             let sc = ctx.next_loop_proof_scope_id();
@@ -522,7 +531,11 @@ fn begin_with(
         }
         _ => None,
     };
-    let arrs = arrays::candidates(ctx, cond, body, update, &env);
+    let arrs = if plain_element_body {
+        HashMap::new()
+    } else {
+        arrays::candidates(ctx, cond, body, update, &env)
+    };
     // Array receivers (S3): the loop region, with the body region nested in
     // its F-body when there is one. Without a bare element read, today's
     // choice below.
@@ -565,31 +578,18 @@ fn begin_with(
         }
     }
     if admit == Admit::Elements
-        && !nested
-            .as_ref()
-            .is_some_and(|(p, inner)| inner.is_some() && p.arrays.iter().any(|(_, u)| u.element))
+        && !nested.as_ref().is_some_and(|(p, inner)| {
+            inner.is_some() && p.arrays.iter().any(|(_, u)| u.element || u.static_element)
+        })
     {
         nested = None;
     }
-    // The bound scope stands only for a region whose guard checks the bound.
+    // The bound scope belongs only to an admitted array region. Static
+    // windows prove their own bounds, so their array guard need not inspect
+    // the loop bound; the strict Number entry test below proves that control
+    // value instead. This also keeps generic (boxed-ABI) functions eligible.
     if let Some(sc) = bound_scope {
-        let guarded = nested.as_ref().is_some_and(|(p, _)| {
-            p.arrays.iter().any(|(_, u)| {
-                u.counter
-                        || u.element
-                        // A view guard compares `B + c <= length` (an f64
-                        // compare a non-Number `B` fails).
-                        || matches!(
-                            (u.view_sym, env.counter),
-                            (Some((arrays::Symbol::Local(b), _)), Some(arrays::Counter {
-                                bound: arrays::Bound::Local(cb),
-                                ..
-                            })) if b == cb
-                        )
-            })
-        });
-        if !guarded {
-            nested = None;
+        if nested.is_none() {
             ctx.receiver_descriptors.dematerialize_scope(sc);
         }
     }
@@ -604,7 +604,15 @@ fn begin_with(
     // Number fact before the entry test. The scope belongs only to the
     // guarded split loop, and is closed before
     // the generic copy. A nonnumber bound keeps its ordinary coercions.
-    let control_bound = if nested.is_none() {
+    let control_bound = if nested.is_some() && bound_scope.is_some() {
+        match env.counter {
+            Some(arrays::Counter {
+                bound: arrays::Bound::Local(b),
+                ..
+            }) => Some(b),
+            _ => None,
+        }
+    } else if nested.is_none() {
         match env.counter {
             Some(arrays::Counter {
                 bound: arrays::Bound::Local(b),
@@ -642,11 +650,12 @@ fn begin_with(
     // The guard is emitted now, in the context the plan was made in: a
     // receiver wider than a learned word must still name its class.
     let first = first.filter(|p| {
-        p.receivers.iter().all(|(r, k, _, _, bm, _)| {
-            k.len() <= MAX_KEYS
-                || static_class_name(ctx, *r, None)
-                    .is_some_and(|c| static_keys_served(ctx, &c, k, *bm))
-        })
+        !plain_element_body
+            && p.receivers.iter().all(|(r, k, _, _, bm, _)| {
+                k.len() <= MAX_KEYS
+                    || static_class_name(ctx, *r, None)
+                        .is_some_and(|c| static_keys_served(ctx, &c, k, *bm))
+            })
     });
     if first.is_none() {
         if let Some(sc) = bound_scope {
@@ -764,7 +773,7 @@ fn begin_with(
             arrs.push(a);
         }
         let loop_control: Vec<&Expr> = cond.into_iter().chain(update).collect();
-        let (number_locals, mut entry_tests) = number_facts(
+        let (mut number_locals, mut entry_tests) = number_facts(
             ctx,
             body,
             &loop_control,
@@ -779,22 +788,45 @@ fn begin_with(
             entry_tests.sort_unstable();
             entry_tests.dedup();
         }
-        if !entry_tests.is_empty() {
-            let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
-            all = ctx.block().and(I1, &all, &number_ok);
-        }
-        ctx.block().store(I1, &all, &valid_slot);
         let dirty_slot = ctx.func.alloca_entry(I1);
         ctx.block().store(I1, "false", &dirty_slot);
         stat(0, 1);
         let inner = inner.map(|(k, ip)| {
-            let mut ib = body_pending(ip, body, k);
+            let mut ib = body_pending(ctx, ip, body, k);
             ib.dirty_slot = Some(dirty_slot.clone());
             // The loop's dirty points in the tail are set from F-tail.
             ib.dirty_after = p.dirty_after.clone();
             ib.parent_valid = Some(valid_slot.clone());
             Box::new(ib)
         });
+        if let Some(ib) = inner.as_ref().filter(|ib| {
+            shared_element_tail::shareable(ctx, &receivers, &arrs, &p.trees, p.recheck, ib, body)
+        }) {
+            // The shared tail's G arm clears the parent validity. Its exact
+            // R reads therefore prove loop-carried Numbers on every F edge;
+            // test those Numbers at entry and again after G.
+            let (locals, tests) = number_facts(
+                ctx,
+                body,
+                &loop_control,
+                &ib.receivers,
+                &HashSet::new(),
+                &ib.bare_reads,
+                &ib.number_local_uses,
+                &ib.declared_locals,
+            );
+            number_locals.extend(locals);
+            number_locals.sort_unstable();
+            number_locals.dedup();
+            entry_tests.extend(tests);
+            entry_tests.sort_unstable();
+            entry_tests.dedup();
+        }
+        if !entry_tests.is_empty() {
+            let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
+            all = ctx.block().and(I1, &all, &number_ok);
+        }
+        ctx.block().store(I1, &all, &valid_slot);
         ctx.region_loops.push(Pending {
             body_ptr: body.as_ptr() as usize,
             fast_body_cannot_collect: false,
@@ -828,7 +860,7 @@ fn begin_with(
     // Body region: the first `const o = <expr>` whose binding the rest of the
     // body reads or writes by static key.
     if let Some((k, p)) = body_region_plan(ctx, body, &cands_for_body, &wide) {
-        let pending = body_pending(p, body, k);
+        let pending = body_pending(ctx, p, body, k);
         let token = pending.token;
         ctx.region_loops.push(pending);
         return Ok(Some(token));
@@ -886,7 +918,7 @@ pub(crate) fn try_lower_view_run(
         return Ok(None);
     }
     let view_index = p.view_index.clone();
-    let mut pending = body_pending(p, run, 0);
+    let mut pending = body_pending(ctx, p, run, 0);
     pending.arrays = arrs;
     pending.view_index = view_index;
     ctx.region_loops.push(pending);
@@ -1086,13 +1118,13 @@ fn emit_number_entry_tests(ctx: &mut FnCtx<'_>, ids: &[u32]) -> Result<String> {
 }
 
 /// A body region's pending split at `split_at`.
-fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
+fn body_pending(ctx: &FnCtx<'_>, p: Plan, body: &[Stmt], split_at: usize) -> Pending {
     let token = NEXT_TOKEN.with(|t| {
         let v = t.get();
         t.set(v + 1);
         v
     });
-    let receivers: Vec<Receiver> = p
+    let mut receivers: Vec<Receiver> = p
         .receivers
         .iter()
         .map(|(r, k, st, sm, bm, rm)| Receiver {
@@ -1113,6 +1145,9 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
             inherited: false,
         })
         .collect();
+    for rv in &mut receivers {
+        guard::nominate_static_supplier(ctx, rv, &body[..split_at]);
+    }
     Pending {
         body_ptr: body.as_ptr() as usize,
         fast_body_cannot_collect: false,
@@ -1232,7 +1267,17 @@ pub(crate) fn lower_loop(
     close_bound_scope(ctx, t);
     ctx.current_block = plain;
     note(ctx, Route::RloopPlain);
+    let element_body =
+        pending.receivers.is_empty() && pending.inner.is_some() && !pending.arrays.is_empty();
+    if element_body {
+        PLAIN_ELEMENT_BODIES.with(|stack| stack.borrow_mut().push(pending.body_ptr));
+    }
     let r = lower(ctx);
+    if element_body {
+        PLAIN_ELEMENT_BODIES.with(|stack| {
+            assert_eq!(stack.borrow_mut().pop(), Some(pending.body_ptr));
+        });
+    }
     ctx.region_loops.push(pending);
     r?;
     if !ctx.block().is_terminated() {
@@ -1277,6 +1322,21 @@ fn close_bound_scope(ctx: &mut FnCtx<'_>, token: u64) {
 /// [`lower_loop`] unregisters it while it lowers the plain copy.
 pub(crate) fn is_registered(ctx: &FnCtx<'_>, token: u64) -> bool {
     ctx.region_loops.iter().any(|p| p.token == token)
+}
+
+/// An array-prefix region with one shared per-element receiver tail. These
+/// regions already own a plain loop, so counter range admission belongs in
+/// that same entry decision rather than another pair of loop copies.
+pub(crate) fn element_entry_slot(ctx: &FnCtx<'_>, token: u64) -> Option<String> {
+    let p = ctx.region_loops.iter().find(|p| p.token == token)?;
+    (p.receivers.is_empty()
+        && p.inner.is_some()
+        && !p.arrays.is_empty()
+        && p.arrays
+            .iter()
+            .all(|a| !a.store && !a.dense && a.view.is_none()))
+    .then(|| p.valid_slot.clone())
+    .flatten()
 }
 
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
@@ -1325,6 +1385,9 @@ pub(crate) fn lower_split(
     lower_list: fn(&mut FnCtx<'_>, &[Stmt]) -> Result<()>,
 ) -> Result<()> {
     ctx.region_loops[idx].fast_body_cannot_collect = false;
+    if shared_element_tail::lower(ctx, stmts, idx, lower_list)? {
+        return Ok(());
+    }
     let split_at = ctx.region_loops[idx].split_at;
     let token = ctx.region_loops[idx].token;
     if split_at > 0 {
@@ -1371,15 +1434,26 @@ pub(crate) fn lower_split(
     let arrs = ctx.region_loops[idx].arrays.clone();
     let view_index = ctx.region_loops[idx].view_index.clone();
     let dirty_after = ctx.region_loops[idx].dirty_after.clone();
+    for rv in &mut receivers {
+        guard::nominate_static_supplier(ctx, rv, &[]);
+    }
+    let static_direct = valid_slot.is_none()
+        && inner.is_none()
+        && arrs.is_empty()
+        && receivers.len() == 1
+        && !receivers[0].has_store
+        && !receivers[0].inherited
+        && receivers[0].static_slots.is_some();
     // The layouts F-body must serve: a loop region's split copy was chosen by
     // its preheader (one layout); a body region chooses per iteration, so it
     // carries the all-inline copy and, unless every key it names is stored
     // (then no spill word is ever published), the spill-reading copy.
     let modes: Vec<bool> = if valid_slot.is_some() {
         vec![ctx.region_loops[idx].spill_mode]
-    } else if receivers
-        .iter()
-        .any(|r| r.stored_mask != (1u32 << r.keys.len()) - 1)
+    } else if !receivers.iter().all(|r| r.static_slots.is_some())
+        && receivers
+            .iter()
+            .any(|r| r.stored_mask != (1u32 << r.keys.len()) - 1)
     {
         vec![false, true]
     } else {
@@ -1474,8 +1548,13 @@ pub(crate) fn lower_split(
                 decide = (rc_idx, ok);
             }
         }
+        None if static_direct => {
+            stat(1, 1);
+            decide = (ctx.current_block, String::new());
+        }
         None if receivers.len() == 1
             && !receivers[0].inherited
+            && planned_number_locals.is_empty()
             && !has_static_supplier(ctx, &receivers[0]) =>
         {
             // Body region, one receiver with no static supplier: load the
@@ -1514,8 +1593,8 @@ pub(crate) fn lower_split(
         }
     }
 
-    let (number_locals, entry_tests) = if valid_slot.is_some() {
-        (planned_number_locals, planned_entry_tests)
+    let (mut number_locals, mut entry_tests) = if valid_slot.is_some() {
+        (planned_number_locals.clone(), planned_entry_tests)
     } else {
         // Only a body region gets here: it has no loop control of its own,
         // and its tests run at the split on every entry.
@@ -1530,7 +1609,20 @@ pub(crate) fn lower_split(
             &declared_locals,
         )
     };
-    if valid_slot.is_none() && direct.is_none() && !entry_tests.is_empty() {
+    if valid_slot.is_none() && !planned_number_locals.is_empty() {
+        let parent = parent_valid
+            .as_ref()
+            .expect("shared Number facts have a parent");
+        if !static_direct {
+            let admitted = ctx.block().load(I1, parent);
+            decide.1 = ctx.block().and(I1, &decide.1, &admitted);
+        }
+        entry_tests.retain(|id| !planned_number_locals.contains(id));
+        number_locals.extend(planned_number_locals);
+        number_locals.sort_unstable();
+        number_locals.dedup();
+    }
+    if valid_slot.is_none() && direct.is_none() && !static_direct && !entry_tests.is_empty() {
         let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
         decide.1 = ctx.block().and(I1, &decide.1, &number_ok);
     }
@@ -1686,7 +1778,19 @@ pub(crate) fn lower_split(
         }
     }
     ctx.current_block = decide.0;
-    if let Some((sites, word)) = &direct {
+    if static_direct {
+        let target = if ok { &fast_l } else { &slow_l };
+        guard::emit_static_body_guard_direct(
+            ctx,
+            &receivers[0],
+            (!number_locals.is_empty())
+                .then_some(parent_valid.as_deref())
+                .flatten(),
+            &entry_tests,
+            target,
+            &slow_l,
+        )?;
+    } else if let Some((sites, word)) = &direct {
         let inline_t = if copies[0].1 {
             copies[0].0.clone()
         } else {

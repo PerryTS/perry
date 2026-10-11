@@ -5,6 +5,9 @@
 #[path = "ptr_shape_region_report_tests.rs"]
 mod ptr_shape_region_report_tests;
 
+#[path = "objarray_region_tests.rs"]
+mod objarray_region_tests;
+
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{
