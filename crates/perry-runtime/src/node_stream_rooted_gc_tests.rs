@@ -688,3 +688,94 @@ fn settling_a_pending_promise_rereads_it_after_a_collecting_job() {
         "the pending promise handed back must be the live promise"
     );
 }
+
+unsafe extern "C" fn record_once_arguments(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
+) -> f64 {
+    let args = std::slice::from_raw_parts(args, argc);
+    RECORDED_CALLS.with(|seen| {
+        seen.borrow_mut().extend(
+            args.iter()
+                .map(|arg| (this.as_f64().to_bits(), arg.to_bits())),
+        );
+    });
+    undefined()
+}
+
+extern "C" fn collecting_remove_listener(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _event: f64,
+    _listener: f64,
+) -> f64 {
+    collect_once();
+    undefined()
+}
+
+#[test]
+fn once_native_arguments_survive_a_collecting_remove_listener_override() {
+    // Exercise the inline-root and heap-root arms, and a direct raw-wrapper
+    // call: emit's argument roots cannot hide an unrooted wrapper argument.
+    for argc in [1, 9] {
+        let _gc = moving_gc();
+        let scope = RuntimeHandleScope::new();
+        // This test exercises the wrapper, without depending on the realm's
+        // native-export bootstrap or its shared prototype roots.
+        let emitter = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc_null_proto(0, 3)));
+        init_event_emitter_state(emitter.get_nanbox_f64());
+        let callback = closure_value(crate::fn_info!(native_args record_once_arguments, 0));
+        js_node_stream_method_once(
+            raw_ptr_from_value(emitter.get_nanbox_f64()) as i64,
+            literal_string_value(b"x"),
+            callback,
+        );
+        let raw = js_node_stream_method_raw_listeners(
+            raw_ptr_from_value(emitter.get_nanbox_f64()) as i64,
+            literal_string_value(b"x"),
+        );
+        let wrapper = scope.root_nanbox_f64(crate::array::js_array_get_f64(
+            raw as *const crate::array::ArrayHeader,
+            0,
+        ));
+        let removal = closure_value(crate::fn_info!(collecting_remove_listener, 2));
+        crate::object::js_object_set_field_by_name(
+            raw_ptr_from_value(emitter.get_nanbox_f64()) as *mut crate::object::ObjectHeader,
+            hidden_key(b"removeListener"),
+            removal,
+        );
+        let handles = (0..argc)
+            .map(|_| scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 1))))
+            .collect::<Vec<_>>();
+        let before = handles
+            .iter()
+            .map(|h| h.get_nanbox_f64())
+            .collect::<Vec<_>>();
+        unsafe {
+            crate::closure::native_call_value_this(
+                wrapper.get_nanbox_f64(),
+                crate::closure::JsThis::from_f64(undefined()),
+                before.as_ptr(),
+                before.len(),
+            );
+        }
+        let after = handles
+            .iter()
+            .map(|h| h.get_nanbox_f64().to_bits())
+            .collect::<Vec<_>>();
+        assert_all_moved(
+            &before.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            &after,
+        );
+        assert_eq!(
+            RECORDED_CALLS.with(|seen| seen.borrow().clone()),
+            after
+                .iter()
+                .map(|v| (emitter.get_nanbox_f64().to_bits(), *v))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(COLLECTIONS.with(Cell::get), 1);
+    }
+}

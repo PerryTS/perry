@@ -57,7 +57,7 @@ impl OwnSlotMemo {
         }
     }
 
-    /// The memo's inline slot for `obj`, when `obj`'s word was primed.
+    /// The memo's storage position for `obj`, when its word was primed.
     ///
     /// # Safety
     /// `obj` is a live, unforwarded ordinary `ObjectHeader`.
@@ -71,14 +71,15 @@ impl OwnSlotMemo {
             .map(|way| way.slot)
     }
 
-    /// Record that the memo's name is an own plain data property at inline
-    /// slot `slot` of `obj`'s shape. A receiver whose stamp is not an
+    /// Record that the memo's name is an own plain data property at
+    /// position `slot` of `obj`'s shape. A caller may encode the storage kind
+    /// in this word when the shape pins the inline bound. A receiver whose stamp is not an
     /// ordinary-band ShapeId (unstamped, dictionary) is not recorded.
     ///
     /// # Safety
     /// `obj` is a live ordinary `ObjectHeader`, and the caller proved from
     /// its shape's own key list (no accessor, no attribute on the key) that
-    /// the name is own data at inline slot `slot`.
+    /// the name is own data at the position represented by `slot`.
     pub(crate) unsafe fn prime(&self, obj: *const ObjectHeader, slot: u32) {
         if !crate::object::shapes::is_site_matchable_shape_id((*obj).parent_class_id) {
             return;

@@ -679,10 +679,10 @@ fn adjust_events_count(target: f64, delta: f64) -> f64 {
     // An own plain `_eventsCount` (every emitter's): read and write its slot.
     if let Some((obj, slot, flags)) = state_slot(target, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY) {
         if flags & crate::gc::OBJ_FLAG_FROZEN == 0 {
-            // SAFETY: `state_slot` resolved the key's own inline data slot on
+            // SAFETY: `state_slot` resolved the key's own data position on
             // the live object; nothing below allocates.
-            let count = number_of(f64::from_bits(unsafe { slot_bits(obj, slot) })) + delta;
-            unsafe { crate::object::store_object_field_slot(obj, slot as usize, count.to_bits()) };
+            let count = number_of(f64::from_bits(unsafe { state_bits(obj, slot) })) + delta;
+            unsafe { state_store(obj, slot, count.to_bits()) };
             return count;
         }
     }
@@ -828,10 +828,11 @@ fn unwrap_listener(listener: f64) -> f64 {
 
 /// The body of node's `onceWrapper`: captures `[target, type, listener,
 /// fired]`; the first call removes the wrapper and forwards to the listener.
-extern "C" fn ns_once_wrapper(
+unsafe extern "C" fn ns_once_wrapper(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
-    rest: f64,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
     if closure.is_null() {
         return undefined_value();
@@ -844,18 +845,14 @@ extern "C" fn ns_once_wrapper(
     let target = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
     let event = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 1));
     let listener = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 2));
-    let args = {
-        let arr = super::raw_ptr_from_value(rest) as *const crate::array::ArrayHeader;
-        let len = if arr.is_null() || !is_array_value(rest) {
-            0
-        } else {
-            crate::array::js_array_length(arr)
-        };
-        (0..len)
-            .map(|i| crate::array::js_array_get_f64(arr, i))
-            .collect::<Vec<f64>>()
+    // The native argument ABI supplies the values directly. Root before
+    // removeListener: its override may run JS and move every argument.
+    let args = if argc == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args, argc)
     };
-    let arg_handles = scope.root_nanbox_f64_slice(&args);
+    let arg_handles = RootedArgs::new(&scope, args);
     let removal = [event.get_nanbox_f64(), wrapper.get_nanbox_f64()];
     if call_method(
         target.get_nanbox_f64(),
@@ -872,18 +869,17 @@ extern "C" fn ns_once_wrapper(
     }
     let wrapper_ptr = super::raw_ptr_from_value(wrapper.get_nanbox_f64()) as *mut ClosureHeader;
     js_closure_set_capture_f64(wrapper_ptr, 3, f64::from_bits(super::TAG_TRUE));
-    let live_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     if !is_callable_value(listener.get_nanbox_f64()) {
         return undefined_value();
     }
-    unsafe {
+    arg_handles.with_live(|live_args| {
         crate::closure::native_call_value_this(
             listener.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(target.get_nanbox_f64()),
             live_args.as_ptr(),
             live_args.len(),
         )
-    }
+    })
 }
 
 /// node's `_onceWrap(target, type, listener)`.
@@ -892,7 +888,7 @@ fn once_wrap(target: f64, event: f64, listener: f64) -> f64 {
     let target = scope.root_nanbox_f64(target);
     let event = scope.root_nanbox_f64(event);
     let listener = scope.root_nanbox_f64(listener);
-    let wrapper = js_closure_alloc(crate::fn_info!(ns_once_wrapper, 1; with_rest(0)), 4);
+    let wrapper = js_closure_alloc(crate::fn_info!(native_args ns_once_wrapper, 0), 4);
     js_closure_set_capture_f64(wrapper, 0, target.get_nanbox_f64());
     js_closure_set_capture_f64(wrapper, 1, event.get_nanbox_f64());
     js_closure_set_capture_f64(wrapper, 2, listener.get_nanbox_f64());
@@ -939,6 +935,19 @@ fn add_stream_listener_for_event_with_options(
         cb.get_nanbox_f64()
     };
     let stored = scope.root_nanbox_f64(stored);
+    // A once wrapper is an ordinary callable once constructed. The same
+    // first-listener operation applies; its meta-event guard preserves the
+    // slow path's announcement of the original listener.
+    if once
+        && add_first_listener_fast(
+            target.get_nanbox_f64(),
+            event.get_nanbox_f64(),
+            stored.get_nanbox_f64(),
+        )
+    {
+        listener_added(target.get_nanbox_f64(), event.get_nanbox_f64());
+        return;
+    }
 
     let events = match events_of(target.get_nanbox_f64()) {
         None => {

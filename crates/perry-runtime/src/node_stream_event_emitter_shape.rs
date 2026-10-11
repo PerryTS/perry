@@ -179,9 +179,9 @@ thread_local! {
 pub(super) type StateMemo =
     std::thread::LocalKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
 
-/// The inline slot of the state key `memo` remembers on `target`, priming
+/// The storage position of the state key `memo` remembers on `target`, priming
 /// the memo from the shape's own key list on a miss. `None` when `target`'s
-/// shape does not hold the key as own plain inline data.
+/// shape does not hold the key as own plain data.
 pub(super) fn state_slot(
     target: f64,
     memo: &'static StateMemo,
@@ -204,18 +204,64 @@ pub(super) fn state_slot_in(
         Some(slot) => slot,
         None => {
             let (own, slot, live) = own_data_slot(target, name)??;
-            if own as usize != obj as usize || slot >= live {
+            if own as usize != obj as usize {
                 return None;
             }
-            // SAFETY: `own_data_slot` proved `name` own plain data at inline
-            // slot `slot` of the object's shape.
+            let slot = if slot >= live {
+                slot | STATE_SPILL
+            } else {
+                slot
+            };
+            // SAFETY: `own_data_slot` proved the plain data position; the
+            // shape also pins whether it resides inline or in spill storage.
             memo.with(|memo| unsafe { memo.prime(obj, slot) });
             slot
         }
     };
-    // SAFETY: the memo's word (or the proof above) pins `slot` as an inline
-    // slot of this object's shape.
-    (unsafe { slot_bits(obj, slot) } != crate::value::TAG_HOLE).then_some(slot)
+    #[cfg(test)]
+    if slot & STATE_SPILL != 0 && std::env::var_os("PERRY_TEST_EMITTER_INLINE_ONLY").is_some() {
+        return None;
+    }
+    // A spill overwrite must remain a non-collecting leaf. Refuse legacy
+    // overflow storage and unmaterialized positions before admitting it.
+    if slot & STATE_SPILL != 0
+        && (!crate::object::object_spill_enabled()
+            || !crate::object::spill_store_would_be_in_capacity(
+                obj as usize,
+                (slot & !STATE_SPILL) as usize,
+            )
+            || crate::object::overflow_get(obj as usize, (slot & !STATE_SPILL) as usize).is_none())
+    {
+        return None;
+    }
+    // SAFETY: the shape proof pins this storage position.
+    (unsafe { state_bits(obj, slot) } != crate::value::TAG_HOLE).then_some(slot)
+}
+
+// Reuse the holder representation: the shape word pins both the position
+// and its storage kind. No pointer or additional memo is retained.
+const STATE_SPILL: u32 = crate::codegen_abi::PIC_HOLDER_SLOT_SPILL_BIT as u32;
+
+/// Read a position returned by `state_slot_in`, without allocation.
+#[inline]
+pub(super) unsafe fn state_bits(obj: *const crate::object::ObjectHeader, slot: u32) -> u64 {
+    if slot & STATE_SPILL != 0 {
+        crate::object::overflow_get(obj as usize, (slot & !STATE_SPILL) as usize)
+            .unwrap_or(crate::value::TAG_UNDEFINED)
+    } else {
+        slot_bits(obj, slot)
+    }
+}
+
+/// Overwrite a position returned by `state_slot_in`, with no intervening
+/// allocation. Spill admission proved its existing buffer has capacity.
+#[inline]
+pub(super) unsafe fn state_store(obj: *mut crate::object::ObjectHeader, slot: u32, bits: u64) {
+    if slot & STATE_SPILL != 0 {
+        crate::object::overflow_set(obj as usize, (slot & !STATE_SPILL) as usize, bits);
+    } else {
+        crate::object::store_object_field_slot(obj, slot as usize, bits);
+    }
 }
 
 /// One of the emitter state keys of `target` (`_events`, `_eventsCount`,
@@ -301,13 +347,13 @@ struct EmitterView {
 /// listener named `meta` (`newListener` / `removeListener`).
 fn emitter_view(target: f64, meta: &[u8]) -> Option<EmitterView> {
     let (obj, flags) = ordinary_object(target)?;
-    if flags & ADD_REFUSING_FLAGS != 0 {
+    if flags & (ADD_REFUSING_FLAGS & !crate::gc::OBJ_FLAG_HAS_DESCRIPTORS) != 0 {
         return None;
     }
     let events_slot = state_slot_in(target, obj, &EVENTS_SLOT, EVENTS_KEY)?;
     let count_slot = state_slot_in(target, obj, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY)?;
     // SAFETY: the memo resolved the slot on the live object.
-    let events = f64::from_bits(unsafe { slot_bits(obj, events_slot) });
+    let events = f64::from_bits(unsafe { state_bits(obj, events_slot) });
     let (events_obj, events_flags) = ordinary_object(events)?;
     if events_flags & ADD_REFUSING_FLAGS != 0
         || !null_prototype(events_obj, events_flags)
@@ -354,13 +400,7 @@ fn meta_event_absent(events: *mut crate::object::ObjectHeader, flags: u16, meta:
 /// `this._eventsCount = n` on a validated emitter.
 fn store_count(view: &EmitterView, count: f64) {
     // SAFETY: the count slot is an own plain data slot of the live emitter.
-    unsafe {
-        crate::object::store_object_field_slot(
-            view.target.0,
-            view.count_slot as usize,
-            count.to_bits(),
-        )
-    };
+    unsafe { state_store(view.target.0, view.count_slot, count.to_bits()) };
 }
 
 /// node's `_addListener(target, type, listener, prepend)` when `type` has no
@@ -394,7 +434,7 @@ pub(super) fn add_first_listener_fast(target: f64, event: f64, listener: f64) ->
     };
     // SAFETY: the emitter's count slot, read before anything can allocate.
     let count = number_of(f64::from_bits(unsafe {
-        slot_bits(view.target.0, view.count_slot)
+        state_bits(view.target.0, view.count_slot)
     }));
     if count.is_nan() {
         return false;
@@ -426,8 +466,8 @@ unsafe fn string_is_interned(key: *const crate::StringHeader) -> bool {
 }
 
 /// node's `removeListener(type, listener)` when `type`'s one listener is
-/// `listener` itself and another event keeps the emitter's map:
-/// `--this._eventsCount; delete events[type]`.
+/// `listener` itself: decrement the count, then reset an empty map or
+/// delete the key while another event keeps the map.
 pub(super) fn remove_only_listener_fast(target: f64, event: f64, listener: f64) -> bool {
     let Some(view) = emitter_view(target, b"removeListener") else {
         return false;
@@ -444,13 +484,20 @@ pub(super) fn remove_only_listener_fast(target: f64, event: f64, listener: f64) 
     let (list, count) = unsafe {
         (
             slot_bits(events_obj, slot),
-            number_of(f64::from_bits(slot_bits(view.target.0, view.count_slot))),
+            number_of(f64::from_bits(state_bits(view.target.0, view.count_slot))),
         )
     };
-    if list != listener.to_bits() || !(count > 1.0) {
+    if list != listener.to_bits() || !(count >= 1.0) {
         return false;
     }
     store_count(&view, count - 1.0);
+    if count == 1.0 {
+        // No removeListener callback can observe the reset (emitter_view
+        // proved it absent). Root before the fresh map can collect, and
+        // never reuse this view's raw pointers after that allocation.
+        reset_events(target);
+        return true;
+    }
     // `delete events[type]`: the last-added key's rollback when it is one
     // (`object::delete_last_key`), else the full delete. Nothing reads the
     // emitter after it.
@@ -470,7 +517,7 @@ pub(super) fn listeners_of_fast(target: f64, event: f64) -> Option<f64> {
     let (obj, _) = ordinary_object(target)?;
     let events_slot = state_slot_in(target, obj, &EVENTS_SLOT, EVENTS_KEY)?;
     // SAFETY: the memo resolved the slot on the live object.
-    let events = f64::from_bits(unsafe { slot_bits(obj, events_slot) });
+    let events = f64::from_bits(unsafe { state_bits(obj, events_slot) });
     let (events_obj, events_flags) = ordinary_object(events)?;
     let key_bits = event.to_bits();
     match with_string_bytes(event, |bytes| {
@@ -502,8 +549,8 @@ pub(super) fn reset_events_fast(target: f64, events: f64) -> bool {
     // SAFETY: own plain data slots of the live emitter; the funnel checks
     // the representation and runs the barrier.
     unsafe {
-        crate::object::store_object_field_slot(obj, events_slot as usize, events.to_bits());
-        crate::object::store_object_field_slot(obj, count_slot as usize, 0f64.to_bits());
+        state_store(obj, events_slot, events.to_bits());
+        state_store(obj, count_slot, 0f64.to_bits());
     }
     true
 }
@@ -511,6 +558,87 @@ pub(super) fn reset_events_fast(target: f64, events: f64) -> bool {
 #[cfg(test)]
 mod method_body_tests {
     use super::*;
+
+    #[test]
+    fn emitter_operations_use_spilled_state_despite_unrelated_attributes() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let target = crate::node_stream::js_node_stream_readable_new(undefined_value());
+        init_event_emitter_state(target);
+        let (obj, _, _) = state_slot(target, &EVENTS_SLOT, EVENTS_KEY).unwrap();
+        assert!(unsafe { crate::object::object_live_slot_count(obj) } <= 2);
+        let events = new_events_object();
+        assert!(reset_events_fast(target, events));
+        assert_eq!(
+            state_get(target, crate::runtime_state_key!(EVENTS_KEY)).to_bits(),
+            events.to_bits()
+        );
+        assert_eq!(
+            state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
+            0.0
+        );
+        // A scalar suffices to test the storage operation; the public add
+        // operation validates callability before entering this helper.
+        let event = name_key(b"x");
+        // The existing key-add helper handles learned transitions only.
+        // Warm its edge on another map, as the public slow path does.
+        set_key(new_events_object(), event, 17.0);
+        assert!(add_first_listener_fast(target, event, 17.0));
+        assert_eq!(
+            state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
+            1.0
+        );
+        assert_eq!(get_key(events, event), 17.0);
+        assert!(remove_only_listener_fast(target, event, 17.0));
+        assert_eq!(
+            state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
+            0.0
+        );
+        assert_ne!(
+            state_get(target, crate::runtime_state_key!(EVENTS_KEY)).to_bits(),
+            events.to_bits()
+        );
+        assert_eq!(
+            get_key(events, event),
+            17.0,
+            "reset preserves a retained old map"
+        );
+        assert!(add_first_listener_fast(target, event, 17.0));
+        // A memo hit must stop answering after this key's attributes change.
+        let descriptor = crate::object::js_object_alloc(0, 2);
+        let descriptor = crate::value::js_nanbox_pointer(descriptor as i64);
+        set_named(
+            descriptor,
+            crate::runtime_state_key!(b"writable"),
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        crate::object::js_object_define_property(target, name_key(EVENTS_COUNT_KEY), descriptor);
+        assert!(state_slot(target, &EVENTS_COUNT_SLOT, EVENTS_COUNT_KEY).is_none());
+        assert!(!reset_events_fast(target, new_events_object()));
+        assert_eq!(
+            state_get(target, crate::runtime_state_key!(EVENTS_COUNT_KEY)),
+            1.0
+        );
+    }
+
+    #[test]
+    fn spill_refusal_negative_control_rejects_the_storage_witness() {
+        let test = "node_stream::event_emitter::shape::method_body_tests::emitter_operations_use_spilled_state_despite_unrelated_attributes";
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("PERRY_TEST_EMITTER_INLINE_ONLY", "1")
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "the inline-only mutation must fail the spill witness"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("FAILED"),
+            "the witness must run and fail: {stdout}"
+        );
+    }
 
     #[test]
     fn method_fast_dispatch_follows_the_resolved_body_for_aliases_and_overrides() {
