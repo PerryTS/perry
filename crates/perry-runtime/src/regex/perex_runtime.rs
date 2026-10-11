@@ -546,13 +546,10 @@ pub(crate) fn find_near_into<'mem, S: ImmutableSubject<Error = OwnerError>>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(Option<Span>, Option<Position>), EngineError> {
     begin(quantum, poll)?;
-    let registers = program
-        .with_view(|program| program.register_count())
-        .map_err(EngineError::Program)?;
     search(
         &BoundResources { program, subject },
         &(),
-        registers,
+        None,
         start,
         near,
         follows,
@@ -632,7 +629,7 @@ pub(crate) fn find_in_place<'mem>(
             subject: &subject,
         },
         &place,
-        registers,
+        Some(registers),
         start,
         near,
         hint,
@@ -964,7 +961,7 @@ where
 fn search<'mem, P, S, H>(
     resources: &BoundResources<'_, P, S>,
     hooks: &H,
-    registers: usize,
+    registers: Option<usize>,
     start: usize,
     near: Option<Position>,
     follows: bool,
@@ -1005,6 +1002,12 @@ where
         },
         Bounds::Declined => (start, None),
     };
+    // The lazy automaton answers bounds without evaluator registers.
+    // Acquire their count only if this search actually reaches evaluation.
+    let registers = match registers {
+        Some(registers) => registers,
+        None => evaluator_register_count(resources.program)?,
+    };
     let (found, position) = evaluate(
         resources, hooks, registers, start, near, mode, budget, memory, quantum, captures, poll,
     )?;
@@ -1013,6 +1016,22 @@ where
         "the evaluator from the automaton's start found another match"
     );
     Ok((found, Some(position)))
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static EVALUATOR_METADATA_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn evaluator_register_count<P: CellProgram>(program: &BoundProgram<P>) -> Result<usize, EngineError>
+where
+    P::Error: HostResourceError,
+{
+    #[cfg(test)]
+    EVALUATOR_METADATA_READS.with(|n| n.set(n.get() + 1));
+    program
+        .with_view(|program| program.register_count())
+        .map_err(|error| EngineError::Program(program_error(error)))
 }
 
 /// The evaluator's search: lent scratch first, owned buffers when the lent

@@ -71,14 +71,18 @@ impl Drop for DisableDirectReplaceForTest {
 /// Whether this replacement may skip exec result objects and `lastIndex`
 /// traffic. Non-observable: the brand and `exec` are shape proofs, the name
 /// count is the program's, and `lastIndex` is an own data property.
-pub(super) fn admissible(receiver: &RuntimeHandle<'_>, reuse: &Reuse<'_, '_>) -> bool {
+pub(super) fn admissible(
+    receiver: &RuntimeHandle<'_>,
+    reuse: &Reuse<'_, '_>,
+    builtin: bool,
+) -> bool {
     #[cfg(test)]
     if DIRECT_DISABLED.with(std::cell::Cell::get) {
         return false;
     }
     let value = receiver.get_nanbox_f64();
     let re = crate::value::js_nanbox_get_pointer(value) as *const RegExpHeader;
-    crate::object::regex_read_sites::builtin_behavior(value)
+    (builtin || crate::object::regex_read_sites::builtin_behavior(value))
         && reuse.name_count(re) == Some(0)
         && JSValue::from_bits(crate::regex::get_last_index(re).to_bits()).is_number()
 }
@@ -158,7 +162,14 @@ pub(super) fn replace(
         .capture_count()
         .ok_or(EngineError::InvalidSpan)?
         .saturating_sub(1);
-    let tokens = template.map(|t| parse(t, groups, false)).transpose()?;
+    // A capture-bearing template must be inspected to choose the search's
+    // capture mode. Without captures, GetSubstitution needs no preparation
+    // until a match exists.
+    let mut tokens = if groups > 0 {
+        template.map(|t| parse(t, groups, false)).transpose()?
+    } else {
+        None
+    };
     // Captures are produced only when something reads them: a replacer
     // receives them all, a template only those it names. Otherwise the
     // search needs the match bounds alone, which the automaton answers.
@@ -248,6 +259,9 @@ pub(super) fn replace(
     }
     if spans.values.is_empty() {
         return Ok(boxed(input));
+    }
+    if tokens.is_none() {
+        tokens = template.map(|t| parse(t, groups, false)).transpose()?;
     }
     let mut subject_text = Text::new(bound)?;
     let bytes = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).byte_len as usize });
@@ -342,4 +356,14 @@ pub(super) fn replace(
         output.span(&mut subject_text, next_source, input_length, budget)?;
     }
     output.finish()
+}
+
+#[cfg(test)]
+pub(crate) fn template_parse_calls() -> usize {
+    super::perex_substitution::parse_calls()
+}
+
+#[cfg(test)]
+pub(crate) fn literal_heap_buffers() -> usize {
+    super::perex_literal_search::heap_buffers()
 }

@@ -5398,6 +5398,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "simdutf8",
+ "smallvec",
  "socket2",
  "taffy",
  "temporal_rs",

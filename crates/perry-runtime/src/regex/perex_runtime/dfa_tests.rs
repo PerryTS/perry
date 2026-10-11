@@ -174,3 +174,19 @@ fn only_eligible_programs_carry_a_cache() {
         }
     }
 }
+
+#[test]
+fn dfa_decisions_do_not_acquire_evaluator_metadata() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let before = EVALUATOR_METADATA_READS.with(std::cell::Cell::get);
+    let answered = DFA_ANSWERS.with(std::cell::Cell::get);
+    for subject in ["abcdefgh", "abc+def"] {
+        let (automaton, evaluator) = both("\\+", "g", subject, 0, CaptureMode::Full);
+        assert_eq!(automaton, evaluator);
+    }
+    assert!(DFA_ANSWERS.with(std::cell::Cell::get) > answered);
+    assert_eq!(EVALUATOR_METADATA_READS.with(std::cell::Cell::get), before);
+    let (automaton, evaluator) = both("a(?=b)", "", "ab", 0, CaptureMode::Full);
+    assert_eq!(automaton, evaluator);
+    assert!(EVALUATOR_METADATA_READS.with(std::cell::Cell::get) > before);
+}

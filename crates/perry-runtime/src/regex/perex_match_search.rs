@@ -84,13 +84,24 @@ pub(super) fn subject(
 ///
 /// `js_regexp_new` stores `unicode` as `contains('u') || contains('v')`, which
 /// is exactly what `scan_flags` derives, so the two agree by construction.
+#[inline]
 pub(super) fn match_flags(
     receiver: &RuntimeHandle<'_>,
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
+    match_flags_proven(receiver, budget, false)
+}
+
+/// Reuse a complete receiver proof after the operation's coercions. The
+/// ordinary flag proof and observable Get remain this same algorithm.
+pub(super) fn match_flags_proven(
+    receiver: &RuntimeHandle<'_>,
+    budget: &mut Budget,
+    builtin: bool,
+) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
     if let Some(data) = crate::regex::regexp_data_of(value) {
-        if crate::object::regex_read_sites::flags(value) {
+        if builtin || crate::object::regex_read_sites::flags(value) {
             // The canonicality check neither collects nor calls user code.
             return Ok(unsafe { ((*data).global, (*data).unicode) });
         }

@@ -28,6 +28,15 @@ pub(super) enum Token {
     Named(usize, usize),
 }
 
+#[cfg(test)]
+crate::perry_thread_local! {
+    static PARSE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn parse_calls() -> usize {
+    PARSE_CALLS.with(std::cell::Cell::get)
+}
+
 /// Parse `template` (rooted heap string) for a match with `captures`
 /// capture groups (group zero excluded). `named` says the match has a groups
 /// object, so `$<name>` is a reference rather than literal text.
@@ -35,16 +44,22 @@ pub(super) fn parse(
     template: &RuntimeHandle<'_>,
     captures: usize,
     named: bool,
-) -> Result<Vec<Token>, EngineError> {
+) -> Result<smallvec::SmallVec<[Token; 4]>, EngineError> {
+    #[cfg(test)]
+    PARSE_CALLS.with(|n| n.set(n.get() + 1));
     // Binding proves the payload is well-formed WTF-8 (and marks it), the
     // condition for scanning and copying it as bytes.
     api::bind_heap_subject(*template)?;
     unsafe { template.with_string_bytes(|bytes| scan(bytes, captures, named)) }
 }
 
-fn scan(bytes: &[u8], captures: usize, named: bool) -> Result<Vec<Token>, EngineError> {
+fn scan(
+    bytes: &[u8],
+    captures: usize,
+    named: bool,
+) -> Result<smallvec::SmallVec<[Token; 4]>, EngineError> {
     let n = bytes.len();
-    let mut tokens = Vec::new();
+    let mut tokens = smallvec::SmallVec::new();
     let (mut i, mut literal) = (0, 0);
     let digit = |b: u8| b.is_ascii_digit().then(|| (b - b'0') as usize);
     while i < n {
@@ -207,4 +222,25 @@ fn name(
         units as u32,
         flags,
     ))
+}
+
+#[cfg(test)]
+mod short_tests {
+    use super::*;
+    #[test]
+    fn substitution_tokens_preserve_literals_captures_and_spill_order() {
+        let simple = scan(b"abc", 0, false).unwrap();
+        assert!(!simple.spilled());
+        assert!(matches!(simple.as_slice(), [Token::Literal(0, 3, 3)]));
+        let many = scan(b"$1-$2-$1-$2-$1-$2-$1-$2-$1", 2, false).unwrap();
+        assert!(many.spilled());
+        assert_eq!(many.len(), 17);
+        for (index, token) in many.iter().enumerate() {
+            if index % 2 == 0 {
+                assert!(matches!(token, Token::Capture(n) if *n == (index / 2) % 2 + 1));
+            } else {
+                assert!(matches!(token, Token::Literal(_, _, 1)));
+            }
+        }
+    }
 }

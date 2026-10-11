@@ -315,3 +315,115 @@ fn direct_match_spans_are_not_capped_by_the_scratch_limit() {
     assert!(output.iter().all(|&byte| byte == b'a'));
     assert_eq!(last, 0.0);
 }
+
+#[test]
+fn short_no_match_keeps_subject_and_defers_substitution_preparation() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::short_no_match_keeps_subject_and_defers_substitution_preparation",
+    ) {
+        return;
+    }
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, b"\\+", b"g");
+    let replacement = text(&scope, b"[$&]");
+    for source in [b"abcdefghi".as_slice(), vec![b'x'; 10000].as_slice()] {
+        let input = text(&scope, source);
+        put(&re, b"lastIndex", 5.0);
+        let before = crate::regex::perex_replace_direct::template_parse_calls();
+        let served = direct_replaces();
+        let result = crate::regex::js_string_replace_js(
+            input.get_nanbox_f64(),
+            re.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        assert!(
+            direct_replaces() > served,
+            "must exercise the builtin direct loop"
+        );
+        assert_eq!(result.to_bits(), input.get_nanbox_f64().to_bits());
+        assert_eq!(get(&re, b"lastIndex").to_bits(), 0.0f64.to_bits());
+        assert_eq!(
+            crate::regex::perex_replace_direct::template_parse_calls(),
+            before
+        );
+    }
+    let input = text(&scope, b"abcd+efghi");
+    let before = crate::regex::perex_replace_direct::template_parse_calls();
+    let result = crate::regex::js_string_replace_js(
+        input.get_nanbox_f64(),
+        re.get_nanbox_f64(),
+        replacement.get_nanbox_f64(),
+    );
+    assert_eq!(bytes(result), b"abcd[+]efghi");
+    assert_eq!(
+        crate::regex::perex_replace_direct::template_parse_calls(),
+        before + 1
+    );
+}
+
+#[test]
+fn short_literal_search_uses_inline_buffers_and_long_search_spills() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::short_literal_search_uses_inline_buffers_and_long_search_spills",
+    ) {
+        return;
+    }
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    for (source, pattern, expected, heap_buffers) in [
+        ("abc%5Bdef", "%5B", "abc_def", 0),
+        ("nomatch", "%5B", "nomatch", 0),
+        ("xabcdefghijklmnopqx", "abcdefghijklmnopq", "x_x", 2),
+    ] {
+        let input = text(&scope, source.as_bytes());
+        let pattern = text(&scope, pattern.as_bytes());
+        let replacement = text(&scope, b"_");
+        let before = crate::regex::perex_replace_direct::literal_heap_buffers();
+        let result = crate::regex::js_string_replace_js(
+            input.get_nanbox_f64(),
+            pattern.get_nanbox_f64(),
+            replacement.get_nanbox_f64(),
+        );
+        assert_eq!(bytes(result), expected.as_bytes());
+        assert_eq!(
+            crate::regex::perex_replace_direct::literal_heap_buffers() - before,
+            heap_buffers
+        );
+    }
+}
+
+#[test]
+fn own_exec_remains_observable_when_builtin_proof_declines() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::own_exec_remains_observable_when_builtin_proof_declines",
+    ) {
+        return;
+    }
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let re = regex(&scope, b"a", b"g");
+    put(&re, b"calls", 0.0);
+    let exec = captured(
+        &scope,
+        crate::fn_info!(counting_exec, 1; with_declared(1)),
+        &re,
+    );
+    put(&re, b"exec", exec.get_nanbox_f64());
+    let input = text(&scope, b"aa");
+    let replacement = text(&scope, b"X");
+    let result = crate::regex::js_string_replace_js(
+        input.get_nanbox_f64(),
+        re.get_nanbox_f64(),
+        replacement.get_nanbox_f64(),
+    );
+    assert_eq!(bytes(result), b"aa");
+    assert_eq!(get(&re, b"calls"), 1.0);
+    assert_eq!(get(&re, b"lastIndex"), 0.0);
+}

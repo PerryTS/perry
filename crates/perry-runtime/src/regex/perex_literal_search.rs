@@ -54,7 +54,10 @@ fn ascii_positions(
     budget: &mut Budget,
 ) -> Result<bool, EngineError> {
     let Some(needle) = pattern
-        .with_view(|p| p.ascii_bytes().map(<[u8]>::to_vec))
+        .with_view(|p| {
+            p.ascii_bytes()
+                .map(smallvec::SmallVec::<[u8; 16]>::from_slice)
+        })
         .map_err(EngineError::Subject)?
     else {
         return Ok(false);
@@ -65,6 +68,8 @@ fn ascii_positions(
     else {
         return Ok(false);
     };
+    #[cfg(test)]
+    ASCII_HEAP_BUFFERS.with(|n| n.set(n.get() + usize::from(needle.spilled())));
     let m = needle.len();
     if m == 0 {
         for i in 0..=n {
@@ -79,11 +84,13 @@ fn ascii_positions(
     if m > n {
         return Ok(true);
     }
-    let mut failure = Vec::new();
+    let mut failure = smallvec::SmallVec::<[usize; 16]>::new();
     failure
         .try_reserve_exact(m)
         .map_err(|_| super::perex_memory::StorageError::Allocation)?;
     failure.resize(m, 0usize);
+    #[cfg(test)]
+    ASCII_HEAP_BUFFERS.with(|n| n.set(n.get() + usize::from(failure.spilled())));
     let mut j = 0;
     for i in 1..m {
         while j > 0 && needle[i] != needle[j] {
@@ -218,4 +225,13 @@ pub(super) fn each_readers<S: Read, N: Read>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static ASCII_HEAP_BUFFERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(super) fn heap_buffers() -> usize {
+    ASCII_HEAP_BUFFERS.with(std::cell::Cell::get)
 }

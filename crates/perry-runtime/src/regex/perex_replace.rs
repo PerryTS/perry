@@ -72,13 +72,19 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     };
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let mut budget = Budget::new(api::WORK);
-    let (global, unicode) = super::perex_match_search::match_flags(&receiver, &mut budget)?;
+    // Coercions above may execute user code; prove the current receiver now.
+    // This one proof authorizes both the flags read and direct-loop admission.
+    // A builtin RegExp's nonconfigurable own lastIndex is data: its reset
+    // either stores without user code or throws, even when nonwritable.
+    let builtin = crate::object::regex_read_sites::builtin_behavior(receiver.get_nanbox_f64());
+    let (global, unicode) =
+        super::perex_match_search::match_flags_proven(&receiver, &mut budget, builtin)?;
     if global {
         dispatch::set_last_index(&receiver, 0.0)?;
     }
     let bound = subject(input)?;
     let reuse = api::Reuse::new(&scope, &receiver, input, &bound, &mut budget);
-    if super::perex_replace_direct::admissible(&receiver, &reuse) {
+    if super::perex_replace_direct::admissible(&receiver, &reuse, builtin) {
         return super::perex_replace_direct::replace(
             &scope,
             &receiver,

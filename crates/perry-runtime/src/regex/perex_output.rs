@@ -85,6 +85,21 @@ impl<'a, 's> Text<'a, 's> {
     }
 }
 
+#[cfg(test)]
+crate::perry_thread_local! {
+    static NATIVE_RELEASE_NOTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Only owned heap capacity participates in external-side accounting.
+#[inline]
+fn release_native_bytes(bytes: usize) {
+    if bytes != 0 {
+        #[cfg(test)]
+        NATIVE_RELEASE_NOTES.with(|n| n.set(n.get() + 1));
+        crate::gc::gc_note_external_side_free(bytes);
+    }
+}
+
 pub(super) struct Output {
     bytes: Vec<u8>,
     units: usize,
@@ -97,7 +112,7 @@ pub(super) struct Output {
 
 impl Drop for Output {
     fn drop(&mut self) {
-        crate::gc::gc_note_external_side_free(self.noted);
+        release_native_bytes(self.noted);
     }
 }
 
@@ -414,14 +429,14 @@ impl Output {
 /// where Node completes (#10164). The collector is told about them as
 /// external bytes, like other runtime side storage.
 pub(super) struct Offsets {
-    pub(super) values: Vec<u32>,
+    pub(super) values: smallvec::SmallVec<[u32; 16]>,
     noted: usize,
 }
 
 impl Offsets {
     pub(super) fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: smallvec::SmallVec::new(),
             noted: 0,
         }
     }
@@ -431,7 +446,11 @@ impl Offsets {
         self.values
             .try_reserve(more)
             .map_err(|_| StorageError::Allocation)?;
-        let bytes = self.values.capacity() * std::mem::size_of::<u32>();
+        let bytes = if self.values.spilled() {
+            self.values.capacity() * std::mem::size_of::<u32>()
+        } else {
+            0
+        };
         if bytes > self.noted {
             let grown = bytes - self.noted;
             self.noted = bytes;
@@ -452,6 +471,38 @@ impl Offsets {
 
 impl Drop for Offsets {
     fn drop(&mut self) {
-        crate::gc::gc_note_external_side_free(self.noted);
+        release_native_bytes(self.noted);
+    }
+}
+
+#[cfg(test)]
+mod short_offset_tests {
+    use super::*;
+    #[test]
+    fn zero_capacity_native_storage_sends_no_release_notification() {
+        let before = NATIVE_RELEASE_NOTES.with(std::cell::Cell::get);
+        drop(Offsets::new());
+        drop(Output::with_capacity(0).unwrap());
+        assert_eq!(NATIVE_RELEASE_NOTES.with(std::cell::Cell::get), before);
+        let mut offsets = Offsets::new();
+        for value in 0..17 {
+            offsets.push(value).unwrap();
+        }
+        drop(offsets);
+        assert_eq!(NATIVE_RELEASE_NOTES.with(std::cell::Cell::get), before + 1);
+    }
+
+    #[test]
+    fn inline_offsets_spill_without_losing_values_or_charging_stack_bytes() {
+        let mut offsets = Offsets::new();
+        for value in 0..16 {
+            offsets.push(value).unwrap();
+        }
+        assert!(!offsets.values.spilled());
+        assert_eq!(offsets.noted, 0);
+        offsets.push(16).unwrap();
+        assert!(offsets.values.spilled());
+        assert!(offsets.noted >= 17 * std::mem::size_of::<u32>());
+        assert_eq!(&offsets.values[..], &(0..17).collect::<Vec<u32>>()[..]);
     }
 }
