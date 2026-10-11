@@ -390,8 +390,8 @@ pub(crate) fn test_value(
 ) -> Result<bool, EngineError> {
     // ToString of a heap string is the identity: it cannot throw, allocate
     // or run user code. RegExpExec still validates the receiver and observes
-    // exec before entering the engine.
-    // SSO strings can allocate when materialized and retain the caught path.
+    // exec before entering the engine. SSO and other values use the shared
+    // conversion path, which roots materialized strings and rejects Symbols.
     let value = crate::value::JSValue::from_bits(argument.to_bits());
     if value.is_string() {
         return test_string(receiver, value.as_string_ptr());
@@ -402,16 +402,7 @@ pub(crate) fn test_value(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
-    let input = api::caught(|| {
-        let value = argument.get_nanbox_f64();
-        if crate::value::JSValue::from_bits(value.to_bits()).is_short_string() {
-            // Inline strings have no StringHeader. Materialization may
-            // collect, so it stays inside the caught, rooted window.
-            crate::string::js_string_materialize_to_heap(value)
-        } else {
-            crate::value::js_jsvalue_to_string_coerce(value)
-        }
-    })?;
+    let input = scope.root_string_ptr(to_string(&argument)?);
     // Nothing collects between the coercion's result and the search entry.
-    test_string(receiver.get_nanbox_f64(), input)
+    input.with_const_ptr::<StringHeader, _>(|input| test_string(receiver.get_nanbox_f64(), input))
 }

@@ -16,6 +16,210 @@ pub(super) fn string_payload(s: *const StringHeader) -> Vec<u8> {
     }
 }
 
+mod test_symbol_to_string {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    per_test_global! {
+        static LOOKUPS_SEEN_DURING_COERCION: AtomicUsize = AtomicUsize::new(usize::MAX);
+    }
+
+    extern "C" fn return_captured_value(
+        closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _hint: f64,
+    ) -> f64 {
+        unsafe { crate::closure::js_closure_get_capture_f64(closure, 0) }
+    }
+
+    extern "C" fn mark_coercion_and_return_x(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _hint: f64,
+    ) -> f64 {
+        crate::regex::perex_dispatch::EXEC_LOOKUPS.with(|lookups| {
+            LOOKUPS_SEEN_DURING_COERCION.store(lookups.get(), Ordering::SeqCst);
+        });
+        f64::from_bits(crate::value::JSValue::short_string_unchecked(b"x").bits())
+    }
+
+    extern "C" fn exec_returns_null(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _input: f64,
+    ) -> f64 {
+        f64::from_bits(crate::value::TAG_NULL)
+    }
+
+    fn receiver<'scope>(
+        scope: &'scope crate::gc::RuntimeHandleScope,
+    ) -> (crate::gc::RuntimeHandle<'scope>, f64) {
+        let regexp = scope.root_raw_mut_ptr(test_alloc_nursery_regexp_for_move("x", ""));
+        let value = regexp.with_mut_ptr::<RegExpHeader, _>(|regexp| {
+            crate::value::js_nanbox_pointer(regexp as i64)
+        });
+        (regexp, value)
+    }
+
+    fn install_to_primitive(object: f64, method: f64) {
+        let symbol = crate::symbol::well_known_symbol("toPrimitive");
+        let symbol = crate::value::js_nanbox_pointer(symbol as i64);
+        unsafe { crate::symbol::js_object_set_symbol_property(object, symbol, method) };
+    }
+
+    #[test]
+    fn test_value_rejects_symbol_arguments_and_symbol_primitive_results() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let (_regexp, receiver) = receiver(&scope);
+        let lookups_before = crate::regex::perex_dispatch::EXEC_LOOKUPS.with(|n| n.get());
+
+        let symbol = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new_empty() });
+        let result = crate::regex::perex_dispatch::test_value(
+            crate::closure::JsThis::from_f64(receiver),
+            receiver,
+            symbol.get_nanbox_f64(),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::regex::perex_runtime::EngineError::Type(
+                "Cannot convert a Symbol value to a string"
+            ))
+        ));
+
+        let returned_symbol_ptr = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(return_captured_value, 1; with_declared(1)),
+            1,
+        ));
+        let returned_symbol = returned_symbol_ptr
+            .with_const_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+                scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64))
+            });
+        returned_symbol_ptr.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+            crate::closure::js_closure_set_capture_f64(closure, 0, symbol.get_nanbox_f64());
+        });
+        let argument = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let argument_value = argument.with_mut_ptr::<ObjectHeader, _>(|argument| {
+            crate::value::js_nanbox_pointer(argument as i64)
+        });
+        install_to_primitive(argument_value, returned_symbol.get_nanbox_f64());
+
+        let result = crate::regex::perex_dispatch::test_value(
+            crate::closure::JsThis::from_f64(receiver),
+            receiver,
+            argument_value,
+        );
+        assert!(matches!(
+            result,
+            Err(crate::regex::perex_runtime::EngineError::Type(
+                "Cannot convert a Symbol value to a string"
+            ))
+        ));
+        assert_eq!(
+            crate::regex::perex_dispatch::EXEC_LOOKUPS.with(|n| n.get()),
+            lookups_before,
+            "a failing ToString must happen before RegExpExec looks up exec"
+        );
+    }
+
+    #[test]
+    fn test_value_converts_objects_before_exec_lookup() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let (regexp, receiver) = receiver(&scope);
+        let argument = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let argument_value = argument.with_mut_ptr::<ObjectHeader, _>(|argument| {
+            crate::value::js_nanbox_pointer(argument as i64)
+        });
+        let to_primitive_ptr = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(mark_coercion_and_return_x, 1; with_declared(1)),
+            0,
+        ));
+        let to_primitive =
+            to_primitive_ptr.with_const_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+                scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64))
+            });
+        install_to_primitive(argument_value, to_primitive.get_nanbox_f64());
+
+        let exec_ptr = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(exec_returns_null, 1; with_declared(1)),
+            0,
+        ));
+        let exec = exec_ptr.with_const_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(ptr as i64))
+        });
+        let exec_key = crate::string::intern_ascii_literal(b"exec");
+        regexp.with_mut_ptr::<RegExpHeader, _>(|regexp| {
+            crate::object::js_object_set_field_by_name(
+                regexp.cast::<ObjectHeader>(),
+                exec_key,
+                exec.get_nanbox_f64(),
+            );
+        });
+
+        let lookups_before = crate::regex::perex_dispatch::EXEC_LOOKUPS.with(|n| n.get());
+        LOOKUPS_SEEN_DURING_COERCION.store(usize::MAX, Ordering::SeqCst);
+        let result = crate::regex::perex_dispatch::test_value(
+            crate::closure::JsThis::from_f64(receiver),
+            receiver,
+            argument_value,
+        );
+        assert_eq!(result.unwrap(), false);
+        assert_eq!(
+            LOOKUPS_SEEN_DURING_COERCION.load(Ordering::SeqCst),
+            lookups_before,
+            "ToPrimitive must run before Get(R, \"exec\")"
+        );
+        assert_eq!(
+            crate::regex::perex_dispatch::EXEC_LOOKUPS.with(|n| n.get()),
+            lookups_before + 1
+        );
+    }
+
+    #[test]
+    fn test_value_keeps_heap_and_short_string_controls() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let (_regexp, receiver) = receiver(&scope);
+
+        let heap_match = scope.root_string_ptr(make_string("x"));
+        let result = heap_match.with_const_ptr::<StringHeader, _>(|input| {
+            crate::regex::perex_dispatch::test_value(
+                crate::closure::JsThis::from_f64(receiver),
+                receiver,
+                crate::value::js_nanbox_string(input as i64),
+            )
+        });
+        assert_eq!(result.unwrap(), true);
+
+        let short_match =
+            f64::from_bits(crate::value::JSValue::short_string_unchecked(b"x").bits());
+        assert_eq!(
+            crate::regex::perex_dispatch::test_value(
+                crate::closure::JsThis::from_f64(receiver),
+                receiver,
+                short_match,
+            )
+            .unwrap(),
+            true
+        );
+
+        let short_miss = f64::from_bits(crate::value::JSValue::short_string_unchecked(b"z").bits());
+        assert_eq!(
+            crate::regex::perex_dispatch::test_value(
+                crate::closure::JsThis::from_f64(receiver),
+                receiver,
+                short_miss,
+            )
+            .unwrap(),
+            false
+        );
+    }
+}
+
 #[test]
 fn regexp_is_an_ordinary_shaped_object_with_private_data() {
     let _lock = crate::gc::global_side_table_test_lock();
