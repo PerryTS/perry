@@ -76,40 +76,30 @@ pub(crate) unsafe fn mark_all_array_props(
     if !is_array_object(obj) {
         return false;
     }
-    // The first descriptor can grow the array to reserve its holder edge.
-    // Snapshot the property set before that growth leaves `arr` forwarded.
     let _no_move = crate::gc::GcSuppressScope::new();
     let arr = array_header_mut(obj);
-    let len = (*arr).length;
-    let names = crate::array::array_named_property_names(arr, false);
-    let gc = gc_header_for(arr.cast());
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-    let addr = arr as usize;
-    let apply = |key: String| {
-        let mut attrs =
-            super::get_property_attrs(addr, &key).unwrap_or(PropertyAttrs::new(true, true, true));
+    let flags = crate::gc::OBJ_FLAG_NO_EXTEND
+        | if drop_configurable {
+            crate::gc::OBJ_FLAG_SEALED
+        } else {
+            0
+        }
+        | if drop_writable {
+            crate::gc::OBJ_FLAG_FROZEN
+        } else {
+            0
+        };
+    (*gc_header_for(arr.cast()))._reserved |= flags;
+    let holder = crate::array::array_property_bag(arr);
+    if !holder.is_null() {
+        let value = crate::value::js_nanbox_pointer(holder as i64);
         if drop_writable {
-            attrs.bits &= !PropertyAttrs::WRITABLE;
+            js_object_freeze(value);
+        } else if drop_configurable {
+            js_object_seal(value);
+        } else {
+            js_object_prevent_extensions(value);
         }
-        if drop_configurable {
-            attrs.bits &= !PropertyAttrs::CONFIGURABLE;
-        }
-        super::set_property_attrs(addr, key, attrs);
-    };
-    // The array's own length is non-enumerable/non-configurable and freeze
-    // also makes it non-writable. Store that explicit override on the live owner.
-    if drop_writable {
-        super::set_property_attrs(
-            addr,
-            "length".to_string(),
-            PropertyAttrs::new(false, false, false),
-        );
-    }
-    for i in 0..len {
-        apply(i.to_string());
-    }
-    for name in names {
-        apply(name);
     }
     true
 }

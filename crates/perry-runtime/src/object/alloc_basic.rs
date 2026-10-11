@@ -161,6 +161,7 @@ pub(crate) fn object_alloc_branded(class_id: u32, brand: u64) -> *mut ObjectHead
         super::field_rep::REP_ANY,
         &[brand],
         None,
+        0,
     ));
     let object = owner.get_raw_mut_ptr::<ObjectHeader>();
     unsafe {

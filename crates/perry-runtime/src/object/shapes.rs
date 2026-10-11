@@ -165,6 +165,7 @@ pub(crate) struct ShapeDescriptor {
     /// mint a process-unique nonzero generation so two semantically different
     /// layouts can never compare equal merely because their keys/counts do.
     pub(crate) semantic_generation: u64,
+    pub(crate) integrity_flags: u16,
     /// The receiver's [[Prototype]] identity ([`object_proto_id`]): part of
     /// the shape's identity, so one ShapeId names one prototype.
     pub(crate) proto_id: u64,
@@ -1029,6 +1030,7 @@ impl PartialEq for ShapeDescriptor {
             && self.logical_key_count == other.logical_key_count
             && self.live_inline_slot_count == other.live_inline_slot_count
             && self.semantic_generation == other.semantic_generation
+            && self.integrity_flags == other.integrity_flags
             && self.proto_id == other.proto_id
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
@@ -1864,6 +1866,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
         rep,
         receiver.brands.as_slice(),
         requested,
+        receiver.integrity_flags,
     )
 }
 
@@ -1882,23 +1885,27 @@ pub(crate) fn shape_descriptor_find_with_rep(
     summary: u8,
     rep: u64,
     brands: &[u64],
+    integrity_flags: u16,
 ) -> Option<u32> {
     if !super::field_rep::is_valid(rep) {
         return None;
     }
     let keys_id = keys as usize as u64;
-    let facts = shapes_store::facts_key_proto_with_special(
-        keys_id,
-        logical_key_count,
-        live_inline_slot_count,
-        semantic_generation,
-        object_kind,
-        hole_count,
-        proto_id,
-        summary,
-        rep,
-        &[],
-        brands,
+    let facts = shapes_store::integrity_facts_key(
+        shapes_store::facts_key_proto_with_special(
+            keys_id,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind,
+            hole_count,
+            proto_id,
+            summary,
+            rep,
+            &[],
+            brands,
+        ),
+        integrity_flags,
     );
     let table = &crate::state::state().shapes;
     let inner = table.inner.borrow();
@@ -1909,6 +1916,7 @@ pub(crate) fn shape_descriptor_find_with_rep(
             // SAFETY: live slab record, read immediately.
             let record = unsafe { *record };
             record.has(RECORD_FLAG_FACTS_INDEXED)
+                && record.integrity_flags() == integrity_flags
                 && record.facts_match_proto_with_special(
                     keys_id,
                     logical_key_count,
@@ -1956,6 +1964,7 @@ pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKi
         &d.brands().to_vec(),
         // A twin re-kinds an existing record: never a static-id request.
         None,
+        d.integrity_flags,
     )
     .ok()
 }
@@ -1982,6 +1991,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     rep: u64,
     brands: &[u64],
     requested: Option<u32>,
+    integrity_flags: u16,
 ) -> Result<u32, ShapeDescriptorError> {
     if !super::field_rep::is_valid(rep) {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -1999,6 +2009,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
         &[],
         brands,
         requested,
+        integrity_flags,
     )
 }
 
@@ -2019,6 +2030,7 @@ pub(crate) fn shape_descriptor_intern_with_special(
     infos: &[shapes_store::ConstFnSlotInfo],
     brands: &[u64],
     requested: Option<u32>,
+    integrity_flags: u16,
 ) -> Result<u32, ShapeDescriptorError> {
     shape_descriptor_intern_with_special_mode(
         keys,
@@ -2034,6 +2046,7 @@ pub(crate) fn shape_descriptor_intern_with_special(
         brands,
         requested,
         false,
+        integrity_flags,
     )
 }
 
@@ -2056,6 +2069,7 @@ fn shape_descriptor_intern_with_special_mode(
     brands: &[u64],
     requested: Option<u32>,
     static_constfn: bool,
+    integrity_flags: u16,
 ) -> Result<u32, ShapeDescriptorError> {
     let Some(mask) = shapes_store::constfn_mask(infos) else {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -2102,18 +2116,21 @@ fn shape_descriptor_intern_with_special_mode(
     } else {
         (0, "", 0)
     };
-    let facts = shapes_store::facts_key_proto_with_special(
-        keys_id,
-        logical_key_count,
-        live_inline_slot_count,
-        semantic_generation,
-        object_kind,
-        hole_count,
-        proto_id,
-        summary,
-        rep,
-        infos,
-        brands,
+    let facts = shapes_store::integrity_facts_key(
+        shapes_store::facts_key_proto_with_special(
+            keys_id,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind,
+            hole_count,
+            proto_id,
+            summary,
+            rep,
+            infos,
+            brands,
+        ),
+        integrity_flags,
     );
     let table = &crate::state::state().shapes;
     let inner = table.inner.borrow();
@@ -2127,6 +2144,7 @@ fn shape_descriptor_intern_with_special_mode(
             let record = unsafe { *record };
             // The bucket is a 64-bit fold: validate the facts on every hit.
             if record.has(RECORD_FLAG_FACTS_INDEXED)
+                && record.integrity_flags() == integrity_flags
                 && record.facts_match_proto_with_special(
                     keys_id,
                     logical_key_count,
@@ -2164,6 +2182,7 @@ fn shape_descriptor_intern_with_special_mode(
         requested,
         #[cfg(feature = "shape-mint-diag")]
         (census_on, census_list_hash, census_file, census_line),
+        integrity_flags,
     )
 }
 
@@ -2188,6 +2207,7 @@ fn shape_descriptor_mint_fresh(
     brands: &[u64],
     requested: Option<u32>,
     #[cfg(feature = "shape-mint-diag")] census: (bool, u64, &'static str, u32),
+    integrity_flags: u16,
 ) -> Result<u32, ShapeDescriptorError> {
     #[cfg(feature = "shape-mint-diag")]
     let (census_on, census_list_hash, census_file, census_line) = census;
@@ -2200,6 +2220,7 @@ fn shape_descriptor_mint_fresh(
     // it yet.
     let adopted = requested.filter(|&id| {
         is_static_shape_id(id)
+            && integrity_flags == 0
             && brands.iter().all(|&b| {
                 b & (crate::object::field_get_set::PRIVATE_FRESH_EVALUATION_BRAND
                     | EVALUATION_HOLDER_BRAND)
@@ -2271,6 +2292,9 @@ fn shape_descriptor_mint_fresh(
     .with_summary(summary)
     .with_special_facts(rep, infos, brands);
     let mut record = record;
+    if integrity_flags != 0 {
+        record.set_integrity_flags(integrity_flags);
+    }
     if adopted.is_some() {
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
     }
@@ -2345,6 +2369,7 @@ pub(crate) unsafe fn shape_descriptor_ensure_for_object(
 /// What a mint for `obj` takes from the receiver rather than from its keys
 /// (see [`shape_descriptor_ensure_with_holes`]).
 pub(crate) struct ReceiverFacts {
+    pub(crate) integrity_flags: u16,
     pub(crate) extra_summary: u8,
     /// The receiver's private brands (#11791), sorted. A brand is only ever
     /// added, so every shape minted for a receiver carries the brands of the
@@ -2431,6 +2456,7 @@ impl BrandList {
 impl ReceiverFacts {
     /// A shape minted for no receiver: an intrinsic, a birth, a seed.
     pub(crate) const NONE: ReceiverFacts = ReceiverFacts {
+        integrity_flags: 0,
         extra_summary: 0,
         brands: BrandList::NONE,
     };
@@ -2439,6 +2465,7 @@ impl ReceiverFacts {
     pub(crate) const fn summary(extra_summary: u8) -> ReceiverFacts {
         ReceiverFacts {
             extra_summary,
+            integrity_flags: 0,
             brands: BrandList::NONE,
         }
     }
@@ -2448,6 +2475,7 @@ impl ReceiverFacts {
     pub(crate) fn of_descriptor(d: &ShapeDescriptor, extra_summary: u8) -> ReceiverFacts {
         ReceiverFacts {
             extra_summary,
+            integrity_flags: d.integrity_flags,
             brands: BrandList::copy_of(d.brands()),
         }
     }
@@ -2462,6 +2490,11 @@ impl ReceiverFacts {
 pub(crate) unsafe fn receiver_facts(obj: *const crate::object::ObjectHeader) -> ReceiverFacts {
     ReceiverFacts {
         extra_summary: receiver_extra_summary(obj),
+        integrity_flags: if obj.is_null() {
+            0
+        } else {
+            (*crate::object::gc_header_for(obj))._reserved & INTEGRITY_FLAGS
+        },
         brands: if obj.is_null() {
             BrandList::NONE
         } else {
@@ -2502,6 +2535,11 @@ pub(crate) unsafe fn receiver_facts_of_current(
     );
     ReceiverFacts {
         extra_summary: receiver_extra_summary(obj),
+        integrity_flags: if obj.is_null() {
+            0
+        } else {
+            (*crate::object::gc_header_for(obj))._reserved & INTEGRITY_FLAGS
+        },
         brands: BrandList::copy_of(current.brands()),
     }
 }
@@ -2982,6 +3020,7 @@ pub(crate) fn final_shape_ensure_constfn(
         &[],
         requested,
         true,
+        0,
     )
 }
 
@@ -4430,6 +4469,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         &infos,
         &brands,
         None,
+        current.integrity_flags,
     ) else {
         return false;
     };
@@ -4516,6 +4556,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         &infos,
         receiver.brands.as_slice(),
         None,
+        current.integrity_flags,
     ) else {
         return transition_object_shape_semantics(obj);
     };
@@ -6462,3 +6503,7 @@ pub(crate) fn shape_table_liveness_census(
         ("shapes.families.largest", largest, 0),
     ]
 }
+
+#[path = "shapes_integrity.rs"]
+mod integrity;
+pub(crate) use integrity::{transition_object_integrity, INTEGRITY_FLAGS};

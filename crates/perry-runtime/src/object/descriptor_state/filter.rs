@@ -1,8 +1,44 @@
 //! All descriptor queries resolve to the holder's ordinary property bag.
 use super::*;
 #[derive(Clone, Copy)]
-pub(super) enum DescriptorRoute {
-    Keys(*const ObjectHeader),
+pub(super) struct DescriptorRoute {
+    pub(super) bag: *const ObjectHeader,
+    /// Present only for integrity-restricted arrays. The routing boundary
+    /// already resolved this header; descriptor queries never resolve it again.
+    pub(super) integrity_array: *const ArrayHeader,
+}
+impl DescriptorRoute {
+    #[inline]
+    fn keys(bag: *const ObjectHeader) -> Self {
+        Self {
+            bag,
+            integrity_array: std::ptr::null(),
+        }
+    }
+}
+
+/// Array storage and virtual integrity descriptors share one resolved owner.
+/// The ordinary array route pays only the flag test on its existing header.
+// Every bag-only query must eliminate the unused integrity answer.
+// A call boundary would charge even those queries for its flag payload.
+#[inline(always)]
+unsafe fn array_route(mut arr: *const ArrayHeader) -> DescriptorRoute {
+    let mut header = crate::gc::header_from_trusted_user_ptr(arr.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        arr = crate::array::clean_arr_ptr(arr);
+        header = crate::gc::header_from_trusted_user_ptr(arr.cast());
+    }
+    DescriptorRoute {
+        bag: crate::array::array_property_bag(arr),
+        integrity_array: if (*header)._reserved
+            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED)
+            != 0
+        {
+            arr
+        } else {
+            std::ptr::null()
+        },
+    }
 }
 
 /// Resolve an ordinary object's forwarding chain before reading its payload.
@@ -17,12 +53,13 @@ pub(super) unsafe fn resolve_object_holder(mut owner: usize) -> usize {
         owner = crate::gc::forwarding_address(header) as usize;
     }
 }
-#[inline]
+// Keep the route inline through bag-only queries, which discard integrity.
+#[inline(always)]
 pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
     // The ordinary holder is already its descriptor storage. Keep its shape
     // reads out of closure, byte-owner and exotic admission paths.
     if super::key_attrs::attrs_live_in_keys(owner) {
-        return DescriptorRoute::Keys(owner as *const ObjectHeader);
+        return DescriptorRoute::keys(owner as *const ObjectHeader);
     }
     let bag = if crate::closure::is_closure_ptr(owner) {
         crate::closure::props::bag_of(owner)
@@ -34,21 +71,19 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
         // Array queries already arrive at a GC array holder. Preserve their
         // header-only route; allocator admission belongs to the otherwise
         // unclassified native-owner/cell boundary below.
-        crate::array::array_property_bag(owner as *const ArrayHeader)
+        return array_route(owner as *const ArrayHeader);
     } else {
         match crate::value::addr_class::try_read_tracked_gc_header(owner)
             .map(|h| (*h.as_ptr()).obj_type)
         {
             Some(crate::gc::GC_TYPE_OBJECT) => resolve_object_holder(owner) as *mut ObjectHeader,
-            Some(crate::gc::GC_TYPE_ARRAY) => {
-                crate::array::array_property_bag(owner as *const ArrayHeader)
-            }
+            Some(crate::gc::GC_TYPE_ARRAY) => return array_route(owner as *const ArrayHeader),
             Some(crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 let array = (*(owner as *const crate::json_tape::LazyArrayHeader)).materialized;
                 if array.is_null() {
                     std::ptr::null_mut()
                 } else {
-                    crate::array::array_property_bag(array)
+                    return array_route(array);
                 }
             }
             Some(
@@ -68,12 +103,12 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
             }
         }
     };
-    DescriptorRoute::Keys(bag)
+    DescriptorRoute::keys(bag)
 }
 #[inline]
 pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+        let bag = descriptor_route(owner).bag;
         !bag.is_null()
             && if accessor {
                 super::key_attrs::object_key_is_accessor(bag, key.as_bytes())

@@ -164,7 +164,7 @@ fn array_descriptor_holder_survives_growth_without_rekeying() {
 }
 
 #[test]
-fn freezing_an_array_snapshots_indices_before_the_holder_reserve_grows() {
+fn freezing_dense_array_uses_integrity_without_growing_a_holder_reserve() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
@@ -176,9 +176,10 @@ fn freezing_an_array_snapshots_indices_before_the_holder_reserve_grows() {
         assert_eq!((*array).length, (*array).capacity);
         crate::object::js_object_freeze(crate::value::js_nanbox_pointer(array as i64));
         let live = crate::array::clean_arr_ptr_mut(array);
-        assert_ne!(
-            array, live,
-            "subject: the holder reserve must grow the full array"
+        assert_eq!(array, live, "integrity must not grow a dense array");
+        assert!(
+            crate::array::array_property_bag(live).is_null(),
+            "dense integrity must not allocate a per-index descriptor holder"
         );
         assert_eq!((*live).length, len);
         for key in ["0", "1", "length"] {

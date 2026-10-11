@@ -510,6 +510,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
     // Read from the PRIVATE list, not through `is_dictionary`: at the latch
     // the shape still publishes the old keys when this runs.
     let receiver = shapes::ReceiverFacts {
+        integrity_flags: (*crate::object::gc_header_for(obj))._reserved & shapes::INTEGRITY_FLAGS,
         extra_summary: private_list_summary(obj),
         // The receiver's private brands survive the conversion (#11791).
         brands: shapes::BrandList::copy_of(current.as_ref().map_or(&[][..], |d| d.brands())),

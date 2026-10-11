@@ -186,6 +186,7 @@ unsafe fn converge_key_add(obj: *mut ObjectHeader, id: u32, slot: u32, value_bit
         d.summary,
         field_rep::with_slot_rep(d.rep, slot, other),
         d.brands(),
+        d.integrity_flags,
     ) else {
         return id;
     };
@@ -543,6 +544,7 @@ unsafe fn publish_key_add_rep(
             infos.as_slice(),
             &d.brands().to_vec(),
             None,
+            d.integrity_flags,
         ),
     ));
     if target != id {
@@ -599,6 +601,7 @@ pub(crate) unsafe fn private_field_lanes_target(
             &[],
             &d.brands().to_vec(),
             None,
+            d.integrity_flags,
         ),
     ));
     (target != 0 && target != id).then_some((id, target, bits))
@@ -801,6 +804,7 @@ pub(crate) fn normalized_shape(mut id: u32) -> u32 {
             // A re-intern of a live record's facts under another rep names
             // no static id.
             None,
+            d.integrity_flags,
         ));
         debug_assert_ne!(next, id, "normalizing {id:#x} found itself");
         if next == id {

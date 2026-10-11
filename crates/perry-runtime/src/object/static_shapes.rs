@@ -250,6 +250,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
             &[],
             &brand_list,
             Some(requested).filter(|&id| id != 0),
+            0,
         ))
     });
     // SAFETY: `id` was resolved from this agent's live slab record above.

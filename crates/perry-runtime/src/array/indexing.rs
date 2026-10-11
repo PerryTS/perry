@@ -1612,8 +1612,9 @@ unsafe fn js_array_set_f64_extend_resolved(
     // it (ECMA-262 OrdinaryGet → prototype chain). Cheap no-op otherwise.
     note_array_index_write(arr as usize);
     let is_frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
-    let blocks_extension =
-        flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
+    let blocks_extension = flags
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
+        != 0;
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
@@ -1662,7 +1663,9 @@ unsafe fn js_array_set_f64_extend_resolved(
 
         // If index is within bounds, just set it
         if index < length {
-            if is_frozen {
+            // One integrity guard leaves ordinary writes on the same branch.
+            // Filling a hole is property creation even inside length.
+            if blocks_extension && (is_frozen || !array_has_own_index(arr, index)) {
                 return arr;
             }
             if index >= (*arr).capacity {
@@ -1697,7 +1700,7 @@ unsafe fn js_array_set_f64_extend_resolved(
             return arr;
         }
 
-        if is_frozen || blocks_extension {
+        if blocks_extension {
             return arr;
         }
 

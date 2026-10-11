@@ -99,6 +99,7 @@ pub(crate) unsafe fn stamp_linked_final_shape_requested(
         birth.brands(),
         requested,
         true,
+        0,
     ) else {
         return false;
     };

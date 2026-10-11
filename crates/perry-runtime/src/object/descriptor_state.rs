@@ -42,10 +42,10 @@ impl PropertyAttrs {
 }
 
 mod filter;
+use filter::descriptor_route;
 pub(crate) use filter::may_have_descriptor_entry;
 #[cfg(test)]
 pub(crate) use filter::test_may_have_descriptor_entry;
-use filter::{descriptor_route, DescriptorRoute};
 mod holder_edit;
 use super::accessor_pair::{descriptor_from, own_accessor, pair_from, store_own_accessor};
 pub(crate) use holder_edit::HolderEdit;
@@ -252,7 +252,8 @@ pub(crate) fn note_attrs_born_with_keys(obj: usize) {
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(obj);
+        let route = descriptor_route(obj);
+        let bag = route.bag;
         if !bag.is_null() {
             let entry = super::key_attrs::object_key_entry(bag, key.as_bytes());
             let keys = super::object_keys(bag);
@@ -270,8 +271,29 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
                 });
             }
         }
+        if !route.integrity_array.is_null() {
+            return array_integrity_attrs(route.integrity_array, key);
+        }
     }
     string_wrapper_index_attrs(obj, key)
+}
+
+/// Default dense/length attributes come from the array's resolved header.
+/// Customized attributes have already been answered by its holder shape.
+#[cold]
+#[inline(never)]
+unsafe fn array_integrity_attrs(arr: *const ArrayHeader, key: &str) -> Option<PropertyAttrs> {
+    let flags = (*crate::gc::header_from_trusted_user_ptr(arr.cast()))._reserved;
+    let frozen = flags & crate::gc::OBJ_FLAG_FROZEN != 0;
+    if key == "length" {
+        return Some(PropertyAttrs::new(!frozen, false, false));
+    }
+    if super::canonical_array_index(key).is_some_and(|i| crate::array::array_has_own_index(arr, i))
+        || crate::array::array_named_property_get_by_name(arr, key).is_some()
+    {
+        return Some(PropertyAttrs::new(!frozen, true, false));
+    }
+    None
 }
 
 /// ECMA-262 §10.4.3: every in-range integer index of a `String` exotic object
@@ -351,7 +373,7 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     ) else {
         return true;
     };
-    let DescriptorRoute::Keys(bag) = descriptor_route(addr);
+    let bag = descriptor_route(addr).bag;
     !bag.is_null() && super::key_attrs::object_key_entry(bag, bytes) != 0
 }
 
@@ -466,9 +488,14 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
 }
 
 /// Can this holder shape carry an accessor or customized attribute entry?
+#[inline]
 pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+        let route = descriptor_route(owner);
+        if !accessor && !route.integrity_array.is_null() {
+            return true;
+        }
+        let bag = route.bag;
         if bag.is_null() {
             return false;
         }
@@ -611,7 +638,7 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(obj);
+        let bag = descriptor_route(obj).bag;
         if bag.is_null() {
             return None;
         }
@@ -661,7 +688,7 @@ pub(crate) fn get_handle_property_attrs(handle: usize, key: &str) -> Option<Prop
 /// per-index attribute checks. No owner index or descriptor-map scan exists.
 pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+        let bag = descriptor_route(owner).bag;
         !bag.is_null()
             && super::key_attrs::object_summary(bag)
                 & (super::key_attrs::SUMMARY_NON_WRITABLE
@@ -673,7 +700,7 @@ pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(obj);
+        let bag = descriptor_route(obj).bag;
         if bag.is_null() {
             Vec::new()
         } else {
@@ -791,7 +818,7 @@ pub(crate) unsafe fn json_object_getter_value(
 
 /// A per-key holder shape query; no owner index or string allocation.
 pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
-    let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+    let bag = descriptor_route(owner).bag;
     !bag.is_null() && super::key_attrs::object_key_is_accessor(bag, key)
 }
 
@@ -1045,7 +1072,7 @@ pub(crate) unsafe fn holder_key_names(bag: *const ObjectHeader, enumerable: bool
 #[cfg(test)]
 pub(crate) fn clear_object_descriptors(obj: usize) {
     unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(obj);
+        let bag = descriptor_route(obj).bag;
         if bag.is_null() {
             return;
         }
@@ -1059,6 +1086,6 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
 /// The ordinary holder reached by a value's own-property storage edge.
 #[inline]
 pub(crate) unsafe fn descriptor_holder(owner: usize) -> *mut ObjectHeader {
-    let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+    let bag = descriptor_route(owner).bag;
     bag as *mut ObjectHeader
 }

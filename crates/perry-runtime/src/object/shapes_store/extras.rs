@@ -21,6 +21,11 @@ pub(in crate::object) struct ShapeExtras {
     /// Weak keyless receiver-birth ShapeId of this prototype's shape.
     /// Revalidated at use; no identity, width or GC edge.
     pub(in crate::object) created_birth_shape: std::sync::atomic::AtomicU32,
+    /// Weak integrity successors, validated against live shape facts at use.
+    /// Scalar ShapeIds do not root targets and are never reused.
+    pub(in crate::object) integrity_targets: [u32; 3],
+    /// Exact immutable integrity identity, reached only behind its packed bit.
+    pub(in crate::object) integrity_flags: u16,
     /// Per-key inherited [[Set]] facts of this shape. The existing prototype
     /// validity word retires them after a descriptor or link mutation.
     pub(in crate::object) store_chain: Option<Box<std::cell::RefCell<Vec<StoreChainFact>>>>,

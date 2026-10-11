@@ -9,7 +9,7 @@ fn assert_refused(owner: usize) {
         "install admitted an internal cell"
     );
     let read = std::panic::catch_unwind(|| unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(owner);
+        let bag = descriptor_route(owner).bag;
         bag.is_null()
     });
     assert!(
@@ -105,7 +105,7 @@ fn descriptor_holder_refusal_reads_ignore_a_native_registry_collision() {
     // even when the native registry has a bag at this GC cell's address.
     unsafe { super::super::handle_expando::handle_property_bag_ensure(capture as i64) };
     let result = std::panic::catch_unwind(|| unsafe {
-        let DescriptorRoute::Keys(bag) = descriptor_route(capture);
+        let bag = descriptor_route(capture).bag;
         bag.is_null()
     });
     super::super::handle_expando::handle_expando_clear(capture as i64);
@@ -137,7 +137,7 @@ fn forwarded_object_descriptor_holder_resolves_reads_and_writes() {
             PropertyAttrs::new(false, true, true),
         );
         for owner in [alias, middle, live] {
-            let DescriptorRoute::Keys(bag) = descriptor_route(owner as usize);
+            let bag = descriptor_route(owner as usize).bag;
             assert_eq!(bag, live as *const ObjectHeader);
             assert!(!get_property_attrs(owner as usize, "x").unwrap().writable());
             assert!(super::super::handle_expando::handle_property_bag(owner as i64).is_null());
@@ -199,7 +199,7 @@ fn lazy_array_descriptor_holder_is_the_materialized_arrays_bag() {
     })
     .expect("valid array tape");
     unsafe {
-        let DescriptorRoute::Keys(before) = descriptor_route(lazy as usize);
+        let before = descriptor_route(lazy as usize).bag;
         assert!(before.is_null());
         assert!((*lazy).materialized.is_null(), "reads must not materialize");
         set_property_attrs(
@@ -211,12 +211,44 @@ fn lazy_array_descriptor_holder_is_the_materialized_arrays_bag() {
             !(*lazy).materialized.is_null(),
             "installs normalize to an ordinary array"
         );
-        let DescriptorRoute::Keys(bag) = descriptor_route(lazy as usize);
+        let bag = descriptor_route(lazy as usize).bag;
         assert_eq!(
             bag,
             crate::array::array_property_bag((*lazy).materialized) as *const ObjectHeader
         );
         assert!(!get_property_attrs(lazy as usize, "tag").unwrap().writable());
         assert!(super::super::handle_expando::handle_property_bag(lazy as i64).is_null());
+    }
+}
+
+#[test]
+fn frozen_array_descriptor_route_uses_the_live_header_after_growth() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let alias = crate::array::js_array_alloc(1);
+        let mut live = alias;
+        for i in 0..48 {
+            live = crate::array::js_array_set_f64_extend(live, i, i as f64);
+        }
+        assert_ne!(alias, live, "premise: growth left a forwarding alias");
+        let route = descriptor_route(alias as usize);
+        assert!(
+            route.integrity_array.is_null(),
+            "ordinary arrays skip integrity"
+        );
+        assert!(!owner_may_have_descriptor_entries(alias as usize, false));
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(live as i64));
+        for owner in [alias, live] {
+            let route = descriptor_route(owner as usize);
+            assert_eq!(route.integrity_array, live as *const ArrayHeader);
+            assert!(owner_may_have_descriptor_entries(owner as usize, false));
+            assert!(!owner_may_have_descriptor_entries(owner as usize, true));
+            let index = get_property_attrs(owner as usize, "0").unwrap();
+            assert!(!index.writable() && index.enumerable() && !index.configurable());
+            let length = get_property_attrs(owner as usize, "length").unwrap();
+            assert!(!length.writable() && !length.enumerable() && !length.configurable());
+            assert!(get_property_attrs(owner as usize, "absent").is_none());
+        }
     }
 }

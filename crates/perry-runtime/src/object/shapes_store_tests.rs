@@ -979,3 +979,32 @@ fn plain_birth_validation_rejects_ids_outside_the_ordinary_directory() {
         );
     }
 }
+
+#[test]
+fn cold_integrity_preserves_packed_facts_and_existing_weak_relationships() {
+    let mut record = ShapeRecord::new(0, 0, 0, 7, ShapeObjectKind::Ordinary, 0);
+    let parent = 0x8000_1245;
+    record.note_rollback_parent(parent);
+    assert!(!record.has_boxed_extras());
+    assert_eq!(record.integrity_flags(), 0);
+    let ordinary = record.facts_key_with_keys(0);
+    record.set_integrity_flags(crate::gc::OBJ_FLAG_NO_EXTEND);
+    assert_eq!(record.rollback_parent(), parent);
+    record.note_created_birth_shape(0x8000_3456);
+    record.note_descendant_width(33);
+    record.note_integrity_target(1, 0x8000_4567);
+    let flags = crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED;
+    record.set_integrity_flags(flags);
+    assert_eq!(record.integrity_flags(), flags);
+    assert_eq!(record.object_kind(), ShapeObjectKind::Ordinary);
+    assert_eq!(record.descendant_width(), 33);
+    assert_eq!(record.created_birth_shape(), 0x8000_3456);
+    assert_eq!(record.integrity_target(1), 0x8000_4567);
+    assert_eq!(record.rollback_parent(), parent);
+    assert_ne!(record.facts_key_with_keys(0), ordinary);
+    record.set_integrity_flags(0);
+    assert_eq!(record.integrity_flags(), 0);
+    assert_eq!(record.facts_key_with_keys(0), ordinary);
+    assert_eq!(record.created_birth_shape(), 0x8000_3456);
+    unsafe { record.release_extras() };
+}
