@@ -739,7 +739,7 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
                 ValueTypeofTag::Object
             };
         }
-        if crate::value::addr_class::is_id_band(addr) {
+        if crate::value::addr_class::is_handle_band(addr) {
             return ValueTypeofTag::Object;
         }
         // One allocator admission and one kind read. Off-heap buffers have no
