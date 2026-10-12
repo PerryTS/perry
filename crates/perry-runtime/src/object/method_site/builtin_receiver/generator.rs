@@ -87,6 +87,9 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let _stable = crate::gc::GcSuppressScope::new();
+            // Memo logic with young per-instance hops: nothing moves (above),
+            // and the publication rule is waived for them.
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
             let object_was_lazy = crate::object::OBJECT_INTRINSIC_PTR.load(Ordering::Acquire) == 0;
             let parent_was_lazy =
                 crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) == 0;

@@ -107,7 +107,8 @@ fn build_async_function_tower() {
         crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
         0,
     );
-    let proto = js_object_alloc(0, 0);
+    // Realm intrinsics, built once: born old and never-move (O3).
+    let proto = crate::object::object_alloc_prototype_old(0, 0);
     if ctor.is_null() || proto.is_null() {
         return;
     }
@@ -852,8 +853,10 @@ fn build_generator_tower(
         crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
         0,
     );
-    let proto = js_object_alloc(0, 0); // %Generator% / %AsyncGenerator%
-    let gen_proto = js_object_alloc(0, 0); // %Generator.prototype%
+    // Realm intrinsics, built once: born old and never-move (O3), so the
+    // method sites that answer from them are admitted before any minor.
+    let proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator% / %AsyncGenerator%
+    let gen_proto = crate::object::object_alloc_prototype_old(0, 0); // %Generator.prototype%
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
         return;
     }
@@ -948,7 +951,7 @@ fn build_generator_tower(
         // `%AsyncIteratorPrototype%`; reflection reaches that parent with two
         // `Object.getPrototypeOf` calls from an async generator function's
         // `.prototype`.
-        let async_iterator_proto = js_object_alloc(0, 0);
+        let async_iterator_proto = crate::object::object_alloc_prototype_old(0, 0);
         install_proto_symbol_self_method(async_iterator_proto, symbol_name, display_name, thunk);
         let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
         super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
