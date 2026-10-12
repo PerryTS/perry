@@ -960,24 +960,17 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
 /// `temporal` install fills (see `crate::temporal::hooked`). Without it no
 /// Temporal constructor exists and this answers `None`.
 pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
-    crate::temporal::hooked::ctor_kind(type_ref)
-}
-
-#[cfg(feature = "temporal")]
-pub(crate) fn temporal_ctor_kind_impl(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
-    use crate::temporal::TemporalKind;
     let jv = JSValue::from_bits(type_ref.to_bits());
     if !jv.is_pointer() {
         return None;
     }
-    let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
-    if closure.is_null() {
-        return None;
-    }
-    if !crate::closure::is_closure_ptr(closure as usize) {
-        return None;
-    }
-    let fp = unsafe { (*closure).code() };
+    let info = crate::closure::closure_info(jv.as_pointer())?;
+    crate::temporal::hooked::ctor_kind(info.code)
+}
+
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_ctor_kind_impl(fp: *const u8) -> Option<crate::temporal::TemporalKind> {
+    use crate::temporal::TemporalKind;
     let fp = fp as usize;
     let table: [(*const u8, TemporalKind); 8] = [
         (

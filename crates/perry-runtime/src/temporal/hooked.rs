@@ -32,7 +32,7 @@ static FINALIZE_CELL: Hook<unsafe fn(*mut TemporalCell)> = Hook::empty();
 static TO_EPOCH_MS: Hook<fn(&TemporalValue) -> Option<f64>> = Hook::empty();
 static CALENDAR_ID: Hook<fn(f64) -> Option<&'static str>> = Hook::empty();
 static INSPECT_STRING: Hook<fn(f64) -> Option<String>> = Hook::empty();
-static CTOR_KIND: Hook<fn(f64) -> Option<TemporalKind>> = Hook::empty();
+static CTOR_KIND: Hook<fn(*const u8) -> Option<TemporalKind>> = Hook::empty();
 
 pub fn call_method(recv: f64, name: &str, args: &[f64]) -> f64 {
     CALL_METHOD
@@ -113,8 +113,8 @@ pub fn inspect_string(value: f64) -> Option<String> {
     INSPECT_STRING.get().and_then(|f| f(value))
 }
 
-pub fn ctor_kind(type_ref: f64) -> Option<TemporalKind> {
-    CTOR_KIND.get().and_then(|f| f(type_ref))
+pub fn ctor_kind(code: *const u8) -> Option<TemporalKind> {
+    CTOR_KIND.get().and_then(|f| f(code))
 }
 
 /// The `temporal` install.

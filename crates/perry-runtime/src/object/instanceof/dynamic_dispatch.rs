@@ -2,17 +2,92 @@
 //! `instanceof`, resolving a value/class-ref RHS pair rather than a
 //! compile-time-known class id.
 //!
-//! Split out of `instanceof.rs` for the file-size cap. Pure relocation —
-//! no logic changes; see `super::*` for every helper this calls.
+//! Admit the RHS body once; hooks retain their precedence over the shared
+//! class dispatch and native constructor brand/prototype dispatch.
 
 use super::*;
+
+#[derive(Clone, Copy)]
+enum RhsKind {
+    Ordinary,
+    Native,
+    Class(u32),
+    ClassObject,
+    Bound,
+    Proxy,
+    NonCallable,
+}
+
+/// The info word is the authority for a function's dispatch kind. Keep the
+/// admitted cell beside that fact; an own-hook getter may move the cell, but
+/// cannot change its body identity.
+struct InstanceofRhs {
+    kind: RhsKind,
+    closure: Option<(
+        *const crate::closure::ClosureHeader,
+        &'static crate::closure::JsFunctionInfo,
+    )>,
+}
+
+impl InstanceofRhs {
+    #[inline]
+    fn classify(value: f64) -> Self {
+        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            return Self {
+                kind: RhsKind::Proxy,
+                closure: None,
+            };
+        }
+        let jv = crate::JSValue::from_bits(value.to_bits());
+        let closure = if jv.is_pointer() {
+            let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+            crate::closure::closure_info(ptr).map(|info| (ptr, info))
+        } else {
+            None
+        };
+        let kind = if let Some((ptr, info)) = closure {
+            if crate::closure::shape::is_class_info(info) {
+                // SAFETY: closure_info admitted this live closure.
+                RhsKind::Class(
+                    unsafe { crate::object::class_value::class_closure_id_unchecked(ptr) }.unwrap(),
+                )
+            } else if info.code == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+                RhsKind::Bound
+            } else if info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0 {
+                RhsKind::Ordinary
+            } else {
+                RhsKind::Native
+            }
+        } else if let Some(id) = (!jv.is_pointer()).then(|| class_ref_id(value)).flatten() {
+            RhsKind::Class(id)
+        } else if is_class_object_value(value) {
+            RhsKind::ClassObject
+        } else if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+            RhsKind::Native
+        } else {
+            RhsKind::NonCallable
+        };
+        Self { kind, closure }
+    }
+
+    #[inline]
+    fn refresh_after_getter(&mut self, value: f64) {
+        if let Some((_, info)) = self.closure {
+            self.closure = Some((
+                crate::JSValue::from_bits(value.to_bits()).as_pointer(),
+                info,
+            ));
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // Proxy ids are registry handles, not closure headers. Resolve their
     // observable @@hasInstance/prototype reads before any constructor probe
     // or unwrapping of the left operand (#10364).
-    if crate::proxy::js_proxy_is_proxy(type_ref) != 0 {
+    let mut rhs = InstanceofRhs::classify(type_ref);
+    if matches!(rhs.kind, RhsKind::Proxy) {
         return super::proxy_rhs::proxy_instanceof(value, type_ref);
     }
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -23,27 +98,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // aliases columns as `new Proxy(column, …)` and its `is(value, type)` brand
     // check relies on `value instanceof type`). Bounded to guard a cycle.
     let mut value = value;
-    {
+    let lhs_non_proxy = {
         let mut depth = 0;
         while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
             value = crate::proxy::js_proxy_target(value);
             depth += 1;
         }
-    }
-    let admit_closure = |rhs: f64| {
-        let value = crate::JSValue::from_bits(rhs.to_bits());
-        if !value.is_pointer() {
-            return None;
-        }
-        let closure = value.as_pointer::<crate::closure::ClosureHeader>();
-        crate::closure::closure_info(closure).map(|info| (closure, info))
+        depth < 16
     };
-    let mut rhs_closure = admit_closure(type_ref);
     // Spec step (InstanceofOperator): an OWN user-defined `@@hasInstance`
     // overrides even native constructor brand checks. The native generic hook
     // lives on Function.prototype, so the own-property gate distinguishes an
     // explicit override from that inherited default without recursion.
-    let symbols_absent = rhs_closure.is_some_and(|(closure, _)| unsafe {
+    let symbols_absent = rhs.closure.is_some_and(|(closure, _)| unsafe {
         let bag = (*closure).props;
         bag.is_null()
             || crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
@@ -61,7 +128,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // querying the generic owner/accessor/data towers repeats this
             // admission. Class immediates and other representations retain
             // their ordinary symbol query.
-            let owns_hook = if let Some((closure, _)) = rhs_closure {
+            let owns_hook = if let Some((closure, _)) = rhs.closure {
                 let bag = unsafe { (*closure).props };
                 !bag.is_null()
                     && unsafe { super::shaped_symbols::position(bag, hi_sym as usize).is_some() }
@@ -80,42 +147,28 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 };
                 value = lhs_h.get_nanbox_f64();
                 type_ref = rhs_h.get_nanbox_f64();
-                rhs_closure = admit_closure(type_ref);
+                rhs.refresh_after_getter(type_ref);
                 if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value) {
                     return result;
                 }
             }
         }
     }
-    // A primitive is an ordinary miss; a terminal ordinary receiver has a
-    // complete prototype chain. Test those facts before classifying the
-    // constructor: its actual prototype decides the terminal receiver's
-    // OrdinaryHasInstance without any native-body or native-brand dispatch.
-    // Bound functions still delegate to their target, and non-callable RHS
-    // values retain the general path's TypeError. Own hooks ran above.
+    // Hooks precede OrdinaryHasInstance. A class must still consult its
+    // lifted/static hooks before using this primitive fact.
     let primitive = instanceof_lhs_is_primitive(value);
-    let terminal = terminal_prototype_id(value);
-    if primitive || terminal.is_some() {
-        if let Some((closure, info)) = rhs_closure {
-            // Classes retain their lifted @@hasInstance and evaluation-identity
-            // dispatch below. A non-class function needs no class admission.
-            if !crate::closure::shape::is_class_info(info) {
-                if info.code == crate::closure::BOUND_FUNCTION_FUNC_PTR {
-                    let target = crate::closure::js_closure_get_capture_f64(closure, 0);
-                    return js_instanceof_dynamic(value, target);
-                }
-                if primitive {
-                    return f64::from_bits(TAG_FALSE);
-                }
-                // The existing function shape can also prove an own data
-                // prototype. Reading its live slot is Leaf, so both shape
-                // proofs can complete without opening any handle scopes.
+    if matches!(rhs.kind, RhsKind::Ordinary | RhsKind::Native) {
+        // Only non-class functions use the terminal receiver proof. Bound
+        // functions have already forwarded, and non-callable values still throw.
+        if let Some((closure, _)) = rhs.closure {
+            if primitive {
+                return f64::from_bits(TAG_FALSE);
+            }
+            if let Some(terminal) = terminal_prototype_id(value) {
                 if let Some(Some(prototype)) =
                     unsafe { crate::closure::shape::closure_own_prototype_by_shape(closure) }
                 {
-                    if let Some(matches) =
-                        terminal.and_then(|id| terminal_prototype_matches_id(id, prototype))
-                    {
+                    if let Some(matches) = terminal_prototype_matches_id(terminal, prototype) {
                         return f64::from_bits(if matches {
                             crate::value::TAG_TRUE
                         } else {
@@ -131,39 +184,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             }
         }
     }
-    // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
-    // brand arms (not a real prototype chain), so resolve the constructor to
-    // its kind and compare against the value's brand. A non-Temporal value, or
-    // a Temporal value of a different kind, yields `false`.
-    if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
-        if crate::temporal::temporal_kind(value) == Some(kind) {
-            return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        // `class X extends Temporal.<Type>` instance: a plain heap object whose
-        // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
-        // the brand via a stashed cell rather than the Temporal-cell tag, so
-        // recover that cell and compare its kind. The receiver reaches here both
-        // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
-        // how module-level object vars are stored) — accept both. (#5587)
-        {
-            let bits = value.to_bits();
-            let top16 = bits >> 48;
-            let raw = if top16 == 0x7FFD {
-                (bits & crate::value::POINTER_MASK) as usize
-            } else if top16 == 0 {
-                bits as usize
-            } else {
-                0
-            };
-            if raw != 0 {
-                if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
-                    if crate::temporal::temporal_kind(cell) == Some(kind) {
-                        return f64::from_bits(crate::value::TAG_TRUE);
-                    }
-                }
-            }
-        }
-        return f64::from_bits(TAG_FALSE);
+    if matches!(rhs.kind, RhsKind::Bound) {
+        let (closure, _) = rhs.closure.unwrap();
+        let target = crate::closure::js_closure_get_capture_f64(closure, 0);
+        return js_instanceof_dynamic(value, target);
     }
     let bits = type_ref.to_bits();
     // `class_ref_id` requires `is_class_id_registered`, not just the tag —
@@ -171,7 +195,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // constructed via `DataView.setFloat64`, not a codegen-emitted class
     // ref) must fall through to the unresolved-RHS `TypeError` below
     // instead of being dispatched into `js_instanceof` as a bogus class id.
-    if let Some(class_id) = class_ref_id(type_ref) {
+    if let RhsKind::Class(class_id) = rhs.kind {
         // #11759 (c′): the class function object is the first evaluation of a
         // declaration whose later evaluations share its template id. A value
         // with an individually recorded prototype chain (an instance of a
@@ -185,12 +209,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 TAG_FALSE
             });
         }
-        return js_instanceof(value, class_id);
+        return super::static_dispatch::instanceof_classified(
+            value,
+            class_id,
+            primitive,
+            lhs_non_proxy,
+        );
     }
     // #9502: a heap class object's template id identifies its code, not its
     // evaluation. Compare the actual prototype objects so sibling evaluations
     // remain distinct and a chain through earlier evaluations still matches.
-    if is_class_object_value(type_ref) {
+    if matches!(rhs.kind, RhsKind::ClassObject) {
         // Static/forward `new C()` sites can still construct by template id
         // without attaching an evaluated prototype. Retain that representation's
         // class-id check; a recorded prototype (a fact of the receiver's
@@ -203,7 +232,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         if super::prototype_chain::object_static_prototype(value_addr(value)).is_none()
             && !crate::object::class_value::class_value_is_first_evaluation(template)
         {
-            return js_instanceof(value, template);
+            return super::static_dispatch::instanceof_classified(
+                value,
+                template,
+                primitive,
+                lhs_non_proxy,
+            );
         }
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
@@ -211,20 +245,60 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             TAG_FALSE
         });
     }
+    if matches!(rhs.kind, RhsKind::Native) {
+        // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
+        // brand arms (not a real prototype chain), so resolve the constructor to
+        // its kind and compare against the value's brand. A non-Temporal value, or
+        // a Temporal value of a different kind, yields `false`.
+        if let Some(kind) = rhs
+            .closure
+            .and_then(|(_, info)| crate::temporal::hooked::ctor_kind(info.code))
+        {
+            if crate::temporal::temporal_kind(value) == Some(kind) {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            // `class X extends Temporal.<Type>` instance: a plain heap object whose
+            // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
+            // the brand via a stashed cell rather than the Temporal-cell tag, so
+            // recover that cell and compare its kind. The receiver reaches here both
+            // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
+            // how module-level object vars are stored) — accept both. (#5587)
+            {
+                let bits = value.to_bits();
+                let top16 = bits >> 48;
+                let raw = if top16 == 0x7FFD {
+                    (bits & crate::value::POINTER_MASK) as usize
+                } else if top16 == 0 {
+                    bits as usize
+                } else {
+                    0
+                };
+                if raw != 0 {
+                    if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
+                        if crate::temporal::temporal_kind(cell) == Some(kind) {
+                            return f64::from_bits(crate::value::TAG_TRUE);
+                        }
+                    }
+                }
+            }
+            return f64::from_bits(TAG_FALSE);
+        }
+    }
     // Class values take their existing exits above. An intrinsic's body
     // identity also proves it is callable and not a bind wrapper, so dispatch
     // it before the remaining callable/bound/native-export probes. Its own
     // @@hasInstance already had first refusal; the shared native dispatch owns
     // the primitive and prototype checks.
-    if let Some(declaration) = rhs_closure.and_then(|(closure, info)| unsafe {
-        super::super::global_this_tables::declaration_of_constructor(closure, info)
-    }) {
+    if let Some(declaration) = matches!(rhs.kind, RhsKind::Native)
+        .then_some(rhs.closure)
+        .flatten()
+        .and_then(|(closure, info)| unsafe {
+            super::super::global_this_tables::declaration_of_constructor(closure, info)
+        })
+    {
         use super::super::global_this_tables::BuiltinInstanceIdentity;
         let matched = match declaration.instance_identity {
             Some(BuiltinInstanceIdentity::Class(class_id)) => {
-                if instanceof_lhs_is_primitive(value) {
-                    return f64::from_bits(TAG_FALSE);
-                }
                 return super::static_dispatch::native_with_constructor(
                     value,
                     class_id,
@@ -257,7 +331,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // #10507: `x instanceof F` for an ordinary compiled function `F`: one
     // shape compare when `x`'s ShapeId names `F.prototype`, else, for an
     // object of no compiled class, OrdinaryHasInstance's prototype walk.
-    {
+    if matches!(rhs.kind, RhsKind::Ordinary) {
         use crate::object::class_registry::OrdinaryInstanceof;
         match crate::object::class_registry::ordinary_compiled_function_has_instance(
             value, type_ref,
@@ -273,15 +347,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             None => {}
         }
     }
-    // OrdinaryHasInstance step 2: a bound function (with no own
-    // `@@hasInstance`, answered above) is `instanceof` exactly as its target.
-    if let Some(target) = crate::object::class_registry::bound_function_target_value(type_ref) {
-        return js_instanceof_dynamic(value, target);
-    }
-    // Class and intrinsic RHS values have already taken their own exits.
-    // A remaining callable still answers false for a primitive; a non-callable
-    // RHS must reach TypeError even when the left operand is primitive.
-    if instanceof_lhs_is_primitive(value) && value_is_callable(type_ref) {
+    if primitive && !matches!(rhs.kind, RhsKind::NonCallable) {
         return f64::from_bits(TAG_FALSE);
     }
     // Native http(s).Agent handles have no heap prototype chain. After any own
@@ -339,7 +405,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 // the class-id chain the same way the EventEmitter branch below
                 // does for its own subclass case.
                 || (method == "Stream"
-                    && js_instanceof(value, 0xFFFF0070).to_bits() == crate::value::TAG_TRUE))
+                    && super::static_dispatch::instanceof_classified(value, 0xFFFF0070, primitive, lhs_non_proxy).to_bits() == crate::value::TAG_TRUE))
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -357,7 +423,14 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // handle/`util.inherits` cases. Keep the general prototype walk
             // as a fallback for shapes neither path reaches.
             return f64::from_bits(
-                if js_instanceof(value, CLASS_ID_EVENT_EMITTER).to_bits() == crate::value::TAG_TRUE
+                if super::static_dispatch::instanceof_classified(
+                    value,
+                    CLASS_ID_EVENT_EMITTER,
+                    primitive,
+                    lhs_non_proxy,
+                )
+                .to_bits()
+                    == crate::value::TAG_TRUE
                     || ordinary_has_instance_prototype_walk(value, type_ref)
                 {
                     crate::value::TAG_TRUE
@@ -485,7 +558,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         }
         // #11919 P0: a native-payload family answers by its class id.
         if let Some(class_id) = crate::native_payload::export_class_id(&module, &method) {
-            let result = js_instanceof(value, class_id);
+            let result = super::static_dispatch::instanceof_classified(
+                value,
+                class_id,
+                primitive,
+                lhs_non_proxy,
+            );
             if result.to_bits() == crate::value::TAG_TRUE
                 || ordinary_has_instance_prototype_walk(value, type_ref)
             {
@@ -508,12 +586,22 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 _ => 0,
             };
             if class_id != 0 {
-                return js_instanceof(value, class_id);
+                return super::static_dispatch::instanceof_classified(
+                    value,
+                    class_id,
+                    primitive,
+                    lhs_non_proxy,
+                );
             }
         }
     }
     if is_buffer_constructor_value(type_ref) {
-        return js_instanceof(value, crate::buffer::NODE_BUFFER_CLASS_ID);
+        return super::static_dispatch::instanceof_classified(
+            value,
+            crate::buffer::NODE_BUFFER_CLASS_ID,
+            primitive,
+            lhs_non_proxy,
+        );
     }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_channel_is_channel_instance_value(value) {

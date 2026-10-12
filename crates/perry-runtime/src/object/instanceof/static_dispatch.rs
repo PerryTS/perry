@@ -2,8 +2,8 @@
 //! `instanceof`, and the per-built-in dispatch ladder behind it.
 //!
 //! Split out of `instanceof.rs` for the file-size cap. Pure relocation —
-//! no logic changes; see `super::*` for every helper this calls.
-
+//! The generic entry shares this class dispatch after preparing its operands;
+//! external static callers retain their own hook/proxy/primitive preparation.
 use super::*;
 
 /// Heap-backed builtins whose reserved ids otherwise dispatch by native brand.
@@ -53,6 +53,28 @@ pub(super) fn instanceof_with_constructor(
     class_id: u32,
     constructor: Option<f64>,
 ) -> f64 {
+    instanceof_dispatch(value, class_id, constructor, None, false)
+}
+
+/// Generic entry preparation has already classified the left operand.
+#[inline(always)]
+pub(super) fn instanceof_classified(
+    value: f64,
+    class_id: u32,
+    primitive: bool,
+    lhs_non_proxy: bool,
+) -> f64 {
+    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy)
+}
+
+#[inline(always)]
+fn instanceof_dispatch(
+    value: f64,
+    class_id: u32,
+    constructor: Option<f64>,
+    primitive: Option<bool>,
+    lhs_non_proxy: bool,
+) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let true_val = f64::from_bits(TAG_TRUE);
@@ -66,7 +88,7 @@ pub(super) fn instanceof_with_constructor(
     // before walking the class chain. The proxy is a small id with no chain of
     // its own. (drizzle's aliased-column proxies + `is(value, type)`.)
     let mut value = value;
-    {
+    if !lhs_non_proxy {
         let mut depth = 0;
         while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
             value = crate::proxy::js_proxy_target(value);
@@ -131,7 +153,7 @@ pub(super) fn instanceof_with_constructor(
     // OrdinaryHasInstance step 3: once no user `@@hasInstance` answered, a
     // primitive is never an instance of anything (#11261). Without this a
     // plain number reached the native brand probes below as a handle id.
-    if instanceof_lhs_is_primitive(value) {
+    if primitive.unwrap_or_else(|| instanceof_lhs_is_primitive(value)) {
         return false_val;
     }
     // User classes have no native-brand arm. The ancestry reader owns any
