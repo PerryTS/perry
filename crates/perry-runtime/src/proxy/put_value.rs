@@ -368,7 +368,10 @@ pub extern "C" fn js_put_value_set(
         return throw_type_error(&msg);
     }
     let ok = if lookup(target).is_some() {
-        js_proxy_set(target, property_key, value).to_bits() == TAG_TRUE
+        // A proxy in the prototype chain is the [[Set]] target, but the
+        // receiver remains the original assignment receiver. `super.x = v`
+        // depends on this distinction just as ordinary inherited writes do.
+        proxy_set_with_receiver(target, property_key, value, receiver).to_bits() == TAG_TRUE
     } else {
         // #8082: `ordinary_set_with_receiver` can run user setters (and
         // allocates), so it is a collection point — the raw `receiver` and

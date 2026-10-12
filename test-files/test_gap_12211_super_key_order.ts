@@ -75,3 +75,81 @@ class StaticHome extends StaticBase {
 }
 StaticHome.write(3);
 console.log("static", JSON.stringify(staticLog), StaticHome.seen);
+
+const dataBase = { x: "inherited" };
+class DataHome {
+  write() {
+    super.x = "receiver";
+  }
+}
+Object.setPrototypeOf(DataHome.prototype, dataBase);
+const dataReceiver: any = {};
+DataHome.prototype.write.call(dataReceiver);
+console.log("data", dataBase.x, dataReceiver.x, Object.hasOwn(dataReceiver, "x"));
+
+const lockedBase = {};
+Object.defineProperty(lockedBase, "x", {
+  value: "locked",
+  writable: false,
+  configurable: false,
+});
+class LockedHome {
+  write() {
+    super.x = "rejected";
+  }
+}
+Object.setPrototypeOf(LockedHome.prototype, lockedBase);
+const lockedReceiver: any = {};
+try {
+  LockedHome.prototype.write.call(lockedReceiver);
+} catch (error: any) {
+  console.log("locked", error instanceof TypeError, lockedReceiver.x);
+}
+
+const proxyLog: string[] = [];
+const proxyTarget: any = {};
+const proxyBase = new Proxy(proxyTarget, {
+  set(target, key, value, setReceiver) {
+    proxyLog.push(`${String(key)}:${value}:${setReceiver === proxyReceiver}`);
+    return Reflect.set(target, key, value, setReceiver);
+  },
+});
+class ProxyHome {
+  write() {
+    super.x = 9;
+  }
+}
+Object.setPrototypeOf(ProxyHome.prototype, proxyBase);
+const proxyReceiver: any = {};
+ProxyHome.prototype.write.call(proxyReceiver);
+console.log("proxy", JSON.stringify(proxyLog), proxyReceiver.x, proxyTarget.x);
+
+const staticRelinkLog: string[] = [];
+class StaticParentA {
+  static set x(value: number) {
+    staticRelinkLog.push(`A:${value}`);
+  }
+}
+class StaticParentB {
+  static set x(value: number) {
+    staticRelinkLog.push(`B:${value}:${this === StaticRelinkHome}`);
+  }
+}
+class StaticRelinkHome extends StaticParentA {
+  static write() {
+    super.x = (Object.setPrototypeOf(StaticRelinkHome, StaticParentB), 4);
+  }
+}
+StaticRelinkHome.write();
+console.log("static-relink", JSON.stringify(staticRelinkLog));
+
+class NullHome extends null {
+  write() {
+    super.x = 1;
+  }
+}
+try {
+  NullHome.prototype.write.call({});
+} catch (error: any) {
+  console.log("null", error instanceof TypeError);
+}
