@@ -54,7 +54,9 @@ pub(super) fn wasm_function_external(value: f64) -> *mut c_void {
     if !is_wasm_export_call_shim(fp) {
         return std::ptr::null_mut();
     }
-    crate::closure::js_closure_get_capture_f64(closure, 6) as usize as *mut c_void
+    crate::closure::wasm_funcref::external_from_capture(crate::closure::js_closure_get_capture_f64(
+        closure, 6,
+    ))
 }
 
 extern "C" fn js_wasm_table_get(
@@ -111,7 +113,10 @@ extern "C" fn js_wasm_table_get(
     let value = if is_null != 0 {
         f64::from_bits(crate::value::TAG_NULL)
     } else if !function_external.is_null() {
-        make_table_function(function_external)
+        make_table_function(
+            function_external,
+            crate::wasm_instance_state::from_owner(table.get_nanbox_f64()),
+        )
     } else {
         f64::from_bits(bits)
     };
@@ -268,7 +273,9 @@ pub(super) fn make_table_method(
     })
 }
 
-pub(super) fn make_table_function(external: *mut c_void) -> f64 {
+pub(super) fn make_table_function(external: *mut c_void, context: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let context = scope.root_nanbox_f64(context);
     let arity = unsafe { perry_wasm_host_func_arity(external) };
     if arity == usize::MAX {
         drop_host_extern_handle(external as usize);
@@ -290,10 +297,13 @@ pub(super) fn make_table_function(external: *mut c_void) -> f64 {
         crate::closure::js_closure_set_capture_f64(closure, 0, 0.0)
     });
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+        crate::closure::js_closure_set_capture_f64(closure, 4, context.get_nanbox_f64())
+    });
+    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_f64(closure, 5, 0.0)
     });
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_f64(closure, 6, external as usize as f64)
+        crate::closure::js_closure_set_capture_f64(closure, 6, nanbox_undefined())
     });
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
         crate::object::set_bound_native_closure_name(closure, "wasm-table-function")

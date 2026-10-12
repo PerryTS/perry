@@ -207,7 +207,10 @@ pub(crate) use dead_owner::{
 };
 mod old_free;
 use old_free::*;
-pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
+pub(crate) use old_free::{
+    old_free_bytes, old_free_filter_range, old_free_take_exact,
+    old_free_take_exact_collecting_holder,
+};
 mod tenuring;
 use tenuring::*;
 mod oldgen;
@@ -905,7 +908,11 @@ pub(crate) fn gc_try_emergency_reclaim() -> bool {
     if IN_EMERGENCY.with(|c| c.get()) {
         return false;
     }
-    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC != 0 || gc_budgeted_cycle_active() {
+    // Holder publication uses the existing no-move scope while its raw
+    // fields are incomplete. An OOM retry must respect that scope too.
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | policy::GC_FLAG_SUPPRESSED) != 0
+        || gc_budgeted_cycle_active()
+    {
         return false;
     }
     IN_EMERGENCY.with(|c| c.set(true));
@@ -1072,7 +1079,6 @@ pub fn gc_init() {
     // (object::shapes_prototype): one registration for every heap word a
     // shape record holds (#12313).
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
-    reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);
     reg_scanner!(async_context_mutable_root_scanner);
@@ -1091,7 +1097,6 @@ pub fn gc_init() {
     // `retired_by_minor=#0`.
     reg_scanner!(crate::builtins::arithmetic::scan_typeof_string_roots_mut);
     reg_scanner!(crate::json::raw_json::scan_raw_json_key_root_mut);
-    reg_scanner!(crate::object::scan_exotic_expando_roots_mut);
     reg_scanner!(crate::array::scan_template_raw_roots_mut);
     // #6981: the memoized `Array.prototype` / `Object.prototype` addresses in
     // `array::indexing`. Raw addresses of movable objects — a relocating cycle
@@ -1118,8 +1123,6 @@ pub fn gc_init() {
     // the hops to it); the emitted hit loads through it, so each is a STRONG
     // root (`object::method_site::read_holder`).
     reg_scanner!(crate::object::method_site::read_holder::scan_read_holder_roots_mut);
-    reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
-    reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
@@ -1130,26 +1133,12 @@ pub fn gc_init() {
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
     #[cfg(feature = "node-api-host")]
     reg_scanner!(crate::node_api_host::scan_node_api_roots_mut);
-    // #9611: `WebAssembly.Memory.prototype.buffer` is a foreign-backed wrapper
-    // over the engine's linear memory, and the wasm binding table keys it by
-    // address so an import boundary can re-point it after a `memory.grow`.
-    // Metadata-only: the buffer's real owner is the Memory object.
     #[cfg(feature = "wasm-host")]
-    reg_scanner!(crate::webassembly::scan_wasm_memory_binding_roots_mut);
-    // The imports object a wasm instance was created with. The host holds only
-    // an opaque token for it, so this table is what a collection rewrites.
-    #[cfg(feature = "wasm-host")]
-    reg_scanner!(crate::webassembly::scan_wasm_import_object_roots_mut);
+    reg_scanner!(crate::webassembly::scan_active_wasm_call_roots_mut);
     reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
         crate::object::new_class_side_table_root_scan_state,
-        MutableRootScannerSource::RuntimeMutableScanner,
-    );
-    reg_budgeted_scanner!(
-        crate::symbol::scan_symbol_side_table_roots_mut,
-        crate::symbol::scan_symbol_side_table_roots_mut_step,
-        crate::symbol::new_symbol_side_table_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
     // Issue #1813: the dispatch-binding cells (`new.target`, the one-shot
@@ -1215,7 +1204,6 @@ pub fn gc_init() {
     // `*const ClosureHeader` in a TLS map. The scanner existed but was never
     // called, so the table stayed invisible to the collector.
     crate::os::os_process_emitter::register_process_emitter_root_scanner();
-    reg_scanner!(crate::builtins::scan_boxed_primitive_payload_roots_mut);
     reg_scanner!(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // #6182: keep the weak-holder registry's stored holder ADDRESSES current
     // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
@@ -1243,16 +1231,10 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
-    reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;
     // keep the weak metadata keys aligned with the forwarded addresses so
     // value-called methods still reach the prototype dispatch tower.
-    reg_scanner!(crate::object::scan_builtin_closure_metadata_roots_mut);
-    // Generic per-handle expando properties (`blob.colors = [...]` and other
-    // arbitrary own props on native HANDLE values). Keys are stable small handle
-    // ids; only the stored VALUES are JS references that must be traced.
-    reg_scanner!(crate::object::handle_expando::scan_handle_expando_roots_mut);
     // Native-module callable export singletons and process stdio stream
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
@@ -1439,9 +1421,7 @@ pub extern "C" fn js_gc_init() {
 /// See `emit_schedule_liveness_verdict`.
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
-    crate::map::release_current_thread_map_side_allocations();
     crate::json_tape_store::release_current_thread_lazy_tapes();
-    crate::set::release_current_thread_set_side_allocations();
     // Every process-exit path funnels through here — the generated exit
     // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own
     // exits call `_exit`, so `atexit` alone would not see them. Print the seeded

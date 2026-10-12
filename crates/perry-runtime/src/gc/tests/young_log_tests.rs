@@ -72,7 +72,6 @@ fn walk_opt(table: &'static str) -> Option<young_log::YoungLogWalk> {
 #[test]
 fn young_closure_prop_value_moves_with_its_owner() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
     let owner = young_closure();
     js_shadow_slot_set(0, ptr_bits(owner));
@@ -106,7 +105,6 @@ fn young_closure_prop_value_moves_with_its_owner() {
 #[test]
 fn young_value_under_an_old_closure_owner_survives_a_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
     let owner = old_closure();
     let value = young_leaf();
@@ -131,7 +129,6 @@ fn young_value_under_an_old_closure_owner_survives_a_minor() {
 #[test]
 fn old_closure_entries_survive_a_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
     let owner = old_closure();
     crate::closure::closure_set_dynamic_prop(owner, "count", 42.0);
@@ -149,7 +146,6 @@ fn old_closure_entries_survive_a_minor() {
 #[test]
 fn dead_young_closure_owner_is_pruned_by_the_young_prune() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
     // One rooted young object so the minor has real work; the owner is not it.
     js_shadow_slot_set(0, string_bits(young_leaf()));
 

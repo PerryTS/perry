@@ -70,12 +70,6 @@ ALLOWLIST = {
     # preflight, or the skip path is masked entirely. It has no reader outside
     # the guard, so it cannot damage another test's assertion.
     "YOUNG_PIN_EVER": "#7645",
-    # Read, never written, by `test_clear_symbol_side_table_roots`: these two are
-    # the process-lifetime registries the per-thread `SYMBOL_POINTERS` rebuild is
-    # derived FROM. Their symbols are `Box::leak`ed, so a process-wide identity
-    # is the correct one — `Symbol.for("x") === Symbol.for("x")` depends on it.
-    "SYMBOL_REGISTRY": "#7672",
-    "WELL_KNOWN_SYMBOLS": "#7672",
     # `plugin::REGISTRY` is the one table already defended the sound way, and
     # the survey behind #7672 called it the model: the guard takes
     # `PLUGIN_REGISTRY_TEST_LOCK` (support.rs) and every plugin test takes the

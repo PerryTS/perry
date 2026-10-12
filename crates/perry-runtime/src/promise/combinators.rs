@@ -4,8 +4,6 @@
 
 use super::*;
 
-use super::keyed_table::PromiseKeyedTable;
-
 use super::assimilate::{
     assimilate_via_then_property, enqueue_thenable_job, get_then_action,
     promise_resolve_assimilating,
@@ -17,15 +15,6 @@ pub(crate) struct PromiseAllState {
     pub results_arr: *mut crate::array::ArrayHeader,
     pub state_arr: *mut crate::array::ArrayHeader,
     pub index: u32,
-}
-
-crate::perry_thread_local! {
-    /// Keyed by input-promise address. See `keyed_table.rs`: a dense `Vec` is
-    /// still the GC scanners' traversal/rewrite surface, with an O(1) key index
-    /// layered on top (#6084 item 2 — this used to be a raw `Vec` that every
-    /// settlement scanned end to end).
-    pub(super) static PROMISE_ALL_STATES: RefCell<PromiseKeyedTable<PromiseAllState>> =
-        const { RefCell::new(PromiseKeyedTable::new()) };
 }
 
 /// Drain ALL `PromiseAllState` entries associated with `promise`.
@@ -43,11 +32,31 @@ crate::perry_thread_local! {
 /// `p as usize`. When `p` settles we must complete every registered
 /// state, not just the first one.
 #[inline]
-pub(super) fn promise_all_take_all_handlers(promise: *mut Promise) -> Vec<PromiseAllState> {
+pub(crate) fn promise_all_take_all_handlers(promise: *mut Promise) -> Vec<PromiseAllState> {
     if promise.is_null() {
         return Vec::new();
     }
-    PROMISE_ALL_STATES.with(|states| states.borrow_mut().take_all(promise as usize))
+    unsafe {
+        let list = owned_state::take_list(promise, owned_state::ALL_STATES);
+        if list.is_null() {
+            return Vec::new();
+        }
+        let len = (*list).length;
+        (0..len / 4)
+            .map(|i| {
+                let ptr = |offset| {
+                    (crate::array::js_array_get(list, i * 4 + offset).bits()
+                        & crate::value::POINTER_MASK) as usize
+                };
+                PromiseAllState {
+                    result_promise: ptr(0) as *mut Promise,
+                    results_arr: ptr(1) as *mut crate::array::ArrayHeader,
+                    state_arr: ptr(2) as *mut crate::array::ArrayHeader,
+                    index: crate::array::js_array_get_f64(list, i * 4 + 3) as u32,
+                }
+            })
+            .collect()
+    }
 }
 
 #[inline]
@@ -61,7 +70,7 @@ pub(super) fn promise_all_settle(state: PromiseAllState, value: f64, is_fulfille
 
 /// Attach the allocation-free `Promise.all` state used when every observable
 /// combinator hook has been ruled out. Settled inputs become ordinary
-/// microtasks; pending inputs park the state in the same GC-scanned keyed table
+/// microtasks; pending inputs park the state in the owner's GC array
 /// that `js_promise_resolve` drains on settlement.
 pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllState) {
     if promise.is_null() {
@@ -69,7 +78,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
     }
     mark_rejection_handled(promise);
 
-    // The direct PromiseAllState table is allocation-free, but it is a
+    // The direct PromiseAllState list shares the Promise's ownership, but it is a
     // separate queue from the promise's ordinary reaction slot. If a reaction
     // is already registered, parking the state here would let Promise.all
     // overtake that earlier reaction when the promise settles. Join the
@@ -111,9 +120,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
                 queued = true;
             }
             PromiseState::Pending => {
-                PROMISE_ALL_STATES.with(|states| {
-                    states.borrow_mut().push(promise as usize, state);
-                });
+                park_all_state(promise, state);
                 set_promise_callback_context(promise);
             }
         }
@@ -123,52 +130,17 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
     }
 }
 
-pub(super) fn scan_promise_all_states_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROMISE_ALL_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let mut rekeyed = false;
-        for entry in states.iter_mut() {
-            // Evacuation rewrites the key IN PLACE — the position stays valid,
-            // but the key → position index no longer does. Rebuild it lazily.
-            rekeyed |= visitor.visit_metadata_usize_slot(&mut entry.key);
-            visitor.visit_raw_mut_ptr_slot(&mut entry.value.result_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut entry.value.results_arr);
-            visitor.visit_raw_mut_ptr_slot(&mut entry.value.state_arr);
-        }
-        if rekeyed {
-            states.note_key_rewritten();
-        }
-    });
-}
-
-/// GC death hook: input promise `promise` died in a sweep — no settle can ever
-/// complete the combinator states keyed by it, so drop them and let the result
-/// machinery (result promise, results/state arrays) become collectible.
-/// 2026-07-09 GC audit, mirrors `PROMISE_CONTEXTS`.
-pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
-    if promise.is_null() {
-        return;
-    }
-    let key = promise as usize;
-    PROMISE_ALL_STATES.with(|states| states.borrow_mut().remove_key(key));
-}
-
-/// Copied-minor from-space cleanup for `PROMISE_ALL_STATES` — see
-/// `cleanup_copied_minor_settle_listeners_for_gc` (`reactions.rs`).
-pub(super) fn cleanup_copied_minor_all_states_for_gc() {
-    use super::CopiedMinorPromiseKeyFate::*;
-    PROMISE_ALL_STATES.with(|states| {
-        states.borrow_mut().retain_mut(|entry| {
-            match super::copied_minor_promise_key_fate(entry.key) {
-                Keep => true,
-                Rekey(new_key) => {
-                    entry.key = new_key;
-                    true
-                }
-                Drop => false,
-            }
-        });
-    });
+pub(crate) unsafe fn park_all_state(promise: *mut Promise, state: PromiseAllState) {
+    owned_state::push_record(
+        promise,
+        owned_state::ALL_STATES,
+        &[
+            owned_state::pointer_word(state.result_promise),
+            owned_state::pointer_word(state.results_arr),
+            owned_state::pointer_word(state.state_arr),
+            state.index as f64,
+        ],
+    );
 }
 
 /// Create a rejected promise with the given reason

@@ -74,8 +74,8 @@ fn value_only_rewrites_skip_pointer_index_rebuild() {
         let moved_bits = crate::value::POINTER_TAG | moved_key as u64;
         // Install the rewritten key with the external-slot barrier, then
         // exercise the same index hook the collector runs after a rewrite.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*map).store as usize,
             (*map).entries as usize,
             moved_bits,
         );

@@ -166,8 +166,6 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
 #[test]
 fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    crate::symbol::test_clear_symbol_side_table_roots();
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     // Class symbols now belong to the pinned function's traced bag. Install
     // its production scanners, retaining every actual-relocation assertion.
     gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
@@ -181,8 +179,6 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let static_value = young_leaf();
     js_shadow_slot_set(0, ptr_bits(owner));
 
-    crate::symbol::test_seed_symbol_pointer_root(sym_key);
-    crate::symbol::test_seed_symbol_pointer_root(static_sym_key);
     unsafe {
         crate::symbol::js_object_set_symbol_property(
             f64::from_bits(ptr_bits(owner)),
@@ -199,10 +195,6 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let static_owner = crate::object::class_value::class_value_ptr(0x5402) as usize;
     let array_bag = unsafe { crate::array::array_property_bag(owner as *const crate::ArrayHeader) };
     let static_bag = unsafe { crate::closure::props::bag_of(static_owner) };
-    assert!(
-        !crate::symbol::test_symbol_property_owner_exists(static_owner),
-        "class symbol data must not also occupy the side table"
-    );
     let _ = gc_collect_minor();
     assert_ne!(
         unsafe { crate::closure::props::bag_of(static_owner) },
@@ -236,23 +228,10 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     assert!(crate::arena::pointer_in_nursery(value_after));
     assert!(crate::arena::pointer_in_nursery(static_sym_key_after));
     assert!(crate::arena::pointer_in_nursery(static_value_after));
-    assert!(
-        !crate::symbol::test_symbol_property_owner_exists(owner),
-        "symbol side table should not keep the stale owner key after moving"
-    );
-    assert!(!crate::symbol::test_symbol_property_owner_exists(
-        owner_after
-    ));
-    assert!(crate::symbol::test_symbol_pointer_root_contains(
-        sym_key_after
-    ));
-    assert!(crate::symbol::test_symbol_pointer_root_contains(
-        static_sym_key_after
-    ));
-    assert!(!crate::symbol::test_symbol_pointer_root_contains(sym_key));
-    assert!(!crate::symbol::test_symbol_pointer_root_contains(
-        static_sym_key
-    ));
+    assert!(crate::symbol::is_registered_symbol(sym_key_after));
+    assert!(crate::symbol::is_registered_symbol(static_sym_key_after));
+    assert!(!crate::symbol::is_registered_symbol(sym_key));
+    assert!(!crate::symbol::is_registered_symbol(static_sym_key));
 
     let moved_owner = f64::from_bits(ptr_bits(owner_after));
     let moved_sym = f64::from_bits(ptr_bits(sym_key_after));
@@ -268,66 +247,6 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
             static_value_bits_after
         );
     }
-}
-
-/// The range filter in front of `SYMBOL_POINTERS` must admit a symbol's NEW
-/// address after the collector moves it.
-///
-/// `is_registered_symbol` rejects an out-of-range pointer WITHOUT consulting
-/// the set, so a moved symbol whose new address fell outside the bounds its
-/// allocation established would be a live, registered symbol that the probe
-/// reports as "not a symbol" — losing `typeof`, symbol-keyed property lookup
-/// and `Symbol.iterator` dispatch.
-///
-/// The sibling test above asserts membership with
-/// `test_symbol_pointer_root_contains`, which reads the set directly and so
-/// cannot see this: the entry IS in the set. This one goes through the public
-/// probe, and resets the range first so exactly one registration defines it —
-/// otherwise a wide range left by earlier tests in this binary would admit the
-/// moved address by luck and the assertion would be vacuous.
-#[test]
-fn test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    crate::symbol::test_clear_symbol_side_table_roots();
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
-
-    // Reset AFTER the clear above, and register exactly one symbol, so the
-    // range is the single point that symbol sits at.
-    let _range = crate::symbol::SymbolAddrRangeGuard::reset();
-
-    let sym_key = unsafe { alloc_nursery_test_symbol() };
-    crate::symbol::test_seed_symbol_pointer_root(sym_key);
-    js_shadow_slot_set(0, ptr_bits(sym_key));
-
-    let filter_before = crate::symbol::test_symbol_filter_snapshot();
-    assert!(
-        crate::symbol::test_symbol_filter_bits_set() <= 3,
-        "fixture must start from a filter holding exactly this one symbol \
-         (at most its three bits), or the assertion below is vacuous"
-    );
-
-    let _ = gc_collect_minor();
-
-    let sym_key_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_ne!(
-        sym_key_after, sym_key,
-        "fixture must actually MOVE the symbol, or nothing is under test"
-    );
-    assert!(crate::symbol::test_symbol_pointer_root_contains(
-        sym_key_after
-    ));
-    assert!(
-        !crate::symbol::test_symbol_filter_snapshot_may_contain(&filter_before, sym_key_after),
-        "fixture must move the symbol to an address the filter its own \
-         allocation built does NOT already accept ({sym_key_after:#x}), or the \
-         assertion below passes without the forwarding rewrite doing anything"
-    );
-    assert!(
-        crate::symbol::is_registered_symbol(sym_key_after),
-        "a symbol evacuated to {sym_key_after:#x}, which the filter its \
-         allocation established rejects, is still live and registered — the \
-         forwarding rewrite must have admitted the new address"
-    );
 }
 
 #[test]

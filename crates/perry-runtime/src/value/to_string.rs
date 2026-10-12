@@ -175,7 +175,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
                 }
                 return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
             }
-            if crate::symbol::is_registered_symbol(ptr as usize) {
+            if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
                 if reject_symbol {
                     crate::collection_iter::throw_type_error(
                         "Cannot convert a Symbol value to a string",

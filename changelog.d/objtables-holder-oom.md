@@ -1,0 +1,1 @@
+Holder publication now blocks the allocation-failure collection retry during the existing GC suppression scope. This prevents a full trace from seeing incomplete Map, Set or async-context holder fields; ordinary emergency retries retain their existing behavior.

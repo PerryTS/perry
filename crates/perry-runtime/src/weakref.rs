@@ -174,8 +174,8 @@ fn is_valid_weak_target(value: f64) -> bool {
     // Class references need their registry proof only in the immediate lane.
     let bits = value.to_bits();
     if bits & TAG_MASK == POINTER_TAG {
-        let ptr = (bits & POINTER_MASK) as usize;
-        return ptr != 0 && !crate::symbol::is_global_registered_symbol(ptr);
+        let ptr = crate::value::addr_class::tagged_heap_addr(bits);
+        return ptr != 0 && !crate::symbol::value_is_global_registered_symbol(value);
     }
     if crate::value::is_js_handle(value) {
         return true;
@@ -240,7 +240,7 @@ fn heap_ptr_from_tagged_bits(bits: u64) -> Option<usize> {
     if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
         return None;
     }
-    let ptr = (bits & POINTER_MASK) as usize;
+    let ptr = crate::value::addr_class::tagged_heap_addr(bits);
     (ptr >= 0x1000).then_some(ptr)
 }
 
@@ -300,12 +300,15 @@ pub(crate) fn weak_target_should_clear(
     if crate::value::is_js_handle(target) {
         return false;
     }
+    if target_bits & TAG_MASK == crate::value::POINTER_TAG
+        && crate::value::addr_class::is_proxy_id_band((target_bits & POINTER_MASK) as usize)
+        && crate::proxy::canonical_address(target).is_none()
+    {
+        return true;
+    }
     let Some(ptr) = heap_ptr_from_tagged_bits(target_bits) else {
         return false;
     };
-    if crate::value::addr_class::is_proxy_id_band(ptr) {
-        return !crate::proxy::gc_weak_key_is_live(target_bits, minor_only);
-    }
     if !valid_ptrs.contains(&ptr) {
         return !crate::symbol::is_well_known_symbol(ptr);
     }
@@ -851,6 +854,12 @@ pub(crate) fn weak_target_should_clear_copied(
     let target = f64::from_bits(target_bits);
     if crate::value::is_js_handle(target) {
         return false;
+    }
+    if target_bits & TAG_MASK == crate::value::POINTER_TAG
+        && crate::value::addr_class::is_proxy_id_band((target_bits & POINTER_MASK) as usize)
+        && crate::proxy::canonical_address(target).is_none()
+    {
+        return true;
     }
     let Some(ptr) = heap_ptr_from_tagged_bits(target_bits) else {
         return false;

@@ -1,44 +1,15 @@
 //! Exotic own properties use ordinary holder shapes and value slots.
-//! Meta-capable cells reach their bag through ObjectMeta.expando. Temporal
-//! retains its existing expando ownership registry, containing only its bag
-//! edge. Neither path stores descriptors separately from the holder keys.
-
-use std::cell::{Cell, RefCell};
+//! All exotic cells reach their bag through ObjectMeta.expando. Neither path stores descriptors separately from the holder keys.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExoticKind {
     Date,
     Error,
-    /// A `Temporal.*` reference value (any of the 8 brand sub-kinds). Like
-    /// `Date`, it is a non-movable, pointer-free cell that is NOT an
-    /// `ObjectHeader`, so user-defined own properties (`Object.defineProperty`,
-    /// plain assignment — e.g. test262's `instance.constructor = …` and the
-    /// `checkToTemporalCalendarFastPath` getter probes) must live in the
-    /// side table rather than being written through a bit-cast that corrupts
-    /// the boxed payload. Built-in getters (`duration.years`, `plainDate.month`)
-    /// stay in the Temporal dispatch path; only true expando keys land here.
+    /// Temporal's native payload and metadata have independent ownership.
     Temporal,
-    /// A `Promise` is a `GC_TYPE_PROMISE` cell, NOT an `ObjectHeader`, so a
-    /// plain property write (`p.status = "pending"`, `Object.assign(p, …)`)
-    /// must land in the side table rather than being bit-cast through the
-    /// `ObjectHeader` field path (which silently dropped the write — reads came
-    /// back `undefined`). Libraries attach bookkeeping to the promise object
-    /// itself: @tanstack/query-core's `pendingThenable()` stores `status` /
-    /// `value` on the promise and gates its retryer on `thenable.status`, so a
-    /// dropped expando left `isResolved()` permanently true and the fetch never
-    /// resolved (#5142). Built-in `then`/`catch`/`finally` reads stay on the
-    /// promise dispatch path; only true expando keys land here. Unlike Date /
-    /// Temporal, a promise is movable, so its expando entry is rekeyed on GC
-    /// move via `exotic_expando_owner_moved`.
+    /// Promise properties live on its traced metadata bag.
     Promise,
-    /// A `Map` is a `MapHeader` cell, NOT an `ObjectHeader` — a plain expando
-    /// write (`memoized.cache.custom = x` on a lodash-memoize Map cache) must
-    /// land in the side table rather than being bit-cast through the
-    /// `ObjectHeader` field path, which overwrote collection-internal fields
-    /// (and enumeration then read those bytes back as a garbage `keys_array`
-    /// pointer → SIGSEGV). Collection DATA stays in the map natives; only
-    /// true expando keys land here. Movable — rekeyed on GC move like
-    /// Promise.
+    /// Collection properties live on their traced metadata bags.
     Map,
     /// `Set` analogue of `Map` (a `SetHeader` cell).
     Set,
@@ -108,28 +79,6 @@ pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticK
     exotic_expando_kind(addr).map(|kind| (addr, kind))
 }
 
-/// #6759 Phase A: exotic-cell expando storage grouped under the owning
-/// thread's [`crate::state::RuntimeState`]. Keeping the gate beside the map
-/// lets each operation fetch the runtime state once and reuse it, rather than
-/// resolving two independent TLS keys on every first store or guarded lookup.
-pub(crate) struct ExoticExpandoTables {
-    /// addr -> insertion-ordered (key, nanboxed value bits) pairs for the
-    /// non-Error exotic cells handled by this module.
-    entries: RefCell<crate::fast_hash::PtrHashMap<usize, u64>>,
-    /// Fast-path gate so hot get/set paths skip the map lookup until the
-    /// first expando is installed on this thread.
-    in_use: Cell<bool>,
-}
-
-impl ExoticExpandoTables {
-    pub(crate) fn new() -> Self {
-        Self {
-            entries: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            in_use: Cell::new(false),
-        }
-    }
-}
-
 fn expando_store(addr: usize, key: &str, bits: u64) {
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
@@ -171,7 +120,7 @@ fn expando_remove(addr: usize, key: &str) -> bool {
 }
 
 /// Kind-dispatched own data-property store: Error delegates to the
-/// pre-existing `ERROR_USER_PROPS` table, Date/RegExp use `EXOTIC_EXPANDO`.
+/// traced property bag, just like the other exotic cells.
 pub(crate) fn value_store(_kind: ExoticKind, addr: usize, key: &str, bits: u64) {
     // #10943: this is where an exotic cell ACTUALLY takes a named property,
     // whatever lowering asked for it. Arming at `field_set_by_name`'s exotic
@@ -196,66 +145,9 @@ fn value_keys(_kind: ExoticKind, addr: usize) -> Vec<String> {
     unsafe { super::descriptor_state::holder_key_names(property_bag(addr), false) }
 }
 
-/// Drop any stale expando entries left at `addr` by a previous (collected)
-/// cell. Called from Date / RegExp allocation so address reuse can't leak
-/// the old instance's properties onto the new one.
-pub(crate) fn expando_clear_on_alloc(addr: usize) {
-    let tables = &crate::state::state().exotic_expando;
-    if !tables.in_use.get() {
-        return;
-    }
-    tables.entries.borrow_mut().remove(&addr);
-}
-
-/// Death pruning (2026-07-09 GC audit wave 2): the root scanner
-/// (`scan_exotic_expando_roots_mut`) strongly roots EVERY owner's values,
-/// dead owners included, so a dead Date/RegExp/Promise/Map/Set's expando
-/// value graph was immortal until the exact address happened to be handed
-/// to a new cell of the same kind (`expando_clear_on_alloc`). Prune entries
-/// whose owner cell is provably dead instead. `is_dead_owner` is one of the
-/// GC's deadness predicates (`gc::dead_owner`). Owners that die PINNED are
-/// skipped by the predicate's pinned check and remain covered by the
-/// clear-on-alloc path.
-pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let tables = &crate::state::state().exotic_expando;
-    if !tables.in_use.get() {
-        return;
-    }
-    let mut map = tables.entries.borrow_mut();
-    if !map.is_empty() {
-        map.retain(|owner, _| !is_dead_owner(*owner));
-    }
-}
-
 #[cfg(test)]
-pub(crate) fn test_seed_exotic_expando_entry(addr: usize, key: &str, value_bits: u64) {
+pub(crate) fn test_define_exotic_property(addr: usize, key: &str, value_bits: u64) {
     expando_store(addr, key, value_bits);
-}
-
-#[cfg(test)]
-pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
-    crate::state::state()
-        .exotic_expando
-        .entries
-        .borrow()
-        .contains_key(&addr)
-}
-
-/// Rekey a movable exotic cell's expando entry after the GC relocates it from
-/// `old_addr` to `new_addr`. Without this, a surviving owner would lose its
-/// user-defined properties after a move. Stored expando *values* are already
-/// rewritten by `scan_exotic_expando_roots_mut`; this migrates the owner
-/// *key*. Every user wires this directly via
-/// `GcMoveHookKind::ExoticExpandoOwner`.
-pub(crate) fn exotic_expando_owner_moved(old_addr: usize, new_addr: usize) {
-    let tables = &crate::state::state().exotic_expando;
-    if !tables.in_use.get() || old_addr == new_addr {
-        return;
-    }
-    let mut map = tables.entries.borrow_mut();
-    if let Some(entries) = map.remove(&old_addr) {
-        map.insert(new_addr, entries);
-    }
 }
 
 /// `[[Set]]` on a Date/RegExp/Error instance. Honors accessor descriptors
@@ -564,71 +456,9 @@ pub(crate) fn exotic_put_value_set(
     Some(value)
 }
 
-/// GC mutable-root scanner: keeps expando values alive (and rewrites them if
-/// the collector relocates the referenced heap objects).
-pub fn scan_exotic_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let owners: Vec<_> = crate::state::state()
-        .exotic_expando
-        .entries
-        .borrow()
-        .keys()
-        .copied()
-        .collect();
-    for owner in owners {
-        let bits = crate::state::state()
-            .exotic_expando
-            .entries
-            .borrow()
-            .get(&owner)
-            .copied();
-        if let Some(bits) = bits {
-            let mut value = f64::from_bits(bits);
-            visitor.visit_nanbox_f64_slot(&mut value);
-            let mut entries = crate::state::state().exotic_expando.entries.borrow_mut();
-            if let Some(slot) = entries.get_mut(&owner) {
-                if *slot == bits {
-                    *slot = value.to_bits();
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn runtime_state_keeps_exotic_expandos_thread_local() {
-        let marker = 0u8;
-        let owner = &marker as *const u8 as usize;
-        let key = "runtime-state-isolation";
-
-        test_seed_exotic_expando_entry(owner, key, crate::value::TAG_UNDEFINED);
-        assert!(test_exotic_expando_entry_exists(owner));
-
-        std::thread::spawn(move || {
-            assert!(
-                !test_exotic_expando_entry_exists(owner),
-                "a worker observed the parent thread's expando table"
-            );
-            test_seed_exotic_expando_entry(owner, key, crate::value::TAG_TRUE);
-            assert_eq!(expando_lookup(owner, key), Some(crate::value::TAG_TRUE));
-        })
-        .join()
-        .expect("worker test thread panicked");
-
-        assert!(
-            test_exotic_expando_entry_exists(owner),
-            "the worker's RuntimeState disturbed the parent table"
-        );
-        assert_eq!(
-            expando_lookup(owner, key),
-            Some(crate::value::TAG_UNDEFINED),
-            "the worker overwrote the parent thread's expando value"
-        );
-        assert!(expando_remove(owner, key));
-    }
 
     /// #11364: a native `Box` under `POINTER_TAG` whose preceding allocator
     /// word looks like a `GC_TYPE_MAP` header must not be classified as a Map.
@@ -699,39 +529,15 @@ mod tests {
     }
 }
 
-/// Reach the existing own-property storage. Meta-capable owners carry their
-/// bag as a child edge; Temporal retains its existing native registry entry.
+/// Every exotic owner carries its property bag through its own metadata.
 pub(crate) unsafe fn property_bag(addr: usize) -> *mut super::ObjectHeader {
-    if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
-        if let Some(bag) = super::cell_expando_get(addr) {
-            return bag;
-        }
+    if crate::value::addr_class::try_read_tracked_gc_header(addr).is_none() {
+        return std::ptr::null_mut();
     }
-    crate::state::state()
-        .exotic_expando
-        .entries
-        .borrow()
-        .get(&addr)
-        .copied()
-        .map_or(std::ptr::null_mut(), |bits| {
-            (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
-        })
+    super::cell_expando_get(addr).unwrap_or(std::ptr::null_mut())
 }
+
 pub(crate) unsafe fn property_bag_ensure(addr: usize) -> *mut super::ObjectHeader {
-    if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some()
-        && super::cell_meta_slot(addr).is_some()
-    {
-        return super::cell_expando_ensure(addr).expect("cell property storage");
-    }
-    let bag = property_bag(addr);
-    if !bag.is_null() {
-        return bag;
-    }
-    let bag = super::js_object_alloc(0, 0);
-    let bits = crate::value::js_nanbox_pointer(bag as i64).to_bits();
-    let tables = &crate::state::state().exotic_expando;
-    tables.in_use.set(true);
-    tables.entries.borrow_mut().insert(addr, bits);
-    crate::gc::runtime_write_barrier_external_slot(addr, 0, bits);
-    bag
+    assert!(crate::value::addr_class::try_read_tracked_gc_header(addr).is_some());
+    super::cell_expando_ensure(addr).expect("exotic cell must own a metadata edge")
 }

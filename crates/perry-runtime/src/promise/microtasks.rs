@@ -858,11 +858,17 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     context,
                     async_id,
                     trigger_async_id,
+                    resource,
                 }) => {
                     bump(&MT_RUN_COUNT);
                     // #7497: root BEFORE `enter_microtask_context` — see the
-                    // Task::AsyncStep arm.
+                    // Task::AsyncStep arm. The popped entry no longer owns the
+                    // job's state: this scope does until its destroy.
                     let scope = crate::gc::RuntimeHandleScope::new();
+                    if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+                        scope.root_raw_mut_ptr(state);
+                    }
+                    let resource_handle = scope.root_nanbox_f64(resource);
                     let callback_handle = scope.root_nanbox_f64(boxed_closure(callback));
                     enter_microtask_context(&context);
                     let callback = rooted_closure(&callback_handle);
@@ -876,13 +882,17 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(callback));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-                    crate::async_hooks::before(async_id, trigger_async_id);
+                    crate::async_hooks::before_scheduled(
+                        async_id,
+                        trigger_async_id,
+                        resource_handle.get_nanbox_f64(),
+                    );
                     crate::closure::js_closure_call0(
                         rooted_closure(&callback_handle),
                         crate::closure::plain_call_receiver(),
                     );
                     crate::async_hooks::after(async_id);
-                    crate::async_hooks::destroy(async_id);
+                    crate::async_hooks::destroy_scheduled(async_id);
                     CURRENT_MICROTASK_PROMISE
                         .with(|c| c.set(prev_promise_handle.get_raw_mut_ptr::<Promise>()));
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(prev_callback));

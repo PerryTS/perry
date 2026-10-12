@@ -739,16 +739,12 @@ pub(super) fn sweep_with_age_bump_and_malloc(
 unsafe fn finalize_dead_arena_payload(
     header: *mut GcHeader,
     user_ptr: *mut u8,
-    closure_externals_active: bool,
     full_dead_owners_pruned: bool,
 ) {
     if full_dead_owners_pruned {
         super::layout::layout_clear_after_full_prune(user_ptr as usize);
     } else {
         layout_clear_for_ptr(user_ptr as usize);
-    }
-    if closure_externals_active {
-        gc_type_clear_dead_payload_side_tables((*header).obj_type, user_ptr as usize);
     }
     gc_type_finalize_unmarked_payload((*header).obj_type, user_ptr);
 }
@@ -844,9 +840,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     let old_block_start = crate::arena::longlived_end();
     crate::arena::old_pages_reset_sweep_accounting();
 
-    // Wasm funcref handles need dead-owner release, checked once per sweep.
-    let closure_externals_active = crate::closure::closure_dynamic_side_tables_nonempty();
-
     crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
         unsafe {
@@ -879,7 +872,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, closure_externals_active, false);
+                finalize_dead_arena_payload(header, user_ptr, false);
                 if reclaim_dead_old_blocks && dead_old {
                     invalidate_dead_old_arena_header(header, total_size);
                 }
@@ -961,12 +954,6 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                     freed_bytes += total_size as u64;
                     layout_clear_for_ptr(user_ptr as usize);
-                    if closure_externals_active {
-                        gc_type_clear_dead_payload_side_tables(
-                            (*header).obj_type,
-                            user_ptr as usize,
-                        );
-                    }
                     if reclaim_dead_old_blocks && dead_old {
                         invalidate_dead_old_arena_header(header, total_size);
                     } else {
@@ -988,7 +975,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
                 }
                 let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
                 freed_bytes += total_size as u64;
-                finalize_dead_arena_payload(header, user_ptr, closure_externals_active, false);
+                finalize_dead_arena_payload(header, user_ptr, false);
 
                 // Note: We deliberately do NOT zero the dead object's
                 // payload here. trace_object/trace_array/trace_closure
@@ -1156,7 +1143,6 @@ enum SweepCycleSubphase {
 
 pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
-    dead_sets: Vec<usize>,
     dead_lazy_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
@@ -1176,7 +1162,6 @@ impl IncrementalSweepState {
     ) -> Self {
         Self {
             subphase: SweepCycleSubphase::Malloc,
-            dead_sets: Vec::new(),
             dead_lazy_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(
@@ -1212,7 +1197,6 @@ impl IncrementalSweepState {
             full_trace,
             synchronous_full_trace,
         );
-        self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
         // #7539: lazy JSON arrays own their tape bytes outside the GC heap.
         // The copying minor has its own from-space pass; this covers the
         // non-copying cycles, including a dead owner sitting in the ACTIVE
@@ -1220,7 +1204,7 @@ impl IncrementalSweepState {
         self.dead_lazy_arrays = crate::json_tape_store::collect_owners(&|addr| unsafe {
             registered_lazy_array_is_dead_post_trace(addr, full_trace)
         });
-        if !self.dead_sets.is_empty() || !self.dead_lazy_arrays.is_empty() {
+        if !self.dead_lazy_arrays.is_empty() {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
         self
@@ -1239,9 +1223,7 @@ impl IncrementalSweepState {
             SweepCycleSubphase::CollectionSideBuffers => {
                 let mut spent = 0usize;
                 while spent < budget {
-                    if let Some(addr) = self.dead_sets.pop() {
-                        crate::set::finalize_collected_dead_set(addr);
-                    } else if let Some(addr) = self.dead_lazy_arrays.pop() {
+                    if let Some(addr) = self.dead_lazy_arrays.pop() {
                         crate::json_tape_store::release(addr);
                     } else {
                         self.subphase = SweepCycleSubphase::Malloc;
@@ -1249,7 +1231,7 @@ impl IncrementalSweepState {
                     }
                     spent += 1;
                 }
-                if self.dead_sets.is_empty() && self.dead_lazy_arrays.is_empty() {
+                if self.dead_lazy_arrays.is_empty() {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
                 false

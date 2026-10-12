@@ -233,8 +233,8 @@ fn rule1_clear_object_descriptors_transitions() {
 #[test]
 fn rule1_clear_object_descriptors_on_a_handle_transitions_its_bag() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let handle: usize = 0x41;
-    assert!(crate::value::addr_class::is_handle_band(handle));
+    let native = super::handle_expando::test_support::TestNativeOwner::new();
+    let handle = native.handle() as usize;
     set_property_attrs(handle, "hid".to_string(), FROZEN_ATTRS);
     unsafe {
         let bag = super::descriptor_state::descriptor_holder(handle);

@@ -1,0 +1,1 @@
+Console instances now own their stream references, counters and indentation in a private traced GC record. Removed the address-keyed instance registry, forwarding scanner and dead-owner prune. Added copying-GC and parity coverage, including loss-of-owner-edge and independent-instance controls.

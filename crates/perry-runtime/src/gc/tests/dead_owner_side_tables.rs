@@ -28,6 +28,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::value::TAG_UNDEFINED;
 
 pub(super) fn full_gc() {
     let _ =
@@ -39,8 +40,6 @@ pub(super) struct ArraySideTableTestGuard;
 impl ArraySideTableTestGuard {
     pub(super) fn new() -> Self {
         crate::array::test_clear_full_array_named_property_roots();
-        crate::map::test_clear_map_iterator_arrays();
-        crate::set::test_clear_set_iterator_arrays();
         Self
     }
 }
@@ -48,15 +47,11 @@ impl ArraySideTableTestGuard {
 impl Drop for ArraySideTableTestGuard {
     fn drop(&mut self) {
         crate::array::test_clear_full_array_named_property_roots();
-        crate::map::test_clear_map_iterator_arrays();
-        crate::set::test_clear_set_iterator_arrays();
     }
 }
 
 pub(super) fn register_array_side_table_scanners() {
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
-    gc_register_mutable_root_scanner(crate::map::scan_map_iterator_array_roots_mut);
-    gc_register_mutable_root_scanner(crate::set::scan_set_iterator_array_roots_mut);
 }
 
 /// Returns the live head: the first named property on a full fixture array
@@ -171,57 +166,68 @@ fn test_array_named_materialized_iterator_brands_follow_live_moves() {
     js_shadow_slot_set(0, 0);
     js_shadow_slot_set(1, 0);
     full_gc();
-    assert!(!util_types_is_map_iterator(moved_map_iter));
-    assert!(!util_types_is_set_iterator(moved_set_iter));
 }
 
 #[test]
-fn test_array_named_dead_map_iterator_marker_does_not_brand_exact_eden_reuse() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _side_tables = ArraySideTableTestGuard::new();
-    register_array_side_table_scanners();
-    crate::arena::arena_reset_all_blocks_to_zero();
-
-    let dead_map = crate::map::js_map_alloc(0);
-    let dead_map_iter = crate::map::js_map_entries(dead_map) as usize;
-    assert!(util_types_is_map_iterator(dead_map_iter));
-
-    let _ = gc_collect_minor();
-    let _replacement_map = crate::map::js_map_alloc(0);
-    let replacement_map_array = unsafe { alloc_nursery_test_array() };
-    assert_eq!(
-        replacement_map_array as usize, dead_map_iter,
-        "test premise: the copied-minor Eden reset must reuse the exact Map iterator address"
-    );
-    assert!(!util_types_is_map_iterator(replacement_map_array as usize));
-
-    // Finalize the replacement Map while its header is still intact; a raw
-    // arena reset would otherwise strand its external entries allocation.
-    full_gc();
+fn materialized_map_brand_moves_with_private_bag() {
+    check_materialized_map_brand(false);
 }
 
 #[test]
-fn test_array_named_dead_set_iterator_marker_does_not_brand_exact_eden_reuse() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _side_tables = ArraySideTableTestGuard::new();
-    register_array_side_table_scanners();
-    crate::arena::arena_reset_all_blocks_to_zero();
+#[ignore = "negative control: erase the moved Map iterator brand"]
+fn negative_control_objtables_map_iterator() {
+    check_materialized_map_brand(true);
+}
 
-    let dead_set = crate::set::js_set_alloc(0);
-    let dead_set_iter = crate::set::js_set_to_array(dead_set) as usize;
-    assert!(util_types_is_set_iterator(dead_set_iter));
-
+fn check_materialized_map_brand(erase: bool) {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let map = crate::map::js_map_alloc(0);
+    let original = crate::map::js_map_entries(map) as usize;
+    js_shadow_slot_set(0, ptr_bits(original));
     let _ = gc_collect_minor();
-    let _replacement_set = crate::set::js_set_alloc(0);
-    let replacement_set_array = unsafe { alloc_nursery_test_array() };
-    assert_eq!(
-        replacement_set_array as usize, dead_set_iter,
-        "test premise: the copied-minor Eden reset must reuse the exact Set iterator address"
-    );
-    assert!(!util_types_is_set_iterator(replacement_set_array as usize));
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(original, moved);
+    if erase {
+        unsafe {
+            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
+            (*(*bag).meta).native_state = 0;
+        }
+    }
+    assert!(util_types_is_map_iterator(moved));
+    let fresh = crate::array::js_array_alloc(0) as usize;
+    assert!(!util_types_is_map_iterator(fresh));
+    assert!(!util_types_is_set_iterator(moved));
+}
 
-    // Finalize the replacement Set before the test guard tears down state.
-    full_gc();
+#[test]
+fn materialized_set_brand_moves_with_private_bag() {
+    check_materialized_set_brand(false);
+}
+
+#[test]
+#[ignore = "negative control: erase the moved Set iterator brand"]
+fn negative_control_objtables_set_iterator() {
+    check_materialized_set_brand(true);
+}
+
+fn check_materialized_set_brand(erase: bool) {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let set = crate::set::js_set_alloc(0);
+    let original = crate::set::js_set_to_array(set) as usize;
+    js_shadow_slot_set(0, ptr_bits(original));
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(original, moved);
+    if erase {
+        unsafe {
+            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
+            (*(*bag).meta).native_state = 0;
+        }
+    }
+    assert!(util_types_is_set_iterator(moved));
+    let fresh = crate::array::js_array_alloc(0) as usize;
+    assert!(!util_types_is_set_iterator(fresh));
+    assert!(!util_types_is_map_iterator(moved));
 }
 
 #[test]
@@ -325,46 +331,6 @@ fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
     assert!(crate::object::get_property_attrs(fresh as usize, "gone").is_none());
 }
 
-#[test]
-fn test_dead_symbol_pointer_pruned_live_symbol_survives_full_gc() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let dead_sym = alloc_tracked_test_symbol() as usize;
-    let live_sym = alloc_tracked_test_symbol() as usize;
-    crate::symbol::test_seed_symbol_pointer_root(dead_sym);
-    crate::symbol::test_seed_symbol_pointer_root(live_sym);
-    js_shadow_slot_set(0, ptr_bits(live_sym));
-
-    full_gc();
-
-    assert!(
-        !crate::symbol::test_symbol_pointer_root_contains(dead_sym),
-        "dead symbol's SYMBOL_POINTERS entry must be pruned (js_is_symbol \
-         would alias a later allocation at the recycled address)"
-    );
-    assert!(
-        crate::symbol::test_symbol_pointer_root_contains(live_sym),
-        "live (rooted) symbol's SYMBOL_POINTERS entry must survive"
-    );
-}
-
-#[test]
-fn test_dead_owner_symbol_property_entries_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
-    let obj = crate::array::js_array_alloc(0);
-    let owner = obj as usize;
-    let sym = unsafe { alloc_old_test_symbol() };
-    crate::symbol::test_seed_symbol_property_root(owner, sym, crate::value::TAG_TRUE);
-    assert!(crate::symbol::test_symbol_property_owner_exists(owner));
-
-    full_gc();
-
-    assert!(
-        !crate::symbol::test_symbol_property_owner_exists(owner),
-        "dead owner's SYMBOL_PROPERTIES entry must be pruned (its values \
-         were strongly rooted by the scanner forever)"
-    );
-}
-
 /// SABOTAGE CHECK for [`full_gc_with_no_block_persistence`] (#7975). Every
 /// "the premise held" verdict it gives is vacuous unless the census it reads
 /// can move — CLAUDE.md's fourth way a gate cannot fail.
@@ -462,7 +428,7 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
     assert!(!crate::closure::closure_is_key_deleted(owner, "length"));
 }
 
-/// The `ObjectOverflowFields` dead-payload arm pruned only OVERFLOW_FIELDS;
+/// The `ObjectModuleWrapper` dead-payload arm pruned only OVERFLOW_FIELDS;
 /// its address-keyed sibling KEYS_INDEX (the key→slot sidecar built for
 /// objects past KEYS_INDEX_THRESHOLD own keys) was never removed on death, so
 /// entries accumulated forever under recycled addresses — an unbounded leak.
@@ -500,69 +466,16 @@ fn test_object_dead_payload_arm_clears_keys_index() {
 fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
     let _guard = GcTestIsolationGuard::new();
 
-    // OBJECT_PROTOTYPES (residual registry, #6759 B): shaped objects now
-    // store their recorded prototype in the per-object meta record, which
-    // dies WITH the owner (no prune needed — see
-    // `test_object_meta_prototype_survives_copied_minor_move`). The
-    // registry still backs non-object owners, so exercise the prune with a
-    // TYPED-ARRAY-tagged owner. (Not a real array: retargeting one flips
-    // the process-wide `ARRAY_TARGET_PROTO_RECORDED` latch, permanently
-    // standing down the typed-feedback array fast paths every later
-    // `typed_feedback` guard test in this process asserts.)
-    let proto_owner = crate::arena::arena_alloc_gc(
-        std::mem::size_of::<crate::object::ObjectHeader>(),
-        8,
-        GC_TYPE_TYPED_ARRAY,
-    ) as usize;
-    crate::object::prototype_chain::object_set_static_prototype(
-        proto_owner,
-        crate::value::TAG_NULL,
-    );
-    assert!(crate::object::prototype_chain::object_static_prototype(proto_owner).is_some());
-
     // EXOTIC_EXPANDO: expando on a (movable, here old-gen) Promise cell.
     let promise = unsafe { alloc_old_test_promise() } as usize;
-    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+    crate::object::exotic_expando::test_define_exotic_property(
         promise,
         "status",
         crate::value::TAG_TRUE,
     );
     assert!(unsafe { crate::object::cell_expando_get(promise).is_some() });
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(promise),
-        "promise properties use its traced child bag, not the owner table"
-    );
-
-    // VM_SCRIPTS: retains full source text per vm.Script.
-    let (vm_owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let vm_owner = vm_owner as usize;
-    crate::node_vm::test_seed_vm_script_entry(vm_owner, "while(true){}");
-    assert!(crate::node_vm::test_vm_script_entry_exists(vm_owner));
-
-    // FILEHANDLE_OBJECT_FDS: FileHandle object address → synthetic fd.
-    let (fh_owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let fh_owner = fh_owner as usize;
-    crate::fs::test_seed_filehandle_fd_entry(fh_owner, 4242);
-    assert!(crate::fs::test_filehandle_fd_entry_exists(fh_owner));
 
     full_gc();
-
-    assert!(
-        crate::object::prototype_chain::object_static_prototype(proto_owner).is_none(),
-        "dead owner's OBJECT_PROTOTYPES entry must be pruned"
-    );
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(promise),
-        "a dead promise must leave no expando owner-table entry"
-    );
-    assert!(
-        !crate::node_vm::test_vm_script_entry_exists(vm_owner),
-        "dead owner's VM_SCRIPTS entry (full source text!) must be pruned"
-    );
-    assert!(
-        !crate::fs::test_filehandle_fd_entry_exists(fh_owner),
-        "dead owner's FILEHANDLE_OBJECT_FDS entry must be pruned"
-    );
 }
 
 /// The DOMException brand is carried by the cell, so recycling an address
@@ -709,93 +622,139 @@ fn test_dead_function_class_id_key_cannot_follow_exact_eden_reuse() {
 // is paired with the inverse (a live owner's entry is not), because a prune
 // that drops live entries is a worse bug than the one it fixes.
 
-fn alloc_nursery_test_object_addr() -> usize {
-    let (obj, _) = unsafe { alloc_nursery_test_object(0) };
-    obj as usize
-}
-
-/// #8190. `CONSOLE_INSTANCES` is keyed by a `new console.Console(...)`
-/// instance's heap address and rekeyed by
-/// `scan_console_log_singleton_roots_mut`.
 #[test]
-fn test_dead_console_instance_owner_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let dead = alloc_nursery_test_object_addr();
-    crate::builtins::test_seed_console_instance(dead);
-    assert_eq!(
-        crate::builtins::test_console_instance_count(),
-        1,
-        "test premise: the instance entry must be installed"
-    );
-
-    full_gc();
-
-    assert_eq!(
-        crate::builtins::test_console_instance_count(),
-        0,
-        "a dead console instance's CONSOLE_INSTANCES entry must be pruned"
-    );
+fn console_private_streams_move_with_the_instance() {
+    check_objtables_console(false);
 }
 
 #[test]
-fn test_live_console_instance_owner_survives_full_gc() {
+#[ignore = "negative control: intentionally erase the owner invariant"]
+fn negative_control_objtables_console() {
+    check_objtables_console(true);
+}
+
+fn check_objtables_console(erase_invariant: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
-
-    let live = alloc_nursery_test_object_addr();
-    js_shadow_slot_set(0, ptr_bits(live));
-    crate::builtins::test_seed_console_instance(live);
-
-    full_gc();
-
-    assert_eq!(
-        crate::builtins::test_console_instance_count(),
-        1,
-        "a ROOTED console instance's entry must survive — a prune that drops \
-         live entries is worse than the stale key it removes"
-    );
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    let obj = crate::object::js_object_alloc(crate::builtins::CONSOLE_INSTANCE_CLASS_ID, 0);
+    let stream = crate::object::js_object_alloc(0, 0);
+    unsafe {
+        crate::builtins::test_seed_console_instance(
+            obj as usize,
+            crate::value::js_nanbox_pointer(stream as i64),
+            crate::value::js_nanbox_pointer(stream as i64),
+        );
+    }
+    js_shadow_slot_set(0, ptr_bits(obj as usize));
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(copying_minor_cycles() > cycles);
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    assert_ne!(moved, obj);
+    if erase_invariant {
+        unsafe {
+            (*(*moved).meta).native_state = 0;
+        }
+    }
+    unsafe {
+        assert_ne!(
+            (*(*moved).meta).native_state,
+            0,
+            "instance must own its state"
+        );
+        let state =
+            ((*(*moved).meta).native_state & POINTER_MASK) as *mut crate::array::ArrayHeader;
+        let stdout = crate::array::js_array_get(state, 0).bits();
+        assert_ne!(stdout & POINTER_MASK, stream as u64);
+        assert_eq!(stdout, crate::array::js_array_get(state, 1).bits());
+        assert!(crate::builtins::try_console_instance_method_dispatch(
+            moved,
+            "groupEnd",
+            std::ptr::null(),
+            0
+        )
+        .is_some());
+        // Negative control: without the owner edge, no instance state remains.
+        (*(*moved).meta).native_state = 0;
+        assert!(crate::builtins::try_console_instance_method_dispatch(
+            moved,
+            "groupEnd",
+            std::ptr::null(),
+            0
+        )
+        .is_none());
+    }
     js_shadow_slot_set(0, 0);
 }
 
-/// #8191. `BOXED_PRIMITIVE_PAYLOADS` is keyed by a boxed `Number`/`String`/…
-/// wrapper's `ObjectHeader` address and rekeyed by
-/// `scan_boxed_primitive_payload_roots_mut`.
 #[test]
-fn test_dead_boxed_primitive_payload_owner_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let dead = alloc_nursery_test_object_addr();
-    crate::builtins::test_seed_boxed_primitive_payload(dead, 42f64.to_bits());
-    assert_eq!(
-        crate::builtins::test_boxed_primitive_payload_count(),
-        1,
-        "test premise: the payload entry must be installed"
-    );
-
-    full_gc();
-
-    assert_eq!(
-        crate::builtins::test_boxed_primitive_payload_count(),
-        0,
-        "a dead wrapper's BOXED_PRIMITIVE_PAYLOADS entry must be pruned"
-    );
+fn boxed_string_payload_moves_as_a_private_child_slot() {
+    check_objtables_boxed_payload(false);
 }
 
 #[test]
-fn test_live_boxed_primitive_payload_owner_survives_full_gc() {
+#[ignore = "negative control: intentionally erase the owner invariant"]
+fn negative_control_objtables_boxed_payload() {
+    check_objtables_boxed_payload(true);
+}
+
+fn check_objtables_boxed_payload(erase_invariant: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
-
-    let live = alloc_nursery_test_object_addr();
-    js_shadow_slot_set(0, ptr_bits(live));
-    crate::builtins::test_seed_boxed_primitive_payload(live, 42f64.to_bits());
-
-    full_gc();
-
-    assert_eq!(
-        crate::builtins::test_boxed_primitive_payload_count(),
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    let text = crate::string::js_string_from_bytes(b"private-payload".as_ptr(), 15);
+    let value = crate::builtins::js_boxed_string_new(
+        f64::from_bits(crate::value::JSValue::string_ptr(text).bits()),
         1,
-        "a ROOTED wrapper's payload entry must survive"
     );
+    js_shadow_slot_set(0, value.to_bits());
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(copying_minor_cycles() > cycles);
+    let moved = f64::from_bits(js_shadow_slot_get(0));
+    assert_ne!(moved.to_bits(), value.to_bits(), "wrapper must move");
+    if erase_invariant {
+        unsafe {
+            let obj = (moved.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
+            (*(*obj).meta).boxed_primitive = crate::value::TAG_UNDEFINED;
+        }
+    }
+    let (_, payload) = crate::builtins::boxed_primitive_payload(moved).unwrap();
+    assert_ne!(
+        payload.to_bits(),
+        crate::value::JSValue::string_ptr(text).bits()
+    );
+    assert!(
+        crate::value::JSValue::from_bits(payload.to_bits()).is_string(),
+        "the private payload must be a String"
+    );
+    let string =
+        crate::value::js_get_string_pointer_unified(payload) as *const crate::string::StringHeader;
+    assert_eq!(
+        unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                crate::string::string_data(string),
+                (*string).byte_len as usize,
+            ))
+            .unwrap()
+        },
+        "private-payload"
+    );
+    // Negative control: replace the private slot, and the public unbox changes.
+    unsafe {
+        let obj = (moved.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        (*(*obj).meta).boxed_primitive = crate::value::TAG_UNDEFINED;
+    }
+    assert!(crate::value::JSValue::from_bits(
+        crate::builtins::boxed_primitive_payload(moved)
+            .unwrap()
+            .1
+            .to_bits()
+    )
+    .is_undefined());
     js_shadow_slot_set(0, 0);
 }
 
@@ -898,101 +857,60 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     js_shadow_slot_set(1, 0);
 }
 
-/// #8194. `REFLECT_METADATA`'s key carries the decorator target's NaN-boxed
-/// bits, rekeyed by `rewrite_metadata_target_bits`. Only `Reflect.deleteMetadata`
-/// ever removed an entry, so an unreachable target left its address behind.
 #[test]
-fn test_dead_reflect_metadata_target_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let len_before = crate::proxy::test_reflect_metadata_len();
-    let dead = alloc_nursery_test_object_addr();
-    crate::proxy::test_seed_reflect_metadata(ptr_bits(dead), "design:type");
-    assert_eq!(
-        crate::proxy::test_reflect_metadata_len(),
-        len_before + 1,
-        "test premise: the metadata entry must be installed"
-    );
-
-    full_gc();
-
-    assert_eq!(
-        crate::proxy::test_reflect_metadata_len(),
-        len_before,
-        "a dead decorator target's REFLECT_METADATA entry must be pruned"
-    );
+fn reflect_metadata_record_moves_as_a_private_owner_child() {
+    check_reflect_metadata_record(false);
 }
 
 #[test]
-fn test_live_reflect_metadata_target_survives_full_gc() {
+#[ignore = "negative control: erase the moved Reflect metadata record"]
+fn negative_control_objtables_reflect_metadata() {
+    check_reflect_metadata_record(true);
+}
+
+fn check_reflect_metadata_record(erase: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
-
-    let len_before = crate::proxy::test_reflect_metadata_len();
-    let live = alloc_nursery_test_object_addr();
-    js_shadow_slot_set(0, ptr_bits(live));
-    crate::proxy::test_seed_reflect_metadata(ptr_bits(live), "design:type");
-
-    full_gc();
-
+    let owner = crate::object::js_object_alloc(0, 0);
+    let value = crate::object::js_object_alloc(0, 0);
+    let key = crate::string::js_string_new_sso(b"meta".as_ptr(), 4);
+    crate::proxy::metadata::js_reflect_define_metadata(
+        key,
+        f64::from_bits(ptr_bits(value as usize)),
+        f64::from_bits(ptr_bits(owner as usize)),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    assert_ne!(moved, owner);
+    if erase {
+        unsafe {
+            (*(*moved).meta).reflect_metadata = 0;
+        }
+    }
+    let result = crate::proxy::metadata::js_reflect_get_own_metadata(
+        key,
+        f64::from_bits(ptr_bits(moved as usize)),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    assert_ne!(result.to_bits(), TAG_UNDEFINED);
+    assert_ne!((result.to_bits() & POINTER_MASK) as usize, value as usize);
+    assert!(unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(
+            (result.to_bits() & POINTER_MASK) as usize,
+        )
+    }
+    .is_some());
+    let fresh = crate::object::js_object_alloc(0, 0);
     assert_eq!(
-        crate::proxy::test_reflect_metadata_len(),
-        len_before + 1,
-        "a ROOTED decorator target's metadata entry must survive"
+        crate::proxy::metadata::js_reflect_get_own_metadata(
+            key,
+            f64::from_bits(ptr_bits(fresh as usize)),
+            f64::from_bits(TAG_UNDEFINED)
+        )
+        .to_bits(),
+        TAG_UNDEFINED
     );
-    js_shadow_slot_set(0, 0);
-}
-
-/// #8195. The accessor table shares its owner key with `SYMBOL_PROPERTIES` and
-/// `SYMBOL_PROPERTY_ATTRS`, both of which `prune_dead_symbol_property_owners`
-/// has pruned since the 2026-07-09 audit. It was the one left out, which also
-/// made every accessor closure it held immortal.
-#[test]
-fn test_dead_symbol_accessor_owner_pruned_on_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let count_before = crate::symbol::test_symbol_accessor_property_count();
-    let dead = alloc_nursery_test_object_addr();
-    crate::symbol::test_seed_symbol_accessor_property(
-        dead,
-        0x8195_0001,
-        crate::value::TAG_UNDEFINED,
-    );
-    assert_eq!(
-        crate::symbol::test_symbol_accessor_property_count(),
-        count_before + 1,
-        "test premise: the accessor descriptor must be installed"
-    );
-
-    full_gc();
-
-    assert_eq!(
-        crate::symbol::test_symbol_accessor_property_count(),
-        count_before,
-        "a dead owner's SYMBOL_ACCESSOR_PROPERTIES entry must be pruned"
-    );
-}
-
-#[test]
-fn test_live_symbol_accessor_owner_survives_full_gc() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-
-    let count_before = crate::symbol::test_symbol_accessor_property_count();
-    let live = alloc_nursery_test_object_addr();
-    js_shadow_slot_set(0, ptr_bits(live));
-    crate::symbol::test_seed_symbol_accessor_property(
-        live,
-        0x8195_0002,
-        crate::value::TAG_UNDEFINED,
-    );
-
-    full_gc();
-
-    assert_eq!(
-        crate::symbol::test_symbol_accessor_property_count(),
-        count_before + 1,
-        "a ROOTED owner's accessor descriptor must survive"
-    );
-    js_shadow_slot_set(0, 0);
 }
 
 /// #6759 phase 1: an `ErrorHeader`'s metadata edge must be ENUMERATED by the
@@ -1169,3 +1087,5 @@ fn transition_cache_entry_does_not_pin_its_target() {
         );
     }
 }
+
+mod temporal_expandos;

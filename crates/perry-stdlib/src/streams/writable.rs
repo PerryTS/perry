@@ -118,6 +118,7 @@ pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f6
     WRITERS.lock().unwrap().insert(
         writer_id,
         WriterData {
+            props: Default::default(),
             stream_handle: id,
             locked: true,
             closed_promise: closed_p,

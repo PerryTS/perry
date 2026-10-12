@@ -99,7 +99,7 @@ impl CopyingMinorPhaseDiag {
         let mut out = String::new();
         write!(
             out,
-            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/map:{}/{}+set:{}/{}+errors:{}/{}+lazytape:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
+            "root_scan={}/{} copy_evacuation={}/{}/{} remembered_set_young_logs={}/{}/{} promotion={}/{}/{} dead_owner_side_table_pruning={}{} from_space_finalization={}/stores:{}/{}+errors:{}/{}+lazytape:{}/{} forwarding_fixups={} block_reset_flip={} other={} phase_sum_us={}",
             self.root_scan_ns / 1000,
             scan_us,
             self.copy_evacuation_ns / 1000,
@@ -114,10 +114,8 @@ impl CopyingMinorPhaseDiag {
             self.dead_owner_side_table_pruning_ns / 1000,
             finalization.dead_owner_detail,
             self.from_space_finalization_ns / 1000,
-            finalization.map_ns / 1000,
-            finalization.maps,
-            finalization.set_ns / 1000,
-            finalization.sets,
+            finalization.stores_ns / 1000,
+            finalization.stores,
             finalization.errors_ns / 1000,
             finalization.errors,
             finalization.lazy_tape_ns / 1000,
@@ -135,16 +133,14 @@ impl CopyingMinorPhaseDiag {
 #[derive(Default)]
 pub(super) struct CopiedMinorFinalizationDiag {
     pub(super) total_ns: u64,
-    pub(super) map_ns: u64,
-    pub(super) maps: usize,
-    pub(super) set_ns: u64,
-    pub(super) sets: usize,
     pub(super) errors_ns: u64,
     pub(super) errors: usize,
     pub(super) dead_owner_ns: u64,
     pub(super) dead_owner_detail: String,
     pub(super) lazy_tapes: usize,
     pub(super) lazy_tape_ns: u64,
+    pub(super) stores: usize,
+    pub(super) stores_ns: u64,
 }
 
 /// Finalize the side allocations whose from-space owners just died.  The
@@ -156,15 +152,9 @@ pub(super) fn finalize_dead_copied_minor_from_space_side_allocations() -> Copied
     let total_start = diag.then(Instant::now);
     let mut out = CopiedMinorFinalizationDiag::default();
 
-    crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
-
     let start = diag.then(Instant::now);
-    out.maps = crate::map::finalize_dead_copied_minor_from_space_maps();
-    out.map_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
-
-    let start = diag.then(Instant::now);
-    out.sets = crate::set::finalize_dead_copied_minor_from_space_sets();
-    out.set_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
+    out.stores = crate::arena::finalize_dead_copied_minor_from_space_owned_stores();
+    out.stores_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
 
     let start = diag.then(Instant::now);
     out.errors =

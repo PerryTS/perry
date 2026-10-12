@@ -104,13 +104,12 @@ impl BlockCensus {
     }
 
     /// A census that records blocks. The type obligations are fixed here:
-    /// nothing a synchronous cycle runs between the census and the sweep can
-    /// populate the module-wrapper registry.
+    /// object-owned native state needs no address-table cleanup. Type
+    /// finalizers remain per-object obligations throughout the full sweep.
     pub(crate) fn armed() -> Self {
-        let object_side_tables_live = crate::object::module_wrapper_registry_ever_used();
         let mut obligation_by_type = [true; 256];
         for (obj_type, slot) in obligation_by_type.iter_mut().enumerate() {
-            *slot = type_needs_per_object_sweep(obj_type as u8, object_side_tables_live);
+            *slot = type_needs_per_object_sweep(obj_type as u8);
         }
         Self {
             blocks: Vec::new(),
@@ -333,7 +332,7 @@ pub(crate) unsafe fn census_header_flag_facts(header: *const GcHeader) -> (bool,
 /// Does a dead object of `obj_type` need `reclaim_dead_object`'s per-object
 /// work beyond what the full trace's dead-owner fan-out and the block reset
 /// already do?
-pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live: bool) -> bool {
+pub(crate) fn type_needs_per_object_sweep(obj_type: u8) -> bool {
     let Some(info) = gc_type_info(obj_type) else {
         return true;
     };
@@ -341,16 +340,14 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live:
         return true;
     }
     match info.move_hook_kind {
-        // `clear_module_wrapper_for_dead_ptr` are
-        // no-ops while their tables are empty; neither is in the fan-out.
-        GcMoveHookKind::ObjectModuleWrapper => object_side_tables_live,
-        // Pruned post-trace by `closure::prune_dead_closure_side_table_owners`.
-        GcMoveHookKind::ClosureDynamicProps => false,
         GcMoveHookKind::ErrorSideTables | GcMoveHookKind::LazyArrayTape => true,
+        // The owned-holder kinds carry a finalize hook, answered above.
         GcMoveHookKind::None
         | GcMoveHookKind::MapForeachStack
-        | GcMoveHookKind::SetSideTables
-        | GcMoveHookKind::ExoticExpandoOwner => false,
+        | GcMoveHookKind::SetForeachStack
+        | GcMoveHookKind::OwnedMapStore
+        | GcMoveHookKind::OwnedSetStore
+        | GcMoveHookKind::OwnedAsyncSnapshot => false,
     }
 }
 

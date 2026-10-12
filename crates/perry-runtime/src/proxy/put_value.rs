@@ -53,34 +53,35 @@ pub(crate) fn proxy_set_with_receiver(
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "set");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let key_h = scope.root_nanbox_f64(key);
+    let value_h = scope.root_nanbox_f64(value);
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "set");
+    let target = target_h.get_nanbox_f64();
+    let key = key_h.get_nanbox_f64();
+    let value = value_h.get_nanbox_f64();
+    let receiver = receiver_h.get_nanbox_f64();
     if is_callable(trap) {
         // #2756: the `set` trap's boolean result is observable through
         // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
         // return it rather than discarding it. The trap receives the spec
         // argument list `(target, key, value, receiver)` with `this` bound to
         // the handler.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let value_h = scope.root_nanbox_f64(value);
-        let receiver_h = scope.root_nanbox_f64(receiver);
         let trap_result = call_trap(
-            handler,
+            handler_h.get_nanbox_f64(),
             trap,
             &[
                 target_h.get_nanbox_f64(),
@@ -106,7 +107,6 @@ pub(crate) fn proxy_set_with_receiver(
     if lookup(target).is_some() {
         return proxy_set_with_receiver(target, key, value, receiver);
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
     let value_handle = scope.root_nanbox_f64(value);

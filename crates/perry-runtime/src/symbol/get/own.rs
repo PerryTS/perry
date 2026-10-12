@@ -32,29 +32,34 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
         }
     }
 
-    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
-        return Some(OwnSymbolSlot::Accessor {
-            get: acc.get,
-            set: acc.set,
-        });
-    }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
     if obj_key == 0 || sym_key == 0 {
         return None;
     }
-    if crate::object::shaped_symbols::owner(obj_key).is_some() {
-        return crate::object::shaped_symbols::get(obj_key, sym_key).map(OwnSymbolSlot::Data);
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    if let Some(map) = guard.as_ref() {
-        if let Some(entries) = map.get(&obj_key) {
-            for &(sk, vb) in entries.iter() {
-                if sk == sym_key {
-                    return Some(OwnSymbolSlot::Data(vb));
-                }
+    // One holder resolution and one key scan answer both the accessor and
+    // the data question.
+    let holder = crate::object::shaped_symbols::owner(obj_key)?;
+    let position = crate::object::shaped_symbols::position(holder, sym_key)?;
+    let keys = crate::object::object_keys(holder);
+    let lane = crate::object::js_object_get_field(holder, position).bits();
+    if crate::object::key_attrs::keys_entry(keys.arr(), position)
+        & crate::object::key_attrs::ENTRY_ACCESSOR
+        != 0
+    {
+        let pair = (lane & POINTER_MASK) as *const crate::array::ArrayHeader;
+        let bits = |i| {
+            let bits = crate::array::js_array_get(pair, i).bits();
+            if bits == TAG_UNDEFINED {
+                0
+            } else {
+                bits
             }
-        }
+        };
+        return Some(OwnSymbolSlot::Accessor {
+            get: bits(0),
+            set: bits(1),
+        });
     }
-    None
+    Some(OwnSymbolSlot::Data(lane))
 }

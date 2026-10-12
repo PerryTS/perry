@@ -1,0 +1,1 @@
+Remove the symbol address set, range/Bloom filter, latch, root scanners and death pruning. Fresh symbols carry their own GC kind; persistent symbols remain owned by the existing named process registries. Add moving-GC, weak reachability, ordinary/untracked pointer controls and a mutation control for the owned brand. Remove the deleted holders from the root and lifetime censuses.

@@ -183,7 +183,7 @@ fn own_data_property_shadows_an_inherited_accessor_for_read_and_write() {
 }
 
 #[test]
-fn symbol_may_have_accessor_is_false_until_an_accessor_is_installed() {
+fn symbol_accessor_filter_marks_installations_without_losing_prior_bits() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         crate::gc::gc_suppress();
@@ -203,10 +203,10 @@ fn symbol_may_have_accessor_is_false_until_an_accessor_is_installed() {
         let bits_after = super::accessors::test_symbol_accessor_id_bits_set();
         crate::gc::gc_unsuppress();
 
-        assert!(
-            !before,
-            "a freshly minted symbol must not read as accessor-bearing before any accessor exists"
-        );
+        // The 256-bit filter is conservative: prior symbols can hash to this
+        // freshly allocated id's bit. A clear bit must become set; a collision
+        // must retain the already-published bit without inventing a new one.
+        assert_eq!(bits_after, bits_before + u32::from(!before));
         assert!(
             after,
             "installing an accessor under a symbol must flip its filter bit"

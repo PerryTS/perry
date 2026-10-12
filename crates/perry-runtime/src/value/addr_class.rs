@@ -22,7 +22,7 @@
 //! | `[0x40000, 0xE0000)`   | Web Fetch family (Request/Response/Headers/Blob), perry-stdlib   |
 //! |                        | `fetch/mod.rs` `FETCH_HANDLE_ID_{START,END}` (#3973/#3974/#4004) |
 //! | `[0xE0000, 0xF0000)`   | unallocated (former zlib ids, now ordinary payload objects)     |
-//! | `[0xF0000, 0x100000)`  | revocable Proxy ids, perry-runtime `proxy.rs` `PROXY_TAG_BASE`   |
+//! | `[0xF0000, 0x100000)`  | reserved former Proxy-id range, never a heap payload   |
 //! |                        | (#2846 crash cluster)                                            |
 //! | `[0x100000, 0x200000)` | Web Streams ids (perry-stdlib `streams.rs`), `POINTER_TAG`-boxed |
 //! |                        | like every other registry handle. They used to travel as raw     |
@@ -61,7 +61,7 @@ pub const FETCH_HANDLE_BAND_START: usize = 0x40000;
 pub const FETCH_HANDLE_BAND_END: usize = 0xE0000;
 
 /// Revocable Proxy id band `[PROXY_ID_BAND_START, PROXY_ID_BAND_END)`, owned by
-/// perry-runtime `proxy.rs` (`PROXY_TAG_BASE`). Kept at the top of the handle
+/// the former proxy registry. Kept reserved at the top of the handle
 /// band so fetch ids below never collide with a proxy id (#2846).
 pub const PROXY_ID_BAND_START: usize = 0xF0000;
 /// Exclusive end of the revocable Proxy id band; the Web Streams band follows.
@@ -108,12 +108,12 @@ pub fn is_above_handle_band(addr: usize) -> bool {
     addr >= HANDLE_BAND_MAX
 }
 
-/// True when `addr` is a revocable-Proxy id. Callers must still confirm
-/// registration via `proxy::js_proxy_is_proxy` before routing — a heap-free
-/// check, so do it before any dereference.
+/// Cheap proxy receiver candidate test. Bit zero tags a nonmoving Proxy cell;
+/// callers prove its allocation kind through `proxy::js_proxy_is_proxy` before
+/// routing or dereferencing. The historical function name remains for callers.
 #[inline(always)]
 pub fn is_proxy_id_band(addr: usize) -> bool {
-    (PROXY_ID_BAND_START..PROXY_ID_BAND_END).contains(&addr)
+    addr & 7 == 1 && !is_handle_band(addr)
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a
@@ -369,6 +369,27 @@ fn classify_tracked_gc_header_with(
         .then_some((header_addr, TrackedGcStorage::Malloc))
 }
 
+/// Arena-only brands require an allocation-authored object start, not just
+/// range membership. Dead nursery starts disappear with their backing bitmap.
+/// No allocation or collection occurs; the pointer remains valid for this leaf.
+#[inline(never)]
+pub(crate) unsafe fn try_read_tracked_arena_header_of_type(
+    addr: usize,
+    kind: u8,
+) -> Option<std::ptr::NonNull<GcHeader>> {
+    if is_handle_band(addr) {
+        return None;
+    }
+    let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
+    let (_, base, bitmap) = crate::arena::classify_heap_space_in_range(addr)?;
+    if !crate::arena::arena_header_is_object_start(header_addr, base, bitmap) {
+        return None;
+    }
+    let header = std::ptr::NonNull::new(header_addr as *mut GcHeader)?;
+    let h = header.as_ref();
+    (h.obj_type == kind && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0).then_some(header)
+}
+
 /// Test-only count of tracked-resolver probes, so a fast path can pin that
 /// it answered without one.
 #[cfg(test)]
@@ -420,6 +441,61 @@ pub(crate) unsafe fn try_read_tracked_gc_header_of_type(
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     debug_assert!(crate::gc::gc_type_is_known(kind));
     tracked_gc_header_admitting(addr, |obj_type| obj_type == kind)
+}
+
+/// Distinguish an owned cell of another kind from an address outside the
+/// tracked heap. Symbol's immortal fallback needs that distinction: ordinary
+/// receivers must reject the brand before any immortal-registry lookup.
+/// The allocator proof precedes every read; a negative kind needs no generic
+/// known-kind, size or arena-flag validation. No allocation occurs. This leaf
+/// folds into the one out-of-line Symbol admission helper, its sole caller.
+#[inline(always)]
+pub(crate) unsafe fn tracked_gc_type_matches(addr: usize, kind: u8) -> Option<bool> {
+    if is_handle_band(addr) {
+        return None;
+    }
+    let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
+    // One page classification serves both the range proof and the start
+    // bitmap: this is the Symbol brand on every pointer-tagged value probe.
+    if let Some((_, range_base, bitmap)) = crate::arena::classify_heap_space_in_range(addr) {
+        // The payload and its header must belong to the same registered
+        // range (#7742).
+        if header_addr < range_base {
+            return None;
+        }
+        if header_addr % std::mem::align_of::<GcHeader>() != 0 {
+            return Some(false);
+        }
+        let header = header_addr as *const GcHeader;
+        if (*header).obj_type != kind {
+            return Some(false);
+        }
+        // Matching payload bytes are not an allocation identity. Only
+        // positives need the start bitmap.
+        if !crate::arena::arena_header_is_object_start(header_addr, range_base, bitmap) {
+            return Some(false);
+        }
+        return Some(
+            (*header).size as usize >= GC_HEADER_SIZE
+                && (*header).gc_flags & crate::gc::GC_FLAG_ARENA != 0
+                && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0,
+        );
+    }
+    if !crate::gc::gc_malloc_header_is_tracked(header_addr as *const GcHeader) {
+        return None;
+    }
+    if header_addr % std::mem::align_of::<GcHeader>() != 0 {
+        return Some(false);
+    }
+    let header = header_addr as *const GcHeader;
+    if (*header).obj_type != kind {
+        return Some(false);
+    }
+    Some(
+        (*header).size as usize >= GC_HEADER_SIZE
+            && (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
+            && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0,
+    )
 }
 
 #[inline(always)]
@@ -475,8 +551,9 @@ mod tests {
         assert!(is_handle_band(0x40000));
         assert!(is_small_handle(0x40000));
         // Proxy ids (#2846), zlib (#1843), common registry, null.
-        assert!(is_proxy_id_band(0xF0000));
-        assert!(is_proxy_id_band(0xF_FFF8));
+        assert!(!is_proxy_id_band(0xF0000));
+        assert!(!is_proxy_id_band(0xF_FFF8));
+        assert!(is_proxy_id_band(0x10_00001));
         assert!(!is_proxy_id_band(0x40000));
         assert!(is_handle_band(0xE0000));
         assert!(is_handle_band(1));
@@ -750,6 +827,28 @@ mod known_plausible_alignment_tests {
         assert!(!addr.is_multiple_of(align));
         // SAFETY: as above.
         assert!(unsafe { try_read_gc_header(addr) }.is_none());
+    }
+}
+
+/// Tagged proxy receivers use bit zero of an otherwise aligned pointer.
+/// An odd candidate is canonicalized only after the allocation proves kind
+/// Proxy; malformed ordinary pointers keep failing admission.
+#[inline]
+pub(crate) fn tagged_heap_addr(bits: u64) -> usize {
+    let payload = (bits & crate::value::POINTER_MASK) as usize;
+    if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG && is_proxy_id_band(payload) {
+        crate::proxy::canonical_address(f64::from_bits(bits)).unwrap_or(0)
+    } else {
+        payload
+    }
+}
+#[inline]
+pub(crate) fn canonical_raw_receiver(addr: usize) -> usize {
+    if is_proxy_id_band(addr) {
+        crate::proxy::canonical_address(f64::from_bits(crate::value::POINTER_TAG | addr as u64))
+            .unwrap_or(addr)
+    } else {
+        addr
     }
 }
 

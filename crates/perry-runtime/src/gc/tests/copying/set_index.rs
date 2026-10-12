@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn test_copying_minor_relocates_managed_set() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let (child_obj, _child_fields) = unsafe { alloc_nursery_test_object(0) };
@@ -43,9 +42,13 @@ fn test_copying_minor_relocates_managed_set() {
     assert!(!crate::set::is_registered_set(set as usize));
     assert!(crate::set::is_registered_set(set_after as usize));
     assert_eq!(crate::set::test_set_side_allocation(set as usize), None);
+    // The young store moves with its Set; the header's alias follows it.
+    let side_allocation_after = crate::set::test_set_side_allocation(set_after as usize)
+        .expect("a moved Set keeps its store");
+    assert_eq!(side_allocation_after.1, side_allocation_before.1);
     assert_eq!(
-        crate::set::test_set_side_allocation(set_after as usize),
-        Some(side_allocation_before)
+        unsafe { (*set_after).elements } as usize,
+        side_allocation_after.0
     );
     assert_ne!(rewritten, child);
     assert!(crate::arena::pointer_in_nursery(rewritten));
@@ -83,25 +86,21 @@ fn test_copying_minor_relocates_managed_set() {
 
 #[test]
 fn set_key_identity_is_weak_and_dead_index_is_reclaimed() {
+    let _scan = ConservativeScanDisabledGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let (child, _) = unsafe { alloc_nursery_test_object(0) };
     let set = crate::set::js_set_alloc(16);
     for i in 0..9 {
         crate::set::js_set_add(set, i as f64);
     }
     crate::set::js_set_add(set, f64::from_bits(ptr_bits(child as usize)));
-    assert_eq!(crate::set::test_identity_count(), 1);
+    assert!(unsafe { crate::set::test_key_identity(child as usize) }.is_some());
     assert_ne!(unsafe { crate::set::test_index_snapshot(set).0 }, 0);
     let release_before = crate::set::test_set_side_deallocation_snapshot();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_eq!(
-        crate::set::test_identity_count(),
-        0,
-        "identity tokens must not root dead keys"
-    );
+    js_gc_collect();
     assert_eq!(crate::set::test_set_side_allocation(set as usize), None);
     assert_eq!(
         crate::set::test_set_side_deallocation_snapshot().0,
@@ -113,7 +112,6 @@ fn set_key_identity_is_weak_and_dead_index_is_reclaimed() {
 fn indexed_array_keys_survive_repeated_evacuation() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let set = crate::set::js_set_alloc(16);
     for _ in 0..12 {
         let array = crate::array::js_array_alloc(4);
@@ -133,7 +131,13 @@ fn indexed_array_keys_survive_repeated_evacuation() {
             let value = crate::set::js_set_value_at(set, i);
             assert_eq!(crate::set::js_set_has(set, value), 1);
         }
-        assert_eq!(crate::set::test_identity_count(), 12);
+        for i in 0..12 {
+            let key = crate::set::js_set_value_at(set, i);
+            assert!(unsafe {
+                crate::set::test_key_identity((key.to_bits() & POINTER_MASK) as usize)
+            }
+            .is_some());
+        }
     }
 }
 
@@ -153,10 +157,9 @@ fn old_array_key() -> f64 {
 /// #11169 follow-up: `has`/`delete` probes that MISS must not allocate a key
 /// identity. Before the fix every probed object left a permanent entry.
 #[test]
-fn identity_probes_that_miss_do_not_grow_the_identity_table() {
+fn identity_probes_that_miss_do_not_allocate_metadata() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let set = crate::set::js_set_alloc(16);
     for _ in 0..12 {
         let array = crate::array::js_array_alloc(4);
@@ -164,19 +167,17 @@ fn identity_probes_that_miss_do_not_grow_the_identity_table() {
     }
     assert_ne!(unsafe { crate::set::test_index_snapshot(set).0 }, 0);
     js_shadow_slot_set(0, ptr_bits(set as usize));
-    let members = crate::set::test_identity_count();
-    assert_eq!(members, 12);
     for _ in 0..64 {
         let stranger = f64::from_bits(ptr_bits(crate::array::js_array_alloc(4) as usize));
         assert_eq!(crate::set::js_set_has(set, stranger), 0);
         assert_eq!(crate::set::js_set_delete(set, stranger), 0);
+        unsafe {
+            assert!(crate::array::array_property_bag(
+                (stranger.to_bits() & POINTER_MASK) as *const crate::array::ArrayHeader
+            )
+            .is_null());
+        }
     }
-    assert_eq!(
-        crate::set::test_identity_count(),
-        members,
-        "a missed probe must not allocate a key identity"
-    );
-
     // Members are still found through their identities after they move.
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
@@ -190,7 +191,6 @@ fn identity_probes_that_miss_do_not_grow_the_identity_table() {
     }
     let stranger = f64::from_bits(ptr_bits(crate::array::js_array_alloc(4) as usize));
     assert_eq!(crate::set::js_set_has(set, stranger), 0);
-    assert_eq!(crate::set::test_identity_count(), members);
     // A member deleted after the move is found by its (rekeyed) identity.
     let first = crate::set::js_set_value_at(set, 0);
     assert_eq!(crate::set::js_set_delete(set, first), 1);
@@ -203,55 +203,35 @@ fn identity_probes_that_miss_do_not_grow_the_identity_table() {
     }
 }
 
-/// #11169 follow-up: a minor must not walk identity entries whose keys are
-/// old — the table's young half confines both the rekey scan and the
-/// dead-key prune.
+/// Old keys keep their owner-local identities through minor collection.
 #[test]
-fn old_identity_keys_are_skipped_by_a_minor() {
+fn old_keys_keep_their_private_identity_through_minor_collection() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let set = crate::set::js_set_alloc(16);
     let keys: Vec<f64> = (0..12).map(|_| old_array_key()).collect();
     for &key in &keys {
         crate::set::js_set_add(set, key);
     }
-    assert_eq!(crate::set::test_identity_halves(), (0, 12));
     js_shadow_slot_set(0, ptr_bits(set as usize));
     // Something young and rooted so the minor has real work.
     js_shadow_slot_set(1, string_bits(young_leaf()));
 
-    let prune_visits_before = crate::set::test_identity_prune_visits();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
 
-    let row = crate::gc::young_log::last_walk("set.key_identities")
-        .expect("the identity scanner must have run");
-    assert!(row.partial, "a copying minor takes the young walk: {row:?}");
-    assert_eq!(row.table_len, 12, "{row:?}");
-    assert_eq!(
-        row.visited, 0,
-        "a minor must not visit identity entries with old keys: {row:?}"
-    );
-    assert_eq!(
-        crate::set::test_identity_prune_visits(),
-        prune_visits_before,
-        "a minor's dead-key prune must not visit identity entries with old keys"
-    );
     let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
     for &key in &keys {
         assert_eq!(crate::set::js_set_has(set, key), 1);
     }
-    assert_eq!(crate::set::test_identity_count(), 12);
 }
 
-/// A young key that dies is pruned by the young-only prune, and a survivor
-/// that moves stays in the young half at its new address.
+/// A survivor keeps its identity through repeated moves while a dead Set
+/// and its key need no metadata registry cleanup.
 #[test]
-fn young_identity_half_prunes_dead_keys_and_follows_moved_ones() {
+fn young_keys_follow_their_owner_local_metadata() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::set::scan_identity_roots_mut);
     let set = crate::set::js_set_alloc(16);
     for i in 0..9 {
         crate::set::js_set_add(set, i as f64);
@@ -268,23 +248,54 @@ fn young_identity_half_prunes_dead_keys_and_follows_moved_ones() {
         doomed,
         f64::from_bits(ptr_bits(crate::array::js_array_alloc(4) as usize)),
     );
-    assert_eq!(crate::set::test_identity_count(), 2);
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_eq!(
-        crate::set::test_identity_count(),
-        1,
-        "the dead key's identity must be pruned by the minor"
-    );
-    let row = crate::gc::young_log::last_walk("set.key_identities").expect("scanner ran");
-    assert!(row.partial && row.kept >= 1, "{row:?}");
-    assert_eq!(crate::set::test_identity_halves(), (1, 0));
     // A second minor still finds (and moves) the survivor via the log.
     let _ = collect_minor_trace(GcTriggerKind::Direct);
     let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
     let key = crate::set::js_set_value_at(set, 9);
     assert_ne!(key.to_bits() & POINTER_MASK, survivor as u64);
     assert_eq!(crate::set::js_set_has(set, key), 1);
-    assert_eq!(crate::set::test_identity_count(), 1);
+}
+
+#[test]
+fn set_key_identity_moves_with_the_key_metadata() {
+    check_owned_key_identity(false);
+}
+
+#[test]
+#[ignore = "negative control: erase the moved Set key identity"]
+fn negative_control_objtables_set_key_identity() {
+    check_owned_key_identity(true);
+}
+
+fn check_owned_key_identity(erase: bool) {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let set = crate::set::js_set_alloc(16);
+    for i in 0..9 {
+        crate::set::js_set_add(set, i as f64);
+    }
+    let owner = crate::object::js_object_alloc(0, 0);
+    crate::set::js_set_add(set, f64::from_bits(ptr_bits(owner as usize)));
+    let identity = unsafe { crate::set::test_key_identity(owner as usize) }.unwrap();
+    js_shadow_slot_set(0, ptr_bits(set as usize));
+    let _ = collect_minor_trace(GcTriggerKind::Direct);
+    let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+    let key = crate::set::js_set_value_at(set, 9);
+    let moved = (key.to_bits() & POINTER_MASK) as usize;
+    assert_ne!(moved, owner as usize);
+    if erase {
+        unsafe {
+            crate::set::test_erase_key_identity(moved);
+        }
+    }
+    assert_eq!(
+        unsafe { crate::set::test_key_identity(moved) },
+        Some(identity)
+    );
+    assert_eq!(crate::set::js_set_has(set, key), 1);
+    let fresh = crate::object::js_object_alloc(0, 0) as usize;
+    assert!(unsafe { crate::set::test_key_identity(fresh) }.is_none());
 }

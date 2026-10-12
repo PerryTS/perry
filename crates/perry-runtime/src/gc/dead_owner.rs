@@ -253,7 +253,6 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
     fan_out(
         &|addr| probe.owner_is_dead(addr, None),
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_CLOSURE)),
-        &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_STRING)),
         /* young_only = */ !full_trace,
         None,
     );
@@ -281,7 +280,6 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
     fan_out(
         &|addr| owner_is_dead_copied_minor_from_space(addr, None),
         &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_CLOSURE)),
-        &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING)),
         /* young_only = */ true,
         diag.then_some(&mut detail),
     );
@@ -302,8 +300,6 @@ pub(super) enum DeadKeyOwner {
     Any,
     /// `GC_TYPE_CLOSURE` only.
     Closure,
-    /// `GC_TYPE_STRING` only — symbols are `gc_malloc`'d with that type.
-    Symbol,
 }
 
 /// One address-keyed side table whose dead keys this pass drops.
@@ -348,16 +344,6 @@ pub(super) type DeadKeyPruneFn = fn(&dyn Fn(usize) -> bool);
 /// are re-keyed by a per-object move hook (`gc_type_after_payload_move`) rather
 /// than by a metadata visitor, so they have no `visit_metadata_*` site at all.
 pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
-    // #9611/#9620: the key is a native wasmi instance pointer, so it is the
-    // VALUE (the published BufferHeader) that can die while the entry lives.
-    #[cfg(feature = "wasm-host")]
-    DeadKeyPrune {
-        table: "WASM_MEMORY_BINDINGS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::webassembly::prune_dead_wasm_memory_bindings,
-        full_only: false,
-        young_prune: None,
-    },
     // #10166 brief 4: arrays that were full at their first named property.
     DeadKeyPrune {
         table: "FULL_ARRAY_NAMED_PROPS",
@@ -371,42 +357,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "ELEMENT_SHAPES",
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_element_shape_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "MAP_ITERATOR_ARRAYS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::map::prune_dead_map_iterator_array_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "SET_KEY_IDENTITIES",
-        owner: DeadKeyOwner::Any,
-        prune: crate::set::prune_dead_identity_owners,
-        full_only: false,
-        young_prune: Some(crate::set::prune_dead_identity_owners_young),
-    },
-    DeadKeyPrune {
-        table: "SET_ITERATOR_ARRAYS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::set::prune_dead_set_iterator_array_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "SET_COMPACTION_LOG",
-        owner: DeadKeyOwner::Any,
-        prune: crate::set::prune_dead_set_compaction_log_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    // Re-keyed by the per-object move hook, not by a metadata visitor.
-    DeadKeyPrune {
-        table: "OBJECT_PROTOTYPES",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::prototype_chain::prune_dead_object_prototype_owners,
         full_only: false,
         young_prune: None,
     },
@@ -456,52 +406,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         full_only: true,
         young_prune: None,
     },
-    // Re-keyed by the per-object move hook, not by a metadata visitor.
-    DeadKeyPrune {
-        table: "state().exotic_expando.entries",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::exotic_expando::prune_dead_exotic_expando_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::symbol::prune_dead_symbol_property_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "SYMBOL_POINTERS",
-        owner: DeadKeyOwner::Symbol,
-        prune: crate::symbol::prune_dead_symbol_pointers,
-        full_only: false,
-        young_prune: None,
-    },
-    #[cfg(feature = "wasm-host")]
-    DeadKeyPrune {
-        table: "WASM_FUNCREF_EXTERNALS",
-        owner: DeadKeyOwner::Closure,
-        prune: crate::closure::prune_dead_closure_side_table_owners,
-        full_only: false,
-        young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
-    },
-    // Always listed; the prunes forward to the interpreter once `dyn-eval` is
-    // installed (see `crate::dyn_eval_hooks`).
-    DeadKeyPrune {
-        table: "dyn_eval::LIFETIME.owners + FN_REGISTRY",
-        owner: DeadKeyOwner::Closure,
-        prune: crate::dyn_eval_hooks::prune_dead_function_owners,
-        full_only: false,
-        young_prune: Some(crate::dyn_eval_hooks::prune_dead_function_owners_young),
-    },
-    DeadKeyPrune {
-        table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
-        owner: DeadKeyOwner::Closure,
-        prune: crate::object::prune_dead_builtin_closure_metadata_owners,
-        full_only: false,
-        young_prune: Some(crate::object::prune_dead_builtin_closure_metadata_owners_young),
-    },
     // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
     // value's closure address, and is REKEYED (not re-derived) when that
     // closure moves — so a dead key does not merely leak, the rekey walk
@@ -514,23 +418,9 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         young_prune: None,
     },
     DeadKeyPrune {
-        table: "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::node_vm::prune_dead_vm_owner_entries,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
         table: "UTF16_INDEX_CACHE",
         owner: DeadKeyOwner::Any,
         prune: crate::string::prune_dead_utf16_indexes,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "FILEHANDLE_OBJECT_FDS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::fs::prune_dead_filehandle_fd_entries,
         full_only: false,
         young_prune: None,
     },
@@ -539,47 +429,17 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
     // module's doc — and each entry is what
     // `scripts/gc_rekeyed_key_tables.json` now points its verdict at.
     DeadKeyPrune {
-        table: "CONSOLE_INSTANCES",
-        owner: DeadKeyOwner::Any,
-        prune: crate::builtins::prune_dead_console_instance_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "BOXED_PRIMITIVE_PAYLOADS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::builtins::prune_dead_boxed_primitive_payload_owners,
-        full_only: false,
-        young_prune: None,
-    },
-    DeadKeyPrune {
         table: "TRANSITION_CACHE_GLOBAL",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prune_dead_transition_cache_entries,
         full_only: false,
         young_prune: Some(crate::object::prune_dead_transition_cache_entries_young),
     },
-    DeadKeyPrune {
-        table: "REFLECT_METADATA",
-        owner: DeadKeyOwner::Any,
-        prune: crate::proxy::prune_dead_reflect_metadata_targets,
-        full_only: false,
-        young_prune: None,
-    },
-    #[cfg(feature = "node-api-host")]
-    DeadKeyPrune {
-        table: "NODE_API_OBJECT_METADATA",
-        owner: DeadKeyOwner::Any,
-        prune: crate::node_api_host::prune_dead_object_meta_owners,
-        full_only: false,
-        young_prune: None,
-    },
 ];
 
 fn fan_out(
     is_dead_owner: &dyn Fn(usize) -> bool,
     is_dead_closure: &dyn Fn(usize) -> bool,
-    is_dead_symbol: &dyn Fn(usize) -> bool,
     young_only: bool,
     mut diag: Option<&mut String>,
 ) {
@@ -599,7 +459,6 @@ fn fan_out(
         let is_dead: &dyn Fn(usize) -> bool = match entry.owner {
             DeadKeyOwner::Any => is_dead_owner,
             DeadKeyOwner::Closure => is_dead_closure,
-            DeadKeyOwner::Symbol => is_dead_symbol,
         };
         let start = diag.as_ref().map(|_| std::time::Instant::now());
         match entry.young_prune {

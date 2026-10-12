@@ -545,8 +545,6 @@ mod property_key_tests {
     #[test]
     fn property_key_symbol_accessors_route_through_symbol_storage() {
         unsafe {
-            crate::symbol::test_clear_symbol_side_table_roots();
-
             let obj = js_object_alloc(0, 0);
             let obj_value = crate::value::js_nanbox_pointer(obj as i64);
             let sym = crate::symbol::js_symbol_new_empty();
@@ -565,8 +563,6 @@ mod property_key_tests {
                 123.0
             );
             assert_eq!(js_object_get_property_key(obj_value, sym), 123.0);
-
-            crate::symbol::test_clear_symbol_side_table_roots();
         }
     }
 

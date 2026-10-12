@@ -1,0 +1,1 @@
+Set allocations and promoted copies now record their allocation boundary in the existing arena bitmap, alongside Maps. Receiver checks can prove ownership from the object itself without the deleted Set registry.

@@ -10,19 +10,13 @@
 //!
 //! A `Temporal.*` value is a **reference type**: a NaN-boxed POINTER
 //! (`POINTER_TAG`) to a heap [`TemporalCell`], exactly like [`crate::date`]'s
-//! `DateCell`. The cell is:
-//! - **non-movable** — a NaN-boxed pointer lives in a plain f64/DOUBLE local
-//!   that codegen does not shadow-root; the conservative stack scan keeps it
-//!   alive and a stable address means the un-rooted pointer never goes stale
-//!   across a GC.
-//! - **`pointer_free`** from the GC's view — the embedded `temporal_rs` value is
-//!   plain integers + `'static` calendar data, never a JSValue, so no write
-//!   barrier and no tracing. Any Rust-heap a variant owns (a `ZonedDateTime`'s
-//!   IANA timezone string) is released by [`finalize_temporal_cell_for_gc`] when
-//!   the cell is swept (the `TemporalCleanup` finalize hook).
+//! `DateCell`. The cell moves by memcpy at GC safepoints. Its native Box owns
+//! the temporal_rs value, while its metadata edge owns named/symbol properties.
+//! The collector traces and rewrites that edge through MetaOnly; native value
+//! cleanup still runs once when the final live copy dies.
 //!
 //! Temporal values are immutable per spec — there are no setters, so unlike
-//! `DateCell` the cell is never mutated in place after construction.
+//! `DateCell` their intrinsic native payload never changes after construction.
 
 use crate::value::JSValue;
 
@@ -165,20 +159,20 @@ impl TemporalValue {
     }
 }
 
-/// 1-slot heap cell holding a `temporal_rs` value behind a shared GC tag. See
-/// the module docs for the non-movable / pointer-free rationale.
+/// Heap cell holding a Rust-owned Temporal value and a traced metadata edge.
 ///
 /// The value is **boxed**, not inlined. `temporal_rs` types carry `i128` fields
 /// (→ 16-byte alignment), but arena cells sit 8 bytes past their address (the
 /// `GcHeader` prefix), so an inlined 16-aligned payload would land at an
 /// 8-aligned address and fault on an aligned 128-bit move. The `Box` keeps the
 /// cell itself pointer-sized (8-aligned) and lets the system allocator give the
-/// value proper 16-byte alignment. The `Box` pointer is a plain Rust-heap
-/// pointer (never a JSValue), so the cell stays `pointer_free` for the GC; the
-/// `TemporalCleanup` finalize hook drops it on sweep.
+/// value proper 16-byte alignment. The Box is native state; only `meta` is
+/// traced. `TemporalCleanup` drops the native value once when the cell dies.
 #[repr(C)]
 pub struct TemporalCell {
     pub value: Box<TemporalValue>,
+    /// Traced own properties and prototype state; native value stays Rust-owned.
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 /// Allocate a fresh Temporal cell wrapping `value` and return it as a NaN-boxed
@@ -195,12 +189,13 @@ pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
         // `arena_alloc_gc` hands back uninitialized memory; `write` moves the
         // box pointer in without dropping the (garbage) prior contents.
         // GC_STORE_AUDIT(INIT): fresh cell; the Box payload is malloc-owned, not a GC edge.
-        std::ptr::write(ptr, TemporalCell { value: boxed });
-        // Address reuse after a sweep must not leak a collected cell's expando
-        // properties (`Object.defineProperty` / plain assignment) onto this
-        // fresh one — clear any stale side-table slot at this address, exactly
-        // as Date/RegExp allocation does.
-        crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);
+        std::ptr::write(
+            ptr,
+            TemporalCell {
+                value: boxed,
+                meta: std::ptr::null_mut(),
+            },
+        );
         f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
     }
 }

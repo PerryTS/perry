@@ -4,20 +4,10 @@
 //! Skipping a walk is skipping every edge that walk would have produced, so the
 //! witnesses here are organised by EDGE SOURCE, not by fixture. Each term of
 //! `gc_object_yields_no_child_slots` gets a case that fails without it, and the
-//! full mark's extra `!proxy_trace_active` term — the one no ordinary GC
-//! fixture can see — gets a real collection and a sabotaged twin.
+//! native-provider gate remains separate; proxy cells use ordinary heap edges.
 
-use super::super::trace::zero_slot_skip_sabotage;
 use super::super::*;
 use super::support::*;
-
-fn full_collect() {
-    let trigger = GcTriggerSnapshot {
-        kind: GcTriggerKind::Manual,
-        steps_before: Some(GcStepSnapshot::current()),
-    };
-    let _ = GcCycleState::new_full(trigger).run_to_completion();
-}
 
 fn alloc_proxy_endpoint() -> (*mut u8, f64) {
     let ptr = gc_malloc(
@@ -105,13 +95,19 @@ fn named_properties_refuse_the_skip() {
 }
 
 #[test]
-fn a_residual_prototype_owner_refuses_the_skip() {
+fn an_owned_prototype_bag_refuses_the_skip() {
     let _guard = GcTestIsolationGuard::new();
     unsafe {
         let (arr, _) = pointer_free_array(4);
         let header = header_of(arr as usize);
         assert!(gc_object_yields_no_child_slots(header), "premise");
-        (*header)._reserved |= crate::gc::GC_RESIDUAL_PROTO_OWNER;
+        let _no_move = GcSuppressScope::new();
+        crate::object::prototype_chain::object_set_static_prototype(
+            arr as usize,
+            crate::value::TAG_NULL,
+        );
+        let arr = crate::array::clean_arr_ptr(arr);
+        let header = header_of(arr as usize);
         assert!(
             !gc_object_yields_no_child_slots(header),
             "an explicit Object.setPrototypeOf value is a child edge of its \
@@ -165,64 +161,4 @@ fn a_non_array_is_refused_whatever_its_payload_says() {
              values and a static prototype edge"
         );
     }
-}
-
-// --------------------------------------------- the full mark's proxy term ---
-
-/// A live proxy reachable ONLY through a pointer-free array, which is itself
-/// reached as a FIELD (so the mark takes `mark_field_into_worklist`, the skip
-/// site, rather than the root path). Returns whether the proxy survived.
-fn proxy_behind_a_pointer_free_array(sabotaged: bool) -> bool {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let (_target_ptr, target) = alloc_proxy_endpoint();
-    let (_handler_ptr, handler) = alloc_proxy_endpoint();
-    let proxy = crate::proxy::js_proxy_new(target, handler);
-
-    let (arr, elements) = unsafe { pointer_free_array(1) };
-    unsafe {
-        *elements = proxy.to_bits();
-        assert!(
-            gc_object_yields_no_child_slots(header_of(arr as usize)),
-            "premise: the carrier must be a skip candidate, or this proves nothing"
-        );
-    }
-    // Reached as a FIELD, not as a root: the skip lives in
-    // `mark_field_into_worklist`, and the root path does not go through it.
-    let (holder, fields) = unsafe { alloc_old_test_array(1) };
-    unsafe {
-        *fields = ptr_bits(arr as usize);
-        layout_init_all_pointer_slots(holder as *mut u8);
-    }
-    js_shadow_slot_set(0, ptr_bits(holder as usize));
-
-    {
-        let _sabotage = sabotaged.then(zero_slot_skip_sabotage::Guard::arm);
-        full_collect();
-    }
-    let live = crate::proxy::test_proxy_slot_is_live(proxy);
-    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
-    live
-}
-
-#[test]
-fn a_proxy_behind_a_pointer_free_array_survives_a_full_trace() {
-    assert!(
-        proxy_behind_a_pointer_free_array(false),
-        "the full mark must still read every word of a pointer-free payload \
-         while a proxy trace is active: a proxy id is a POINTER_TAG value in \
-         the proxy-id band, not a heap pointer, which is why the layout mask \
-         calls that payload pointer-free in the first place"
-    );
-}
-
-#[test]
-fn sabotaging_the_proxy_gate_strands_that_proxys_target() {
-    assert!(
-        !proxy_behind_a_pointer_free_array(true),
-        "with the !proxy_trace_active term removed the array is skipped, the \
-         registry entry is never observed, gc_finish_full_trace prunes it and \
-         a LIVE proxy loses its target and handler. If this twin ever passes, \
-         the term is unwitnessed."
-    );
 }

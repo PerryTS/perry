@@ -87,7 +87,6 @@ fn perex_constructor_isregexp_and_call_identity_follow_current_values() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     let scope = RuntimeHandleScope::new();
     let re = construct(&scope, b"a", b"i");
     let called = crate::regex::js_regexp_construct_call(

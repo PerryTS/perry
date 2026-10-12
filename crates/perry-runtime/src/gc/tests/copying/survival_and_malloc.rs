@@ -885,12 +885,12 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
     assert!(crate::arena::pointer_in_nursery(date_addr));
 
     let expando_val = f64::from_bits(crate::value::JSValue::int32(42).bits());
-    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+    crate::object::exotic_expando::test_define_exotic_property(
         date_addr,
         "tag",
         expando_val.to_bits(),
     );
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr));
+
     let bag_before = unsafe { crate::object::exotic_expando::property_bag(date_addr) };
     assert!(!bag_before.is_null(), "the Date owns its property holder");
     js_shadow_slot_set(0, ptr_bits(date_addr));
@@ -919,14 +919,6 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
             "tag",
         ),
         Some(expando_val.to_bits()),
-    );
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr),
-        "the evacuated Date must not need an expando owner-table entry"
-    );
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr),
-        "expando must not remain at the stale old address"
     );
 }
 
@@ -964,7 +956,7 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     );
 
     // The expando owner key moves with the header (`ExoticExpandoOwner`).
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
+
     assert_eq!(
         crate::object::js_object_get_field_by_name(
             new_addr as *const crate::ObjectHeader,
@@ -973,7 +965,6 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
         .bits(),
         crate::value::JSValue::int32(42).bits()
     );
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
 
     let source = crate::regex::js_regexp_get_source(new_addr as *const _);
     assert_eq!(crate::regex::string_as_str(source), r"move\/source");
@@ -1058,7 +1049,6 @@ fn set_regexp_expando(addr: usize, key: &str, value: crate::value::JSValue) {
         key,
         f64::from_bits(value.bits()),
     );
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
 /// #9819 follow-up: `js_regexp_new` allocates the header in the NURSERY. A
@@ -1128,14 +1118,6 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
         crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((live_new) as i64)).is_some()
     );
 
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(dead_addr),
-        "a nursery RegExp that died must lose its expando entry in the copied minor"
-    );
-    assert!(
-        !crate::object::exotic_expando::test_exotic_expando_entry_exists(live_new),
-        "the surviving RegExp's expando must follow it to its new address"
-    );
     assert_eq!(
         Some(
             crate::object::js_object_get_field_by_name(

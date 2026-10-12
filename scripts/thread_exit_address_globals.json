@@ -28,8 +28,9 @@
    "names": [
     "SIGNAL_ASYNC_IDS"
    ],
-   "verdict": "no_heap_address",
-   "why": "Maps signal name String -> u64 async_id minted from async_hooks NEXT_ASYNC_ID (process-global per_test_global in production) and resolved in the process-global RESOURCES table; the SIGNALWRAP resource object itself is handed to async_hooks::init_resource, not stored here (signal.rs:765-785)."
+   "verdict": "thread_exit_invalidated",
+   "why": "Native signal registrations hold tokens of their pinned, nonmoving owned async state cells until destroy. The allocation-range hook clears tokens whose mutator is retiring, without reading retired TLS or invoking JavaScript.",
+   "hook": "release_signal_resources_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/os/signal.rs",
@@ -571,7 +572,7 @@
     "HANDLES"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Type-erased handle payloads; each payload type that holds GC values registers a releaser (register_handle_payload_releaser), run at thread exit to clear freed slots or drop the payload.",
+   "why": "Existing native payload records own a mutator-specific ordinary property bag. The same payload-release hook first clears common and SDK record bags in freed ranges, then runs existing type-specific payload releasers. It registers when publishing a bag or a typed payload releaser; no retired TLS is consulted.",
    "hook": "release_handle_payloads_in_freed_ranges"
   },
   {
@@ -791,7 +792,7 @@
     "FETCH_RESPONSES"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "HashMap keyed by process-global Fetch handle ids (alloc_fetch_handle_id) holding Rust-owned response data plus other handle ids (cached_headers_id, body_stream_id); no raw heap address. Ids are owned per-thread in lifecycle::OWNED and removed by OwnedHandles::drop -> release() (fetch/lifecycle.rs:262-275) when the owning thread exits.",
+   "why": "Existing per-thread-owned Fetch response records hold native bytes, other handle ids and their ordinary property bag. OwnedHandles::drop removes the exiting mutator records, releasing those bag edges without reading retired TLS.",
    "hook": "release",
    "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
   },
@@ -852,8 +853,10 @@
    "names": [
     "BLOB_REGISTRY"
    ],
-   "verdict": "no_heap_address",
-   "why": "HashMap<handle id, BlobData> where BlobData is Vec<u8> body, String content_type, Option<String>/Option<f64> File fields (fetch/mod.rs:1101); Rust-owned. Also released per owning thread by OwnedHandles::drop except blobs an object URL still names."
+   "verdict": "thread_exit_invalidated",
+   "why": "Existing native Blob records hold their ordinary property bag. OwnedHandles::drop removes ordinary records and clears bags on Blob byte records retained by process-wide object URLs, before the publishing mutator retires.",
+   "hook": "drop",
+   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
   },
   {
    "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
@@ -1410,15 +1413,6 @@
    "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc \u2014 including arena blocks released through the allocator \u2014 so addresses are never stale."
   },
   {
-   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-   "names": [
-    "WASM_FUNCREF_EXTERNALS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "(wasm-host feature) closure-address -> host funcref handle map; entries in the exiting arena's ranges are removed and their handles dropped by release_closure_side_table_owners_in_ranges (dynamic_props.rs:474-491) from Arena::drop.",
-   "hook": "release_closure_side_table_owners_in_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/typedarray/mod.rs",
    "names": [
     "PERRY_TA_KIND_CACHE"
@@ -1501,24 +1495,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Previous minor's dirty-scan covered-set size used to pre-size the next one; a capped count."
-  },
-  {
-   "file": "crates/perry-runtime/src/node_vm.rs",
-   "names": [
-    "VM_COMPILED_FUNCTION_SOURCES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "vm.compileFunction source text keyed by closure address; owners in freed ranges are dropped at thread exit.",
-   "hook": "release_vm_owner_entries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/node_vm.rs",
-   "names": [
-    "VM_SCRIPTS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "vm.Script metadata keyed by owner address; the death prune keeps other threads' owners, so owners in freed ranges are dropped at thread exit.",
-   "hook": "release_vm_owner_entries_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/promise/native_async.rs",
@@ -1805,30 +1781,10 @@
   {
    "file": "crates/perry-runtime/src/async_hooks.rs",
    "names": [
-    "RESOURCES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Async resource entries whose resource value or captured ALS store lies in freed memory are dropped at thread exit without a destroy event.",
-   "hook": "release_async_hooks_in_freed_ranges",
-   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
-  },
-  {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "names": [
     "GC_DESTROY_QUEUE"
    ],
    "verdict": "no_heap_address",
    "why": "VecDeque<u64> of async ids queued by enqueue_gc_destroy (async_hooks.rs:1118); ids come from the process-global NEXT_ASYNC_ID counter, not addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "names": [
-    "CONTEXT_SNAPSHOTS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "ALS snapshots holding a freed store are dropped at thread exit.",
-   "hook": "release_async_hooks_in_freed_ranges",
-   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
   },
   {
    "file": "crates/perry-runtime/src/async_hooks.rs",
@@ -2081,9 +2037,8 @@
    "names": [
     "REGISTRY"
    ],
-   "verdict": "thread_exit_invalidated",
-   "why": "(PERRY_TYPED_FEEDBACK) Observations record object and shape addresses; those naming freed memory are removed at thread exit.",
-   "hook": "release_typed_feedback_in_freed_ranges"
+   "verdict": "no_heap_address",
+   "why": "Registry of native feedback-site addresses and observations containing scalar ShapeIds, lengths and counters. ShapeIds replace object/key-list addresses; no observation contains a GC pointer."
   },
   {
    "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
@@ -2538,15 +2493,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "per_test_global AtomicU64 remaining layout-id budget, stored in object/dictionary.rs:138/160; a counter."
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol/accessors.rs",
-   "names": [
-    "SYMBOL_ACCESSOR_PROPERTIES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Keyed by (owner, symbol) addresses with get/set closure bits; entries whose owner, symbol or closures are freed are dropped at thread exit.",
-   "hook": "release_symbol_accessors_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/symbol/accessors.rs",
@@ -3074,15 +3020,6 @@
    "why": "OnceLock<Option<Sink>> parsed once from PERRY_RECEIVER_REPR_DIAG (hot_diag::Sink output target: stderr/file); Rust-owned config."
   },
   {
-   "file": "crates/perry-runtime/src/object/global_this_webassembly.rs",
-   "names": [
-    "REG"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "(feature wasm-host) WebAssembly wrapper registries keyed by wrapper object address; move/death hooks do not run at thread exit, so freed addresses are dropped (host handles only unmapped). | (second declaration) (feature wasm-host) WebAssembly wrapper registries keyed by wrapper object address; move/death hooks do not run at thread exit, so freed addresses are dropped (host handles only unmapped).",
-   "hook": "release_wasm_wrapper_registries_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/tui/hooks.rs",
    "names": [
     "SLOTS"
@@ -3140,15 +3077,6 @@
    "why": "Never-dropped Arc<ClassImageTables> plus owner ThreadId; the tables are class-id-keyed metadata (vtables, fn-pointer hooks such as has_instance/to_string_tag stored as func_ptr code addresses, names, lengths, parent edges) owned by Rust allocations, not the GC arena."
   },
   {
-   "file": "crates/perry-runtime/src/object/prototype_chain.rs",
-   "names": [
-    "OBJECT_PROTOTYPES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Keyed by owner address; death pruning only sees the collecting thread, so entries whose owner or prototype is freed are dropped at thread exit.",
-   "hook": "release_object_prototypes_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/proxy/put_value/packed_add.rs",
    "names": [
     "PERRY_STORE_CENSUS"
@@ -3201,23 +3129,6 @@
   {
    "file": "crates/perry-runtime/src/symbol.rs",
    "names": [
-    "SYMBOL_POINTERS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Set of fresh Symbol() header addresses (gc_malloc); death pruning only sees the collecting thread's heap, so addresses in the exiting thread's freed arena/malloc ranges are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "REGISTERED_SYMBOL_DESCRIPTIONS"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "Keyed by addresses of Box::leak'd registered/well-known/Intl-fallback SymbolHeaders only (inserters symbol.rs:398, 709, symbol/constructors.rs:122); values are Rust-owned Arc<str>."
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
     "WELL_KNOWN_SYMBOLS"
    ],
    "verdict": "process_global_allocation",
@@ -3234,36 +3145,10 @@
   {
    "file": "crates/perry-runtime/src/symbol.rs",
    "names": [
-    "SYMBOL_ADDR_FILTER"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Bloom-style RegistryAddrFilter admitted with every symbol address before insertion; a stale bit only yields 'maybe', which is resolved against the authoritative SYMBOL_POINTERS set (is_registered_symbol, symbol.rs:738-781). Note the authoritative table itself is a BUG in this audit."
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
     "INTL_FALLBACK_SYMBOL"
    ],
    "verdict": "process_global_allocation",
    "why": "Holds the address of the %Intl%.[[FallbackSymbol]] SymbolHeader, Box::into_raw'd once in intl_legacy_constructed_symbol (symbol.rs:688-712); never freed."
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "SYMBOL_PROPERTIES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Keyed by owner object address with strongly-rooted values; owner records in freed ranges, and entries whose symbol or value is freed, are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "SYMBOL_PROPERTY_ATTRS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Keyed by (owner, symbol) addresses; entries where either lies in freed ranges are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/symbol.rs",
@@ -3875,6 +3760,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Test-only observed AgentId from the retire hook; AgentId is a monotonic numeric agent identity, never a heap address. per_test_global isolates the assertion on the retiring worker thread."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "NATIVE_PROPERTY_BAG_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Startup code function pointer for the native-owner bag adapter. It stores only an extern C function address, never a payload, property bag or GC address."
   }
  ]
 }

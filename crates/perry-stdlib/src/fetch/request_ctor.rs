@@ -128,6 +128,7 @@ pub unsafe extern "C" fn js_request_new(
     let signal = body_metadata::signal_or_default(signal_root.get_nanbox_f64());
     let id = alloc_fetch_handle_id();
     let record = RequestRecord {
+        props: 0,
         url,
         method,
         body,

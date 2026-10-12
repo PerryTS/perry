@@ -15,6 +15,8 @@ mod registry;
 pub(crate) mod shape;
 mod unbox;
 mod v8_stubs;
+#[cfg(any(feature = "wasm-host", test))]
+pub(crate) mod wasm_funcref;
 mod wide_call;
 
 #[cfg(test)]
@@ -44,9 +46,7 @@ pub(crate) use wide_call::dispatch_wide_abi;
 
 /// `PERRY_GC_CENSUS`: every closure-keyed side table outside the registries.
 pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow> {
-    let mut rows = alloc::singleton_closure_census();
-    rows.extend(dynamic_props::dynamic_props_census());
-    rows
+    alloc::singleton_closure_census()
 }
 pub use registry::{
     build_rest_array, build_rest_array_rooted, closure_arity, closure_info, closure_is_arrow,
@@ -85,17 +85,10 @@ pub use dispatch::{
 };
 pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked_rebind};
 
-#[cfg(feature = "wasm-host")]
-pub(crate) use dynamic_props::register_wasm_funcref_external;
-#[cfg(test)]
-pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{
-    clear_closure_side_tables_for_dead_ptr, clone_closure_rebind_this,
-    closure_dynamic_props_owner_moved, closure_dynamic_side_tables_nonempty,
-    closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
+    clone_closure_rebind_this, closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
     closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
-    function_prototype_inherited_get, prune_dead_closure_side_table_owners,
-    prune_dead_closure_side_table_owners_young, release_closure_side_table_owners_in_ranges,
+    function_prototype_inherited_get,
 };
 pub(crate) use dynamic_props::{
     closure_define_data_with_attrs, closure_define_first_props_with_attrs,
@@ -105,8 +98,10 @@ pub use dynamic_props::{
     closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_get_own_dynamic_prop,
     closure_has_own_dynamic_prop, closure_is_key_deleted, closure_mark_key_deleted,
     closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
-    is_closure_ptr, scan_closure_dynamic_props_roots_mut,
+    is_closure_ptr,
 };
+#[cfg(feature = "wasm-host")]
+pub(crate) use wasm_funcref::register_wasm_funcref_external;
 
 // v8_stubs re-exports the AOT stubs + non-macOS Rust V8-interop stubs.
 #[cfg(not(target_os = "macos"))]

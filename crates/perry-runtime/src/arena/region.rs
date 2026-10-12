@@ -61,6 +61,8 @@ pub(super) const ALIGN: usize = 2 * 1024 * 1024;
 pub(crate) enum Kind {
     NurseryBlock,
     OldBlock,
+    /// O1: collectible old backing excluded from every relocation policy.
+    CollectingHolder,
     LargeObject,
     #[cfg(target_os = "linux")]
     #[allow(dead_code)] // Reserved for the byte-store integration slice.

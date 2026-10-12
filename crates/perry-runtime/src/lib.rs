@@ -270,7 +270,6 @@ pub mod v8;
 pub mod validators;
 pub mod value;
 pub mod wasi;
-pub mod web_storage;
 /// WebAssembly host shims (issue #76). Forward-declares the
 /// `perry_wasm_host_*` C ABI; the wasmi-backed implementation lives in
 /// the separate `perry-wasm-host` crate and is linked in only when the
@@ -282,6 +281,9 @@ pub mod web_storage;
 /// without libperry_wasm_host.a on the line. The auto-optimize path
 /// (crates/perry/src/commands/compile/optimized_libs.rs) flips this
 /// feature on when `ctx.needs_wasm_runtime` is true.
+#[cfg(any(test, feature = "wasm-host"))]
+mod wasm_instance_state;
+pub mod web_storage;
 #[cfg(feature = "wasm-host")]
 pub mod webassembly;
 // Networking is provided by perry-ext-net; the retired synchronous provider

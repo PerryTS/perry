@@ -41,6 +41,8 @@ mod is_array;
 mod iter_methods;
 mod iter_object;
 mod iterator;
+mod iterator_brand;
+pub(crate) use iterator_brand::{has_materialized_iterator_brand, mark_materialized_iterator};
 mod join;
 mod jsvalue_api;
 /// Own named (non-index) properties stored with the array (#10166 brief 4).

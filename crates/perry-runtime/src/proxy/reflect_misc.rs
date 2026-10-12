@@ -153,11 +153,10 @@ pub(crate) unsafe fn proxy_define_own_property_decoded(
     let obj = f64::from_bits(receiver.get_nanbox_u64());
     let _proxy_pin = pin_proxy_for_native_call(obj);
     let id = lookup(obj).expect("decoded proxy receiver");
-    let (target, handler, revoked) = PROXIES.with(|proxies| {
-        let proxies = proxies.borrow();
-        let entry = proxies[id as usize].as_ref().unwrap();
+    let (target, handler, revoked) = {
+        let entry = entry(id).expect("live proxy cell");
         (entry.target, entry.handler, entry.revoked)
-    });
+    };
     if revoked {
         revoked_return();
         return false;
@@ -221,21 +220,21 @@ pub(super) fn proxy_get_prototype_of_impl(obj: f64) -> f64 {
     let Some(id) = lookup(obj) else {
         return crate::object::js_object_get_prototype_of(obj);
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "getPrototypeOf");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "getPrototypeOf");
+    let target = target_h.get_nanbox_f64();
     let trap_bits = trap.to_bits();
     if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
         return reflect_target_get_prototype_of(target);
@@ -243,9 +242,11 @@ pub(super) fn proxy_get_prototype_of_impl(obj: f64) -> f64 {
     if !is_callable_function(trap) {
         return throw_type_error("proxy getPrototypeOf trap is not a function");
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_h = scope.root_nanbox_f64(target);
-    let result = call_trap(handler, trap, &[target_h.get_nanbox_f64()]);
+    let result = call_trap(
+        handler_h.get_nanbox_f64(),
+        trap,
+        &[target_h.get_nanbox_f64()],
+    );
     let result_bits = result.to_bits();
     if result_bits != TAG_NULL && !reflect_value_is_object(result) {
         return throw_type_error("proxy getPrototypeOf trap returned non-object");
@@ -285,25 +286,27 @@ pub extern "C" fn js_reflect_get_prototype_of(obj: f64) -> f64 {
 pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
     if let Some(id) = lookup(target) {
         let _proxy_pin = pin_proxy_for_native_call(target);
-        let (inner, handler, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| (e.target, e.handler, e.revoked))
-                .unwrap_or((
-                    f64::from_bits(TAG_UNDEFINED),
-                    f64::from_bits(TAG_UNDEFINED),
-                    false,
-                ))
-        });
+        let (inner, handler, revoked) = entry(id)
+            .map(|e| (e.target, e.handler, e.revoked))
+            .unwrap_or((
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                false,
+            ));
         if revoked {
             return revoked_return();
         }
-        let trap = handler_trap(handler, "isExtensible");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let inner_h = scope.root_nanbox_f64(inner);
+        let handler_h = scope.root_nanbox_f64(handler);
+        let trap = handler_trap(handler_h.get_nanbox_f64(), "isExtensible");
+        let inner = inner_h.get_nanbox_f64();
         if is_callable(trap) {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let inner_h = scope.root_nanbox_f64(inner);
-            let trap_result = call_trap(handler, trap, &[inner_h.get_nanbox_f64()]);
+            let trap_result = call_trap(
+                handler_h.get_nanbox_f64(),
+                trap,
+                &[inner_h.get_nanbox_f64()],
+            );
             let booleanized = crate::value::js_is_truthy(trap_result) != 0;
             // Invariant: the trap result must equal the target's actual
             // extensibility.
@@ -333,25 +336,27 @@ pub extern "C" fn js_reflect_is_extensible(target: f64) -> f64 {
 pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
     if let Some(id) = lookup(target) {
         let _proxy_pin = pin_proxy_for_native_call(target);
-        let (inner, handler, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|o| o.as_ref())
-                .map(|e| (e.target, e.handler, e.revoked))
-                .unwrap_or((
-                    f64::from_bits(TAG_UNDEFINED),
-                    f64::from_bits(TAG_UNDEFINED),
-                    false,
-                ))
-        });
+        let (inner, handler, revoked) = entry(id)
+            .map(|e| (e.target, e.handler, e.revoked))
+            .unwrap_or((
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                false,
+            ));
         if revoked {
             return revoked_return();
         }
-        let trap = handler_trap(handler, "preventExtensions");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let inner_h = scope.root_nanbox_f64(inner);
+        let handler_h = scope.root_nanbox_f64(handler);
+        let trap = handler_trap(handler_h.get_nanbox_f64(), "preventExtensions");
+        let inner = inner_h.get_nanbox_f64();
         if is_callable(trap) {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let inner_h = scope.root_nanbox_f64(inner);
-            let trap_result = call_trap(handler, trap, &[inner_h.get_nanbox_f64()]);
+            let trap_result = call_trap(
+                handler_h.get_nanbox_f64(),
+                trap,
+                &[inner_h.get_nanbox_f64()],
+            );
             let booleanized = crate::value::js_is_truthy(trap_result) != 0;
             // Invariant: a `true` result requires the target to be non-extensible.
             if booleanized {

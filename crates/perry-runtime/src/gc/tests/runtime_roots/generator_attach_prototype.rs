@@ -103,7 +103,7 @@ fn current_addr() -> usize {
 ///
 /// Deliberately NOT asserted: that `before` carries no recorded prototype. The
 /// nursery recycles addresses between tests on this thread, and the collector's
-/// `object_static_prototype_owner_moved` migrates an entry off the old address
+/// The prototype bag follows its owner off the old address
 /// when the owner moves — so that slot's contents are not a stable signal
 /// either way. What is asserted is what the bug got wrong: the receiver moved
 /// (subject live), the return value is the current address, and the LIVE object

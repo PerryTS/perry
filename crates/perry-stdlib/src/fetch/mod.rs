@@ -66,6 +66,8 @@ pub use bun_server_bridge::*;
 // the two bound-method caches and `RequestRecord::signal`. Same
 // child-module/`use super::*` contract as `headers`.
 mod gc;
+mod native_properties;
+pub(crate) use native_properties::{native_property_bag, set_native_property_bag};
 mod lifecycle;
 
 // Web Fetch `Request` constructors (`js_request_new` /
@@ -332,6 +334,7 @@ fn with_stream(id: usize, f: impl FnOnce(&mut StreamState)) {
 }
 
 struct FetchResponse {
+    pub(super) props: u64,
     status: u16,
     status_text: String,
     headers: HeadersStore,
@@ -1062,6 +1065,7 @@ mod headers_store;
 use headers_store::{HeadersRecord, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
+    pub(super) props: u64,
     url: String,
     method: String,
     /// Raw body bytes, stored verbatim so a binary (Buffer/Uint8Array) body
@@ -1099,6 +1103,7 @@ pub(crate) static BLOB_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, BlobDa
 
 #[derive(Clone)]
 pub(crate) struct BlobData {
+    pub(super) props: u64,
     pub(crate) body: Vec<u8>,
     pub(crate) content_type: String,
     // Issue #1211: when the handle was created via `new File(parts, name, opts)`
@@ -1110,6 +1115,7 @@ pub(crate) struct BlobData {
 impl BlobData {
     pub(crate) fn blob(body: Vec<u8>, content_type: String) -> Self {
         BlobData {
+            props: 0,
             body,
             content_type,
             file_name: None,
@@ -1118,7 +1124,8 @@ impl BlobData {
     }
 }
 
-pub(crate) fn alloc_blob(data: BlobData) -> usize {
+pub(crate) fn alloc_blob(mut data: BlobData) -> usize {
+    data.props = 0;
     let id = alloc_fetch_handle_id();
     BLOB_REGISTRY.lock().unwrap().insert(id, data);
     id
@@ -1471,6 +1478,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 return Err(());
             }
             Ok(RequestRecord {
+                props: 0,
                 url: req.url.clone(),
                 method: req.method.clone(),
                 body: req.body.clone(),

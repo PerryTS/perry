@@ -366,12 +366,6 @@
     },
     {
       "file": "crates/perry-runtime/src/symbol.rs",
-      "name": "REGISTERED_SYMBOL_DESCRIPTIONS",
-      "verdict": "process_lifetime",
-      "why": "Keyed by each leaked Symbol.for / well-known symbol; tracks the registries above per distinct key"
-    },
-    {
-      "file": "crates/perry-runtime/src/symbol.rs",
       "name": "SYMBOL_REGISTRY",
       "verdict": "process_lifetime",
       "why": "Symbol.for(key) registry: by spec it returns the same symbol forever; grows per distinct key string"
@@ -393,12 +387,6 @@
       "name": "NAVSTACK_REGISTRY",
       "verdict": "bounded_by_program",
       "why": "Keyed by compiler-synthesized NavStack state id, registered per declared route during UI init"
-    },
-    {
-      "file": "crates/perry-runtime/src/webassembly.rs",
-      "name": "WASM_IMPORT_OBJECTS",
-      "verdict": "open_leak",
-      "why": "Keyed by a monotonic token per WebAssembly instantiation; each keeps its imports object rooted and none is removed"
     },
     {
       "file": "crates/perry-stdlib/src/container/types.rs",

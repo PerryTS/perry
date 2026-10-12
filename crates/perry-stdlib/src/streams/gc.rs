@@ -138,6 +138,9 @@ pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     expando::scan_expando_roots(visitor);
     if let Ok(mut map) = READABLE_STREAMS.lock() {
         for stream in map.values_mut() {
+            if let Some(slot) = stream.props.slot() {
+                visitor.visit_nanbox_u64_slot(slot);
+            }
             if let Some(promise) = stream.tee_cancel_promise.as_mut() {
                 visitor.visit_raw_mut_ptr_slot(promise);
             }
@@ -170,6 +173,9 @@ pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     byob::scan_byob_roots(visitor);
     if let Ok(mut map) = WRITABLE_STREAMS.lock() {
         for stream in map.values_mut() {
+            if let Some(slot) = stream.props.slot() {
+                visitor.visit_nanbox_u64_slot(slot);
+            }
             visitor.visit_i64_slot(&mut stream.write_cb);
             visitor.visit_i64_slot(&mut stream.close_cb);
             visitor.visit_i64_slot(&mut stream.abort_cb);
@@ -188,6 +194,9 @@ pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     }
     if let Ok(mut map) = TRANSFORM_STREAMS.lock() {
         for transform in map.values_mut() {
+            if let Some(slot) = transform.props.slot() {
+                visitor.visit_nanbox_u64_slot(slot);
+            }
             visitor.visit_i64_slot(&mut transform.transform_cb);
             visitor.visit_i64_slot(&mut transform.flush_cb);
         }
@@ -195,11 +204,17 @@ pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     scan_transform_deferred_roots(visitor);
     if let Ok(mut map) = READERS.lock() {
         for reader in map.values_mut() {
+            if let Some(slot) = reader.props.slot() {
+                visitor.visit_nanbox_u64_slot(slot);
+            }
             visitor.visit_raw_mut_ptr_slot(&mut reader.closed_promise);
         }
     }
     if let Ok(mut map) = WRITERS.lock() {
         for writer in map.values_mut() {
+            if let Some(slot) = writer.props.slot() {
+                visitor.visit_nanbox_u64_slot(slot);
+            }
             visitor.visit_raw_mut_ptr_slot(&mut writer.closed_promise);
             visitor.visit_raw_mut_ptr_slot(&mut writer.ready_promise);
         }

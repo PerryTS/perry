@@ -199,6 +199,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,
+            resource: f64::from_bits(crate::value::TAG_UNDEFINED),
         });
     });
     crate::event_pump::js_notify_promise_progress();
@@ -312,6 +313,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,
+            resource: f64::from_bits(crate::value::TAG_UNDEFINED),
         });
     });
     crate::event_pump::js_notify_promise_progress();

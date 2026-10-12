@@ -87,6 +87,7 @@ unsafe fn alloc_transform_stream_with_strategies(
     WRITABLE_STREAMS.lock().unwrap().insert(
         writable_id,
         WritableStreamData {
+            props: Default::default(),
             state: WritableState::Writable,
             // Sentinel: write_cb=0, close_cb=0 — the dispatcher checks
             // TRANSFORM_PAIRS first and routes through the user transform_cb /
@@ -116,6 +117,7 @@ unsafe fn alloc_transform_stream_with_strategies(
     TRANSFORM_STREAMS.lock().unwrap().insert(
         id,
         TransformStreamData {
+            props: Default::default(),
             readable_handle: readable_id,
             writable_handle: writable_id,
             transform_cb,

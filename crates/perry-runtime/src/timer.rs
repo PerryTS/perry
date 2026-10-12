@@ -876,18 +876,13 @@ fn schedule_callback_timer_inner(
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
-    let (ids, callback) =
-        callback_handle.across_const::<crate::closure::ClosureHeader, _>(
-            || match trigger_async_id {
-                Some(trigger_async_id) => crate::async_hooks::init_resource_with_trigger(
-                    type_name,
-                    resource(),
-                    true,
-                    trigger_async_id,
-                ),
-                None => crate::async_hooks::init_resource(type_name, resource(), true),
-            },
-        );
+    let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        crate::async_hooks::init_scheduled_resource(type_name, resource(), trigger_async_id)
+    });
+    // The queue entry owns the timer's state; keep it reachable until queued.
+    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+        scope.root_raw_mut_ptr(state);
+    }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
     // Re-read after `init_resource*`, which can move it.

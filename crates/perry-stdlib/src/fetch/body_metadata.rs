@@ -13,6 +13,7 @@ enum FormDataValue {
 
 #[derive(Default)]
 pub(super) struct FormDataStore {
+    pub(super) props: u64,
     entries: Vec<(String, FormDataValue)>,
     pub(super) method_values: HashMap<&'static str, u64>,
 }
@@ -21,6 +22,7 @@ pub(super) struct FormDataStore {
 impl Clone for FormDataStore {
     fn clone(&self) -> Self {
         Self {
+            props: 0,
             entries: self.entries.clone(),
             method_values: Default::default(),
         }
@@ -268,6 +270,7 @@ fn form_data_from_multipart(
                 part.content_type.as_deref().unwrap_or("text/plain"),
             );
             let file_id = alloc_blob(BlobData {
+                props: 0,
                 body: part.data,
                 content_type,
                 file_name: Some(filename),
@@ -401,6 +404,7 @@ pub extern "C" fn js_response_static_error() -> f64 {
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
+            props: 0,
             status: 0,
             status_text: String::new(),
             headers: HeadersStore::default(),

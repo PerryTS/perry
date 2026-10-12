@@ -244,7 +244,6 @@ fn test_incremental_barrier_marks_closure_static_prototype_store() {
     assert!(stats.checked_edges >= 1);
     assert_eq!(stats.missing_edges, 0);
     clear_mark_user_ptr(closure as usize);
-    crate::closure::test_clear_closure_side_tables();
     clear_marks();
     remembered_set_clear();
 }
@@ -265,12 +264,16 @@ fn test_incremental_barrier_marks_external_map_and_set_slots() {
         (*set).used = 1;
     }
     mark_user_ptr(map as usize);
+    let store = unsafe { crate::map::test_map_store_word(map) };
+    mark_user_ptr(store);
     mark_user_ptr(set as usize);
+    let set_store = unsafe { crate::set::test_set_store_word(set) };
+    mark_user_ptr(set_store);
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
 
-    runtime_store_external_jsvalue_slot(map as usize, entries as usize, ptr_bits(map_child));
-    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(set_child));
+    runtime_store_gc_jsvalue_slot(store, entries as usize, ptr_bits(map_child));
+    runtime_store_gc_jsvalue_slot(set_store, elements as usize, ptr_bits(set_child));
     drain_incremental_mark_barrier_seeds(&valid_ptrs);
 
     assert_marked_user_ptr(map_child, "map external slot child");

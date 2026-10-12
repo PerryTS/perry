@@ -1,9 +1,9 @@
 use super::{
-    closure_from, coerce_trap_bool, extract_pointer, handler_trap, is_callable_function,
+    closure_from, coerce_trap_bool, entry, extract_pointer, handler_trap, is_callable_function,
     js_proxy_delete, js_proxy_get, js_proxy_has, lookup, nanbox_bool, reflect_non_object_typeerror,
     reflect_ordinary_delete_property_key, reflect_ordinary_set_with_receiver,
-    reflect_value_is_object, revoked_return, target_get_property_key, throw_type_error, PROXIES,
-    TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    reflect_value_is_object, revoked_return, target_get_property_key, throw_type_error, TAG_NULL,
+    TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// `Reflect.get(target, key, receiver)` (#2766).
@@ -273,12 +273,7 @@ pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
 
 fn proxy_entry(proxy_boxed: f64) -> Option<(f64, f64, bool)> {
     let id = lookup(proxy_boxed)?;
-    PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-    })
+    entry(id).map(|e| (e.target, e.handler, e.revoked))
 }
 
 fn descriptor_key(name: &[u8]) -> (*const crate::StringHeader, f64) {

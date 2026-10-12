@@ -23,6 +23,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let mut request = source.unwrap_or_else(|| {
         let url = js_request_input_to_url(input_root.get_nanbox_f64());
         RequestRecord {
+            props: 0,
             url: string_from_header(url).unwrap_or_default(),
             method: "GET".to_string(),
             body: None,

@@ -60,12 +60,6 @@ fn set_prototype(owner: usize, proto: usize) {
     );
 }
 
-fn forget_owners(owners: &[usize]) {
-    crate::object::prototype_chain::prune_dead_object_prototype_owners(&|owner| {
-        owners.contains(&owner)
-    });
-}
-
 #[test]
 fn retargeting_one_array_keeps_every_other_array_on_the_fast_path() {
     let _serialized = test_serialize();
@@ -124,8 +118,6 @@ fn retargeting_one_array_keeps_every_other_array_on_the_fast_path() {
         array_index_fast_path_invalid_for(reserved_of(grown)),
         "growth must not drop the retargeted array's custom-prototype bit"
     );
-
-    forget_owners(&[old_owner, grown as usize]);
 }
 
 #[test]
@@ -158,6 +150,4 @@ fn retargeting_a_lazy_json_array_still_invalidates_globally() {
         "a lazy array's materialized storage is a separate allocation without \
          the owner's bit, so its retarget must keep the conservative global byte"
     );
-
-    forget_owners(&[lazy]);
 }

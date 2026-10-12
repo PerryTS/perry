@@ -270,6 +270,15 @@ impl Drop for OwnedHandles {
             .copied()
             .filter(|id| !object_urls.contains(id))
             .collect();
+        // Object URLs keep native Blob bytes after this mutator exits;
+        // their JavaScript bags belong to the retiring heap.
+        if let Ok(mut blobs) = BLOB_REGISTRY.lock() {
+            for id in self.0.iter().filter(|id| object_urls.contains(id)) {
+                if let Some(blob) = blobs.get_mut(id) {
+                    blob.props = 0;
+                }
+            }
+        }
         release(&dead);
     }
 }
@@ -299,6 +308,9 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
     // Snapshot before invoking the marker: an edge can cycle back through
     // another handle, and callbacks must never re-enter a held registry lock.
     let mut edges = Vec::new();
+    if let Some(props) = super::native_property_bag(id).filter(|&bits| bits != 0) {
+        edges.push(props);
+    }
     if let Some(response) = FETCH_RESPONSES.lock().unwrap().get(&id) {
         if let Some(headers) = response.cached_headers_id {
             edges.push(handle_to_f64(headers).to_bits());
@@ -449,6 +461,7 @@ mod ownership_tests {
             let form = js_form_data_new();
             let form_root = scope.root_nanbox_f64(form);
             let blob = handle_to_f64(alloc_blob(BlobData {
+                props: 0,
                 body: vec![1, 2, 3],
                 content_type: "text/plain".into(),
                 file_name: Some("part.txt".into()),

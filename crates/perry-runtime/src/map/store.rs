@@ -1,20 +1,19 @@
-//! Native storage owned by a Map header. Header copies transfer ownership;
-//! only an unforwarded dead header may destroy it.
+//! The Map's store: an ordinary young, movable GC object holding the inline
+//! entry pairs and owning the native indexes. The header's `store` word is its
+//! only edge; the header's `entries` alias is re-derived by the Map's rewrite
+//! hook whenever the store moves. A store that dies young releases its native
+//! buffers in the copying minor (`arena/owned_stores.rs`), an older one in the
+//! ordinary sweep through its finalize hook.
 use super::*;
 use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
 
-// Keep Map-free programs off the bitmap walk and brand-probe path. This is
-// only an empty fast path, never an ownership registry or liveness authority.
-static MAP_STORE_EVER_ALLOCATED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn map_stores_never_allocated() -> bool {
-    !MAP_STORE_EVER_ALLOCATED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-pub(super) struct MapStore {
+#[repr(C)]
+pub(crate) struct MapStore {
+    // Internal holders must never expose a ShapeId at payload +4 (rule 3).
+    _receiver_word: u64,
     pub(super) entries: *mut f64,
     pub(super) capacity: usize,
+    pub(super) used: usize,
     pub(super) numeric: NumericIndex,
     pub(super) strings: StringIndex,
     pub(super) pointers: PtrHashMap<MapPtrKey, u32>,
@@ -46,10 +45,11 @@ impl MapStore {
     }
 
     pub(super) fn new(entries: *mut f64, capacity: usize) -> Self {
-        MAP_STORE_EVER_ALLOCATED.store(true, std::sync::atomic::Ordering::Relaxed);
         Self {
+            _receiver_word: 0,
             entries,
             capacity,
+            used: 0,
             numeric: NumericIndex::new(),
             strings: StringIndex::default(),
             pointers: new_ptr_hash_map(),
@@ -60,16 +60,87 @@ impl MapStore {
     }
 }
 
-impl Drop for MapStore {
-    fn drop(&mut self) {
-        if !self.entries.is_null() && self.capacity != 0 {
-            let layout = entries_layout(self.capacity);
-            unsafe {
-                dealloc(self.entries.cast(), layout);
-            }
-            note_test_map_side_deallocation(layout.size());
-        }
+/// Bounded native publication: a creating caller allocates the store before
+/// anything unrooted is live; a growing caller keeps its receiver and values in
+/// roots and holds a no-move scope until the new store is linked.
+pub(super) unsafe fn alloc_store(capacity: usize) -> *mut MapStore {
+    alloc_store_in::<false>(capacity)
+}
+
+/// `OLD` births a tenured store: test fixtures that model an old collection
+/// pair it with an old header. Production stores are always born young.
+pub(super) unsafe fn alloc_store_in<const OLD: bool>(capacity: usize) -> *mut MapStore {
+    let size = std::mem::size_of::<MapStore>()
+        .checked_add(entries_layout(capacity).size())
+        .filter(|size| *size <= u32::MAX as usize - crate::gc::GC_HEADER_SIZE - 8)
+        .unwrap_or_else(|| crate::error::throw_allocation_failed());
+    let store = if OLD {
+        crate::arena::arena_alloc_gc_old_born_tenured(
+            size,
+            std::mem::align_of::<MapStore>(),
+            crate::gc::GC_TYPE_MAP_STORE,
+        )
+    } else {
+        crate::arena::arena_alloc_gc(
+            size,
+            std::mem::align_of::<MapStore>(),
+            crate::gc::GC_TYPE_MAP_STORE,
+        )
     }
+    .cast::<MapStore>();
+    crate::arena::note_young_owned_store(store.cast());
+    let entries = store
+        .cast::<u8>()
+        .add(std::mem::size_of::<MapStore>())
+        .cast::<f64>();
+    std::ptr::write(store, MapStore::new(entries, capacity));
+    std::ptr::write_bytes(entries, 0, capacity * 2);
+    store
+}
+
+/// Move hook: the copy owns the native indexes now. Its entries alias points
+/// at its own inline payload, and the abandoned original holds no buffer a
+/// later sweep or exit walk could release a second time. The forwarding word
+/// covers payload bytes 0..8 only (the reserved receiver word).
+pub(crate) unsafe fn owned_store_moved_for_gc(old_user: usize, new_user: usize) {
+    if old_user == new_user {
+        return;
+    }
+    let new = new_user as *mut MapStore;
+    if !(*new).entries.is_null() {
+        (*new).entries = (new_user + std::mem::size_of::<MapStore>()) as *mut f64;
+    }
+    // GC_STORE_AUDIT(POINTER_FREE): ownership moved to the copy.
+    (*(old_user as *mut MapStore)).entries = ptr::null_mut();
+    crate::arena::note_owned_store_copied(new_user);
+}
+
+/// The header's entries alias names its store's inline payload; refreshed by
+/// the Map's rewrite hook after a pass rewrote the `store` edge.
+pub(crate) unsafe fn refresh_entries_alias(map: *mut MapHeader) {
+    if let Some(store) = (*map).store.as_ref() {
+        (*map).entries = store.entries;
+    }
+}
+
+/// Idempotent native cleanup. Values belong to the GC allocation itself;
+/// only Rust index/history buffers need a destructor. Exit must avoid TLS.
+pub(crate) unsafe fn finalize_owned_store(store: *mut u8, accounting: bool) {
+    let store = &mut *store.cast::<MapStore>();
+    if store.entries.is_null() {
+        return;
+    }
+    if accounting {
+        crate::gc::gc_note_external_side_free(store.index_bytes());
+    }
+    drop(std::mem::replace(&mut store.numeric, NumericIndex::new()));
+    drop(std::mem::take(&mut store.strings));
+    drop(std::mem::take(&mut store.pointers));
+    drop(store.compaction.take());
+    note_test_map_side_deallocation(entries_layout(store.capacity).size());
+    store.entries = ptr::null_mut();
+    store.capacity = 0;
+    store.used = 0;
 }
 
 /// Most content hashes have exactly one entry: store its offset inline.
@@ -158,46 +229,25 @@ impl StringIndex {
 /// Brand checks accept only an allocation-authored Map start, then its type.
 /// Range membership precedes every dereference, including for garbage inputs.
 pub(super) fn is_live_map(addr: usize) -> bool {
-    if map_stores_never_allocated() || crate::value::addr_class::is_handle_band(addr) {
-        return false;
-    }
-    let Some(header_addr) = addr.checked_sub(crate::gc::GC_HEADER_SIZE) else {
-        return false;
-    };
-    let Some((_, base, bitmap)) = crate::arena::classify_heap_space_in_range(addr) else {
-        return false;
-    };
-    if !crate::arena::arena_header_is_object_start(header_addr, base, bitmap) {
-        return false;
-    }
     unsafe {
-        let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
+        let Some(header) = crate::value::addr_class::try_read_tracked_arena_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_MAP,
+        ) else {
             return false;
         };
-        let header = header.as_ref();
-        header.obj_type == crate::gc::GC_TYPE_MAP
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && header.size as usize
-                == (crate::gc::GC_HEADER_SIZE + std::mem::size_of::<MapHeader>())
-                    .next_multiple_of(8)
+        header.as_ref().size as usize
+            == (crate::gc::GC_HEADER_SIZE + std::mem::size_of::<MapHeader>()).next_multiple_of(8)
             && !(*(addr as *const MapHeader)).store.is_null()
     }
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
-    if map.is_null() {
-        return;
-    }
     let store = std::mem::replace(&mut (*map).store, ptr::null_mut());
-    if store.is_null() {
-        return;
+    if !store.is_null() {
+        finalize_owned_store(store.cast(), true);
     }
-    let store = Box::from_raw(store);
-    crate::gc::gc_note_external_side_free(
-        entries_layout(store.capacity).size() + store.index_bytes(),
-    );
-    drop(store);
-    // GC_STORE_AUDIT(POINTER_FREE): the native owner and external entries have been freed.
     (*map).entries = ptr::null_mut();
     (*map).capacity = 0;
     (*map).size = 0;
@@ -208,18 +258,12 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
         return;
     }
-    // The copied header already carries the stable store pointer, so the old
-    // header must give up ownership here. It cannot rely on staying a
-    // forwarding stub: old-generation evacuation (tenured nursery objects
-    // and old-page defrag) releases FORWARDED on the original before the
-    // sweep, which then reclaims it as an ordinary dead Map, and the exit
-    // walks skip only headers that still carry FORWARDED. Either would free
-    // the store the live copy uses. The forwarding word covers payload bytes
-    // 0..8 only; `entries` (8) and `store` (16) are still ours to clear.
+    // The store is its own GC allocation: only the live header's ordinary
+    // edge owns it. Clearing these aliases on the forwarding source avoids
+    // stale fixture reads; no header is responsible for freeing the store.
     unsafe {
         let old = old_addr as *mut MapHeader;
-        // GC_STORE_AUDIT(POINTER_FREE): ownership moved to the copy; the
-        // stale header must hold neither native pointer.
+        // GC_STORE_AUDIT(POINTER_FREE): retired forwarding source aliases.
         (*old).store = ptr::null_mut();
         (*old).entries = ptr::null_mut();
     }
@@ -228,47 +272,6 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
             if *addr == old_addr {
                 *addr = new_addr;
             }
-        }
-    });
-}
-
-pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
-    let mut count = 0;
-    crate::arena::walk_map_allocations(true, |header| unsafe {
-        let map = header
-            .cast::<u8>()
-            .add(crate::gc::GC_HEADER_SIZE)
-            .cast::<MapHeader>();
-        let space = crate::arena::classify_heap_space(map as usize);
-        if crate::gc::minor_side_owner_is_dead(&*header, space) {
-            if !(*map).store.is_null() {
-                finalize_map_side_allocation_for_gc(map);
-                count += 1;
-            }
-        }
-    });
-    #[cfg(test)]
-    TEST_FROM_SPACE_MAP_FINALIZATIONS.fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
-    count
-}
-
-#[cfg(test)]
-static TEST_FROM_SPACE_MAP_FINALIZATIONS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// Dead Maps the copying-minor from-space walk has finalized. Tests compare
-/// deltas; perry-runtime tests run single-threaded.
-#[cfg(test)]
-pub(crate) fn test_from_space_map_finalizations() -> u64 {
-    TEST_FROM_SPACE_MAP_FINALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-pub(crate) fn release_current_thread_map_side_allocations() {
-    crate::arena::walk_map_allocations(false, |header| unsafe {
-        if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
-            finalize_map_side_allocation_for_gc(
-                header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE).cast(),
-            );
         }
     });
 }
@@ -292,18 +295,39 @@ pub(crate) unsafe fn test_map_store_word(map: *const MapHeader) -> usize {
     (*map).store as usize
 }
 
-/// TLS destructors cannot access GC accounting TLS, which may already be gone.
-pub(crate) unsafe fn drop_map_store_at_thread_exit(map: *mut MapHeader) {
-    let store = std::mem::replace(&mut (*map).store, ptr::null_mut());
-    if !store.is_null() {
-        drop(Box::from_raw(store));
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 pub(crate) unsafe fn test_map_index_bytes(map: *const MapHeader) -> usize {
     (*(*map).store).index_bytes()
+}
+
+/// Only the active, initialized extent is traced; cleared/retired stores hold
+/// no JS values even while waiting for their ordinary full collection.
+pub(crate) unsafe fn owned_entry_slot_range(user: *mut u8) -> Option<crate::gc::HeapSlotRange> {
+    let store = &*user.cast::<MapStore>();
+    if store.entries.is_null() || store.used == 0 || store.used > store.capacity {
+        return None;
+    }
+    let header = crate::gc::header_from_trusted_user_ptr(user);
+    let start = user.add(std::mem::size_of::<MapStore>()) as usize;
+    let end = start.checked_add(store.used.checked_mul(16)?)?;
+    if store.entries as usize != start
+        || end > (header as usize).checked_add((*header).size as usize)?
+    {
+        return None;
+    }
+    Some(crate::gc::HeapSlotRange::new(
+        store.entries.cast(),
+        store.used * 2,
+    ))
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_init_owned_map_store(map: *mut MapHeader, capacity: u32) {
+    let store = alloc_store_in::<true>(capacity as usize);
+    (*store).used = capacity as usize; // Fixtures initialize the whole zeroed extent.
+    (*map).store = store;
+    (*map).entries = (*store).entries;
 }

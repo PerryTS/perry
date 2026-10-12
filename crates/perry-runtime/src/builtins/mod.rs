@@ -140,12 +140,12 @@ pub use console::{
     scan_console_log_singleton_roots_mut,
 };
 
+#[cfg(test)]
+pub(crate) use console::test_seed_console_instance;
 pub(crate) use console::{
-    is_console_instance_method_name, is_console_instance_value, prune_dead_console_instance_owners,
+    is_console_instance_method_name, is_console_instance_value,
     try_console_instance_method_dispatch, CONSOLE_INSTANCE_CLASS_ID,
 };
-#[cfg(test)]
-pub(crate) use console::{test_console_instance_count, test_seed_console_instance};
 
 pub(crate) use fn_metadata::function_name_for_closure;
 
@@ -163,20 +163,17 @@ pub use formatting::{
     js_array_print, js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new,
     js_boxed_string_new, js_boxed_symbol_new, js_util_format, js_util_format_with_options,
     js_util_inspect, js_util_is_deep_strict_equal, js_util_is_deep_strict_equal_skip_prototype,
-    js_util_strip_vt_control_characters, scan_boxed_primitive_payload_roots_mut,
+    js_util_strip_vt_control_characters,
 };
 
+#[cfg(test)]
+pub(crate) use formatting::test_boxed_primitive_allocation_count;
 pub(crate) use formatting::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
     boxed_string_wrapper_utf16_len, format_finite_number_js, format_jsvalue, int32_or_class_repr,
-    is_array_hole, is_negative_zero, jsvalue_string_content,
-    prune_dead_boxed_primitive_payload_owners, InspectCompactGuard, InspectCustomInspectGuard,
-    InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
-    INT_EXACT_FASTPATH_LIMIT,
-};
-#[cfg(test)]
-pub(crate) use formatting::{
-    test_boxed_primitive_payload_count, test_seed_boxed_primitive_payload,
+    is_array_hole, is_negative_zero, jsvalue_string_content, InspectCompactGuard,
+    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
+    InspectSortedGuard, INT_EXACT_FASTPATH_LIMIT,
 };
 
 pub use globals::{
@@ -208,6 +205,6 @@ pub(crate) use console::{test_console_log_singleton, test_set_console_log_single
 
 #[cfg(test)]
 pub(crate) use globals::{
-    test_queued_microtask_snapshot, test_seed_queued_microtask,
-    test_seed_queued_microtask_previous_context,
+    test_clear_queued_jobs, test_queued_microtask_snapshot, test_seed_queued_job_owner,
+    test_seed_queued_microtask, test_seed_queued_microtask_previous_context,
 };

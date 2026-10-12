@@ -1,0 +1,1 @@
+Remove SYMBOL_PROPERTY_ATTRS and both scanner paths: symbol descriptors now use only the existing shape-key attributes of the receiver or its property bag. Delete the table's prune, thread-exit release and rekey receipts. Add a moving-owner gap test and a deliberately red readonly-attribute erasure control.

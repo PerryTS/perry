@@ -12,7 +12,7 @@
 //!
 //! The assertion is the wrapper count, not the return value: a test that only
 //! checked the answer would pass with the arm deleted, because the fallback
-//! computes the same number — expensively. `BOXED_PRIMITIVE_PAYLOADS` gains one
+//! computes the same number — expensively. the test-only wrapper allocation counter gains one
 //! entry per wrapper, so "no new boxed primitives" is exactly "the fallback did
 //! not run".
 
@@ -40,7 +40,7 @@ fn code_point_at_dispatches_natively_and_boxes_no_receiver() {
         // Warm anything the first dispatch installs, so the delta below is the
         // method call itself and not one-time globalThis population.
         let _ = call_string_method("ab", "charCodeAt", &[0.0]);
-        let before = crate::builtins::test_boxed_primitive_payload_count();
+        let before = crate::builtins::test_boxed_primitive_allocation_count();
 
         let cp = call_string_method("a", "codePointAt", &[0.0]);
         assert_eq!(cp, 97.0, "codePointAt(0) of \"a\"");
@@ -53,7 +53,7 @@ fn code_point_at_dispatches_natively_and_boxes_no_receiver() {
         );
 
         assert_eq!(
-            crate::builtins::test_boxed_primitive_payload_count(),
+            crate::builtins::test_boxed_primitive_allocation_count(),
             before,
             "the native arm must not mint a String wrapper; a non-zero delta \
              means the call fell through to the primitive-method fallback"
@@ -69,12 +69,12 @@ fn code_point_at_dispatches_natively_and_boxes_no_receiver() {
 /// and the fallback returns before it boxes.
 #[test]
 fn the_wrapper_counter_moves_when_a_receiver_is_boxed() {
-    let before = crate::builtins::test_boxed_primitive_payload_count();
+    let before = crate::builtins::test_boxed_primitive_allocation_count();
     let s = crate::string::js_string_from_bytes(b"abc".as_ptr(), 3);
     let value = f64::from_bits(JSValue::string_ptr(s).bits());
     let _wrapper = crate::builtins::js_boxed_string_new(value, 1);
     assert!(
-        crate::builtins::test_boxed_primitive_payload_count() > before,
+        crate::builtins::test_boxed_primitive_allocation_count() > before,
         "if this cannot move, the codePointAt assertion above is vacuous"
     );
 }
@@ -103,7 +103,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
             crate::fn_info!(crate::object::string_proto_thunks::string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         );
-        let before = crate::builtins::test_boxed_primitive_payload_count();
+        let before = crate::builtins::test_boxed_primitive_allocation_count();
         let cp = super::call_primitive_closure_value(
             recv,
             JSValue::from_bits(method.to_bits()),
@@ -116,7 +116,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
             "the built-in still sees \"a\" through the raw receiver"
         );
         assert_eq!(
-            crate::builtins::test_boxed_primitive_payload_count(),
+            crate::builtins::test_boxed_primitive_allocation_count(),
             before,
             "a built-in callee must receive the primitive, not a ToObject wrapper"
         );
@@ -129,7 +129,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
         }
         let user = crate::closure::js_closure_alloc(crate::fn_info!(sloppy_user_body, 0), 0);
         let user_value = crate::value::js_nanbox_pointer(user as i64);
-        let before = crate::builtins::test_boxed_primitive_payload_count();
+        let before = crate::builtins::test_boxed_primitive_allocation_count();
         let _ = super::call_primitive_closure_value(
             recv,
             JSValue::from_bits(user_value.to_bits()),
@@ -137,7 +137,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
             0,
         );
         assert!(
-            crate::builtins::test_boxed_primitive_payload_count() > before,
+            crate::builtins::test_boxed_primitive_allocation_count() > before,
             "a sloppy user callee is still owed the ToObject wrapper"
         );
     }

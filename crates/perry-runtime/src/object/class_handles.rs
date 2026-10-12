@@ -2,7 +2,7 @@
 //! under the 2,000-line CI gate.
 
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 /// Function pointer type for dispatching method calls on handle-based objects.
@@ -659,3 +659,40 @@ pub unsafe extern "C" fn js_register_handle_prototype_dispatch(f: HandlePrototyp
 #[cfg(test)]
 #[path = "class_handles_extension_tests.rs"]
 mod extension_tests;
+
+/// Native payload owners supply their existing record's bag slot. Operation
+/// zero reads it; operation one replaces it. An unknown owner returns false.
+pub type NativePropertyBagDispatchFn = unsafe extern "C" fn(i64, u32, u64, *mut u64) -> bool;
+static NATIVE_PROPERTY_BAG_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+#[no_mangle]
+pub unsafe extern "C" fn js_register_native_property_bag_dispatch(f: NativePropertyBagDispatchFn) {
+    NATIVE_PROPERTY_BAG_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+/// Set before the first bag word is written into any native record. Until a
+/// program gives a native handle an own property, every handle read misses
+/// without asking the owner records (one map probe per owner family).
+static NATIVE_PROPERTY_BAG_PUBLISHED: AtomicBool = AtomicBool::new(false);
+
+/// Has any native record ever been given a property bag? `false` proves every
+/// handle's bag is empty.
+#[inline]
+pub(crate) fn native_property_bag_published() -> bool {
+    NATIVE_PROPERTY_BAG_PUBLISHED.load(Ordering::Acquire)
+}
+
+pub(crate) unsafe fn native_property_bag_access(
+    handle: i64,
+    operation: u32,
+    bits: u64,
+) -> Option<u64> {
+    if operation == 1 && bits != 0 {
+        NATIVE_PROPERTY_BAG_PUBLISHED.store(true, Ordering::Release);
+    }
+    let dispatch = NATIVE_PROPERTY_BAG_DISPATCH_PTR.load(Ordering::Acquire);
+    if dispatch.is_null() {
+        return None;
+    }
+    let dispatch: NativePropertyBagDispatchFn = std::mem::transmute(dispatch);
+    let mut out = 0;
+    dispatch(handle, operation, bits, &mut out).then_some(out)
+}

@@ -97,34 +97,25 @@ fn the_probe_catches_a_bare_process_global_sink() {
 // Converted tables. One test per `test_clear_*` helper the guards call.
 // ---------------------------------------------------------------------------
 
-/// `symbol::test_clear_symbol_side_table_roots` — `SYMBOL_PROPERTIES`,
-/// `SYMBOL_PROPERTY_ATTRS`, `SYMBOL_ACCESSOR_PROPERTIES`
-/// and the `SYMBOL_POINTERS` rebuild.
-///
-/// The largest reader cluster in the survey behind #7672: 14 tests populate one
-/// of these and assert on it without taking the clearing lock.
+/// Symbol properties now belong to their objects and survive unrelated
+/// thread-local test resets, without a shared symbol-property table.
 #[test]
 fn symbol_side_tables_survive_a_guard_clear_on_another_thread() {
-    let owner = 0x_5B01_0000_7672_usize;
-    let sym_key = 0x_5B01_0000_7673_usize;
+    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
+    let sym_key = (symbol.to_bits() & crate::value::POINTER_MASK) as usize;
     let class_id = 0x7672_u32;
     let survived = survives_a_foreign_clear(
         "symbol side tables",
         || {
-            crate::symbol::test_seed_symbol_property_root(owner, sym_key, 0x7FFD_0000_0000_7672);
-            crate::symbol::test_seed_class_static_symbol_root(
-                class_id,
-                sym_key,
-                0x7FFD_0000_0000_7673,
-            );
-            crate::symbol::test_seed_symbol_pointer_root(sym_key);
+            crate::symbol::test_seed_symbol_property_root(owner, sym_key, 37.0f64.to_bits());
+            crate::symbol::test_seed_class_static_symbol_root(class_id, sym_key, 38.0f64.to_bits());
         },
         move || {
-            crate::symbol::test_symbol_property_root_bits(owner, sym_key)
-                == Some(0x7FFD_0000_0000_7672)
+            crate::symbol::test_symbol_property_root_bits(owner, sym_key) == Some(37.0f64.to_bits())
                 && crate::symbol::test_class_static_symbol_root_bits(class_id, sym_key)
-                    == Some(0x7FFD_0000_0000_7673)
-                && crate::symbol::test_symbol_pointer_root_contains(sym_key)
+                    == Some(38.0f64.to_bits())
+                && crate::symbol::is_registered_symbol(sym_key)
         },
         foreign_guard_clear,
     );
@@ -327,8 +318,6 @@ fn tui_tree_handles_are_not_perturbed_by_another_thread() {
 
 /// Every `test_clear_*` helper this file claims to cover.
 const COVERED_CLEAR_HELPERS: &[&str] = &[
-    "test_clear_closure_side_tables",
-    "test_clear_symbol_side_table_roots",
     "test_clear_all_timer_scanner_roots",
     "test_clear_class_side_table_roots",
     "test_clear_object_cache_roots",
@@ -351,7 +340,7 @@ fn every_covered_clear_helper_is_still_called_by_the_guards() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        body.contains("test_clear_closure_side_tables"),
+        body.contains("test_clear_object_cache_roots"),
         "sanity: the extracted reset body does not contain a call it certainly \
          makes, so the extraction is broken and this check is vacuous"
     );

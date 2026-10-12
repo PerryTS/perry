@@ -17,7 +17,6 @@ pub(super) fn register_host_roots() {
     // The isolation guard removes the production registry. Restore both the
     // transient handles and the metadata families these public operations use.
     register_runtime_handle_root_scanner_for_tests();
-    gc_register_mutable_root_scanner(crate::object::scan_builtin_closure_metadata_roots_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     // gc_init registers this in production. The isolation guard clears that
     // registry, so restore the intrinsic-address rewrites before callbacks
@@ -28,7 +27,6 @@ pub(super) fn register_host_roots() {
 
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
     gc_register_mutable_root_scanner(
         crate::object::method_site::read_holder::scan_read_holder_roots_mut,
@@ -39,8 +37,6 @@ pub(super) fn register_host_roots() {
     // production; the isolation guard clears that registry too.
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_current_new_target_root_mut);
     gc_register_mutable_root_scanner(crate::iter_result::scan_iter_result_keys_roots_mut);
 }

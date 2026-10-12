@@ -16,24 +16,8 @@
 //! the raw-f64 / holes flags, `GC_ARRAY_ELEMENT_SHAPE`. What cannot ride a header is a record keyed
 //! by the object's ADDRESS, and that is all this funnel moves:
 //!
-//! * the residual static-prototype owner registry (#9304), gated by its
-//!   process-global latch (#7733/#7737) — for EVERY kind that can own an
-//!   entry, not only the layout kinds (see below);
 //! * the element-shape proof record (#7480), gated by the header bit that is
-//!   authoritative for it;
-//!
-//! # The prototype registry is not layout metadata
-//!
-//! Its population is every receiver `object::prototype_chain::
-//! meta_capable_object` turns away — a Map, Set, Error, Promise, Date, RegExp,
-//! Temporal cell, lazy JSON array or closure as much as an array — and most of
-//! those kinds have no layout slots at all. The rekey used to sit in the array
-//! arm of the record path, below the layout-kind return, and in the ordinary
-//! object's move hook; every other movable owner kept its entry under the
-//! address it had just left, and the dead-owner prune then dropped it. So it
-//! runs first, keyed on `prototype_chain::residual_prototype_owner_type`, the
-//! same population predicate the collector's value visit uses
-//! (`gc/layout_slot_visit.rs`).
+//!   authoritative for it. Prototypes already travel with their owner bags.
 //!
 //! Until #10362 the funnel re-derived the header half too, once per relocated
 //! object (4.2% of #10362's retained-graph run). The gates below answer the
@@ -42,7 +26,7 @@
 
 use super::*;
 
-/// Rekey residual prototypes and element-shape proofs after relocation.
+/// Rekey element-shape proofs after relocation.
 ///
 /// # Safety
 ///
@@ -62,24 +46,6 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     if (old_user as usize) < GC_HEADER_SIZE + 0x1000 {
         return;
     }
-    // Before the layout-kind return, because the registry's owners are not the
-    // layout kinds (module docs). The latch first: it is one byte load, false
-    // for any process that never re-prototyped a non-object, and the move is
-    // out of line.
-    let relocating_header = header_from_user_ptr(old_user as *const u8);
-    if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
-        && crate::object::prototype_chain::residual_prototype_owner_type(
-            (*relocating_header).obj_type,
-        )
-        // #10362: the per-OWNER half, same bit and same proof as the trace
-        // path's. `_reserved` rides every relocation by construction — all four
-        // callers copy it before calling here and
-        // `assert_relocation_copied_the_header` enforces that — so the bit is
-        // already correct at this point and needs no transfer of its own.
-        && crate::object::prototype_chain::residual_entry_possible_for(relocating_header)
-    {
-        transfer_residual_prototype(old_user as usize, new_user as usize);
-    }
     // Kinds with no layout metadata at all (strings, meta records, RegExps)
     // have no layout record to move. The destination carries the same
     // `obj_type`, so one classification answers for both.
@@ -93,15 +59,6 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     if is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0 {
         crate::array::transfer_element_shape(old_user as usize, new_user as usize);
     }
-}
-
-/// The residual prototype registry's rekey. Cold and out of line so the funnel
-/// stays small enough to inline into every relocation site: it is reached only
-/// once something in the process has been re-prototyped.
-#[cold]
-#[inline(never)]
-fn transfer_residual_prototype(old_user: usize, new_user: usize) {
-    crate::object::prototype_chain::object_static_prototype_owner_moved(old_user, new_user);
 }
 
 /// The funnel's precondition: the destination header is the source's copy.

@@ -111,186 +111,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
 }
 
 #[test]
-fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() {
-    // Not exposed: every allocation here goes through opaque helpers
-    // (`js_object_alloc`, `alloc_nursery_test_symbol`, `young_leaf`) with no
-    // direct `arena_alloc_gc`/`arena_alloc_gc_old` call written in this file,
-    // so there is no in-file call site to guard.
-    let _guard = GcTestIsolationGuard::new();
-    clear_marks();
-    clear_mark_seeds();
-    crate::symbol::test_clear_symbol_side_table_roots();
-
-    // Seed the retained fallback store explicitly; public array installs use shape slots.
-    let owner = crate::array::js_array_alloc(0) as usize;
-    let sym_key = unsafe { alloc_nursery_test_symbol() };
-    let value = young_leaf();
-    let static_sym_key = unsafe { alloc_nursery_test_symbol() };
-    let static_value = young_leaf();
-
-    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
-    crate::symbol::test_seed_class_static_symbol_root(
-        0x5301,
-        static_sym_key,
-        string_bits(static_value),
-    );
-
-    let valid_ptrs = build_valid_pointer_set();
-    crate::symbol::scan_symbol_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
-
-    assert_unmarked_user_ptr(owner, "symbol side-table owner metadata key");
-    assert_marked_user_ptr(sym_key, "symbol property key");
-    assert_marked_user_ptr(value, "symbol property value");
-    assert_marked_user_ptr(static_sym_key, "class static symbol key");
-    assert_marked_user_ptr(static_value, "class static symbol value");
-
-    crate::symbol::test_clear_symbol_side_table_roots();
-    clear_marks();
-    clear_mark_seeds();
-}
-
-#[test]
-fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
-    let _guard = GcTestIsolationGuard::new();
-    // `owner`/`sym_key`/`value`/`static_sym_key`/`static_value` (and the
-    // `_old` addresses as they're allocated) are all live across the three
-    // `arena_alloc_gc_old` calls below.
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_symbol_side_table_roots();
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
-
-    // Seed the retained fallback store explicitly; public array installs use shape slots.
-    let owner = crate::array::js_array_alloc(0) as usize;
-    let sym_key = unsafe { alloc_nursery_test_symbol() };
-    let value = young_leaf();
-    let static_sym_key = unsafe { alloc_nursery_test_symbol() };
-    let static_value = young_leaf();
-
-    let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
-    let sym_key_old = unsafe { alloc_old_test_symbol() };
-    let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
-    let static_sym_key_old = unsafe { alloc_old_test_symbol() };
-    let static_value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
-    unsafe {
-        set_forwarding_address(
-            header_from_user_ptr(owner as *const u8) as *mut GcHeader,
-            owner_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(sym_key as *const u8) as *mut GcHeader,
-            sym_key_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(value as *const u8) as *mut GcHeader,
-            value_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(static_sym_key as *const u8) as *mut GcHeader,
-            static_sym_key_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(static_value as *const u8) as *mut GcHeader,
-            static_value_old as *mut u8,
-        );
-    }
-
-    crate::symbol::test_seed_symbol_pointer_root(sym_key);
-    crate::symbol::test_seed_symbol_pointer_root(static_sym_key);
-    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
-    crate::symbol::test_seed_class_static_symbol_root(
-        0x5302,
-        static_sym_key,
-        string_bits(static_value),
-    );
-
-    rewrite_mutable_registered_roots(&valid_ptrs);
-
-    assert!(
-        !crate::symbol::test_symbol_property_owner_exists(owner),
-        "symbol side table should remove the stale owner key"
-    );
-    assert_eq!(
-        crate::symbol::test_symbol_property_root_bits(owner_old, sym_key_old),
-        Some(string_bits(value_old))
-    );
-    assert_eq!(
-        crate::symbol::test_class_static_symbol_root_bits(0x5302, static_sym_key_old),
-        Some(string_bits(static_value_old))
-    );
-    assert_eq!(
-        crate::symbol::test_class_static_symbol_root_bits(0x5302, static_sym_key),
-        None
-    );
-    assert!(crate::symbol::test_symbol_pointer_root_contains(
-        sym_key_old
-    ));
-    assert!(crate::symbol::test_symbol_pointer_root_contains(
-        static_sym_key_old
-    ));
-    assert!(!crate::symbol::test_symbol_pointer_root_contains(sym_key));
-    assert!(!crate::symbol::test_symbol_pointer_root_contains(
-        static_sym_key
-    ));
-
-    crate::symbol::test_clear_symbol_side_table_roots();
-}
-
-#[test]
-fn test_symbol_side_table_budgeted_scanner_heals_entries_after_owner_rekey() {
-    let _guard = GcTestIsolationGuard::new();
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_symbol_side_table_roots();
-
-    // Seed the retained fallback store explicitly; public array installs use shape slots.
-    let owner = crate::array::js_array_alloc(0) as usize;
-    let sym_key = unsafe { alloc_nursery_test_symbol() };
-    let value = young_leaf();
-    let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
-    let sym_key_old = unsafe { alloc_old_test_symbol() };
-    let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
-    unsafe {
-        set_forwarding_address(
-            header_from_user_ptr(owner as *const u8) as *mut GcHeader,
-            owner_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(sym_key as *const u8) as *mut GcHeader,
-            sym_key_old as *mut u8,
-        );
-        set_forwarding_address(
-            header_from_user_ptr(value as *const u8) as *mut GcHeader,
-            value_old as *mut u8,
-        );
-    }
-    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
-
-    // One slot per step forces the owner-rekey and entry-rewrite slots into
-    // separate budget slices. The later slice must still find and rewrite the
-    // entry after its owner key moved in the earlier slice.
-    let mut state = crate::symbol::new_symbol_side_table_root_scan_state();
-    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
-    loop {
-        let mut remaining = 1;
-        if crate::symbol::scan_symbol_side_table_roots_mut_step(
-            &mut visitor,
-            state.as_mut(),
-            &mut remaining,
-        ) {
-            break;
-        }
-    }
-
-    assert!(!crate::symbol::test_symbol_property_owner_exists(owner));
-    assert_eq!(
-        crate::symbol::test_symbol_property_root_bits(owner_old, sym_key_old),
-        Some(string_bits(value_old))
-    );
-    crate::symbol::test_clear_symbol_side_table_roots();
-}
-
-#[test]
 fn test_runtime_root_visitor_rewrites_raw_pointer_slots() {
     // `nursery_user` is live across the `arena_alloc_gc_old` call below.
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -487,59 +307,46 @@ fn test_runtime_root_visitor_rewrites_metadata_without_marking() {
 }
 
 #[test]
-fn test_builtin_closure_metadata_follows_forwarded_owner() {
-    let _guard = GcTestIsolationGuard::new();
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    clear_marks();
-    clear_mark_seeds();
+fn builtin_closure_constructability_moves_with_its_owner() {
+    check_objtables_builtin_flag(false);
+}
 
-    let nursery_owner = crate::arena::arena_alloc_gc(
-        std::mem::size_of::<crate::closure::ClosureHeader>(),
-        std::mem::align_of::<crate::closure::ClosureHeader>(),
-        GC_TYPE_CLOSURE,
-    ) as usize;
-    let valid_ptrs = build_valid_pointer_set();
-    let relocated_owner = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<crate::closure::ClosureHeader>(),
-        std::mem::align_of::<crate::closure::ClosureHeader>(),
-        GC_TYPE_CLOSURE,
-    ) as usize;
+#[test]
+#[ignore = "negative control: intentionally erase the owner invariant"]
+fn negative_control_objtables_builtin_flag() {
+    check_objtables_builtin_flag(true);
+}
 
-    for owner in [nursery_owner, relocated_owner] {
-        unsafe { init_test_closure(owner as *mut u8) };
+fn check_objtables_builtin_flag(erase_invariant: bool) {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    let closure = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
+    crate::object::set_builtin_closure_non_constructable(closure);
+    js_shadow_slot_set(0, crate::value::JSValue::pointer(closure as *mut u8).bits());
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(
+        copying_minor_cycles() > cycles,
+        "the copying subject must run"
+    );
+    let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
+    assert_ne!(closure, moved, "the flagged owner must move");
+    if erase_invariant {
+        unsafe {
+            (*(header_from_user_ptr(moved as *const u8) as *mut GcHeader))._reserved &=
+                !GC_CLOSURE_NON_CONSTRUCTABLE;
+        }
     }
-    crate::object::set_builtin_closure_non_constructable(nursery_owner);
-
-    // These tables classify closures owned by the heap graph; their keys must
-    // not turn into an independent root during a mark phase.
-    crate::object::scan_builtin_closure_metadata_roots_mut(&mut RuntimeRootVisitor::for_mark(
-        &valid_ptrs,
-    ));
-    assert_unmarked_user_ptr(nursery_owner, "built-in closure metadata owner");
-
+    assert!(crate::object::builtin_closure_is_non_constructable(moved));
+    // Negative control: removing the owner-local invariant changes the verdict.
     unsafe {
-        set_forwarding_address(
-            header_from_user_ptr(nursery_owner as *const u8) as *mut GcHeader,
-            relocated_owner as *mut u8,
-        );
+        (*(header_from_user_ptr(moved as *const u8) as *mut GcHeader))._reserved &=
+            !GC_CLOSURE_NON_CONSTRUCTABLE;
     }
-    crate::object::scan_builtin_closure_metadata_roots_mut(&mut RuntimeRootVisitor::for_rewrite(
-        &valid_ptrs,
-    ));
-
-    assert!(!crate::object::builtin_closure_is_non_constructable(
-        nursery_owner
-    ));
-    assert!(crate::object::builtin_closure_is_non_constructable(
-        relocated_owner
-    ));
-
-    crate::object::prune_dead_builtin_closure_metadata_owners(&|owner| owner == relocated_owner);
-    assert!(!crate::object::builtin_closure_is_non_constructable(
-        relocated_owner
-    ));
-    clear_marks();
-    clear_mark_seeds();
+    assert!(!crate::object::builtin_closure_is_non_constructable(moved));
+    js_shadow_slot_set(0, 0);
 }
 
 #[test]

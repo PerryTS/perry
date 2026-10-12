@@ -83,14 +83,14 @@ fn map_set_side_allocations_release_exactly_once() {
                 map_drain_after.0 - map_drain_before.0,
                 map_drain_after.1 - map_drain_before.1
             ),
-            (1, 64)
+            (0, 0), // The live GC store belongs to the arena, not this drain.
         );
         assert_eq!(
             (
                 set_drain_after.0 - set_drain_before.0,
                 set_drain_after.1 - set_drain_before.1
             ),
-            (1, 32)
+            (0, 0)
         );
         crate::gc::js_gc_release_current_thread_collection_side_allocations();
         assert_eq!(

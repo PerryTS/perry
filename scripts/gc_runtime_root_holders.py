@@ -148,10 +148,10 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
 * **`RuntimeState`-owned tables.** `crates/perry-runtime/src/state.rs` absorbed
   roughly a dozen former `thread_local!`s (`descriptors`, `object_hot` and its
   `shape_cache_overflow` / `transition_cache`,
-  `field_lookup`, `shapes`, and `exotic_expando`). They are struct FIELDS,
+  `field_lookup`, and `shapes`). They are struct FIELDS,
   reached through `state()`, so no declaration-site scan sees them. All are
-  covered today: in particular, `exotic_expando` is visited by
-  `scan_exotic_expando_roots_mut`. A new field added there is invisible here.
+  covered by their registered scanners. Exotic expandos now live entirely
+  on their cells. A new table field added there is invisible here.
   `STATE_FIELD_FLOOR` below asserts the struct has not grown past the field
   count this was checked at, so growth is at least *loud*.
 * **A non-TLS integer-typed holder whose own file never calls an allocator, in a CORE
@@ -384,7 +384,7 @@ MIN_REGISTERED = 60
 # and are invisible to DECL; this makes the struct growing at least loud.
 STATE_FILE = "crates/perry-runtime/src/state.rs"
 STATE_STRUCT = "struct RuntimeState"
-STATE_FIELD_FLOOR = 5
+STATE_FIELD_FLOOR = 3
 
 
 def crate_source_files(root: Path, crates: tuple[str, ...]) -> list[Path]:

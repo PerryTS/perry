@@ -94,7 +94,7 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
 
     // Not found — allocate a persistent SymbolHeader. We use Box::leak so the
     // pointer outlives any GC cycle (the registry holds it as a root). The
-    // description text is stored in REGISTERED_SYMBOL_DESCRIPTIONS as a
+    // description text is stored in the symbol's native text as a
     // process-lifetime Arc<str>; the header's `description` pointer stays
     // null. Readers (`sym.description`, `sym.toString()`, key_for) consult
     // the side table and materialize a StringHeader in *their own* arena on
@@ -116,10 +116,9 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // another thread can see the pointer via the registry but get None
     // from registered_symbol_description, returning a transiently bogus
     // sym.description / sym.toString() / Symbol.keyFor(). Lock order is
-    // SYMBOL_REGISTRY → SYMBOL_POINTERS → REGISTERED_SYMBOL_DESCRIPTIONS;
+    // SYMBOL_REGISTRY owns the symbol and its native text;
     // no reader takes them in the reverse order.
     record_registered_symbol_description(sym_ptr as usize, &key);
-    register_symbol_pointer(sym_ptr as usize);
     registry.insert(key.clone(), sym_ptr as usize);
     drop(guard);
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
@@ -208,7 +207,7 @@ pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
     if is_well_known_symbol(sym_ptr as usize) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if (*sym_ptr).registered == 0 {
+    if (*sym_ptr).registered & 1 == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     // Registered symbols carry the description as Arc<str> in the side

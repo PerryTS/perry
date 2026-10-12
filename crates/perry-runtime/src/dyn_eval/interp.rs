@@ -34,9 +34,9 @@ pub(crate) struct Ctx {
     pub strict: bool,
     pub strings_allowed: bool,
     pub wasm_allowed: bool,
-    /// `FN_REGISTRY` id whose AST holds the statements being executed; the
+    /// Collecting cell whose AST holds the statements being executed; the
     /// nested-function cache is scoped to it. Pinned for the frame's life.
-    pub owner_fn: u32,
+    pub owner_fn: f64,
 }
 
 /// Statement completion. Thrown exceptions never appear here — they longjmp
@@ -50,15 +50,16 @@ pub(crate) enum Flow {
 
 // ── nested-function registration cache ────────────────────────────────────
 
-/// AST-node address → registered fn id, scoped to the AST that contains the
+/// AST-node address → prepared native function, owned by the parent AST.
+/// A node belongs to the AST that contains the
 /// node (`ctx.owner_fn`). Nested function/arrow expressions evaluate many
 /// times (ajv validators run per request); registering the node once per
-/// parent keeps the registry bounded by the number of syntactic functions of
+/// parent keeps its memo bounded by the number of syntactic functions of
 /// live parents. The entry lives exactly as long as the parent AST: the GC
-/// prune evicts it in the same step that frees the parent (see
-/// `registry_lifetime`), so a recycled address never reaches a stale entry.
-fn fn_id_for_node(ctx: &Ctx, addr: usize, build: impl FnOnce() -> InterpFn) -> u32 {
-    super::registry_lifetime::node_fn_id(ctx.owner_fn, addr, build)
+/// collection drops the parent cell and its AST together, so a recycled
+/// address never reaches a stale entry.
+fn fn_id_for_node(ctx: &Ctx, addr: usize, build: impl FnOnce() -> InterpFn) -> f64 {
+    super::function_owner::node_fn_id(ctx.owner_fn, addr, build)
 }
 
 // ── construction ───────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ pub(crate) fn build_interp_fn(
         body,
         hoisted_vars,
         strict,
+        node_functions: Default::default(),
     }
 }
 
@@ -210,12 +212,12 @@ fn collect_pat_names(pat: &ast::Pat, out: &mut Vec<String>) {
 const NO_LEXICAL_THIS: u64 = crate::value::TAG_HOLE;
 
 /// Allocate the first-class runtime closure for an interpreted function.
-/// Captures: [0] fn id (number), [1] defining environment (traced pointer),
+/// Captures: [0] collecting parsed-function cell, [1] defining environment (traced pointer),
 /// [2] lexical `this` for arrows (or the hole sentinel), [3] target global,
 /// [4] intrinsic-global fallback, [5] string code generation policy,
 /// [6] WebAssembly code generation policy.
 pub(crate) fn alloc_interp_closure(
-    fn_id: u32,
+    fn_id: f64,
     def_env: f64,
     lexical_this: Option<f64>,
     global: f64,
@@ -223,9 +225,9 @@ pub(crate) fn alloc_interp_closure(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
-    // Allocation may collect before the closure has an owner-table entry.
+    // Root the prepared cell across environment and closure allocations.
     let _prepared =
-        super::registry_lifetime::pin_function(fn_id).expect("registered interpreted function");
+        super::function_owner::pin_function(fn_id).expect("registered interpreted function");
     ensure_thunk_registered();
     let env_idx = root_push(def_env);
     let this_idx = root_push(lexical_this.unwrap_or(f64::from_bits(NO_LEXICAL_THIS)));
@@ -239,7 +241,7 @@ pub(crate) fn alloc_interp_closure(
         roots_truncate(env_idx);
         bridge::throw_range_error("out of memory allocating dynamic function");
     }
-    crate::closure::js_closure_set_capture_f64(closure, 0, fn_id as f64);
+    crate::closure::js_closure_set_capture_f64(closure, 0, fn_id);
     crate::closure::js_closure_set_capture_bits(closure, 1, root_get(env_idx).to_bits());
     crate::closure::js_closure_set_capture_bits(closure, 2, root_get(this_idx).to_bits());
     crate::closure::js_closure_set_capture_bits(closure, 3, root_get(global_idx).to_bits());
@@ -251,7 +253,6 @@ pub(crate) fn alloc_interp_closure(
     unsafe {
         crate::closure::rebuild_closure_layout_and_barriers(closure, 7);
     }
-    super::registry_lifetime::register_closure(closure as usize, fn_id);
     roots_truncate(env_idx);
     crate::value::js_nanbox_pointer(closure as i64)
 }
@@ -297,7 +298,7 @@ fn interp_thunk_impl(
     closure: *const crate::closure::ClosureHeader,
     raw_args: f64,
 ) -> f64 {
-    let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u32;
+    let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0);
     let def_env = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 1));
     let this_bits = crate::closure::js_closure_get_capture_bits(closure, 2);
     let is_arrow = this_bits != NO_LEXICAL_THIS;
@@ -336,7 +337,7 @@ fn interp_thunk_impl(
 /// bound (destructuring + defaults), vars hoisted, function declarations
 /// hoisted, body executed.
 pub(crate) fn invoke_interp_fn(
-    fn_id: u32,
+    fn_id: f64,
     def_env: f64,
     this: f64,
     global: f64,
@@ -346,7 +347,7 @@ pub(crate) fn invoke_interp_fn(
     is_arrow: bool,
     args: &[f64],
 ) -> f64 {
-    let fun = match super::registry_lifetime::pin_function(fn_id) {
+    let fun = match super::function_owner::pin_function(fn_id) {
         Some(f) => f,
         None => bridge::throw_type_error(
             "perry runtime interpreter (#6559): interpreted function is not available on this \
@@ -459,8 +460,7 @@ pub(crate) fn make_function_value(
     env_idx: usize,
 ) -> f64 {
     let fn_id = fn_id_for_node(ctx, node_addr, || build_interp_fn(params, body, ctx.strict));
-    let _prepared =
-        super::registry_lifetime::pin_function(fn_id).expect("registered nested function");
+    let _prepared = super::function_owner::pin_function(fn_id).expect("registered nested function");
     let lexical_this = if is_arrow {
         Some(root_get(ctx.this_idx))
     } else {

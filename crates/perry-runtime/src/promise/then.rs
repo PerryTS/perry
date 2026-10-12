@@ -157,13 +157,6 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
             crate::v8::promise_hook_init(promise, parent);
         });
     });
-    let (_, promise) = promise_handle.across_mut::<Promise, _>(|| {
-        promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            // #5142: a recycled address may carry expando properties (`p.status = …`)
-            // left by a previously-collected promise; a fresh promise must start clean.
-            crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
-        });
-    });
     promise
 }
 

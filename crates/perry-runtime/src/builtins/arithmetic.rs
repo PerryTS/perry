@@ -68,7 +68,7 @@ fn eq_is_object(v: JSValue) -> bool {
     if crate::value::addr_class::is_handle_band(ptr as usize) {
         return false;
     }
-    !crate::symbol::is_registered_symbol(ptr as usize)
+    unsafe { crate::symbol::js_is_symbol(f64::from_bits(v.bits())) == 0 }
 }
 
 /// JS abstract equality (==). Implements the coercion rules:

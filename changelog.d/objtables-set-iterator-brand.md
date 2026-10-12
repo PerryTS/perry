@@ -1,0 +1,1 @@
+Store materialized Set iterator brands in their existing private array bags. Delete SET_ITERATOR_ARRAYS and its scanner, prune and census/rekey receipts; register the independent Set key-identity scanner directly. Add relocation coverage, a fresh-array negative case and a deliberately red brand-erasure control.

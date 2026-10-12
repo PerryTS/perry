@@ -1,0 +1,1 @@
+Release native signal resource tokens when their mutator's allocation ranges retire. Native signal registrations lease the object-owned async state through its existing pin; the process-wide routing record must not retain that state address after worker teardown. The range hook clears those records without consulting retired TLS or invoking JavaScript.

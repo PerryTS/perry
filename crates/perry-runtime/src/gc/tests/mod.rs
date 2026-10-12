@@ -38,6 +38,7 @@ mod env_knob_parse;
 mod error_side_tables;
 mod evacuation;
 mod fetch_handle_trace;
+mod filehandle_owner_fd;
 mod forwarded_stub_membership;
 mod forwarding_target_validation;
 mod forwarding_verification;
@@ -86,6 +87,10 @@ mod os_tag;
 mod pinned_roots;
 mod precise_root_contract;
 mod precise_root_ownership;
+mod promise_owner_all;
+mod promise_owner_context;
+mod promise_owner_listener;
+mod promise_owner_overflow;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
@@ -119,6 +124,9 @@ mod sweep_hole_rebuild;
 mod sweep_page_tally;
 mod sweep_whole_block;
 mod sweep_window_births;
+mod symbol_owner_accessors;
+mod symbol_owner_attrs;
+mod symbol_owner_data;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
@@ -153,3 +161,35 @@ mod census_two_mib;
 mod holder_memo;
 
 mod shared_slot_custody;
+
+mod als_snapshot_owner;
+mod persistent_symbol_description_owner;
+mod set_compaction_owner;
+mod symbol_description_owner;
+mod vm_context_owner;
+mod vm_function_source_owner;
+mod vm_script_owner;
+
+mod symbol_owner_brand;
+
+#[cfg(feature = "node-api-host")]
+mod node_api_metadata_owner;
+
+mod wasm_funcref_owner;
+
+mod set_store;
+
+mod owned_holder_class;
+
+mod wasm_instance_owner;
+
+mod wasm_memory_owner;
+
+mod async_resource_state;
+mod wasm_wrapper_state;
+
+mod owned_state_bag;
+
+mod native_handle_props;
+
+mod young_collection_stores;

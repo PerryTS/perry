@@ -162,6 +162,7 @@ pub(crate) use global_this::{
     temporal_subclass_super as global_this_temporal_subclass_super,
 };
 pub mod handle_expando;
+pub(crate) mod owned_state_bag;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
 pub(crate) mod shape_store;
@@ -328,7 +329,6 @@ pub(crate) use data_view_registry::{extends_builtin_data_view, extends_builtin_t
 pub(crate) use date_proto_thunks::date_to_json_value;
 pub use delete_rest::*;
 pub use descriptors::*;
-pub use exotic_expando::scan_exotic_expando_roots_mut;
 pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub use global_this::*;
@@ -1417,6 +1417,7 @@ fn transition_cache_insert(
     // Eagerly stabilize small shapes so growth cannot invalidate a cached
     // target. Large one-off dictionaries stay lazy to avoid prefix copies.
 }
+
 pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_object_cache_roots_mut(&mut visitor);
@@ -1540,6 +1541,7 @@ pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHe
     }
     crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
 }
+
 // `is_valid_obj_ptr` moved to `value/addr_class.rs` (the centralized
 // handle-vs-heap-pointer classification module); re-exported here so the
 // existing `crate::object::is_valid_obj_ptr` call sites keep compiling

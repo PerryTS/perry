@@ -16,17 +16,15 @@ mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
 mod errors;
+#[cfg(test)]
+pub(crate) use boxed_primitives::test_boxed_primitive_allocation_count;
 pub(crate) use boxed_primitives::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
-    boxed_string_wrapper_utf16_len, prune_dead_boxed_primitive_payload_owners,
+    boxed_string_wrapper_utf16_len,
 };
 pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
-    js_boxed_symbol_new, scan_boxed_primitive_payload_roots_mut,
-};
-#[cfg(test)]
-pub(crate) use boxed_primitives::{
-    test_boxed_primitive_payload_count, test_seed_boxed_primitive_payload,
+    js_boxed_symbol_new,
 };
 mod collections;
 mod identity_equality;

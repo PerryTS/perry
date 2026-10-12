@@ -1,9 +1,8 @@
 use super::*;
 
-thread_local! {
-    static BOXED_PRIMITIVE_PAYLOADS: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, u64>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
+#[cfg(test)]
+static TEST_BOXED_PRIMITIVE_ALLOCATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
 const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
@@ -79,48 +78,39 @@ unsafe fn boxed_primitive_payload_for_object(
     ) {
         return None;
     }
-    let ptr_key = obj_ptr as usize;
-    let payload = BOXED_PRIMITIVE_PAYLOADS.with(|m| {
-        m.borrow()
-            .get(&ptr_key)
-            .copied()
-            .map(f64::from_bits)
-            .unwrap_or_else(|| crate::object::js_object_get_field_f64(obj_ptr, 0))
-    });
+    let meta = (*obj_ptr).meta;
+    let payload = if meta.is_null() {
+        crate::object::js_object_get_field_f64(obj_ptr, 0)
+    } else {
+        f64::from_bits((*meta).boxed_primitive)
+    };
     Some((class_id, payload))
 }
 
-/// #8191: death pruning for `BOXED_PRIMITIVE_PAYLOADS`.
-///
-/// Keyed by a boxed-primitive wrapper's `ObjectHeader` address, and **rekeyed**
-/// by `scan_boxed_primitive_payload_roots_mut` when that object moves. A dead
-/// key on a rekeyed table is the #8040 shape, not a leak — see
-/// `gc::dead_owner`'s module doc.
-pub(crate) fn prune_dead_boxed_primitive_payload_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
-        m.borrow_mut().retain(|&owner, _| !is_dead_owner(owner));
-    });
-}
-
 #[cfg(test)]
-pub(crate) fn test_boxed_primitive_payload_count() -> usize {
-    BOXED_PRIMITIVE_PAYLOADS.with(|m| m.borrow().len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_boxed_primitive_payload(owner: usize, payload_bits: u64) {
-    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
-        m.borrow_mut().insert(owner, payload_bits);
-    });
+pub(crate) fn test_boxed_primitive_allocation_count() -> usize {
+    TEST_BOXED_PRIMITIVE_ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn register_boxed_primitive_payload(obj: *mut crate::object::ObjectHeader, payload: f64) {
     if obj.is_null() {
         return;
     }
-    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
-        m.borrow_mut().insert(obj as usize, payload.to_bits());
-    });
+    // Existing callers retain a raw owner across publication; the property
+    // bag and spill funnels use this same no-move scope for internal stores.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let meta = crate::object::object_meta_ensure(obj);
+        // GC_STORE_AUDIT(BARRIERED): private metadata child slot + exact barrier.
+        (*meta).boxed_primitive = payload.to_bits();
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            &(*meta).boxed_primitive as *const _ as usize,
+            payload.to_bits(),
+        );
+    }
+    #[cfg(test)]
+    TEST_BOXED_PRIMITIVE_ALLOCATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn boxed_constructor_name(class_id: u32) -> Option<&'static [u8]> {
@@ -203,25 +193,6 @@ pub(crate) fn boxed_string_wrapper_utf16_len(addr: usize) -> Option<u32> {
         }
         Some(crate::string::js_string_length(str_ptr))
     }
-}
-
-pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut moved = Vec::new();
-    BOXED_PRIMITIVE_PAYLOADS.with(|m| {
-        let mut m = m.borrow_mut();
-        for (&owner, payload_bits) in m.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            visitor.visit_nanbox_u64_slot(payload_bits);
-        }
-        for (old_owner, new_owner) in moved.drain(..) {
-            if let Some(payload) = m.remove(&old_owner) {
-                m.insert(new_owner, payload);
-            }
-        }
-    });
 }
 
 /// #3857: `JSON.stringify` of a boxed primitive wrapper (`new String("hi")`,

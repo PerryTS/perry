@@ -510,7 +510,6 @@ fn weakmap_ephemeron_indirect_cycles_and_cross_map_fixed_point() {
 fn weakmap_ephemeron_proxy_chain_and_dead_proxy_backedge() {
     let _guard = guard(6);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     root_map();
     root_object(1);
     let second = js_weakmap_new();

@@ -388,7 +388,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::InlinePayload,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::ObjectModuleWrapper,
+            move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::None,
         },
@@ -418,7 +418,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::InlinePayload,
             large_object_policy: GcLargeObjectPolicy::MallocTracked,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::ClosureDynamicProps,
+            move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::None,
         },
@@ -434,7 +434,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             large_object_policy: GcLargeObjectPolicy::MallocTracked,
             pointer_free: false,
             // #5142: rekey address-keyed promise expandos on GC move.
-            move_hook_kind: GcMoveHookKind::ExoticExpandoOwner,
+            move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::PromiseCleanup,
         },
@@ -476,15 +476,15 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             rewrite_descriptor_kind: GcRewriteDescriptorKind::Map,
             layout_slot_kind: GcLayoutSlotKind::None,
             movable: true,
-            external_byte_policy: GcExternalBytePolicy::SideAllocation,
+            external_byte_policy: GcExternalBytePolicy::None,
             large_object_policy: GcLargeObjectPolicy::NotApplicable,
             pointer_free: false,
             move_hook_kind: GcMoveHookKind::MapForeachStack,
             // #6084: object/bigint keys are indexed by pointer bits/content,
             // so an evacuation that rewrites this Map's entry slots must
             // refresh the owned pointer-key index (mirrors "set" below).
-            rewrite_hook_kind: GcRewriteHookKind::MapIndex,
-            finalize_hook_kind: GcFinalizeHookKind::MapSideAllocation,
+            rewrite_hook_kind: GcRewriteHookKind::OwnedMapEntries,
+            finalize_hook_kind: GcFinalizeHookKind::None,
         },
         GcTypeInfo {
             type_id: GC_TYPE_LAZY_ARRAY,
@@ -551,12 +551,12 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             rewrite_descriptor_kind: GcRewriteDescriptorKind::Set,
             layout_slot_kind: GcLayoutSlotKind::None,
             movable: true,
-            external_byte_policy: GcExternalBytePolicy::SideAllocation,
+            external_byte_policy: GcExternalBytePolicy::None,
             large_object_policy: GcLargeObjectPolicy::NotApplicable,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::SetSideTables,
-            rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::SetSideAllocation,
+            move_hook_kind: GcMoveHookKind::SetForeachStack,
+            rewrite_hook_kind: GcRewriteHookKind::OwnedSetElements,
+            finalize_hook_kind: GcFinalizeHookKind::None,
         },
     ];
 
@@ -667,6 +667,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                         async_id: 0,
                         trigger_async_id: 0,
                         meta: std::ptr::null_mut(),
+                        callback_context: std::ptr::null_mut(),
                     },
                 );
             }

@@ -1,7 +1,7 @@
 //! Owner-local Set index. Buckets contain only a hash and a raw element index;
 //! equality always reads the authoritative (GC-rewritten) elements buffer.
 //! Strings are never rehashed merely because they move. Pointer keys get a
-//! lazy weak identity token, shared across all indexed Sets in this thread.
+//! scalar identity token in their own metadata, shared by every Set.
 //! Only inserting into an index allocates a token; a probe for a key without
 //! one is a definite miss.
 
@@ -9,138 +9,69 @@ use super::*;
 use std::cell::Cell;
 use std::hash::{BuildHasher, Hash, Hasher};
 
-type IdentityMap = crate::fast_hash::PtrHashMap<usize, u64>;
-
-/// The weak address -> identity-token table, split by the KEY's generation
-/// so a minor never walks old keys (#11169 follow-up). The token is a scalar,
-/// so only the key's generation matters: `young` holds keys a minor can move
-/// or reclaim (`addr_is_minor_collectible`), `old` the rest. A key only ever
-/// goes young -> old; a young walk migrates promoted keys. A lookup probes
-/// both halves, because an in-place promotion retags a key without a walk.
-struct SetKeyIdentities {
-    young: IdentityMap,
-    old: IdentityMap,
-    /// Reused rekey buffer: `(new_addr, id, still_young)`.
-    moved: Vec<(usize, u64, bool)>,
-}
-
-impl SetKeyIdentities {
-    fn get(&self, addr: usize) -> Option<u64> {
-        self.young
-            .get(&addr)
-            .or_else(|| self.old.get(&addr))
-            .copied()
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.young.len() + self.old.len()
-    }
-}
-
 crate::perry_thread_local! {
-    static SET_KEY_IDENTITIES: RefCell<SetKeyIdentities> = RefCell::new(SetKeyIdentities {
-        young: crate::fast_hash::new_ptr_hash_map(),
-        old: crate::fast_hash::new_ptr_hash_map(),
-        moved: Vec::new(),
-    });
     static NEXT_SET_KEY_IDENTITY: Cell<u64> = const { Cell::new(1) };
 }
 
-const IDENTITY_WALK_NAME: &str = "set.key_identities";
-
-/// Rekeys `SET_KEY_IDENTITIES` after a relocation, never marking the keys
-/// (the table is weak; see `prune_dead_identity_owners`). A minor-scoped pass
-/// walks only the young half; a full pass walks both. Either way an entry
-/// whose (new) key is no longer minor-collectible ends up in the old half.
-pub(crate) fn scan_identity_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    use crate::gc::young_log::{addr_is_minor_collectible, note_walk, YoungLogWalk};
-    let young_scope = visitor.young_scope();
-    let (visited, kept, table_len) = SET_KEY_IDENTITIES.with(|table| {
-        let mut table = table.borrow_mut();
-        let SetKeyIdentities { young, old, moved } = &mut *table;
-        #[cfg(any(debug_assertions, test))]
-        if young_scope {
-            debug_assert_old_identity_keys_are_old(old);
-        }
-        moved.clear();
-        let mut visited = young.len();
-        young.retain(|&addr, &mut id| {
-            let mut new = addr;
-            let rekeyed = visitor.visit_metadata_usize_slot(&mut new);
-            let still_young = addr_is_minor_collectible(new);
-            if rekeyed || !still_young {
-                moved.push((new, id, still_young));
-                false
+/// A scalar identity belongs to its key's private metadata. Array and
+/// closure keys use their existing traced property holders; other public
+/// object cells already have a direct metadata edge.
+unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let meta = match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY => {
+            let bag = if create {
+                crate::array::array_property_bag_ensure(addr as *mut crate::array::ArrayHeader)
             } else {
-                true
+                crate::array::array_property_bag(addr as *const crate::array::ArrayHeader)
+            };
+            if bag.is_null() {
+                return None;
             }
-        });
-        if !young_scope {
-            visited += old.len();
-            old.retain(|&addr, &mut id| {
-                let mut new = addr;
-                if visitor.visit_metadata_usize_slot(&mut new) {
-                    moved.push((new, id, addr_is_minor_collectible(new)));
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        for (addr, id, still_young) in moved.drain(..) {
-            if still_young {
-                young.insert(addr, id);
+            if create {
+                crate::object::object_meta_ensure(bag)
             } else {
-                old.insert(addr, id);
+                (*bag).meta
             }
         }
-        let table_len = young.len() + old.len();
-        (visited as u64, young.len() as u64, table_len as u64)
-    });
-    note_walk(
-        IDENTITY_WALK_NAME,
-        YoungLogWalk {
-            partial: young_scope,
-            logged: visited,
-            visited,
-            kept,
-            table_len,
-        },
-    );
-}
-
-/// The analogue of `gc/young_log.rs` rule 2: a minor skips the old half, so
-/// the old half must hold no key a minor can act on.
-#[cfg(any(debug_assertions, test))]
-fn debug_assert_old_identity_keys_are_old(old: &IdentityMap) {
-    for &addr in old.keys() {
-        assert!(
-            !crate::gc::young_log::addr_is_minor_collectible(addr),
-            "SET_KEY_IDENTITIES: old half holds minor-collectible key {addr:#x}"
-        );
+        crate::gc::GC_TYPE_CLOSURE => {
+            let bag = if create {
+                crate::closure::props::bag_ensure(addr)
+            } else {
+                crate::closure::props::bag_of(addr)
+            };
+            if bag.is_null() {
+                return None;
+            }
+            if create {
+                crate::object::object_meta_ensure(bag)
+            } else {
+                (*bag).meta
+            }
+        }
+        _ => {
+            let slot = crate::object::cell_meta_slot(addr)?;
+            if create {
+                crate::object::object_meta_ensure_for_cell(addr)?
+            } else {
+                *slot
+            }
+        }
+    };
+    if meta.is_null() {
+        return None;
     }
-}
-
-pub(crate) fn prune_dead_identity_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    SET_KEY_IDENTITIES.with(|table| {
-        let mut table = table.borrow_mut();
-        #[cfg(test)]
-        TEST_PRUNE_VISITS.with(|count| count.set(count.get() + table.len()));
-        table.young.retain(|&addr, _| !is_dead_owner(addr));
-        table.old.retain(|&addr, _| !is_dead_owner(addr));
-    });
-}
-
-/// [`prune_dead_identity_owners`] for a MINOR: only a young key can be dead,
-/// and every key a minor can reclaim is in the young half.
-pub(crate) fn prune_dead_identity_owners_young(is_dead_owner: &dyn Fn(usize) -> bool) {
-    SET_KEY_IDENTITIES.with(|table| {
-        let mut table = table.borrow_mut();
-        #[cfg(test)]
-        TEST_PRUNE_VISITS.with(|count| count.set(count.get() + table.young.len()));
-        table.young.retain(|&addr, _| !is_dead_owner(addr));
-    });
+    let id = &mut (*meta).key_identity;
+    if *id == 0 && create {
+        // GC_STORE_AUDIT(NONPOINTER): scalar identity counter, never an edge.
+        *id = NEXT_SET_KEY_IDENTITY.with(|next| {
+            let id = next.get();
+            next.set(id.checked_add(1).expect("Set key identity exhausted"));
+            id
+        });
+    }
+    (*id != 0).then_some(*id)
 }
 
 /// Hash for a value being PUT INTO an index: allocates an identity for a
@@ -163,7 +94,8 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     let bits = value.to_bits();
     let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
-        bits.hash(&mut hasher);
+        let addr = (bits & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
+        unsafe { (*addr).id }.hash(&mut hasher);
         return Some(hasher.finish() as u32);
     }
     if is_string_like(bits) {
@@ -177,32 +109,38 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     }
     let tag = bits >> 48;
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if matches!(tag, 0 | 0x7FFD | 0x7FFA)
-        && unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-            .is_some_and(|h| crate::gc::gc_type_is_movable(h.obj_type))
-    {
-        let id = SET_KEY_IDENTITIES.with(|table| {
-            let mut table = table.borrow_mut();
-            if let Some(id) = table.get(addr) {
-                return Some(id);
-            }
-            if !insert {
-                return None;
-            }
-            let id = NEXT_SET_KEY_IDENTITY.with(|next| {
-                let id = next.get();
-                next.set(id.checked_add(1).expect("Set key identity exhausted"));
-                id
-            });
-            if crate::gc::young_log::addr_is_minor_collectible(addr) {
-                table.young.insert(addr, id);
+    if matches!(tag, 0 | 0x7FFD | 0x7FFA) {
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+            .filter(|h| crate::gc::gc_type_is_movable(h.obj_type))
+        {
+            let kind = header.obj_type;
+            if kind == crate::gc::GC_TYPE_BIGINT {
+                unsafe {
+                    crate::bigint::BigIntHeader::all_limbs(
+                        addr as *const crate::bigint::BigIntHeader,
+                    )
+                }
+                .hash(&mut hasher);
+            } else if matches!(
+                kind,
+                crate::gc::GC_TYPE_OBJECT
+                    | crate::gc::GC_TYPE_ARRAY
+                    | crate::gc::GC_TYPE_CLOSURE
+                    | crate::gc::GC_TYPE_PROMISE
+                    | crate::gc::GC_TYPE_ERROR
+                    | crate::gc::GC_TYPE_MAP
+                    | crate::gc::GC_TYPE_SET
+            ) {
+                let id = unsafe { key_identity(addr, insert) }?;
+                (tag, id).hash(&mut hasher);
             } else {
-                table.old.insert(addr, id);
+                // Internal non-object cells have no public identity slot.
+                // A type hash is relocation-stable; authoritative element
+                // equality resolves collisions without retaining addresses.
+                (tag, kind).hash(&mut hasher);
             }
-            Some(id)
-        })?;
-        (tag, id).hash(&mut hasher);
-        return Some(hasher.finish() as u32);
+            return Some(hasher.finish() as u32);
+        }
     }
     bits.hash(&mut hasher);
     Some(hasher.finish() as u32)
@@ -347,17 +285,10 @@ pub(super) unsafe fn rebuild_index(set: *mut SetHeader) {
     };
     let bytes = index.byte_len();
     let index_ptr = &mut *index as *mut SetIndex;
-    let old = SET_REGISTRY.with(|registry| {
-        registry
-            .borrow_mut()
-            .get_mut(&(set as usize))
-            .expect("registered Set")
-            .index
-            .replace(index)
-    });
+    let old = (*(*set).store).index.replace(index);
     let old_bytes = old.as_ref().map_or(0, |index| index.byte_len());
     drop(old);
-    // Native allocation, owned by SET_REGISTRY, not a managed-heap edge.
+    // Native allocation, owned by the traced Set store, not a managed-heap edge.
     (*meta).native_state = index_ptr as u64;
     crate::gc::gc_note_external_side_free(old_bytes);
     crate::gc::gc_note_external_side_alloc(bytes);
@@ -395,12 +326,7 @@ pub(super) unsafe fn clear_index(set: *mut SetHeader) {
         return;
     }
     (*(*set).meta).native_state = 0;
-    let old = SET_REGISTRY.with(|registry| {
-        registry
-            .borrow_mut()
-            .get_mut(&(set as usize))
-            .and_then(|allocation| allocation.index.take())
-    });
+    let old = (*(*set).store).index.take();
     if let Some(index) = old {
         crate::gc::gc_note_external_side_free(index.byte_len());
     }
@@ -409,13 +335,6 @@ pub(super) unsafe fn clear_index(set: *mut SetHeader) {
 #[cfg(test)]
 crate::perry_thread_local! {
     static TEST_HASH_CALLS: Cell<usize> = const { Cell::new(0) };
-    static TEST_PRUNE_VISITS: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Identity entries examined by the dead-key prunes so far on this thread.
-#[cfg(test)]
-pub(crate) fn test_identity_prune_visits() -> usize {
-    TEST_PRUNE_VISITS.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -543,15 +462,12 @@ mod tests {
 }
 
 #[cfg(test)]
-pub(crate) fn test_identity_count() -> usize {
-    SET_KEY_IDENTITIES.with(|table| table.borrow().len())
+pub(crate) unsafe fn test_key_identity(addr: usize) -> Option<u64> {
+    key_identity(addr, false)
 }
 
-/// `(young, old)` sizes of the identity table's two halves.
 #[cfg(test)]
-pub(crate) fn test_identity_halves() -> (usize, usize) {
-    SET_KEY_IDENTITIES.with(|table| {
-        let table = table.borrow();
-        (table.young.len(), table.old.len())
-    })
+pub(crate) unsafe fn test_erase_key_identity(addr: usize) {
+    let meta = *crate::object::cell_meta_slot(addr).unwrap();
+    (*meta).key_identity = 0;
 }

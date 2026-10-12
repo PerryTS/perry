@@ -16,6 +16,80 @@ pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
 }
 
+/// A native context vector in an ordinary young, movable GC holder. The
+/// holder has no root registry: a Promise/task/resource must own its edge. One
+/// that dies young releases its vector in the copying minor
+/// (`arena/owned_stores.rs`), an older one in the sweep's finalize hook.
+#[repr(C)]
+pub(crate) struct AsyncSnapshotHolder {
+    /// Reserved receiver word: +4 must stay below the ShapeId range (rule 3).
+    _receiver_word: u64,
+    pub(crate) snapshot: AsyncContextSnapshot,
+}
+
+pub(crate) fn alloc_snapshot_holder(snapshot: AsyncContextSnapshot) -> *mut AsyncSnapshotHolder {
+    alloc_snapshot_holder_in::<false>(snapshot)
+}
+
+/// `OLD` births a tenured holder, for fixtures that plant an old population.
+pub(crate) fn alloc_snapshot_holder_in<const OLD: bool>(
+    snapshot: AsyncContextSnapshot,
+) -> *mut AsyncSnapshotHolder {
+    // Callers publish under a no-move scope; the native input snapshot is not
+    // an independent registered root during this bounded native-only store.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let size = std::mem::size_of::<AsyncSnapshotHolder>();
+    let align = std::mem::align_of::<AsyncSnapshotHolder>();
+    let cell = if OLD {
+        crate::arena::arena_alloc_gc_old_born_tenured(
+            size,
+            align,
+            crate::gc::GC_TYPE_ASYNC_SNAPSHOT,
+        )
+    } else {
+        crate::arena::arena_alloc_gc(size, align, crate::gc::GC_TYPE_ASYNC_SNAPSHOT)
+    } as *mut AsyncSnapshotHolder;
+    crate::arena::note_young_owned_store(cell.cast());
+    unsafe {
+        std::ptr::write(
+            cell,
+            AsyncSnapshotHolder {
+                _receiver_word: 0,
+                snapshot,
+            },
+        );
+        for_each_snapshot_store_slot(&mut (*cell).snapshot, &mut |slot| {
+            crate::gc::runtime_write_barrier_external_slot(
+                cell as usize,
+                slot as usize,
+                (*slot).to_bits(),
+            );
+        });
+    }
+    cell
+}
+
+/// Move hook: the copy owns the native vector now; the abandoned original is
+/// left empty so no later sweep or exit walk releases it a second time. The
+/// forwarding word covers payload bytes 0..8 only (the reserved receiver word).
+pub(crate) unsafe fn snapshot_holder_moved_for_gc(old_user: usize, new_user: usize) {
+    if old_user == new_user {
+        return;
+    }
+    let old = old_user as *mut AsyncSnapshotHolder;
+    std::ptr::write(
+        std::ptr::addr_of_mut!((*old).snapshot),
+        AsyncContextSnapshot::default(),
+    );
+    crate::arena::note_owned_store_copied(new_user);
+}
+
+/// Sweep and thread exit share an idempotent release: swept headers can still
+/// be encountered in the arena's existing exit walk before their reuse.
+pub(crate) unsafe fn finalize_snapshot_holder(cell: *mut AsyncSnapshotHolder) {
+    drop(std::mem::take(&mut (*cell).snapshot));
+}
+
 impl AsyncContextSnapshot {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -450,6 +524,18 @@ pub fn scan_snapshot_roots(snapshot: &AsyncContextSnapshot, mark: &mut dyn FnMut
     }
 }
 
+/// The child-slot contract shared by root snapshots and owner-held snapshots.
+pub(crate) fn for_each_snapshot_store_slot(
+    snapshot: &mut AsyncContextSnapshot,
+    visit: &mut dyn FnMut(*mut f64),
+) {
+    for entry in &mut snapshot.entries {
+        for store in &mut entry.stores {
+            visit(store);
+        }
+    }
+}
+
 pub fn scan_snapshot_roots_mut(
     snapshot: &mut AsyncContextSnapshot,
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
@@ -548,6 +634,12 @@ pub(crate) fn test_snapshot_first_store(snapshot: &AsyncContextSnapshot) -> Opti
         .entries
         .first()
         .and_then(|entry| entry.stores.first().copied())
+}
+
+#[cfg(test)]
+pub(crate) fn test_snapshot_token_lifetime(snapshot: &AsyncContextSnapshot) -> impl Fn() -> bool {
+    let token = Arc::downgrade(&snapshot.entries[0].token);
+    move || token.strong_count() != 0
 }
 
 #[cfg(test)]

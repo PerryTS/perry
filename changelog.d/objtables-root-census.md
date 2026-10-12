@@ -1,0 +1,3 @@
+Refresh the root-holder census and rekey custody manifest against the supplied base. Remove stale holder/frontier entries left by prior deletions, classify new scalar/test counters and the pointer-free inherited class-key snapshot, and re-audit the synchronous full-cycle census window before updating its source pins. Point the shape-key rekey verdict at its current implementation and record the collection-local ephemeron seed queue's clearing boundary. Lower RuntimeState's field-growth gate to its remaining three fields after deleting exotic expando state.
+
+The census self-test, holder gate, and rekey gate pass with no declared gaps. Removed tables are absent from enumeration; no suppression is added.

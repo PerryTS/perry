@@ -197,13 +197,11 @@ fn a_forwarding_target_must_be_an_object_start() {
 fn the_dead_key_prune_registry_keeps_its_shape() {
     use crate::gc::dead_owner::{DeadKeyOwner, DEAD_KEY_PRUNES};
 
-    assert!(
-        DEAD_KEY_PRUNES.len() >= 19,
-        "DEAD_KEY_PRUNES shrank to {} entries; a prune was removed from the \
-         fan-out, and every `dead_owner:` verdict in \
-         scripts/gc_rekeyed_key_tables.json that named it is now a lie",
-        DEAD_KEY_PRUNES.len()
-    );
+    // Removal is required when an owner table disappears. The census/rekey
+    // gate checks every remaining table's death verdict, so a fixed historical
+    // count would reject authorized table deletions without detecting an
+    // orphaned remaining table. Keep the structural and required-owner checks.
+    assert!(!DEAD_KEY_PRUNES.is_empty());
 
     let mut labels: Vec<&str> = DEAD_KEY_PRUNES.iter().map(|entry| entry.table).collect();
     let total = labels.len();

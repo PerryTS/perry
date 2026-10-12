@@ -197,25 +197,6 @@ impl CopyingNurseryCollector {
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
-        // The generic walk's first edge, ahead of its kind arms: an explicit
-        // prototype in the residual registry. For `GC_TYPE_OBJECT` the
-        // per-owner half of the gate is conservatively `true`, so once the
-        // process latch is armed every object asks.
-        let mut residual_slots = 0usize;
-        if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
-            && crate::object::prototype_chain::residual_prototype_owner_type(GC_TYPE_OBJECT)
-            && crate::object::prototype_chain::residual_entry_possible_for(header)
-        {
-            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
-                user_ptr,
-                |slot| {
-                    residual_slots += 1;
-                    let before = *slot;
-                    self.visit_side_slot(slot, header, weak, remembering);
-                    changed |= *slot != before;
-                },
-            );
-        }
         let mut plan = plain_object_plan(header);
         #[cfg(test)]
         let cross_check = !sabotage::cross_check_disabled();
@@ -223,9 +204,8 @@ impl CopyingNurseryCollector {
         let cross_check = true;
         #[cfg(any(test, debug_assertions))]
         if cross_check {
-            assert_matches_generic_walk(header, &plan, residual_slots);
+            assert_matches_generic_walk(header, &plan);
         }
-        let _ = residual_slots;
         while let Some(slot) = plan.next_slot() {
             let before = slot.read();
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
@@ -236,37 +216,11 @@ impl CopyingNurseryCollector {
         }
         true
     }
-
-    /// Residual prototype edges are rare; keep
-    /// their visit out of the hot loop's code.
-    #[inline(never)]
-    unsafe fn visit_side_slot(
-        &mut self,
-        slot: *mut u64,
-        header: *mut GcHeader,
-        weak: bool,
-        remembering: ParentRemembering,
-    ) {
-        self.visit_slot_with_parent_facts(
-            GcMutableSlot::new(slot, None),
-            header,
-            weak,
-            remembering,
-        );
-    }
 }
 
-/// The drift check: the generic walk, run for its slot list only, must name
-/// exactly the plan's slots, after the
-/// residual-prototype slots the scan already visited. Those are a stack
-/// temporary of the registry's visitor, different on every call, so they are
-/// matched by count, not address.
+/// The generic walk must enumerate exactly the owned fields in the plan.
 #[cfg(any(test, debug_assertions))]
-unsafe fn assert_matches_generic_walk(
-    header: *mut GcHeader,
-    plan: &PlainObjectPlan,
-    residual_slots: usize,
-) {
+unsafe fn assert_matches_generic_walk(header: *mut GcHeader, plan: &PlainObjectPlan) {
     let mut generic = Vec::new();
     visit_gc_rewrite_slots(header, |slot| {
         generic.push((slot.slot as usize, slot.is_parent_owned()));
@@ -277,11 +231,10 @@ unsafe fn assert_matches_generic_walk(
         expected.push((slot.slot as usize, slot.is_parent_owned()));
     }
     assert!(
-        generic.len() == residual_slots + expected.len()
-            && generic[residual_slots..] == expected[..],
+        generic == expected,
         "copying_object_scan: the plain-object plan enumerated different slots than the \
          generic walk for header {header:p} — a traced edge would be lost or invented \
-         (generic {generic:x?}, residual {residual_slots}, plan {expected:x?})"
+         (generic {generic:x?}, plan {expected:x?})"
     );
 }
 

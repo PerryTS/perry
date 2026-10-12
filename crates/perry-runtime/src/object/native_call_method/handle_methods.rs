@@ -4,7 +4,7 @@ use super::*;
 /// Wall 10 — resolve and invoke a method that a framework attached to a native
 /// registry handle via `Object.setPrototypeOf(handle, proto)` (Express's
 /// augmented `res.send` / `req.accepts` / …). The link was recorded in the
-/// `OBJECT_PROTOTYPES` side-table keyed by the handle id (see
+/// owner property bag for the handle id (see
 /// `js_object_set_prototype_of`). Walk it via `resolve_inherited_field`; if the
 /// resolved member is a callable closure, invoke it with `this` bound to the
 /// handle value (`object`) so the method's internal `this.end(...)` /

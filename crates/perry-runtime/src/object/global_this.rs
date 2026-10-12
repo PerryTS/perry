@@ -20,9 +20,7 @@ use super::*;
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
 pub(crate) use global_this_webassembly::{
-    clear_module_wrapper_for_dead_ptr, is_registered_wasm_module, module_wrapper_owner_moved,
-    module_wrapper_registry_ever_used, webassembly_error_ctor_instanceof,
-    webassembly_value_ctor_instanceof,
+    is_registered_wasm_module, webassembly_error_ctor_instanceof, webassembly_value_ctor_instanceof,
 };
 // Only the `wasm-host` engine constructs real modules (via
 // `webassembly::make_module_object`), so registration and trusted-handle
@@ -230,3 +228,6 @@ pub(crate) use typed_array::{
 pub(crate) use array_error::array_prototype_values_thunk;
 
 pub(crate) use install_static::install_proto_method_with_key;
+
+#[cfg(test)]
+pub(crate) use global_this_webassembly::owned_wrappers as test_wasm_wrapper_state;

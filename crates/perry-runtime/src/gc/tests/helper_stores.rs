@@ -60,19 +60,9 @@ fn shared_array_and_object_slot_helpers_preserve_young_children() {
 
 #[test]
 fn map_and_set_external_helper_stores_preserve_young_children() {
-    struct SetRootGuard;
-
-    impl Drop for SetRootGuard {
-        fn drop(&mut self) {
-            crate::set::test_clear_set_roots();
-        }
-    }
-
     let _guard = CopyingNurseryTestGuard::new(0);
     let _env_guard = VerifyEvacuationTestGuard::on();
-    let _set_guard = SetRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::set::test_clear_set_roots();
 
     let map_child = young_leaf();
     let set_child = young_leaf();
@@ -80,8 +70,8 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     unsafe {
         (*map).size = 1;
         (*map).used = 1;
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            crate::map::test_map_store_word(map),
             entries as usize,
             ptr_bits(map_child),
         );
@@ -91,8 +81,8 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     unsafe {
         (*set).size = 1;
         (*set).used = 1;
-        crate::gc::runtime_store_external_jsvalue_slot(
-            set as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            crate::set::test_set_store_word(set),
             set_elements as usize,
             ptr_bits(set_child),
         );

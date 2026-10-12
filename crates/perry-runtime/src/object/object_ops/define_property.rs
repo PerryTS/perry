@@ -5,16 +5,9 @@ use super::*;
 /// small registry id (zlib stream, fetch Request/Response/Headers/Blob, crypto
 /// hash, …), not a heap `ObjectHeader`.
 ///
-/// Handles get their arbitrary own-property storage from the
-/// `handle_expando` side table — the same one a plain `handle.foo = v` write
-/// lands in (perry-stdlib's `js_handle_property_set_dispatch` falls back to it
-/// once every typed setter has passed). This ROUTES the descriptor there rather
-/// than merely tolerating the call: the value round-trips through `handle.key`,
-/// the `writable`/`enumerable`/`configurable` bits and any `get`/`set` pair are
-/// recorded in the ordinary descriptor side tables (keyed by the handle id), and
-/// `getOwnPropertyDescriptor` / `Object.keys` / `delete` read them back. A
-/// define that returned `true` and dropped the property would be the same silent
-/// no-op the throw replaced.
+/// The existing native payload owns an ordinary property bag. Data and
+/// accessors use its slots, and attributes use its shape. Assignment,
+/// descriptor queries, enumeration and deletion all route through that bag.
 ///
 /// The caller has already established that `hid` is in the handle band and that
 /// the receiver is not a Proxy (proxies are handle-band ids too, and are routed
@@ -33,9 +26,8 @@ unsafe fn define_property_on_handle(
     };
     use crate::object::handle_expando as hx;
 
-    // A Symbol key goes to the symbol side table (`SYMBOL_PROPERTIES`), which is
-    // keyed by the NaN-box payload — a handle id works there unchanged, and it's
-    // the table `handle[sym]` reads back from. String-coercing the symbol would
+    // A Symbol key is an ordinary symbol shape key on the owned bag.
+    // String-coercing the symbol would
     // file the value under a `"Symbol(x)"` STRING name, unreachable by the
     // symbol-keyed reader. (This is the Next.js `PATCHED_SET_HEADER` shape.)
     if crate::symbol::js_is_symbol(key_value) != 0 {

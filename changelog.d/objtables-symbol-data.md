@@ -1,0 +1,1 @@
+Delete SYMBOL_PROPERTIES and its full/budgeted scanning, rekeying, owner pruning and thread-exit release. All supported objects, closures, arrays, exotic cells and native handle bags use the existing shaped-symbol key/slot path. Replace obsolete table-scanner fixtures with owned-slot tests; add a Promise-owner moving-GC gap and a mutation control that removes its symbol slot.

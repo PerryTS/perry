@@ -2,9 +2,9 @@
 crates/perry-runtime/src/gc/ | * | * | * | Collector ownership, generations and malloc bookkeeping.
 crates/perry-runtime/src/arena/ | * | * | * | Arena metadata owns the generation classification.
 crates/perry-runtime/src/value/addr_class.rs | tracked_gc_header_admitting | gc_malloc_header_is_tracked | 1 | The canonical dereference-safe classifier owns malloc admission.
+crates/perry-runtime/src/value/addr_class.rs | tracked_gc_type_matches | gc_malloc_header_is_tracked | 1 | The canonical one-kind brand classifier (Symbol) owns its malloc admission; it separates another kind from outside the tracked heap.
 crates/perry-runtime/src/native_handle.rs | handle_from_value | gc_malloc_header_is_tracked | 1 | Native payload-handle admission; not a string receiver.
 crates/perry-runtime/src/timer.rs | raw_closure_pointer | gc_malloc_header_is_tracked | 1 | Closure callback admission; not a string receiver.
-crates/perry-runtime/src/set.rs | registered_set_is_dead_post_trace | classify_heap_generation | 1 | Post-trace Set owner liveness; requires heap generation.
 crates/perry-runtime/src/closure/dynamic_props.rs | is_closure_ptr | classify_heap_generation | 1 | Closure branding and test teardown; no string admission.
 crates/perry-runtime/src/closure/dynamic_props.rs | drop | classify_heap_generation | 1 | Closure branding and test teardown; no string admission.
 crates/perry-runtime/src/array/header.rs | clean_arr_ptr | classify_heap_generation | 1 | Array forwarding resolution; no string admission.

@@ -1,6 +1,6 @@
 use super::{
-    closure_from, handler_trap, is_callable, lookup, pin_proxy_for_native_call, revoked_return,
-    revoked_return_with_message, POINTER_MASK, POINTER_TAG, PROXIES, TAG_UNDEFINED,
+    closure_from, entry, handler_trap, is_callable, lookup, pin_proxy_for_native_call,
+    revoked_return, revoked_return_with_message, POINTER_MASK, POINTER_TAG, TAG_UNDEFINED,
 };
 
 /// Return the proxy target for internal-operation callers that must throw on a
@@ -25,16 +25,13 @@ fn js_proxy_checked_target_with_revoked_message(
     revoked_message: &str,
 ) -> Option<f64> {
     let id = lookup(proxy_boxed)?;
-    PROXIES.with(|p| {
-        let borrowed = p.borrow();
-        let Some(Some(entry)) = borrowed.get(id as usize) else {
-            return None;
-        };
+    {
+        let entry = entry(id)?;
         if entry.revoked {
             revoked_return_with_message(revoked_message);
         }
         Some(entry.target)
-    })
+    }
 }
 
 /// Proxy-aware enumerable string key collection for JSON.parse reviver
@@ -48,21 +45,22 @@ pub(crate) fn js_proxy_own_keys_for_json(proxy_boxed: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "ownKeys");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "ownKeys");
+    let target = target_h.get_nanbox_f64();
+    let handler = handler_h.get_nanbox_f64();
     if is_callable(trap) {
         return crate::closure::js_closure_call1(
             closure_from(trap),

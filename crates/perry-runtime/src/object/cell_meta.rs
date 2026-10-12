@@ -68,6 +68,9 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
         crate::gc::GC_TYPE_DATE_CELL => {
             Some(&mut (*(user_ptr as *mut crate::date::DateCell)).meta as *mut *mut ObjectMeta)
         }
+        crate::gc::GC_TYPE_TEMPORAL => Some(
+            &mut (*(user_ptr as *mut crate::temporal::TemporalCell)).meta as *mut *mut ObjectMeta,
+        ),
         // Anything still without a metadata edge answers absence rather than
         // mis-reading its own layout as a pointer.
         _ => None,

@@ -1,20 +1,5 @@
-//! An explicit `[[Prototype]]` recorded in the residual registry must survive
-//! its owner's relocation, whatever the owner's kind.
-//!
-//! `Object.setPrototypeOf` keeps a shaped object's prototype in its meta record
-//! and everything else — every receiver `meta_capable_object` turns away — in
-//! the residual address-keyed registry (`object::prototype_chain`). That entry
-//! carries two collector obligations: rekey it when the owner moves, and treat
-//! its value as a child edge so the prototype is retained and rewritten. Both
-//! were wired to arrays and ordinary objects only, the rekey below
-//! `layout_transfer`'s layout-kind return. Every other movable owner — a lazy
-//! JSON array, Map, Set, Error, Promise, Date, RegExp — lost its prototype at
-//! its first copying minor, and with the rekey alone would have kept a stale
-//! address to a prototype that had moved or died.
-//!
-//! These tests have to be able to fail, so every premise they rest on — the
-//! entry landed in the registry, the owner and the prototype really moved — is
-//! asserted before the verdict.
+//! Owned prototype words survive relocation through each owner's property bag.
+//! The owner and prototype movement premises make stale words observable.
 
 use super::super::*;
 use super::support::*;
@@ -90,12 +75,6 @@ fn register_key_table_scanners() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
-fn forget_owners(owners: &[usize]) {
-    crate::object::prototype_chain::prune_dead_object_prototype_owners(&|owner| {
-        owners.contains(&owner)
-    });
-}
-
 /// The claim as reported against #10381: a lazy array's prototype, set through
 /// the real `Object.setPrototypeOf` entry, across a copying minor that moves
 /// both the array and its prototype.
@@ -123,7 +102,7 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
     assert!(crate::gc::gc_type_is_movable(GC_TYPE_LAZY_ARRAY));
     assert!(
         unsafe { crate::object::prototype_chain::meta_capable_object(lazy) }.is_none(),
-        "premise: a lazy array has no meta record, so its prototype goes to the registry"
+        "premise: a lazy array has no meta record, so its prototype goes to the owner bag"
     );
 
     let proto = marked_prototype();
@@ -142,14 +121,10 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
         GC_TYPE_LAZY_ARRAY,
         "premise: setPrototypeOf left the receiver a lazy array"
     );
-    assert!(
-        crate::object::prototype_chain::test_prototype_registry_latch_armed(),
-        "premise: the residual registry holds an entry"
-    );
     assert_eq!(
         crate::object::prototype_chain::object_static_prototype(lazy),
         Some(ptr_bits(proto)),
-        "premise: the prototype is recorded in the residual registry under the lazy \
+        "premise: the prototype is recorded in the owned bag under the lazy \
          header's own address"
     );
     assert_eq!(
@@ -177,12 +152,11 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
     let resolved =
         crate::object::js_object_get_prototype_of(f64::from_bits(ptr_bits(lazy_after))).to_bits();
     // Leave no entry behind for a later test to trip over, whatever the verdict.
-    forget_owners(&[lazy, lazy_after]);
 
     assert_eq!(
         recorded,
         Some(ptr_bits(proto_after)),
-        "the registry entry must follow the lazy header to its new address and name \
+        "the owner bag entry must follow the lazy header to its new address and name \
          the prototype at ITS current address"
     );
     assert_eq!(
@@ -193,85 +167,59 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
     );
 }
 
-/// #10362 SABOTAGE: with `GC_RESIDUAL_PROTO_OWNER` never set, the per-owner
-/// gates answer "no entry here" and the collector skips the prototype edge.
-///
-/// This is the test that proves the bit is load-bearing rather than
-/// documentation. Its subject is the same one the two tests around it assert on
-/// — the entry must follow the owner and the recorded address must be rewritten
-/// — so a green run here with the bit suppressed would mean the gates it feeds
-/// are not gating anything, and A' should be withdrawn.
-///
-/// The membership assertion (`debug_assert_residual_owner_bit`) stands itself
-/// down while the sabotage is armed, so this test fails at the real verdict
-/// rather than at an assertion the sabotage itself provoked.
 #[test]
-fn test_suppressing_the_residual_owner_bit_loses_the_prototype() {
+fn an_owned_prototype_moves_with_its_array() {
+    prototype_edge(false);
+}
+
+#[test]
+#[ignore = "negative control: erase the relocated owner's prototype slot"]
+fn negative_control_objtables_object_prototypes() {
+    prototype_edge(true);
+}
+fn prototype_edge(erase: bool) {
     let _serialized = crate::array::test_serialize();
     let _feedback = crate::typed_feedback::typed_feedback_test_lock();
     let _latch = ArrayPrototypeLatchRestore::capture();
     let _guard = CopyingNurseryTestGuard::new(1);
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_key_table_scanners();
-
-    let owner = crate::array::js_array_alloc(4) as usize;
-    let obj_type = obj_type_at(owner);
-    assert!(
-        crate::arena::pointer_in_nursery(owner) && crate::gc::gc_type_is_movable(obj_type),
-        "premise: a nursery owner of a movable kind"
-    );
-    assert_ne!(
-        obj_type, GC_TYPE_OBJECT,
-        "premise: the subject must be a kind the bit actually gates"
-    );
+    let owner = crate::array::js_array_alloc(8) as usize;
     js_shadow_slot_set(0, ptr_bits(owner));
-
-    let sabotage = crate::object::prototype_chain::residual_proto_bit_sabotage::Guard::arm();
     let proto = marked_prototype();
-    crate::object::js_object_set_prototype_of(
-        f64::from_bits(ptr_bits(owner)),
-        f64::from_bits(ptr_bits(proto)),
-    );
-    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_eq!(
-        crate::object::prototype_chain::object_static_prototype(owner),
-        Some(ptr_bits(proto)),
-        "premise: the entry is recorded even with the bit suppressed — the \
-         sabotage removes the PROOF, not the entry"
-    );
-    unsafe {
-        let header =
-            (owner as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        assert_eq!(
-            (*header)._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER,
-            0,
-            "premise: the sabotage really did suppress the bit"
-        );
-    }
-
+    crate::object::prototype_chain::object_set_static_prototype(owner, ptr_bits(proto));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_ne!(owner_after, owner, "premise: the owner must actually move");
-
-    let recorded = crate::object::prototype_chain::object_static_prototype(owner_after);
-    forget_owners(&[owner, owner_after]);
-    js_shadow_slot_set(0, 0);
-    drop(sabotage);
-
-    assert!(
-        recorded.is_none(),
-        "the bit is not load-bearing: with `GC_RESIDUAL_PROTO_OWNER` suppressed the \
-         entry still followed its owner, so the per-owner gates in \
-         `gc/layout_slot_visit.rs` and `gc/layout/transfer.rs` are not gating \
-         anything. A' is documentation — withdraw it."
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, owner);
+    if erase {
+        unsafe {
+            let bag = crate::object::descriptor_state::descriptor_holder(moved);
+            (*(*bag).meta).prototype = 0;
+        }
+    }
+    let bits = crate::object::prototype_chain::object_static_prototype(moved)
+        .expect("owner retains prototype");
+    assert_ne!((bits & POINTER_MASK) as usize, proto);
+    assert_eq!(
+        crate::object::js_object_get_field(
+            (bits & POINTER_MASK) as *const crate::object::ObjectHeader,
+            0
+        )
+        .bits(),
+        MARKER.to_bits()
+    );
+    let fresh = crate::array::js_array_alloc(8) as usize;
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(fresh),
+        None
     );
 }
 
 /// Every movable receiver kind that keeps its prototype in the residual
 /// registry, with the prototype held by NOTHING but that entry. One copying
-/// minor has to rekey the entry, retain the prototype through it, and rewrite
-/// the recorded address — the three obligations the registry's population
+/// minor has to retain the prototype through the bag, and rewrite
+/// the recorded address — the three obligations the owner bag's population
 /// shares regardless of kind. Arrays and ordinary objects are the controls:
 /// they were covered before.
 #[test]
@@ -353,11 +301,10 @@ fn test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor(
         );
 
         let recorded = crate::object::prototype_chain::object_static_prototype(owner_after);
-        forget_owners(&[owner, owner_after]);
         js_shadow_slot_set(0, 0);
 
         let Some(recorded) = recorded else {
-            panic!("{kind}: the registry entry did not follow its owner to the new address");
+            panic!("{kind}: the owner bag entry did not follow its owner to the new address");
         };
         let proto_after = (recorded & POINTER_MASK) as usize;
         assert_ne!(

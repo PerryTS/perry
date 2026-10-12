@@ -1,14 +1,8 @@
-//! `Reflect.{define,get,has,delete}Metadata` and related metadata-keys
-//! helpers, backed by the `REFLECT_METADATA` thread-local in the parent
-//! module. Extracted from `proxy.rs` to keep that file under the 2000-line
-//! cap; behavior is unchanged.
-
+//! Reflect metadata is a private traced record on its target's property holder.
+use super::{POINTER_MASK, POINTER_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use std::collections::HashSet;
-
-use super::{
-    MetadataKey, POINTER_MASK, POINTER_TAG, REFLECT_METADATA, TAG_FALSE, TAG_NULL, TAG_TRUE,
-    TAG_UNDEFINED,
-};
+mod storage;
+use storage::{lookup, metadata_record, own_keys, storage_key};
 
 #[no_mangle]
 pub extern "C" fn js_reflect_define_metadata(
@@ -17,83 +11,149 @@ pub extern "C" fn js_reflect_define_metadata(
     target: f64,
     property_key: f64,
 ) -> f64 {
-    if let Some(metadata_key) = make_metadata_key(key, target, property_key) {
-        REFLECT_METADATA.with(|store| {
-            store.borrow_mut().insert(metadata_key, value);
-        });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    if let Some(key) = metadata_key_part(key.get_nanbox_f64()) {
+        if let Some(property_key) = metadata_property_key_part(property_key.get_nanbox_f64()) {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            unsafe {
+                let record = metadata_record(target.get_nanbox_f64(), true);
+                if !record.is_null() {
+                    let name = storage_key(&key, property_key.as_deref());
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::object::object_ops::define_property_force_store_value(
+                        record,
+                        key,
+                        value.get_nanbox_f64(),
+                    );
+                }
+            }
+        }
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
+fn coerced_lookup(key: f64, target: f64, property_key: f64, inherited: bool) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let key = metadata_key_part(key.get_nanbox_f64())?;
+    let property_key = metadata_property_key_part(property_key.get_nanbox_f64())?;
+    let current = scope.root_nanbox_f64(target.get_nanbox_f64());
+    loop {
+        if let Some(value) = lookup(current.get_nanbox_f64(), &key, property_key.as_deref()) {
+            return Some(value);
+        }
+        if !inherited {
+            return None;
+        }
+        let before = current.get_nanbox_u64();
+        let next = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+        if matches!(next.to_bits(), TAG_NULL | TAG_UNDEFINED) || next.to_bits() == before {
+            return None;
+        }
+        current.set_nanbox_f64(next);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_reflect_get_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(key_part) = metadata_key_part(key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    let Some(property_key_part) = metadata_property_key_part(property_key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
+    coerced_lookup(key, target, property_key, true).unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
 }
-
-fn get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    REFLECT_METADATA.with(|store| {
-        store
-            .borrow()
-            .get(&metadata_key)
-            .copied()
-            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
-    })
-}
-
 #[no_mangle]
 pub extern "C" fn js_reflect_get_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    get_own_metadata(key, target, property_key)
+    coerced_lookup(key, target, property_key, false)
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
 }
-
 #[no_mangle]
 pub extern "C" fn js_reflect_has_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(key_part) = metadata_key_part(key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let Some(property_key_part) = metadata_property_key_part(property_key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let found = get_metadata_in_prototype_chain(&key_part, target, property_key_part.as_ref())
-        .to_bits()
-        != TAG_UNDEFINED;
+    let found = coerced_lookup(key, target, property_key, true)
+        .is_some_and(|v| v.to_bits() != TAG_UNDEFINED);
     f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
 }
-
 #[no_mangle]
 pub extern "C" fn js_reflect_has_own_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
+    f64::from_bits(
+        if coerced_lookup(key, target, property_key, false).is_some() {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        },
+    )
+}
+#[no_mangle]
+pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(key);
+    let target = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let Some(key) = metadata_key_part(key.get_nanbox_f64()) else {
         return f64::from_bits(TAG_FALSE);
     };
-    let found = REFLECT_METADATA.with(|store| store.borrow().contains_key(&metadata_key));
-    f64::from_bits(if found { TAG_TRUE } else { TAG_FALSE })
+    let Some(property_key) = metadata_property_key_part(property_key.get_nanbox_f64()) else {
+        return f64::from_bits(TAG_FALSE);
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let deleted = unsafe {
+        let record = metadata_record(target.get_nanbox_f64(), false);
+        let name = storage_key(&key, property_key.as_deref());
+        if lookup(target.get_nanbox_f64(), &key, property_key.as_deref()).is_none() {
+            false
+        } else {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_delete_field(record, key) != 0
+        }
+    };
+    f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
 }
-
 #[no_mangle]
 pub extern "C" fn js_reflect_get_metadata_keys(target: f64, property_key: f64) -> f64 {
     metadata_keys_for(target, property_key, true)
 }
-
 #[no_mangle]
 pub extern "C" fn js_reflect_get_own_metadata_keys(target: f64, property_key: f64) -> f64 {
     metadata_keys_for(target, property_key, false)
 }
 
-#[no_mangle]
-pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key: f64) -> f64 {
-    let Some(metadata_key) = make_metadata_key(key, target, property_key) else {
-        return f64::from_bits(TAG_FALSE);
-    };
-    let deleted = REFLECT_METADATA.with(|store| store.borrow_mut().remove(&metadata_key).is_some());
-    f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
+fn metadata_keys_for(target: f64, property_key: f64, inherited: bool) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(target);
+    let property_key = scope.root_nanbox_f64(property_key);
+    let property_key = metadata_property_key_part(property_key.get_nanbox_f64());
+    let mut keys = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(property_key) = property_key {
+        loop {
+            for key in own_keys(current.get_nanbox_f64(), property_key.as_deref()) {
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+            if !inherited {
+                break;
+            }
+            let before = current.get_nanbox_u64();
+            let next = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+            if matches!(next.to_bits(), TAG_NULL | TAG_UNDEFINED) || next.to_bits() == before {
+                break;
+            }
+            current.set_nanbox_f64(next);
+        }
+    }
+    let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(keys.len() as u32));
+    for key in keys {
+        let key = scope.root_nanbox_f64(crate::string::js_string_new_sso(
+            key.as_ptr(),
+            key.len() as u32,
+        ));
+        let next = crate::array::js_array_push_f64(array.get_raw_mut_ptr(), key.get_nanbox_f64());
+        array.set_raw_mut_ptr(next);
+    }
+    crate::value::js_nanbox_pointer(array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
 }
 
 /// Map a metadata `target` to a GC-stable key, folding a class's prototype onto
@@ -136,14 +196,6 @@ fn normalize_target_bits(target: f64) -> u64 {
         }
     }
     bits
-}
-
-fn make_metadata_key(key: f64, target: f64, property_key: f64) -> Option<MetadataKey> {
-    Some(MetadataKey {
-        target_bits: normalize_target_bits(target),
-        key: metadata_key_part(key)?,
-        property_key: metadata_property_key_part(property_key)?,
-    })
 }
 
 /// Resolve the `propertyKey` argument of a `Reflect.*Metadata(…)` call.
@@ -210,83 +262,6 @@ fn metadata_key_part(value: f64) -> Option<String> {
         }
     }
     None
-}
-
-fn get_metadata_in_prototype_chain(key: &str, target: f64, property_key: Option<&String>) -> f64 {
-    let mut current = target;
-    loop {
-        let current_bits = normalize_target_bits(current);
-        let found = REFLECT_METADATA.with(|store| {
-            store
-                .borrow()
-                .get(&MetadataKey {
-                    target_bits: current_bits,
-                    key: key.to_string(),
-                    property_key: property_key.cloned(),
-                })
-                .copied()
-        });
-        if let Some(value) = found {
-            return value;
-        }
-
-        let next = crate::object::js_object_get_prototype_of(current);
-        let next_bits = next.to_bits();
-        if next_bits == TAG_NULL || next_bits == TAG_UNDEFINED || next_bits == current_bits {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        current = next;
-    }
-}
-
-fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -> f64 {
-    let Some(wanted_property_key) = metadata_property_key_part(property_key) else {
-        let empty = crate::array::js_array_alloc(0);
-        return f64::from_bits(POINTER_TAG | ((empty as u64) & POINTER_MASK));
-    };
-
-    let keys = REFLECT_METADATA.with(|store| {
-        let mut seen = HashSet::new();
-        let mut keys = Vec::new();
-        let store = store.borrow();
-        let mut current = target;
-
-        loop {
-            let current_bits = normalize_target_bits(current);
-            for metadata_key in store.keys() {
-                if metadata_key.target_bits == current_bits
-                    && metadata_key.property_key == wanted_property_key
-                    && seen.insert(metadata_key.key.clone())
-                {
-                    keys.push(metadata_key.key.clone());
-                }
-            }
-
-            if !include_prototypes {
-                break;
-            }
-
-            let next = crate::object::js_object_get_prototype_of(current);
-            let next_bits = next.to_bits();
-            if next_bits == TAG_NULL || next_bits == TAG_UNDEFINED || next_bits == current_bits {
-                break;
-            }
-            current = next;
-        }
-
-        keys
-    });
-
-    let mut values = Vec::with_capacity(keys.len());
-    for key in keys {
-        values.push(crate::string::js_string_new_sso(
-            key.as_ptr(),
-            key.len() as u32,
-        ));
-    }
-
-    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
-    f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
 }
 
 #[cfg(test)]

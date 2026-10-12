@@ -153,8 +153,25 @@ pub(super) fn scan_fetch_roots(mark: &mut dyn FnMut(f64)) {
 /// Visit every heap-value slot the Fetch registries own.
 pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     // Each mutator visits only the records it owns (`lifecycle::owns`).
+    if let Ok(mut responses) = FETCH_RESPONSES.lock() {
+        for (id, record) in responses.iter_mut() {
+            if lifecycle::owns(*id) && record.props != 0 {
+                visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
+        }
+    }
+    if let Ok(mut blobs) = BLOB_REGISTRY.lock() {
+        for (id, record) in blobs.iter_mut() {
+            if lifecycle::owns(*id) && record.props != 0 {
+                visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
+        }
+    }
     if let Ok(mut headers) = HEADERS_REGISTRY.lock() {
         for (_, record) in headers.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
+            if record.props != 0 {
+                visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
             for bits in record.method_values.values_mut() {
                 visitor.visit_nanbox_u64_slot(bits);
             }
@@ -162,6 +179,9 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     }
     if let Ok(mut forms) = body_metadata::FORM_DATA_REGISTRY.lock() {
         for (_, record) in forms.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
+            if record.props != 0 {
+                visitor.visit_nanbox_u64_slot(&mut record.props);
+            }
             for bits in record.method_values.values_mut() {
                 visitor.visit_nanbox_u64_slot(bits);
             }
@@ -169,6 +189,9 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     }
     if let Ok(mut requests) = REQUEST_REGISTRY.lock() {
         for (_, request) in requests.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
+            if request.props != 0 {
+                visitor.visit_nanbox_u64_slot(&mut request.props);
+            }
             visitor.visit_nanbox_f64_slot(&mut request.signal);
             if let Some(error) = &mut request.body_error {
                 visitor.visit_nanbox_f64_slot(error);

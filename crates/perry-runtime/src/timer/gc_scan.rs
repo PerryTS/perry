@@ -134,6 +134,13 @@ fn scan_store_step(
                 visitor.visit_nanbox_f64_slot(&mut entry.js_handle);
                 state.slot = 4;
             }
+            if state.slot == 4 {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                crate::async_hooks::resource_state::scan_token(&mut entry.async_id, visitor);
+                state.slot = 5;
+            }
             state.index += 1;
             state.finish_timer();
         }

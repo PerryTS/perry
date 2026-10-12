@@ -6,9 +6,9 @@
 //! against the target's non-configurable / non-extensible invariants.
 
 use super::{
-    call_trap, create_list_from_array_like, handler_trap, is_callable_function, lookup,
+    call_trap, create_list_from_array_like, entry, handler_trap, is_callable_function, lookup,
     pin_proxy_for_native_call, revoked_return, throw_type_error, POINTER_MASK, POINTER_TAG,
-    PROXIES, TAG_NULL, TAG_UNDEFINED,
+    TAG_NULL, TAG_UNDEFINED,
 };
 
 /// #7949: root the caller's key list before touching the heap.
@@ -128,21 +128,21 @@ pub extern "C" fn js_proxy_own_keys(proxy_boxed: f64) -> f64 {
         Some(id) => id,
         None => return alloc_key_array(&[]),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "ownKeys");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "ownKeys");
+    let target = target_h.get_nanbox_f64();
     let trap_bits = trap.to_bits();
     if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
         return alloc_key_array(&target_own_keys(target));
@@ -151,9 +151,11 @@ pub extern "C" fn js_proxy_own_keys(proxy_boxed: f64) -> f64 {
         return throw_type_error("proxy ownKeys trap is not a function");
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_h = scope.root_nanbox_f64(target);
-    let trap_result = call_trap(handler, trap, &[target_h.get_nanbox_f64()]);
+    let trap_result = call_trap(
+        handler_h.get_nanbox_f64(),
+        trap,
+        &[target_h.get_nanbox_f64()],
+    );
 
     // CreateListFromArrayLike(trapResult, « String, Symbol »): throws for a
     // non-object result and for any element that is neither a string nor a

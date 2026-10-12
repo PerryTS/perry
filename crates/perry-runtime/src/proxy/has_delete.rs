@@ -4,8 +4,8 @@
 //! no behavior change.
 
 use super::{
-    call_trap, handler_trap, invariants, is_callable, is_non_configurable_exotic_own, lookup,
-    nanbox_bool, pin_proxy_for_native_call, revoked_return, PROXIES, TAG_FALSE, TAG_UNDEFINED,
+    call_trap, entry, handler_trap, invariants, is_callable, is_non_configurable_exotic_own,
+    lookup, nanbox_bool, pin_proxy_for_native_call, revoked_return, TAG_FALSE, TAG_UNDEFINED,
 };
 
 /// `key in proxy` — if `handler.has` exists, call it; else forward to the
@@ -17,27 +17,26 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "has");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let key_h = scope.root_nanbox_f64(key);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "has");
+    let target = target_h.get_nanbox_f64();
+    let key = key_h.get_nanbox_f64();
     if is_callable(trap) {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
         let trap_result = call_trap(
-            handler,
+            handler_h.get_nanbox_f64(),
             trap,
             &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
         );
@@ -70,29 +69,28 @@ pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_FALSE),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
-    let trap = handler_trap(handler, "deleteProperty");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let handler_h = scope.root_nanbox_f64(handler);
+    let key_h = scope.root_nanbox_f64(key);
+    let trap = handler_trap(handler_h.get_nanbox_f64(), "deleteProperty");
+    let target = target_h.get_nanbox_f64();
+    let key = key_h.get_nanbox_f64();
     if is_callable(trap) {
         // #2760: the `deleteProperty` trap's boolean result is observable
         // through `Reflect.deleteProperty(proxy, …)`.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
         let trap_result = call_trap(
-            handler,
+            handler_h.get_nanbox_f64(),
             trap,
             &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
         );

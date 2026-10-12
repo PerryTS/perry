@@ -1,0 +1,1 @@
+Store boxed primitive payloads in a private ObjectMeta child slot, reusing a retired descriptor word so metadata offsets and size stay fixed. Delete the payload address table, scanner, prune, and rekey verdict. Trace and barrier the slot through the ordinary object graph. Add copying-GC coverage, a slot-removal negative control, and wrapper parity coverage.

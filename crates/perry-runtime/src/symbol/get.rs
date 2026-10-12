@@ -85,11 +85,7 @@ pub(crate) unsafe fn has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool
     if crate::object::shaped_symbols::owner(obj_key).is_some() {
         return crate::object::shaped_symbols::get(obj_key, sym_key).is_some();
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    match guard.as_ref().and_then(|map| map.get(&obj_key)) {
-        Some(entries) => entries.iter().any(|&(sk, _)| sk == sym_key),
-        None => false,
-    }
+    false
 }
 
 /// #1758: the OWN symbol-property lookup — the raw `SYMBOL_PROPERTIES`
@@ -390,9 +386,7 @@ unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
 /// `GC_TYPE_OBJECT` before anything is dereferenced as one.
 unsafe fn receiver_ptr_from_value_bits(bits: u64) -> Option<usize> {
     let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
-    if obj_type == crate::gc::GC_TYPE_OBJECT
-        || crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
-    {
+    if crate::object::prototype_chain::owned_prototype_receiver_type(obj_type) {
         Some(raw)
     } else {
         None
@@ -1651,8 +1645,6 @@ mod handle_meta_share_tests {
     //! over an IncomingMessage), and must survive an `undefined` write-back.
     use super::*;
 
-    const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
-
     // A registered `Symbol.for(key)` as a NaN-boxed f64.
     unsafe fn registered_symbol(key: &str) -> f64 {
         let kh = js_string_from_bytes(key.as_ptr(), key.len() as u32);
@@ -1667,20 +1659,15 @@ mod handle_meta_share_tests {
         registered_symbol("NextInternalRequestMeta")
     }
 
-    // A small native handle id NaN-boxed as POINTER (e.g. an IncomingMessage).
-    // MUST stay below 0x1000: `is_valid_obj_ptr` uses HEAP_MIN=0x1000 on Linux
-    // (0x200_0000_0000 on macOS), so an id >= 0x1000 is misclassified as a valid
-    // heap object ON LINUX — which breaks the handle-band gate and fails these
-    // tests in CI (they pass on macOS, where the id is far below HEAP_MIN). Real
-    // native handles are tiny, so a sub-0x1000 id faithfully models them.
-    fn handle_value(id: u64) -> f64 {
-        f64::from_bits(POINTER_TAG_BITS | id)
-    }
+    // Handle ids MUST stay below 0x1000: `is_valid_obj_ptr` uses
+    // HEAP_MIN=0x1000 on Linux, so a larger id is misclassified as a heap
+    // object and breaks the handle-band gate. Each test's id is backed by a
+    // real native owner record (the stdlib registry's shape), whose bag holds
+    // the handle's properties.
 
     // An IMMOVABLE metadata value: a plain NaN-boxed number. Unlike a heap
-    // object, a number is never a pointer, so the SYMBOL_PROPERTIES side-table
-    // scanner never rewrites it on a GC move — its bits are invariant across any
-    // collection. The #5437 fix logic (no-op on undefined, `_req` fallthrough)
+    // object, a number is never a pointer, so no GC move rewrites it — its
+    // bits are invariant across any collection. The #5437 fix logic (no-op on undefined, `_req` fallthrough)
     // is value-agnostic, so a number tests it faithfully without depending on
     // GC suppression to keep a heap `meta` from moving.
     fn immovable_meta() -> f64 {
@@ -1701,7 +1688,9 @@ mod handle_meta_share_tests {
             let sym = next_request_meta_symbol();
             // Pick a handle id well inside the small-handle band but unlikely to
             // collide with another test's side-table entry.
-            let handle = handle_value(0x321);
+            let owner =
+                crate::object::handle_expando::test_support::TestSmallHandleOwner::new(0x321);
+            let handle = owner.value();
 
             // The per-request metadata value lives on the handle. Use an
             // immovable number so a GC can't invalidate the comparison.
@@ -1740,7 +1729,9 @@ mod handle_meta_share_tests {
             // GC-invariant; `gc_suppress` is defensive only.
             crate::gc::gc_suppress();
             let sym = next_request_meta_symbol();
-            let handle = handle_value(0x654);
+            let owner =
+                crate::object::handle_expando::test_support::TestSmallHandleOwner::new(0x654);
+            let handle = owner.value();
             let meta = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, meta);
 
@@ -1788,7 +1779,9 @@ mod handle_meta_share_tests {
             crate::gc::gc_suppress();
             let sym = registered_symbol("someOtherHandleSym@@test_clear");
             // Distinct handle id so this doesn't alias the metadata tests.
-            let handle = handle_value(0x789);
+            let owner =
+                crate::object::handle_expando::test_support::TestSmallHandleOwner::new(0x789);
+            let handle = owner.value();
             let v = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, v);
 

@@ -1,0 +1,1 @@
+Store materialized Map iterator brands in the array’s existing private property bag. Remove MAP_ITERATOR_ARRAYS, its scanner, dead-owner prune and census/rekey receipts. Add a copying-GC gap test and an ignored deliberately red brand-erasure control; fresh arrays do not inherit a brand.

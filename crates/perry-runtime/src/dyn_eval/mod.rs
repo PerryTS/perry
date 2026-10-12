@@ -57,19 +57,15 @@ mod bench;
 mod bridge;
 mod env;
 mod expr;
+pub(crate) mod function_cell;
+mod function_owner;
 mod interp;
-mod registry_lifetime;
-#[cfg(test)]
-pub(crate) use registry_lifetime::register_closure;
-pub(crate) use registry_lifetime::{
-    function_owner_moved, prune_dead_function_owners, prune_dead_function_owners_young,
-};
 #[cfg(test)]
 mod tests;
 
 /// One parsed interpreted function: the (possibly nested) function AST plus
-/// the prepass results the interpreter needs at call time. Registered in the
-/// thread-local `FN_REGISTRY`; closures reference it by id (capture slot 0).
+/// the prepass results the interpreter needs at call time. A collecting native
+/// cell in closure capture zero owns it.
 pub(crate) struct InterpFn {
     /// Parameter patterns (identifiers, destructuring, defaults).
     pub params: Vec<ast::Pat>,
@@ -81,6 +77,7 @@ pub(crate) struct InterpFn {
     pub hoisted_vars: Vec<String>,
     /// Whether assignments in this function use strict PutValue semantics.
     pub strict: bool,
+    pub node_functions: RefCell<HashMap<usize, Rc<InterpFn>>>,
 }
 
 pub(crate) enum InterpBody {
@@ -89,12 +86,6 @@ pub(crate) enum InterpBody {
 }
 
 thread_local! {
-    /// id → parsed function. GC prunes entries with no live closure, active
-    /// invocation/construction, or bounded source-cache entry. See registry_lifetime.
-    static FN_REGISTRY: RefCell<HashMap<u32, Rc<InterpFn>>> =
-        RefCell::new(HashMap::new());
-    static NEXT_FN_ID: Cell<u32> = const { Cell::new(1) };
-
     /// The interpreter's rooted value stack. Every JSValue an interpreter
     /// frame holds across a potential allocation lives here; the GC scanner
     /// below marks and REWRITES the slots, so moving collections can't
@@ -106,17 +97,17 @@ thread_local! {
     /// frame recurses through the Rust tree-walker).
     static CALL_DEPTH: Cell<u32> = const { Cell::new(0) };
 
-    /// Assembled-source → prepared function id (#6693). `new Function` with a
+    /// Assembled-source → Rust-owned prepared AST (#6693). `new Function` with a
     /// body identical to one already prepared skips the SWC re-parse + subset
     /// scan + hoist prepass entirely — the dominant construction cost — and
-    /// reuses the registered `InterpFn`. Each `new Function` still returns a
+    /// reuses the prepared `InterpFn`. Each `new Function` still returns a
     /// FRESH closure over a fresh per-instance root environment, so identity /
     /// expando semantics are unchanged; only the parse work is shared. Fastify
     /// stacks (ajv / fast-json-stringify / find-my-way) and repeated schema
     /// compiles re-`new Function` identical bodies; distinct bodies simply
     /// miss (no slower than before). Bounded so a pathological distinct-source
-    /// stream can't grow it (or `FN_REGISTRY`) without limit.
-    static SOURCE_FN_CACHE: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+    /// stream cannot grow it without limit.
+    static SOURCE_FN_CACHE: RefCell<HashMap<String, Rc<InterpFn>>> = RefCell::new(HashMap::new());
 
     /// Aggregate byte size of the source strings currently held in
     /// `SOURCE_FN_CACHE`. The entry-count cap alone doesn't bound memory —
@@ -177,27 +168,11 @@ pub(crate) fn fast_scope_enabled() -> bool {
 /// catchable RangeError instead of a native stack overflow.
 const MAX_INTERP_CALL_DEPTH: u32 = 256;
 
-pub(crate) fn register_fn(f: InterpFn) -> u32 {
-    let id = FN_REGISTRY.with(|r| {
-        let mut r = r.borrow_mut();
-        // Ids are recycled once reclaimed, so a long-running process can wrap
-        // the counter; never hand out 0 or an id that is still registered.
-        let id = NEXT_FN_ID.with(|c| loop {
-            let id = c.get();
-            c.set(id.checked_add(1).unwrap_or(1));
-            if id != 0 && !r.contains_key(&id) {
-                break id;
-            }
-        });
-        r.insert(id, Rc::new(f));
-        id
-    });
-    registry_lifetime::note_registered(id);
-    id
+pub(crate) fn register_fn(f: InterpFn) -> f64 {
+    function_cell::new(Rc::new(f))
 }
-
-pub(crate) fn lookup_fn(id: u32) -> Option<Rc<InterpFn>> {
-    FN_REGISTRY.with(|r| r.borrow().get(&id).cloned())
+pub(crate) fn lookup_fn(id: f64) -> Option<Rc<InterpFn>> {
+    function_cell::get(id)
 }
 
 // ── GC safepoints ──────────────────────────────────────────────────────────
@@ -297,7 +272,7 @@ pub(crate) fn roots_len() -> usize {
 }
 
 pub(crate) fn roots_truncate(len: usize) {
-    registry_lifetime::release_function_pins(len);
+    function_owner::release_function_pins(len);
     ROOTS.with(|r| {
         let mut v = r.borrow_mut();
         if v.len() > len {
@@ -375,7 +350,7 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     crate::object::js_install_global_value_surfaces();
     let fn_id = prepare_function_args(args);
     // Keep the prepared AST alive across environment/closure allocations.
-    let prepared = registry_lifetime::pin_function(fn_id).expect("just prepared function");
+    let prepared = function_owner::pin_function(fn_id).expect("just prepared function");
     let function_length = prepared
         .params
         .iter()
@@ -472,7 +447,7 @@ pub(crate) fn function_from_strings_in_with_codegen(
         .map(root_push)
         .collect::<Vec<_>>();
     let fn_id = prepare_function_args(args);
-    let _prepared = registry_lifetime::pin_function(fn_id).expect("just prepared function");
+    let _prepared = function_owner::pin_function(fn_id).expect("just prepared function");
     let rooted_object_envs = object_env_idxs
         .iter()
         .map(|&idx| root_get(idx))
@@ -587,19 +562,20 @@ pub(crate) fn eval_direct_in(
 /// Register a parsed script/eval body as a pinned, parameterless `InterpFn`.
 /// Nested functions are cached by AST-node address, so the statements must
 /// stay allocated for as long as those cache entries exist: owning them in
-/// the registry lets the GC prune evict the entries together with the AST
-/// (the pin is released when the script's roots are truncated, including by
+/// its own node memo dies with the AST. The cell pin is released when the
+/// script's roots are truncated, including by
 /// a throw). A local `Vec` freed on return would let the next script's parse
 /// reuse an address and resolve to this script's function.
-fn register_script(statements: Vec<ast::Stmt>) -> (u32, registry_lifetime::FunctionPin) {
+fn register_script(statements: Vec<ast::Stmt>) -> (f64, function_owner::FunctionPin) {
     let strict = interp::has_use_strict_directive(&statements);
     let id = register_fn(InterpFn {
         params: Vec::new(),
         body: InterpBody::Block(statements),
         hoisted_vars: Vec::new(),
         strict,
+        node_functions: RefCell::new(HashMap::new()),
     });
-    let pin = registry_lifetime::pin_function(id).expect("just registered script");
+    let pin = function_owner::pin_function(id).expect("just registered script");
     (id, pin)
 }
 
@@ -654,7 +630,7 @@ fn object_environment_chain(global: f64, object_envs: &[f64]) -> f64 {
     result
 }
 
-fn prepare_function_args(args: &[String]) -> u32 {
+fn prepare_function_args(args: &[String]) -> f64 {
     let (params, body) = match args.split_last() {
         Some((body, params)) => (params.join(","), body.as_str()),
         None => (String::new(), ""),
@@ -664,14 +640,14 @@ fn prepare_function_args(args: &[String]) -> u32 {
     // parses, and the parameter text is validated by the same parse.
     let source = format!("(function anonymous({params}\n) {{\n{body}\n}})");
     // Parse cache: an identical assembled source reuses the already-prepared
-    // `InterpFn` (same `FN_REGISTRY` id, same stable AST-node addresses that
+    // `InterpFn` (same native AST, same stable AST-node addresses that
     // the nested-function cache keys on) — skipping SWC parse + subset scan +
     // hoist prepass. A cache hit still builds a fresh root env + closure below.
     let fn_id = if !parse_cache_enabled() {
         prepare_source(&source)
     } else {
-        match SOURCE_FN_CACHE.with(|c| c.borrow().get(&source).copied()) {
-            Some(id) => id,
+        match SOURCE_FN_CACHE.with(|c| c.borrow().get(&source).cloned()) {
+            Some(function) => function_cell::new(function),
             None => {
                 let id = prepare_source(&source);
                 SOURCE_FN_CACHE.with(|c| {
@@ -681,8 +657,7 @@ fn prepare_function_args(args: &[String]) -> u32 {
                         && bytes + source.len() <= SOURCE_FN_CACHE_MAX_BYTES
                     {
                         SOURCE_FN_CACHE_BYTES.with(|b| b.set(bytes + source.len()));
-                        c.insert(source, id);
-                        registry_lifetime::note_permanent(id);
+                        c.insert(source, lookup_fn(id).expect("just prepared AST"));
                     }
                 });
                 id
@@ -694,10 +669,10 @@ fn prepare_function_args(args: &[String]) -> u32 {
 
 /// Parse an assembled `(function anonymous(…){…})` source, reject
 /// out-of-subset constructs eagerly, run the hoist prepass, and register the
-/// resulting `InterpFn`. Returns its `FN_REGISTRY` id. Throws SyntaxError on a
+/// resulting `InterpFn`. Returns its collecting cell. Throws SyntaxError on a
 /// parse failure and TypeError on an unsupported construct — the same
 /// diagnostics as before the parse cache existed; only a cache MISS runs this.
-fn prepare_source(source: &str) -> u32 {
+fn prepare_source(source: &str) -> f64 {
     // `.cjs` pins script (sloppy, non-module) parsing: generated bodies rely
     // on sloppy semantics (find-my-way assigns the undeclared `value`), and
     // module auto-detection must not kick in on `import(`-looking substrings.

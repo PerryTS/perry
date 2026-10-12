@@ -1,0 +1,1 @@
+Delete `FRESH_SYMBOL_DESCRIPTIONS` and its liveness-pruning work. Fresh symbols now use the existing dedicated Symbol GC type, with a traced description slot. The symbol and its description move and die through ordinary heap edges. Persistent symbols retain process-lifetime descriptions. Add moving-owner/description, empty-symbol, mutation-control and Node parity gap checks.

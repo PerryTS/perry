@@ -116,8 +116,12 @@ CRATES = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
 EXCLUDED_FILES = ("crates/perry-runtime/src/gc/roots.rs",)
 
 # Floors. A regex that stops matching must fail loudly, not report a clean run.
-MIN_SITES = 30
-MIN_REGISTRY_PRUNES = 16
+# Lane 4 deletes owner tables and their scanner sites, including symbol,
+# Promise, FileHandle, VM state and wasm funcrefs. Keep the parser backstop at the 14
+# remaining matched scanner functions.
+MIN_SITES = 12  # objtables: delete the Wasm memory-binding rekey site and table;
+# main's keylists lane (e1929b47a0) then retired two more rekey sites.
+MIN_REGISTRY_PRUNES = 9  # Wasm memory and interpreter cells no longer have owner prunes.
 # Declared, tracked `open_gap` verdicts allowed. ZERO, and it stays zero: the
 # audit that came with this gate found six rekeyed tables with no death story
 # (#8190-#8195) and all six were fixed rather than exempted, so there is no

@@ -1,0 +1,1 @@
+Move settle listeners into a private GC array owned by their Promise. Delete the address multimap, full/budgeted scans and death/copied-minor cleanup. Nonempty captured contexts use collecting nonmoving old holders; callbacks and stores follow owner reachability. Add a moving-GC gap and a mutation control that removes the listener list.

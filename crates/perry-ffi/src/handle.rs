@@ -85,7 +85,39 @@ pub type Handle = i64;
 /// JS side has `null` / `undefined`.
 pub const INVALID_HANDLE: Handle = 0;
 
-static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
+/// Hashes a handle id for the payload maps. Ids are small sequential integers
+/// chosen by the registry, never by a client, so a multiplicative mix spreads
+/// them over shards and buckets without SipHash's per-probe cost.
+#[derive(Default, Clone, Copy)]
+pub struct HandleIdHasher(u64);
+
+impl std::hash::Hasher for HandleIdHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mixed = self.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        mixed ^ (mixed >> 29)
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0.rotate_left(8)) ^ u64::from(byte);
+        }
+    }
+    #[inline]
+    fn write_i64(&mut self, id: i64) {
+        self.0 = id as u64;
+    }
+    #[inline]
+    fn write_u64(&mut self, id: u64) {
+        self.0 = id;
+    }
+}
+
+/// Build hasher for maps keyed by a [`Handle`].
+pub type HandleIdBuildHasher = std::hash::BuildHasherDefault<HandleIdHasher>;
+
+static HANDLES: Lazy<DashMap<Handle, crate::NativePayloadRecord, HandleIdBuildHasher>> =
+    Lazy::new(|| DashMap::with_hasher(HandleIdBuildHasher::default()));
 const FFI_HANDLE_ID_START: Handle = 1;
 
 // ---------------------------------------------------------------------------
@@ -266,6 +298,7 @@ const FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 
 extern "C" {
     fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner);
+    fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void) -> bool;
     fn perry_ffi_gc_register_mutable_root_scanner_named(
         source_ptr: *const u8,
         source_len: usize,
@@ -361,6 +394,11 @@ pub struct GcRootVisitor<'a> {
 }
 
 impl<'a> GcRootVisitor<'a> {
+    /// Whether this visitor is performing a full reachability mark.
+    pub fn is_full_mark(&self) -> bool {
+        unsafe { perry_ffi_gc_root_visitor_is_full_mark(self.ctx) }
+    }
+
     fn new(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) -> Self {
         Self {
             visit,
@@ -454,7 +492,7 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     };
     let handle = identity.numeric_id();
     // Pending blocks acquisition/reuse while the payload-map lock is held.
-    let previous = HANDLES.insert(handle, Box::new(value));
+    let previous = HANDLES.insert(handle, crate::NativePayloadRecord::new(value));
     assert!(
         previous.is_none(),
         "pending native id must have an empty payload slot"
@@ -596,7 +634,7 @@ fn remove_payload(
     let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
     // destructor runs under the registration-state mutex.
-    let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
+    let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
     // Still retiring, so the id cannot be reused before the index drops it.
     if let Some(payload) = removed.as_deref() {
         index_note_removed(payload, handle);
@@ -1580,3 +1618,32 @@ mod tests {
 #[cfg(test)]
 #[path = "handle_registration_tests.rs"]
 mod registration_tests;
+
+/// Access the current mutator's bag on an existing native payload record.
+/// No caller may retain a reference into the registry across a GC operation.
+pub fn native_handle_props(handle: Handle) -> Option<u64> {
+    HANDLES.get(&handle).and_then(|entry| entry.props())
+}
+/// Replace the property bag on the current mutator's native owner.
+pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
+    let stored = HANDLES
+        .get_mut(&handle)
+        .is_some_and(|mut entry| entry.set_props(bits));
+    if stored && bits != 0 {
+        gc_register_mutable_root_scanner_named("ffi:native-payloads", scan_native_payload_roots);
+    }
+    stored
+}
+fn scan_native_payload_roots(visitor: &mut GcRootVisitor<'_>) {
+    for mut entry in HANDLES.iter_mut() {
+        if let Some(slot) = entry.props_slot() {
+            visitor.visit_nanbox_u64_slot(slot);
+        }
+    }
+}
+/// Called by the host's existing allocation-range teardown hook.
+pub fn clear_native_handle_props_in_ranges(contains: impl Fn(usize) -> bool) {
+    for mut entry in HANDLES.iter_mut() {
+        entry.clear_props_if(&contains);
+    }
+}

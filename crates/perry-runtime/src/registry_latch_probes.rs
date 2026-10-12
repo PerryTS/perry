@@ -216,53 +216,6 @@ fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
 /// test can widen a registry window to cover it.
 const FAR_OUTSIDE_ANY_WINDOW: usize = 0x7000_0000_0000_0000;
 
-/// The symbol address FILTER. `is_registered_symbol` is asked about arbitrary
-/// pointer-shaped values on the generic property, coercion and iteration paths,
-/// and the answer is essentially always "no" — but a symbol the collector has
-/// EVACUATED must keep answering "yes" from its new address, which is what the
-/// forwarding rewrite's admission is for (see
-/// `gc::tests::copying_side_tables::test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter`).
-///
-/// A Bloom filter has false positives, so "the filter rejected this particular
-/// address" is not by itself a proof that it can reject: the probe counter is,
-/// and the second half — an address the filter must ADMIT — is what makes the
-/// first half able to fail.
-///
-/// The worker below is a deterministic stand-in for an unrelated test: it
-/// admits this exact address as a false positive in its own filter. Test builds
-/// must isolate that filter alongside `SYMBOL_POINTERS`; a process-global
-/// filter carries the worker's admission here and reproduces #9344.
-#[test]
-fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
-    std::thread::spawn(|| {
-        let unrelated_sym =
-            unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
-        assert!(unrelated_sym != 0, "test premise: the symbol allocated");
-        crate::symbol::admit_symbol_pointer(FAR_OUTSIDE_ANY_WINDOW);
-    })
-    .join()
-    .expect("the unrelated symbol registration must finish");
-
-    let before = crate::symbol::test_symbol_filter_admitted_probe_count();
-    assert!(!crate::symbol::is_registered_symbol(FAR_OUTSIDE_ANY_WINDOW));
-    assert_eq!(
-        crate::symbol::test_symbol_filter_admitted_probe_count(),
-        before,
-        "the address filter must answer without reaching SYMBOL_POINTERS"
-    );
-
-    let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
-    assert!(sym != 0, "test premise: the symbol allocated");
-    assert!(
-        crate::symbol::is_registered_symbol(sym),
-        "the filter must not hide a registered symbol"
-    );
-    assert!(
-        crate::symbol::test_symbol_filter_admitted_probe_count() > before,
-        "a filter-admitted address must reach SYMBOL_POINTERS"
-    );
-}
-
 /// The class-prototype probe uses an exact inverse address index. Keep both
 /// positive and negative membership covered: class-heavy bundles saturate the
 /// older monotone filter, while this index must remain O(1) and exact (#9225).

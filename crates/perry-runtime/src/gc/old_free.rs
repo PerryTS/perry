@@ -87,11 +87,13 @@ pub(super) const OLD_FREE_MIN_HOLE: usize = GC_HEADER_SIZE + OLD_FREE_LINK_BYTES
 pub(super) const OLD_FREE_SMALL_MAX: usize = 2048;
 const OLD_FREE_SMALL_CLASSES: usize = OLD_FREE_SMALL_MAX / 8 + 1;
 
+// Collecting-holder holes use an allocation-class component in the existing
+// head index. No second free list or per-owner storage is needed.
 /// Per-size chain heads. A head is the user pointer of the most recently
 /// listed hole of that size, `0` when none is listed.
 struct OldFreeHeads {
     small: [usize; OLD_FREE_SMALL_CLASSES],
-    large: crate::fast_hash::PtrHashMap<usize, usize>,
+    large: crate::fast_hash::PtrHashMap<(usize, bool), usize>,
 }
 
 impl OldFreeHeads {
@@ -109,17 +111,20 @@ impl OldFreeHeads {
 
     /// The head for `total_size`, if one exists. `0` means an empty chain.
     #[inline]
-    fn head_mut(&mut self, total_size: usize) -> Option<&mut usize> {
-        match Self::small_class(total_size) {
+    fn head_mut(&mut self, total_size: usize, collecting_holder: bool) -> Option<&mut usize> {
+        match Self::small_class(total_size).filter(|_| !collecting_holder) {
             Some(class) => Some(&mut self.small[class]),
-            None => self.large.get_mut(&total_size),
+            None => self.large.get_mut(&(total_size, collecting_holder)),
         }
     }
 
-    fn head_mut_or_insert(&mut self, total_size: usize) -> &mut usize {
-        match Self::small_class(total_size) {
+    fn head_mut_or_insert(&mut self, total_size: usize, collecting_holder: bool) -> &mut usize {
+        match Self::small_class(total_size).filter(|_| !collecting_holder) {
             Some(class) => &mut self.small[class],
-            None => self.large.entry(total_size).or_insert(0),
+            None => self
+                .large
+                .entry((total_size, collecting_holder))
+                .or_insert(0),
         }
     }
 
@@ -137,7 +142,7 @@ impl OldFreeHeads {
                 f(class * 8, head);
             }
         }
-        for (&total_size, head) in self.large.iter_mut() {
+        for (&(total_size, _), head) in self.large.iter_mut() {
             if *head != 0 {
                 f(total_size, head);
             }
@@ -218,7 +223,7 @@ pub(crate) fn old_free_bytes_slot_index() -> u32 {
 
 /// List one hole. Returns whether it was listed: a hole too small to carry
 /// its link is not.
-fn old_free_push(user_ptr: usize, total_size: usize) -> bool {
+fn old_free_push(user_ptr: usize, total_size: usize, collecting_holder: bool) -> bool {
     crate::gc::heap_generation::debug_assert_heap_change_open();
     if user_ptr == 0
         || total_size < OLD_FREE_MIN_HOLE
@@ -228,7 +233,7 @@ fn old_free_push(user_ptr: usize, total_size: usize) -> bool {
     }
     OLD_FREE_MAP.with(|m| {
         let mut heads = m.borrow_mut();
-        let head = heads.head_mut_or_insert(total_size);
+        let head = heads.head_mut_or_insert(total_size, collecting_holder);
         // SAFETY: the caller hands a hole inside a mapped old block, at
         // least OLD_FREE_MIN_HOLE bytes long.
         unsafe { old_free_set_link(user_ptr, *head) };
@@ -275,16 +280,23 @@ pub(super) fn old_free_rebuild_from_old_blocks(parse: impl FnMut(usize) -> bool)
     // them silently records zero holes. It also maintains each old block's
     // `old_free_holes` bit from the callback's answer, which is what lets
     // the block reset sites skip the chain walk for a block with no hole.
-    crate::arena::old_arena_walk_all_headers_listing_holes(parse, |header_ptr, _block_idx| {
-        let header = header_ptr as *mut GcHeader;
-        unsafe {
-            if (*header).obj_type == 0 {
-                let total_size = (*header).size as usize;
-                return old_free_push(header as usize + GC_HEADER_SIZE, total_size);
+    crate::arena::old_arena_walk_all_headers_listing_holes(
+        parse,
+        |header_ptr, _block_idx, collecting_holder| {
+            let header = header_ptr as *mut GcHeader;
+            unsafe {
+                if (*header).obj_type == 0 {
+                    let total_size = (*header).size as usize;
+                    return old_free_push(
+                        header as usize + GC_HEADER_SIZE,
+                        total_size,
+                        collecting_holder,
+                    );
+                }
             }
-        }
-        false
-    });
+            false
+        },
+    );
 }
 
 /// Stop handing out holes until the sweep that starts now lists them again
@@ -318,12 +330,24 @@ pub(crate) fn old_free_take_exact(
     total_size: usize,
     excluded_pages: Option<&crate::fast_hash::PtrHashSet<usize>>,
 ) -> Option<usize> {
+    old_free_take_exact_class(total_size, excluded_pages, false)
+}
+
+pub(crate) fn old_free_take_exact_collecting_holder(total_size: usize) -> Option<usize> {
+    old_free_take_exact_class(total_size, None, true)
+}
+
+fn old_free_take_exact_class(
+    total_size: usize,
+    excluded_pages: Option<&crate::fast_hash::PtrHashSet<usize>>,
+    collecting_holder: bool,
+) -> Option<usize> {
     if !OLD_FREE_NONEMPTY.with(Cell::get) {
         return None;
     }
     let taken = OLD_FREE_MAP.with(|m| {
         let mut heads = m.borrow_mut();
-        let head = heads.head_mut(total_size)?;
+        let head = heads.head_mut(total_size, collecting_holder)?;
         match excluded_pages {
             None => {
                 let hole = *head;
@@ -427,7 +451,7 @@ pub(super) fn old_free_push_for_test(user_ptr: usize, total_size: usize) {
     let _heap_change = crate::gc::heap_generation::HeapChange::begin(
         crate::gc::heap_generation::HeapChangeKind::Sweep,
     );
-    if old_free_push(user_ptr, total_size) {
+    if old_free_push(user_ptr, total_size, false) {
         // A hole listed outside a rebuild must still be unlinked when its
         // block is recycled.
         crate::arena::old_arena_note_listed_hole_for_test(user_ptr - GC_HEADER_SIZE);

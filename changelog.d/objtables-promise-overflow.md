@@ -1,0 +1,1 @@
+Move overflow reactions into a private FIFO GC array owned by their Promise. Delete the address multimap, full/budgeted scans, death/copied-minor cleanup and now-unused PromiseKeyedTable implementation. Add an ALS/FIFO gap, a moving-owner/children unit test and a mutation control that removes the reaction list.

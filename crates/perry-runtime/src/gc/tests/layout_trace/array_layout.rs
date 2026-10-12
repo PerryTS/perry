@@ -237,7 +237,8 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     // follow to the child — is asserted below, unchanged: one slot read, child
     // marked.
     assert_eq!(test_layout_pointer_slot_count(set_arr as usize, 1), None);
-    assert_array_root_trace_reads(set_arr, 1);
+    // The iterator brand now lives in the traced private property bag.
+    assert_array_root_trace_reads(set_arr, 2);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
@@ -255,7 +256,8 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     let pair_box = crate::array::js_array_get_f64(entries, 0);
     let pair = (pair_box.to_bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
     assert_eq!(test_layout_pointer_slot_count(pair as usize, 2), None);
-    assert_array_root_trace_reads(entries, 3);
+    // The outer iterator owns one additional property-bag edge.
+    assert_array_root_trace_reads(entries, 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }

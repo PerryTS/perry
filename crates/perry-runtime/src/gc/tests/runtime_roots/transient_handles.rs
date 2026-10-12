@@ -119,7 +119,6 @@ fn test_transient_runtime_handle_scope_drop_removes_roots() {
 fn test_set_gc_field_rewrite_reindexes_elements() {
     clear_marks();
     clear_mark_seeds();
-    crate::set::test_clear_set_roots();
 
     let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     let nursery_bits = ptr_bits(nursery_user as usize);
@@ -137,7 +136,8 @@ fn test_set_gc_field_rewrite_reindexes_elements() {
 
     let valid_ptrs = build_valid_pointer_set();
     unsafe {
-        rewrite_heap_object_fields(header_from_user_ptr(set as *const u8), &valid_ptrs);
+        let store = crate::set::test_set_store_word(set);
+        rewrite_heap_object_fields(header_from_user_ptr(store as *const u8), &valid_ptrs);
     }
 
     assert_eq!(crate::set::js_set_value_at(set, 0).to_bits(), old_bits);
@@ -150,7 +150,6 @@ fn test_set_gc_field_rewrite_reindexes_elements() {
 
     clear_marks();
     clear_mark_seeds();
-    crate::set::test_clear_set_roots();
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use super::{
     destroy, init_resource, init_resource_with_trigger, try_enter_resource_scope,
-    try_leave_resource_scope, AsyncResourceIds, RESOURCES,
+    try_leave_resource_scope, AsyncResourceIds,
 };
 
 /// A native provider whose metadata lifetime follows an ordinary GC object.
@@ -46,7 +46,13 @@ pub unsafe extern "C" fn js_async_hooks_owned_provider_new(
     ) {
         return super::TAG_UNDEFINED_F64;
     }
-    let ids = super::init_resource_metadata(name, owner.get_nanbox_f64(), true, trigger);
+    let ids = super::init_resource_metadata(
+        name,
+        owner.get_nanbox_f64(),
+        true,
+        trigger,
+        super::resource_state::Owner::Resource,
+    );
     let raw = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64());
     if let Some(payload) = super::resource_payload(raw) {
         payload.ids = ids;
@@ -66,11 +72,8 @@ pub extern "C" fn js_async_hooks_owned_provider_emit_init(resource: f64) {
     let Some(ids) = (unsafe { super::resource_payload(raw) }).map(|payload| payload.ids) else {
         return;
     };
-    let name = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&ids.async_id)
-        .map(|meta| meta.type_name.clone());
+    let name =
+        super::resource_state::get(ids.async_id).map(|meta| unsafe { (*meta).type_name.clone() });
     if let Some(name) = name {
         super::emit_init(
             ids.async_id,
@@ -144,7 +147,7 @@ pub extern "C" fn js_async_hooks_owned_provider_destroy(resource: f64) {
         super::TAG_UNDEFINED_F64
     });
     if let Err(error) = outcome {
-        RESOURCES.lock().unwrap().remove(&id);
+        super::resource_state::forget(id);
         crate::exception::exit_on_uncaught(error);
     }
 }
@@ -153,7 +156,12 @@ extern "C" fn deferred_destroy_step(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let async_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u64;
+    let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let async_id = if crate::value::JSValue::from_bits(captured.to_bits()).is_pointer() {
+        captured.to_bits() & crate::value::POINTER_MASK
+    } else {
+        captured as u64
+    };
     let remaining = crate::closure::js_closure_get_capture_f64(closure, 1) as u32;
     if remaining == 0 {
         destroy(async_id);
@@ -165,12 +173,17 @@ extern "C" fn deferred_destroy_step(
 
 fn schedule_deferred_destroy_step(async_id: u64, remaining: u32) {
     let scope = crate::gc::RuntimeHandleScope::new();
+    let captured = scope.root_nanbox_f64(if super::resource_state::get(async_id).is_some() {
+        crate::value::js_nanbox_pointer(async_id as i64)
+    } else {
+        async_id as f64
+    });
     let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(deferred_destroy_step, 0; with_declared(0)),
         2,
     ));
     callback.with_mut_ptr(|callback| {
-        crate::closure::js_closure_set_capture_f64(callback, 0, async_id as f64);
+        crate::closure::js_closure_set_capture_f64(callback, 0, captured.get_nanbox_f64());
         crate::closure::js_closure_set_capture_f64(callback, 1, remaining as f64);
         crate::timer::js_set_immediate_callback(callback as i64);
     });
@@ -192,11 +205,8 @@ pub fn defer_destroy_after_check_turns(async_id: u64, check_turns: u32) {
 }
 
 fn provider_ids(async_id: u64) -> AsyncResourceIds {
-    let trigger_async_id = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&async_id)
-        .map(|meta| meta.trigger_async_id)
+    let trigger_async_id = super::resource_state::get(async_id)
+        .map(|meta| unsafe { (*meta).trigger_async_id })
         .unwrap_or(0);
     AsyncResourceIds {
         async_id,
@@ -212,12 +222,14 @@ pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_
     }
     let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
     let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource(
+    let id = init_resource(
         type_name,
         crate::value::js_nanbox_pointer(resource as i64),
         true,
     )
-    .async_id
+    .async_id;
+    super::resource_state::acquire_native_lease(id, super::resource_state::resource(id));
+    id
 }
 
 #[no_mangle]
@@ -231,13 +243,15 @@ pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
     }
     let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
     let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource_with_trigger(
+    let id = init_resource_with_trigger(
         type_name,
         crate::value::js_nanbox_pointer(resource as i64),
         true,
         trigger_async_id,
     )
-    .async_id
+    .async_id;
+    super::resource_state::acquire_native_lease(id, super::resource_state::resource(id));
+    id
 }
 
 #[no_mangle]

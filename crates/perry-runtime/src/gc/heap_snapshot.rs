@@ -112,10 +112,10 @@ fn json_escape_into(s: &str, out: &mut String) {
 /// NaN-boxed pointer tags or a plausible raw 48-bit pointer. Returns 0
 /// for anything that cannot reference a heap object.
 fn decode_slot_target(bits: u64) -> usize {
-    use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+    use crate::value::{BIGINT_TAG, POINTER_TAG, STRING_TAG, TAG_MASK};
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        return (bits & POINTER_MASK) as usize;
+        return crate::value::addr_class::tagged_heap_addr(bits);
     }
     if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
         return bits as usize;

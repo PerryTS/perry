@@ -131,7 +131,7 @@ pub(crate) unsafe fn stamp_header_promoted_in_place(header: *mut GcHeader) {
 #[inline]
 pub(super) fn strip_nanbox_user_ptr(bits: u64) -> usize {
     if (bits >> 48) >= 0x7FF8 {
-        (bits & POINTER_MASK) as usize
+        crate::value::addr_class::tagged_heap_addr(bits)
     } else {
         bits as usize
     }
@@ -193,8 +193,6 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
 ///   meta record, shape `keys` edge and overflow fields;
 /// * **the array's named-property reserve slots** — `GC_ARRAY_NAMED_PROPS`,
 ///   which live in front of element 0, outside every layout range;
-/// * **a residual `Object.setPrototypeOf` entry** — the per-owner header bit
-///   from #10611, which is what makes this affordable to ask per object.
 ///
 /// A FORWARDED header is never skippable, whatever its layout: array growth
 /// installs PERMANENT forwarding stubs, and walking the stub is what propagates
@@ -202,11 +200,11 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
 /// `gc/trace.rs` is there for this reason.
 ///
 /// NOT SUFFICIENT ON ITS OWN FOR THE FULL MARK. `gc/trace.rs` reads every word
-/// of a pointer-free payload through `proxy::gc_observe_traced_value` when a
-/// proxy trace is active, because a proxy id is a `POINTER_TAG` value in the
-/// proxy-id band rather than a heap pointer — which is precisely why the layout
+/// of a pointer-free payload through the native-provider observer when a
+/// provider trace is active, because a native handle is a `POINTER_TAG` value
+/// in the native-id band rather than a heap pointer — which is precisely why the layout
 /// mask is entitled to call a payload holding one pointer free. The full mark's
-/// call site therefore ANDs in `!proxy_trace_active`; the copying minor and the
+/// call site therefore ANDs in `!handle_trace_active`; the copying minor and the
 /// remembered-set rebuild both ignore `PointerFreeRange` and need no such term.
 #[inline]
 pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) -> bool {
@@ -217,11 +215,7 @@ pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) ->
     // terms fold into ONE mask compare on a word `move_young` has already
     // loaded, so a non-candidate is rejected in two instructions.
     let reserved = (*header)._reserved;
-    if reserved
-        & (GC_LAYOUT_STATE_MASK
-            | crate::gc::GC_ARRAY_NAMED_PROPS
-            | crate::gc::GC_RESIDUAL_PROTO_OWNER)
-        != GC_LAYOUT_POINTER_FREE
+    if reserved & (GC_LAYOUT_STATE_MASK | crate::gc::GC_ARRAY_NAMED_PROPS) != GC_LAYOUT_POINTER_FREE
     {
         return false;
     }

@@ -36,12 +36,19 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     scan_snapshot_roots_mut(context, visitor);
                 }
                 Task::Microtask {
-                    callback, context, ..
+                    callback,
+                    context,
+                    async_id,
+                    resource,
+                    ..
                 } => {
+                    crate::async_hooks::resource_state::scan_token(async_id, visitor);
+                    visitor.visit_nanbox_f64_slot(resource);
                     visitor.visit_raw_const_ptr_slot(callback);
                     scan_snapshot_roots_mut(context, visitor);
                 }
-                Task::AsyncStep(cb, value, next, _, context, _, _, _) => {
+                Task::AsyncStep(cb, value, next, _, context, _, id, _) => {
+                    crate::async_hooks::resource_state::scan_token(id, visitor);
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
                     visitor.visit_nanbox_f64_slot(value);
@@ -84,29 +91,6 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
     });
 
-    PROMISE_CONTEXTS.with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
-        let mut moved = Vec::new();
-        let mut index = 0;
-        while let Some(key) = contexts.key_at(index) {
-            let mut new_key = key;
-            if visitor.visit_metadata_usize_slot(&mut new_key) {
-                moved.push((key, new_key));
-            }
-            if let Some(context) = contexts.get_mut(&key) {
-                scan_snapshot_roots_mut(context, visitor);
-            }
-            index += 1;
-        }
-        for (old_key, new_key) in moved {
-            contexts.rekey(old_key, new_key);
-        }
-    });
-
-    super::combinators::scan_promise_all_states_mut(visitor);
-    super::reactions::scan_promise_settle_listeners_mut(visitor);
-    super::reactions::scan_promise_overflow_reactions_mut(visitor);
-
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         for context in stack.borrow_mut().iter_mut() {
             scan_snapshot_roots_mut(context, visitor);
@@ -133,10 +117,6 @@ const PROMISE_SCAN_INLINE_TRAP: u8 = 5;
 // `AsyncStepGuard::last_closure`, a write-only raw closure address that this
 // pass rekeyed and nothing pruned. The field is gone, so the phase has nothing
 // left to scan and the ordinals close up behind it.
-const PROMISE_SCAN_CONTEXTS: u8 = 6;
-const PROMISE_SCAN_ALL_STATES: u8 = 7;
-const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 8;
-const PROMISE_SCAN_OVERFLOW_REACTIONS: u8 = 9;
 const PROMISE_SCAN_PREV_CONTEXTS: u8 = 10;
 const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 11;
 const PROMISE_SCAN_DONE: u8 = 12;
@@ -148,7 +128,6 @@ pub(crate) struct PromiseRootScanState {
     slot: usize,
     context_entry: usize,
     context_store: usize,
-    moved_context_keys: Vec<(usize, usize)>,
 }
 
 impl PromiseRootScanState {
@@ -195,14 +174,6 @@ pub(crate) fn scan_promise_roots_mut_step(
                 scan_current_microtask_next_step(visitor, remaining)
             }
             PROMISE_SCAN_INLINE_TRAP => scan_inline_trap_step(visitor, state, remaining),
-            PROMISE_SCAN_CONTEXTS => scan_promise_contexts_step(visitor, state, remaining),
-            PROMISE_SCAN_ALL_STATES => scan_promise_all_states_step(visitor, state, remaining),
-            PROMISE_SCAN_SETTLE_LISTENERS => {
-                scan_promise_settle_listeners_step(visitor, state, remaining)
-            }
-            PROMISE_SCAN_OVERFLOW_REACTIONS => {
-                scan_promise_overflow_reactions_step(visitor, state, remaining)
-            }
             PROMISE_SCAN_PREV_CONTEXTS => scan_prev_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_SCHEDULED_RESOLVES => {
                 scan_scheduled_resolves_step(visitor, state, remaining)
@@ -257,6 +228,20 @@ fn scan_task_step(
     state: &mut PromiseRootScanState,
     remaining: &mut usize,
 ) -> bool {
+    // A task owns its async metadata token independently of its next Promise.
+    // Visit before the bounded payload scan; the token's old holder cannot move.
+    match task {
+        Task::Microtask {
+            async_id, resource, ..
+        } => {
+            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+            visitor.visit_nanbox_f64_slot(resource);
+        }
+        Task::AsyncStep(_, _, _, _, _, _, async_id, _) => {
+            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+        }
+        _ => {}
+    }
     match task {
         Task::Promise(promise_ptr, value, _, context) => {
             scan_task_slot_promise(promise_ptr, value, context, visitor, state, remaining)
@@ -483,189 +468,6 @@ fn scan_inline_trap_step(
     })
 }
 
-fn scan_promise_contexts_step(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    state: &mut PromiseRootScanState,
-    remaining: &mut usize,
-) -> bool {
-    PROMISE_CONTEXTS.with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
-        while let Some(key) = contexts.key_at(state.index) {
-            let mut new_key = key;
-            if state.slot == 0 {
-                if !consume_root_work(remaining) {
-                    return false;
-                }
-                if visitor.visit_metadata_usize_slot(&mut new_key) {
-                    // Rekey only after every context has been scanned. A
-                    // collision may swap an unvisited key into this slot;
-                    // mutating the vector now would skip that context when
-                    // the cursor advances.
-                    state.moved_context_keys.push((key, new_key));
-                }
-                state.slot = 1;
-            }
-
-            let Some(context) = contexts.get_mut(&key) else {
-                state.index += 1;
-                state.finish_context_item();
-                continue;
-            };
-            if !crate::async_context::scan_snapshot_roots_mut_step(
-                context,
-                visitor,
-                &mut state.context_entry,
-                &mut state.context_store,
-                remaining,
-            ) {
-                return false;
-            }
-            state.index += 1;
-            state.finish_context_item();
-        }
-        for (old_key, new_key) in state.moved_context_keys.drain(..) {
-            contexts.rekey(old_key, new_key);
-        }
-        true
-    })
-}
-
-fn scan_promise_all_states_step(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    state: &mut PromiseRootScanState,
-    remaining: &mut usize,
-) -> bool {
-    super::combinators::PROMISE_ALL_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        while state.index < states.len() {
-            while state.slot < 4 {
-                if !consume_root_work(remaining) {
-                    return false;
-                }
-                let slot = state.slot;
-                let Some(entry) = states.entry_at_mut(state.index) else {
-                    break;
-                };
-                let rekeyed = match slot {
-                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
-                    1 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.result_promise),
-                    2 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.results_arr),
-                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.state_arr),
-                    _ => false,
-                };
-                // Evacuation rewrote the key in place: the position is still
-                // valid, the key → position index is not.
-                if slot == 0 && rekeyed {
-                    states.note_key_rewritten();
-                }
-                state.slot += 1;
-            }
-            state.index += 1;
-            state.slot = 0;
-        }
-        true
-    })
-}
-
-fn scan_promise_settle_listeners_step(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    state: &mut PromiseRootScanState,
-    remaining: &mut usize,
-) -> bool {
-    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        let mut listeners = listeners.borrow_mut();
-        while state.index < listeners.len() {
-            while state.slot < 3 {
-                if !consume_root_work(remaining) {
-                    return false;
-                }
-                let slot = state.slot;
-                let Some(entry) = listeners.entry_at_mut(state.index) else {
-                    break;
-                };
-                let rekeyed = match slot {
-                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
-                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
-                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
-                    _ => false,
-                };
-                if slot == 0 && rekeyed {
-                    listeners.note_key_rewritten();
-                }
-                state.slot += 1;
-            }
-            let Some(entry) = listeners.entry_at_mut(state.index) else {
-                break;
-            };
-            if !crate::async_context::scan_snapshot_roots_mut_step(
-                &mut entry.value.context,
-                visitor,
-                &mut state.context_entry,
-                &mut state.context_store,
-                remaining,
-            ) {
-                return false;
-            }
-            state.index += 1;
-            state.finish_context_item();
-        }
-        true
-    })
-}
-
-// Step twin of `scan_promise_overflow_reactions_mut` (reactions.rs). The 2nd+
-// `.then()`/`.catch()`/`.finally()` on a still-pending promise parks its
-// reaction ONLY in PROMISE_OVERFLOW_REACTIONS — cycle-based collections run
-// exclusively the step scanner, so a missing phase here meant those reaction
-// closures and their chained `next` promises were swept while the promise
-// was pending, and never rewritten on a moving cycle.
-fn scan_promise_overflow_reactions_step(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    state: &mut PromiseRootScanState,
-    remaining: &mut usize,
-) -> bool {
-    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        let mut reactions = reactions.borrow_mut();
-        while state.index < reactions.len() {
-            while state.slot < 4 {
-                if !consume_root_work(remaining) {
-                    return false;
-                }
-                let slot = state.slot;
-                let Some(entry) = reactions.entry_at_mut(state.index) else {
-                    break;
-                };
-                let rekeyed = match slot {
-                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
-                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
-                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
-                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.next),
-                    _ => false,
-                };
-                if slot == 0 && rekeyed {
-                    reactions.note_key_rewritten();
-                }
-                state.slot += 1;
-            }
-            let Some(entry) = reactions.entry_at_mut(state.index) else {
-                break;
-            };
-            if !crate::async_context::scan_snapshot_roots_mut_step(
-                &mut entry.value.context,
-                visitor,
-                &mut state.context_entry,
-                &mut state.context_store,
-                remaining,
-            ) {
-                return false;
-            }
-            state.index += 1;
-            state.finish_context_item();
-        }
-        true
-    })
-}
-
 fn scan_prev_contexts_step(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     state: &mut PromiseRootScanState,
@@ -736,8 +538,6 @@ pub(crate) struct TestPromiseScannerSnapshot {
     pub async_step_callback_ptr: usize,
     pub async_step_next_ptr: usize,
     pub async_step_value_bits: u64,
-    pub promise_context_key: usize,
-    pub promise_context_store_bits: u64,
     pub previous_microtask_context_store_bits: u64,
     pub scheduled_promise_ptr: usize,
     pub scheduled_value_bits: u64,
@@ -773,11 +573,6 @@ pub(crate) fn test_seed_promise_scanner_roots(
             0,
             0,
         ));
-    });
-    PROMISE_CONTEXTS.with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
-        contexts.clear();
-        contexts.insert(promise_ptr as usize, context.clone());
     });
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         let mut stack = stack.borrow_mut();
@@ -820,17 +615,10 @@ pub(crate) fn test_seed_many_promise_task_roots(values: &[f64]) {
 
 #[cfg(test)]
 pub(crate) fn test_seed_promise_context(promise_ptr: *mut Promise, context_store: f64) {
-    PROMISE_CONTEXTS.with(|contexts| {
-        contexts.borrow_mut().insert(
-            promise_ptr as usize,
-            crate::async_context::test_snapshot_with_store(context_store),
-        );
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_promise_context_keys() -> Vec<usize> {
-    PROMISE_CONTEXTS.with(|contexts| contexts.borrow().keys().copied().collect())
+    set_promise_context_snapshot(
+        promise_ptr,
+        crate::async_context::test_snapshot_with_store(context_store),
+    );
 }
 
 #[cfg(test)]
@@ -874,16 +662,6 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
         snapshot.inline_trap_next_ptr = trap.trap_next as usize;
         snapshot.inline_trap_step_ptr = trap.current_step;
     });
-    PROMISE_CONTEXTS.with(|contexts| {
-        let contexts = contexts.borrow();
-        if let Some((key, context)) = contexts.first() {
-            snapshot.promise_context_key = key;
-            snapshot.promise_context_store_bits =
-                crate::async_context::test_snapshot_first_store(context)
-                    .map(f64::to_bits)
-                    .unwrap_or(0);
-        }
-    });
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         snapshot.previous_microtask_context_store_bits = stack
             .borrow()
@@ -905,7 +683,6 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
 #[cfg(test)]
 pub(crate) fn test_clear_promise_scanner_roots() {
     TASK_QUEUE.with(|q| q.borrow_mut().clear());
-    PROMISE_CONTEXTS.with(|contexts| contexts.borrow_mut().clear());
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().clear());
     super::microtasks::CURRENT_MICROTASK_PROMISE.with(|c| c.set(std::ptr::null_mut()));
     super::microtasks::CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
@@ -913,9 +690,6 @@ pub(crate) fn test_clear_promise_scanner_roots() {
     super::microtasks::CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
     INLINE_TRAP.with(|c| c.set(InlineTrap::empty()));
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
-    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
-    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().clear());
-    super::combinators::PROMISE_ALL_STATES.with(|states| states.borrow_mut().clear());
 }
 
 /// Test support for the GC death-cleanup tests (gc/tests): park one entry
@@ -923,31 +697,22 @@ pub(crate) fn test_clear_promise_scanner_roots() {
 /// settle listeners, overflow reactions, Promise.all states.
 #[cfg(test)]
 pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
-    let key = promise as usize;
-    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        listeners.borrow_mut().push(
-            key,
-            super::reactions::PromiseSettleListener {
-                on_fulfilled: std::ptr::null(),
-                on_rejected: std::ptr::null(),
-                context: capture_context(),
-            },
-        );
-    });
-    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        reactions.borrow_mut().push(
-            key,
-            super::reactions::OverflowReaction {
-                on_fulfilled: std::ptr::null(),
-                on_rejected: std::ptr::null(),
-                next: std::ptr::null_mut(),
-                context: capture_context(),
-            },
-        );
-    });
-    super::combinators::PROMISE_ALL_STATES.with(|states| {
-        states.borrow_mut().push(
-            key,
+    super::reactions::park_settle_listener(
+        promise,
+        std::ptr::null(),
+        std::ptr::null(),
+        capture_context(),
+    );
+    super::reactions::push_overflow_reaction(
+        promise,
+        std::ptr::null(),
+        std::ptr::null(),
+        std::ptr::null_mut(),
+        capture_context(),
+    );
+    unsafe {
+        super::combinators::park_all_state(
+            promise,
             super::combinators::PromiseAllState {
                 result_promise: std::ptr::null_mut(),
                 results_arr: std::ptr::null_mut(),
@@ -955,19 +720,20 @@ pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
                 index: 0,
             },
         );
-    });
+    }
 }
 
 /// Test support: per-table entry counts keyed by `key` (a promise address) —
 /// (settle listeners, overflow reactions, Promise.all states).
 #[cfg(test)]
 pub(crate) fn test_promise_side_table_counts_for(key: usize) -> (usize, usize, usize) {
-    let listeners =
-        super::reactions::PROMISE_SETTLE_LISTENERS.with(|l| l.borrow_mut().count_for_key(key));
-    let reactions =
-        super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|r| r.borrow_mut().count_for_key(key));
-    let states = super::combinators::PROMISE_ALL_STATES.with(|s| s.borrow_mut().count_for_key(key));
-    (listeners, reactions, states)
+    unsafe {
+        (
+            owned_state::record_count(key as *mut Promise, owned_state::LISTENERS, 3),
+            owned_state::record_count(key as *mut Promise, owned_state::OVERFLOW, 4),
+            owned_state::record_count(key as *mut Promise, owned_state::ALL_STATES, 4),
+        )
+    }
 }
 
 #[cfg(test)]

@@ -233,23 +233,6 @@ pub fn scan_console_log_singleton_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_console_log_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     visitor.visit_atomic_i64_slot(&CONSOLE_LOG_SINGLETON, Ordering::Acquire, Ordering::Release);
-    let mut moved = Vec::new();
-    CONSOLE_INSTANCES.with(|instances| {
-        let mut instances = instances.borrow_mut();
-        for (&owner, state) in instances.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            visitor.visit_nanbox_f64_slot(&mut state.stdout);
-            visitor.visit_nanbox_f64_slot(&mut state.stderr);
-        }
-        for (old_owner, new_owner) in moved.drain(..) {
-            if let Some(state) = instances.remove(&old_owner) {
-                instances.insert(new_owner, state);
-            }
-        }
-    });
 }
 
 /// Print a number to stdout (optimized path for known numbers)
@@ -688,39 +671,9 @@ use std::time::Instant;
 thread_local! {
     static CONSOLE_TIMERS: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
     static CONSOLE_COUNTERS: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
-    static CONSOLE_INSTANCES: RefCell<HashMap<usize, ConsoleInstanceState>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) const CONSOLE_INSTANCE_CLASS_ID: u32 = 0xFFFF_0083;
-
-/// #8190: death pruning for `CONSOLE_INSTANCES`.
-///
-/// The table is keyed by the raw heap address of a `new console.Console(...)`
-/// instance object, and `scan_console_log_singleton_roots_mut` **rekeys** that
-/// address when the object moves. A rekeyed table's dead key is not merely a
-/// leak — the arena recycles the address and the next rewrite pass reads the
-/// recycled bytes as a `GcHeader`. See `gc::dead_owner`'s module doc.
-pub(crate) fn prune_dead_console_instance_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    CONSOLE_INSTANCES.with(|instances| {
-        instances
-            .borrow_mut()
-            .retain(|&owner, _| !is_dead_owner(owner));
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_console_instance_count() -> usize {
-    CONSOLE_INSTANCES.with(|instances| instances.borrow().len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_console_instance(owner: usize) {
-    CONSOLE_INSTANCES.with(|instances| {
-        instances
-            .borrow_mut()
-            .insert(owner, ConsoleInstanceState::default());
-    });
-}
 
 pub(crate) fn is_console_instance_method_name(method_name: &str) -> bool {
     matches!(
@@ -756,13 +709,58 @@ pub(crate) fn is_console_instance_value(value: f64) -> bool {
     unsafe { (*obj).class_id == CONSOLE_INSTANCE_CLASS_ID }
 }
 
-#[derive(Default)]
-struct ConsoleInstanceState {
+// Private GC state: streams, counter object, indentation and ignoreErrors.
+// All JS edges are ordinary array slots; the instance owns the state through meta.
+unsafe fn console_instance_state(
+    obj: *const crate::object::ObjectHeader,
+) -> Option<*mut crate::array::ArrayHeader> {
+    if (*obj).meta.is_null() {
+        return None;
+    }
+    let word = (*(*obj).meta).native_state;
+    (word & crate::value::TAG_MASK == crate::value::POINTER_TAG)
+        .then_some((word & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader)
+}
+
+unsafe fn install_console_instance_state(
+    obj: *mut crate::object::ObjectHeader,
     stdout: f64,
     stderr: f64,
-    counters: HashMap<String, u64>,
-    indent: usize,
-    _ignore_errors: bool,
+    ignore_errors: bool,
+) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let state = crate::array::js_array_alloc(5);
+    let counters = crate::object::js_object_alloc(0, 0);
+    crate::object::js_object_set_prototype_of(
+        crate::value::js_nanbox_pointer(counters as i64),
+        f64::from_bits(crate::value::TAG_NULL),
+    );
+    for word in [
+        stdout,
+        stderr,
+        crate::value::js_nanbox_pointer(counters as i64),
+        0.0,
+        if ignore_errors { 1.0 } else { 0.0 },
+    ] {
+        crate::array::js_array_push_f64(state, word);
+    }
+    let meta = crate::object::object_meta_ensure(obj);
+    (*meta).native_state = crate::value::JSValue::pointer(state.cast()).bits();
+    crate::gc::runtime_write_barrier_slot(
+        meta as usize,
+        std::ptr::addr_of_mut!((*meta).native_state) as usize,
+        (*meta).native_state,
+    );
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_seed_console_instance(owner: usize, stdout: f64, stderr: f64) {
+    install_console_instance_state(
+        owner as *mut crate::object::ObjectHeader,
+        stdout,
+        stderr,
+        true,
+    );
 }
 
 unsafe fn label_from_str_ptr(ptr: *const StringHeader) -> String {
@@ -847,8 +845,10 @@ fn object_property(value: f64, name: &[u8]) -> f64 {
     if obj.is_null() {
         return undefined_value();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_const_ptr(obj);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
+    f64::from_bits(crate::object::js_object_get_field_by_name(obj.get_raw_const_ptr(), key).bits())
 }
 
 fn value_gc_type(value: f64) -> Option<u8> {
@@ -945,7 +945,9 @@ fn validate_console_constructor_options(options: f64) {
         return;
     }
 
-    let inspect_options = object_property(options, b"inspectOptions");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let inspect_options = object_property(options.get_nanbox_f64(), b"inspectOptions");
     if !JSValue::from_bits(inspect_options.to_bits()).is_undefined()
         && !is_plain_object(inspect_options)
     {
@@ -956,7 +958,7 @@ fn validate_console_constructor_options(options: f64) {
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let color_mode = object_property(options, b"colorMode");
+    let color_mode = object_property(options.get_nanbox_f64(), b"colorMode");
     let color_mode_value = JSValue::from_bits(color_mode.to_bits());
     if !color_mode_value.is_undefined()
         && !color_mode_value.is_bool()
@@ -966,7 +968,7 @@ fn validate_console_constructor_options(options: f64) {
         throw_invalid_color_mode(color_mode);
     }
 
-    let group_indentation = object_property(options, b"groupIndentation");
+    let group_indentation = object_property(options.get_nanbox_f64(), b"groupIndentation");
     if !JSValue::from_bits(group_indentation.to_bits()).is_undefined() {
         crate::fs::validate::validate_int32(group_indentation, "groupIndentation", 0, 1000);
     }
@@ -980,37 +982,53 @@ pub extern "C" fn js_console_new(options: f64) -> f64 {
     // argument is itself a writable stream — there it has no `.stdout` of its
     // own, so detect that case by checking whether the argument is itself a
     // writable stream.
-    let stdout_prop = object_property(options, b"stdout");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(options);
+    let stdout_prop = scope.root_nanbox_f64(object_property(options.get_nanbox_f64(), b"stdout"));
     let stdout;
     let stderr_candidate;
     let options_value;
-    if !null_or_undefined(stdout_prop) {
+    if !null_or_undefined(stdout_prop.get_nanbox_f64()) {
         stdout = stdout_prop;
-        stderr_candidate = object_property(options, b"stderr");
+        stderr_candidate =
+            scope.root_nanbox_f64(object_property(options.get_nanbox_f64(), b"stderr"));
         options_value = options;
-    } else if has_write_method(options) {
-        // Single positional stream form: the argument is stdout itself.
+    } else if has_write_method(options.get_nanbox_f64()) {
         stdout = options;
-        stderr_candidate = undefined_value();
-        options_value = undefined_value();
+        stderr_candidate = scope.root_nanbox_f64(undefined_value());
+        options_value = scope.root_nanbox_f64(undefined_value());
     } else {
-        // Options-object form whose stdout is missing/nullish.
         stdout = stdout_prop;
-        stderr_candidate = object_property(options, b"stderr");
+        stderr_candidate =
+            scope.root_nanbox_f64(object_property(options.get_nanbox_f64(), b"stderr"));
         options_value = options;
     }
-
-    let ignore_errors = unsafe { decode_dir_bool_option(options, "ignoreErrors") }.unwrap_or(true);
-    js_console_new_resolved(stdout, stderr_candidate, ignore_errors, options_value)
+    let ignore_errors =
+        unsafe { decode_dir_bool_option(options.get_nanbox_f64(), "ignoreErrors") }.unwrap_or(true);
+    js_console_new_resolved(
+        stdout.get_nanbox_f64(),
+        stderr_candidate.get_nanbox_f64(),
+        ignore_errors,
+        options_value.get_nanbox_f64(),
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_console_new2(stdout: f64, stderr_candidate: f64) -> f64 {
-    let has_options_stdout = !null_or_undefined(object_property(stdout, b"stdout"));
-    if null_or_undefined(stderr_candidate) && has_options_stdout {
-        return js_console_new(stdout);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stdout = scope.root_nanbox_f64(stdout);
+    let stderr = scope.root_nanbox_f64(stderr_candidate);
+    let has_options_stdout =
+        !null_or_undefined(object_property(stdout.get_nanbox_f64(), b"stdout"));
+    if null_or_undefined(stderr.get_nanbox_f64()) && has_options_stdout {
+        return js_console_new(stdout.get_nanbox_f64());
     }
-    js_console_new_resolved(stdout, stderr_candidate, true, undefined_value())
+    js_console_new_resolved(
+        stdout.get_nanbox_f64(),
+        stderr.get_nanbox_f64(),
+        true,
+        undefined_value(),
+    )
 }
 
 fn js_console_new_resolved(
@@ -1019,40 +1037,36 @@ fn js_console_new_resolved(
     ignore_errors: bool,
     options_value: f64,
 ) -> f64 {
-    if !has_write_method(stdout) {
-        throw_console_writable_stream("stdout");
-    }
-    // stderr is validated only when explicitly provided (non-nullish);
-    // otherwise it defaults to stdout, matching Node.
-    if !null_or_undefined(stderr_candidate) && !has_write_method(stderr_candidate) {
-        throw_console_writable_stream("stderr");
-    }
-    validate_console_constructor_options(options_value);
-    let stderr = if null_or_undefined(stderr_candidate) {
-        stdout
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stdout = scope.root_nanbox_f64(stdout);
+    let stderr = scope.root_nanbox_f64(if null_or_undefined(stderr_candidate) {
+        stdout.get_nanbox_f64()
     } else {
         stderr_candidate
-    };
-    let obj = crate::object::js_object_alloc(CONSOLE_INSTANCE_CLASS_ID, 0);
-    let value = crate::value::js_nanbox_pointer(obj as i64);
-    CONSOLE_INSTANCES.with(|instances| {
-        instances.borrow_mut().insert(
-            obj as usize,
-            ConsoleInstanceState {
-                stdout,
-                stderr,
-                counters: HashMap::new(),
-                indent: 0,
-                _ignore_errors: ignore_errors,
-            },
-        );
     });
-    value
+    let options = scope.root_nanbox_f64(options_value);
+    if !has_write_method(stdout.get_nanbox_f64()) {
+        throw_console_writable_stream("stdout");
+    }
+    if !has_write_method(stderr.get_nanbox_f64()) {
+        throw_console_writable_stream("stderr");
+    }
+    validate_console_constructor_options(options.get_nanbox_f64());
+    let obj = crate::object::js_object_alloc(CONSOLE_INSTANCE_CLASS_ID, 0);
+    unsafe {
+        install_console_instance_state(
+            obj,
+            stdout.get_nanbox_f64(),
+            stderr.get_nanbox_f64(),
+            ignore_errors,
+        );
+    }
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
-enum ConsoleInstanceAction {
+enum ConsoleInstanceAction<'scope> {
     Write {
-        stream: f64,
+        stream: crate::gc::RuntimeHandle<'scope>,
         line: String,
         stderr: bool,
     },
@@ -1060,11 +1074,17 @@ enum ConsoleInstanceAction {
 }
 
 fn format_console_instance_args(args: &[f64]) -> String {
-    let arr = crate::array::js_array_alloc(args.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args: Vec<_> = args
+        .iter()
+        .map(|&value| scope.root_nanbox_f64(value))
+        .collect();
+    let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(args.len() as u32));
     for arg in args {
-        crate::array::js_array_push_f64(arr, *arg);
+        let next = crate::array::js_array_push_f64(arr.get_raw_mut_ptr(), arg.get_nanbox_f64());
+        arr.set_raw_mut_ptr(next);
     }
-    jsvalue_string_content(js_util_format(arr)).unwrap_or_default()
+    jsvalue_string_content(js_util_format(arr.get_raw_const_ptr())).unwrap_or_default()
 }
 
 fn console_instance_label(args: &[f64]) -> String {
@@ -1085,12 +1105,14 @@ fn console_instance_write(stream: f64, line: &str, stderr: bool) {
     let mut chunk = String::with_capacity(line.len() + 1);
     chunk.push_str(line);
     chunk.push('\n');
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
     let chunk_ptr = crate::string::js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
     let chunk_value = f64::from_bits(JSValue::string_ptr(chunk_ptr).bits());
     let args = [chunk_value];
     unsafe {
         let _ = crate::object::js_native_call_method(
-            stream,
+            stream.get_nanbox_f64(),
             b"write".as_ptr() as *const i8,
             5,
             args.as_ptr(),
@@ -1114,36 +1136,86 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
         std::slice::from_raw_parts(args_ptr, args_len)
     };
 
-    let action = CONSOLE_INSTANCES.with(|instances| {
-        let mut instances = instances.borrow_mut();
-        let state = instances.get_mut(&(obj as usize))?;
-        let indent = "  ".repeat(state.indent);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args: Vec<_> = args
+        .iter()
+        .map(|&value| scope.root_nanbox_f64(value))
+        .collect();
+    let current_args = || {
+        args.iter()
+            .map(|value| value.get_nanbox_f64())
+            .collect::<Vec<_>>()
+    };
+    let action = {
+        let state = scope.root_raw_mut_ptr(console_instance_state(obj)?);
+        let stdout =
+            f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 0).bits());
+        let stderr =
+            f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 1).bits());
+        let counters = (crate::array::js_array_get(state.get_raw_const_ptr(), 2).bits()
+            & crate::value::POINTER_MASK)
+            as *mut crate::object::ObjectHeader;
+        let stdout = scope.root_nanbox_f64(stdout);
+        let stderr = scope.root_nanbox_f64(stderr);
+        let counters = scope.root_raw_mut_ptr(counters);
+        let depth = f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 3).bits())
+            as usize;
+        let indent = "  ".repeat(depth);
         match method_name {
             "log" | "info" | "debug" | "dir" | "dirxml" => Some(ConsoleInstanceAction::Write {
-                stream: state.stdout,
-                line: format!("{indent}{}", format_console_instance_args(args)),
+                stream: stdout,
+                line: format!("{indent}{}", format_console_instance_args(&current_args())),
                 stderr: false,
             }),
             "error" | "warn" => Some(ConsoleInstanceAction::Write {
-                stream: state.stderr,
-                line: format!("{indent}{}", format_console_instance_args(args)),
+                stream: stderr,
+                line: format!("{indent}{}", format_console_instance_args(&current_args())),
                 stderr: true,
             }),
             "count" => {
-                let label = console_instance_label(args);
-                let count = state.counters.entry(label.clone()).or_insert(0);
-                *count += 1;
+                let label = console_instance_label(&current_args());
+                let key = scope.root_raw_const_ptr(crate::string::js_string_from_bytes(
+                    label.as_ptr(),
+                    label.len() as u32,
+                ));
+                let previous = crate::object::js_object_get_field_by_name(
+                    counters.get_raw_const_ptr(),
+                    key.get_raw_const_ptr(),
+                );
+                let count = if previous.is_undefined() {
+                    1.0
+                } else {
+                    f64::from_bits(previous.bits()) + 1.0
+                };
+                crate::object::js_object_set_field_by_name(
+                    counters.get_raw_mut_ptr(),
+                    key.get_raw_const_ptr(),
+                    count,
+                );
                 Some(ConsoleInstanceAction::Write {
-                    stream: state.stdout,
+                    stream: stdout,
                     line: format!("{indent}{label}: {count}"),
                     stderr: false,
                 })
             }
             "countReset" => {
-                let label = console_instance_label(args);
-                if state.counters.remove(&label).is_none() {
+                let label = console_instance_label(&current_args());
+                let key = scope.root_raw_const_ptr(crate::string::js_string_from_bytes(
+                    label.as_ptr(),
+                    label.len() as u32,
+                ));
+                let missing = crate::object::js_object_get_field_by_name(
+                    counters.get_raw_const_ptr(),
+                    key.get_raw_const_ptr(),
+                )
+                .is_undefined();
+                crate::object::js_object_delete_field(
+                    counters.get_raw_mut_ptr(),
+                    key.get_raw_const_ptr(),
+                );
+                if missing {
                     Some(ConsoleInstanceAction::Write {
-                        stream: state.stderr,
+                        stream: stderr,
                         line: format!("Warning: Count for '{label}' does not exist"),
                         stderr: true,
                     })
@@ -1155,33 +1227,38 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
                 let line = if args.is_empty() {
                     None
                 } else {
-                    Some(format!("{indent}{}", format_console_instance_args(args)))
+                    Some(format!(
+                        "{indent}{}",
+                        format_console_instance_args(&current_args())
+                    ))
                 };
-                state.indent += 1;
+                crate::array::js_array_set_f64(state.get_raw_mut_ptr(), 3, (depth + 1) as f64);
                 line.map(|line| ConsoleInstanceAction::Write {
-                    stream: state.stdout,
+                    stream: stdout,
                     line,
                     stderr: false,
                 })
                 .or(Some(ConsoleInstanceAction::Noop))
             }
             "groupEnd" => {
-                if state.indent > 0 {
-                    state.indent -= 1;
-                }
+                crate::array::js_array_set_f64(
+                    state.get_raw_mut_ptr(),
+                    3,
+                    depth.saturating_sub(1) as f64,
+                );
                 Some(ConsoleInstanceAction::Noop)
             }
             "clear" | "profile" | "profileEnd" | "timeStamp" => Some(ConsoleInstanceAction::Noop),
             _ => None,
         }
-    })?;
+    }?;
 
     match action {
         ConsoleInstanceAction::Write {
             stream,
             line,
             stderr,
-        } => console_instance_write(stream, &line, stderr),
+        } => console_instance_write(stream.get_nanbox_f64(), &line, stderr),
         ConsoleInstanceAction::Noop => {}
     }
     Some(undefined_value())

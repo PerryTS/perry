@@ -94,7 +94,6 @@ thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
-    static FILEHANDLE_OBJECT_FDS: RefCell<StdHashMap<usize, i32>> = RefCell::new(StdHashMap::new());
     static DIR_REGISTRY: RefCell<StdHashMap<usize, DirState>> = RefCell::new(StdHashMap::new());
     static NEXT_DIR_ID: RefCell<usize> = const { RefCell::new(1) };
 }
@@ -102,56 +101,8 @@ thread_local! {
 static NEXT_FD: AtomicI32 = AtomicI32::new(100);
 
 pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    scan_filehandle_object_fd_metadata_roots_mut(visitor);
     scan_filehandle_roots_mut(visitor);
     scan_fs_dir_roots_mut(visitor);
-}
-
-fn scan_filehandle_object_fd_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    FILEHANDLE_OBJECT_FDS.with(|fds| {
-        let mut fds = fds.borrow_mut();
-        let mut moved = Vec::new();
-        for (&owner, _) in fds.iter() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-        }
-        for (old_owner, new_owner) in moved {
-            if let Some(fd) = fds.remove(&old_owner) {
-                fds.insert(new_owner, fd);
-            }
-        }
-    });
-}
-
-/// Death pruning (2026-07-09 GC audit wave 2): `FILEHANDLE_OBJECT_FDS` maps
-/// FileHandle OBJECT addresses to synthetic fds and was move-rekeyed but
-/// never death-pruned — one entry per abandoned FileHandle forever, plus fd
-/// misattribution when a new object landed on the recycled address.
-/// `is_dead_owner` is one of the GC's deadness predicates
-/// (`gc::dead_owner`). Note `DIR_REGISTRY` is NOT covered here: it is keyed
-/// by a monotonic id (`NEXT_DIR_ID`), not by an object address, so
-/// dead-owner pruning cannot apply (same class as `CONTEXT_SNAPSHOTS`).
-pub(crate) fn prune_dead_filehandle_fd_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    FILEHANDLE_OBJECT_FDS.with(|fds| {
-        let mut fds = fds.borrow_mut();
-        if !fds.is_empty() {
-            fds.retain(|owner, _| !is_dead_owner(*owner));
-        }
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_filehandle_fd_entry(owner: usize, fd: i32) {
-    FILEHANDLE_OBJECT_FDS.with(|fds| {
-        fds.borrow_mut().insert(owner, fd);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_filehandle_fd_entry_exists(owner: usize) -> bool {
-    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().contains_key(&owner))
 }
 
 pub(crate) fn allocate_synthetic_fd() -> i32 {
@@ -182,7 +133,29 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
     if addr < 0x1000 {
         return None;
     }
-    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().get(&addr).copied())
+    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    unsafe {
+        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        let obj = addr as *const crate::object::ObjectHeader;
+        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || (*obj).meta.is_null() {
+            return None;
+        }
+        let word = (*(*obj).meta).native_state;
+        (word != 0).then_some(word.wrapping_sub(1) as u32 as i32)
+    }
+}
+
+/// FileHandle's immutable initial fd is private POD, separate from its public
+/// mutable `fd` property. Nonzero encoding includes detached/closed fd -1.
+pub(crate) unsafe fn set_filehandle_owner_fd(obj: *mut crate::object::ObjectHeader, fd: i32) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    debug_assert_eq!((*obj).class_id, CLASS_ID_FS_FILEHANDLE);
+    let meta = crate::object::object_meta_ensure(obj);
+    (*meta).native_state = u64::from(fd as u32) + 1;
 }
 
 struct DirState {

@@ -33,10 +33,6 @@ pub(super) unsafe fn value_slot_is_enabled(
     if !valid.is_null() {
         return !crate::weakref::weak_target_should_clear(key, &*valid, minor);
     }
-    let addr = barrier::decode_heap_addr(key);
-    if crate::value::addr_class::is_proxy_id_band(addr) {
-        return crate::proxy::gc_weak_key_is_live(key, minor);
-    }
     if let Some((addr, key_header)) = barrier::current_heap_header_for_heap_word(key, None) {
         return (minor && !crate::arena::pointer_in_nursery(addr))
             || (*key_header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0;
@@ -45,7 +41,7 @@ pub(super) unsafe fn value_slot_is_enabled(
     // references and runtime handles have no collectible heap header.
     crate::value::is_js_handle(f64::from_bits(key))
         || key & crate::value::TAG_MASK != crate::value::POINTER_TAG
-        || crate::symbol::is_well_known_symbol(addr)
+        || crate::symbol::is_well_known_symbol(barrier::decode_heap_addr(key))
 }
 
 /// Publishing a weak pair owes generational coverage and conditional work,
@@ -106,7 +102,6 @@ pub(super) struct Ephemerons {
     ready_table: usize,
     ready_entry: u32,
     ready_changed: bool,
-    ready_revision: usize,
     clear_table: usize,
     clear_entry: u32,
 }
@@ -126,8 +121,6 @@ impl Ephemerons {
 
     pub(super) fn has_pending_work(&self) -> bool {
         EPHEMERON_SEEDS.with(|seeds| !seeds.borrow().is_empty())
-            || (!self.tables.is_empty()
-                && crate::proxy::gc_trace_mark_revision() != self.ready_revision)
     }
 
     pub(super) fn restart_ready_scan(&mut self) {
@@ -154,11 +147,6 @@ impl Ephemerons {
         budget: usize,
     ) -> (bool, usize) {
         self.absorb();
-        let revision = crate::proxy::gc_trace_mark_revision();
-        if revision != self.ready_revision {
-            self.ready_changed = true;
-            self.ready_revision = revision;
-        }
         let mut used = 0;
         while self.ready_table < self.tables.len() && used < budget {
             let table = self.tables[self.ready_table];
@@ -175,8 +163,8 @@ impl Ephemerons {
                     continue;
                 }
                 if !crate::weakref::weak_target_should_clear((*entry).key, valid, minor) {
-                    // Proxy observation can enable another key without adding
-                    // heap work when its endpoints are already black.
+                    // A newly enabled conditional edge requires another bounded
+                    // round, even when its value is already marked.
                     self.ready_changed |= self.enabled.insert(entry as usize);
                     try_mark_value((*entry).value, valid);
                 }
@@ -190,9 +178,7 @@ impl Ephemerons {
         if self.ready_table < self.tables.len() {
             return (false, used);
         }
-        let revision = crate::proxy::gc_trace_mark_revision();
-        let done = !self.ready_changed && revision == self.ready_revision;
-        self.ready_revision = revision;
+        let done = !self.ready_changed;
         self.restart_ready_scan();
         (done, used)
     }

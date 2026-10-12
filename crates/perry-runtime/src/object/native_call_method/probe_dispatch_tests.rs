@@ -28,12 +28,7 @@
 //! and requires the classification to go WRONG, so a future edit that drops the
 //! screen cannot leave these tests quietly green.
 //!
-//! Leaked symbols are minted through `Symbol.for` with a key unique to each
-//! test rather than through the well-known cache: `WELL_KNOWN_SYMBOLS` is a
-//! process-global cache while `SYMBOL_POINTERS` is `per_test_global!` (i.e. per
-//! THREAD under `cargo test`), so a well-known symbol first created on another
-//! test thread would come back cached and unregistered here. A unique key always
-//! allocates and registers on the calling thread.
+//! Persistent symbols use the existing named registries across test threads.
 
 use super::*;
 
@@ -45,7 +40,7 @@ fn plain_object() -> usize {
     crate::object::js_object_alloc(0, 4) as usize
 }
 
-/// A `Box`-leaked symbol (no `GcHeader`), registered on THIS thread. Same
+/// A `Box`-leaked symbol with a real GC prefix and native lifetime. Same
 /// storage class as `Symbol.iterator` and the Intl fallback symbol.
 fn leaked_symbol(key: &str) -> usize {
     let key_str = crate::string::js_string_from_str(key);
@@ -109,10 +104,6 @@ fn excluded_by_the_header_arms(addr: usize, obj_type: u8) -> bool {
 fn plain_object_dispatch_probes_no_side_registry() {
     // Arm the latch the way ordinary code does.
     leaked_symbol("perry-7850-arm-the-latch");
-    assert!(
-        !crate::symbol::test_symbol_latch_is_idle(),
-        "test premise: creating a symbol must arm SYMBOL_EVER_REGISTERED"
-    );
 
     let obj = plain_object();
     // Warm any lazy state so the measured call below is steady-state.

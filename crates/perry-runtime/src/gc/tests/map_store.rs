@@ -5,77 +5,32 @@ use super::support::*;
 use crate::map::*;
 
 #[test]
-fn map_growth_arms_a_deferred_safepoint_with_a_current_arena_base() {
+fn map_gc_store_growth_is_collected_only_at_a_rooted_safepoint() {
     on_fresh_thread(|| {
         let _guard = CopyingNurseryTestGuard::new(1);
         let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-        policy::set_safepoint_pending(false);
-        policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(0));
-        let before = gc_collection_count();
         let map = js_map_alloc(4);
         js_shadow_slot_set(0, ptr_bits(map as usize));
-        let mut entries = 0;
-        while !policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
-            js_map_set(map, entries as f64, entries as f64);
-            entries += 1;
-            assert!(
-                entries <= 1_100_000,
-                "Map growth must cross the external allocation step"
-            );
+        let before = gc_collection_count();
+        for i in 0..2000 {
+            js_map_set(map, i as f64, i as f64);
         }
-        assert!(
-            unsafe { (*map).capacity } >= 524288,
-            "the external growth subject must be live"
-        );
         assert_eq!(
             gc_collection_count(),
             before,
-            "external growth must defer collection"
+            "raw receiver growth must not collect"
         );
-        let current = crate::arena::arena_total_bytes();
-        assert!(current > 0, "zero cannot hide a stale base");
-        assert_eq!(
-            policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(std::cell::Cell::get),
-            current
-        );
-        // A further external pulse must preserve the first deferral base.
-        policy::gc_note_external_side_alloc(16 * 1024 * 1024);
-        assert_eq!(
-            policy::GC_SAFEPOINT_DEFER_ARENA_BASE.with(std::cell::Cell::get),
-            current
-        );
-        policy::gc_note_external_side_free(16 * 1024 * 1024);
         triggers.make_arena_trigger_due();
+        // Model the pending request made by the allocation-point pacing
+        // probe; the subject here is collection after the raw growth window.
+        policy::set_safepoint_pending(true);
         js_gc_loop_safepoint();
         assert!(
             gc_collection_count() > before,
-            "the precise safepoint must consume pressure"
+            "the rooted safepoint must consume GC storage pressure"
         );
-        assert!(!policy::GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
-        let moved = ptr_from_slot(0);
-        assert_eq!(
-            js_map_get(moved, (entries - 1) as f64),
-            (entries - 1) as f64
-        );
+        assert_eq!(js_map_get(ptr_from_slot(0), 1999.0), 1999.0);
     });
-}
-
-#[test]
-fn stale_external_deferral_base_turns_the_map_growth_witness_red() {
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "gc::tests::map_store::map_growth_arms_a_deferred_safepoint_with_a_current_arena_base",
-            "--nocapture",
-        ])
-        .env("PERRY_B4_SABOTAGE", "external_base")
-        .output()
-        .unwrap();
-    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
-    assert!(
-        !child.status.success(),
-        "the stale nursery base must be detected"
-    );
 }
 
 #[test]
@@ -108,8 +63,10 @@ fn map_store_full_sweep_reclaims_dead_active_block_and_preserves_live_owner() {
             assert!(is_registered_map(live as usize));
             assert_eq!(js_map_get(live, 42.0), 99.0);
             let before = test_thread_map_side_deallocation_snapshot();
-            release_current_thread_map_side_allocations();
-            release_current_thread_map_side_allocations();
+            root = 0;
+            std::hint::black_box(root);
+            full_collection();
+            full_collection();
             let after = test_thread_map_side_deallocation_snapshot();
             assert_eq!((after.0 - before.0, after.1 - before.1), (1, 128));
         })
@@ -133,19 +90,20 @@ fn map_store_compaction_history_survives_actual_copying_collection() {
     assert_ne!(map_compaction_epoch(map), epoch);
     js_shadow_slot_set(0, ptr_bits(map as usize));
     // A dead Map in from-space: only the copying minor's from-space
-    // Map-start walk can free its store, since the block is reset in bulk.
+    // store-start walk can free its young store, since the block is reset in
+    // bulk.
     let dead = js_map_alloc(8);
     js_map_set(dead, 1.0, 2.0);
-    let from_space_before = test_from_space_map_finalizations();
     let dealloc_before = test_thread_map_side_deallocation_snapshot();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_eq!(
-        test_from_space_map_finalizations() - from_space_before,
-        1,
-        "the from-space walk must finalize exactly the dead Map"
-    );
     assert_eq!(dealloc_delta(dealloc_before), (1, 128));
+    full_collection();
+    assert_eq!(
+        dealloc_delta(dealloc_before),
+        (1, 128),
+        "and never freed again"
+    );
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut MapHeader;
     assert_ne!(map, moved, "the test must actually move its owner");
     let raw = unsafe { map_cursor_next_raw(moved, 21, epoch) }.unwrap();
@@ -247,7 +205,8 @@ fn map_store_survives_tenured_evacuation_sweeps_and_exit_walk() {
         js_map_set(moved, 43.0, 100.0);
         assert_eq!(js_map_get(moved, 43.0), 100.0);
 
-        release_current_thread_map_side_allocations();
+        js_shadow_slot_set(0, 0);
+        full_collection();
         assert_eq!(
             dealloc_delta(before),
             (1, 128),
@@ -283,6 +242,10 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
         let map = js_map_alloc(8);
         js_map_set(map, 42.0, 99.0);
         js_shadow_slot_set(0, ptr_bits(map as usize));
+        // Keep the nonmoving store off the movable-header block: defrag
+        // evacuates whole source blocks and refuses nonmoving neighbors.
+        let _padding =
+            crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
         let old_map = evacuate_rooted_tenured_map_to_old();
         let _dead = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING);
         let old_header = unsafe { header_from_user_ptr(old_map as *const u8) };
@@ -293,6 +256,8 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
             .collect::<Vec<_>>();
         unsafe {
             (*old_header).gc_flags |= GC_FLAG_MARKED;
+            (*header_from_user_ptr(test_map_store_word(old_map) as *const u8)).gc_flags |=
+                GC_FLAG_MARKED;
         }
         let _ = sweep_with_age_bump(false);
         let selected = select_old_page_defrag_pages(true);
@@ -327,7 +292,8 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
         );
         assert_eq!(js_map_get(moved, 42.0), 99.0);
 
-        release_current_thread_map_side_allocations();
+        js_shadow_slot_set(0, 0);
+        full_collection();
         assert_eq!(
             dealloc_delta(before),
             (1, 128),
@@ -357,7 +323,6 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
             let _roots = ShadowAndGlobalRootResetGuard;
             let dead = js_map_alloc(8);
             js_map_set(dead, 1.0, 2.0);
-            let from_space_before = test_from_space_map_finalizations();
             let force_marks_before = crate::gc::block_persist_force_mark_count();
 
             let before = test_thread_map_side_deallocation_snapshot();
@@ -388,16 +353,13 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
                 "block persistence kept the Map alive; the fixture proves nothing"
             );
             assert_eq!(
-                test_from_space_map_finalizations(),
-                from_space_before,
-                "the copying minor's from-space walk must not be what freed it"
-            );
-            assert_eq!(
                 dealloc_delta(before),
                 (1, 128),
-                "the dead Map's store must be freed by the minor that found it dead"
+                "the minor's sweep finalizes the dead young store"
             );
-            release_current_thread_map_side_allocations();
+            full_collection();
+            assert_eq!(dealloc_delta(before), (1, 128));
+            full_collection();
             assert_eq!(dealloc_delta(before), (1, 128), "and never freed again");
         });
     }
@@ -426,13 +388,9 @@ fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
                     keys.push(key);
                 }
                 unsafe {
-                    let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
                     let indexes = test_map_index_bytes(map);
                     assert!(indexes > 0, "fixture must allocate all key indexes");
-                    assert_eq!(
-                        policy::external_side_live_bytes(),
-                        baseline + entries + indexes
-                    );
+                    assert_eq!(policy::external_side_live_bytes(), baseline + indexes);
                 }
             }
             // Model a relocated pointer key so the GC hook must rebuild,
@@ -441,8 +399,8 @@ fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
             let replacement_bits = ptr_bits(replacement as usize);
             let raw = keys.len() - 1;
             unsafe {
-                crate::gc::runtime_store_external_jsvalue_slot(
-                    map as usize,
+                crate::gc::runtime_store_gc_jsvalue_slot(
+                    test_map_store_word(map),
                     (*map).entries.add(raw * 2) as usize,
                     replacement_bits,
                 );
@@ -461,13 +419,9 @@ fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
             }
             assert_eq!(js_map_size(map), 0);
             unsafe {
-                let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
                 let indexes = test_map_index_bytes(map);
                 assert!(indexes > 0, "empty tables retain allocated capacity");
-                assert_eq!(
-                    policy::external_side_live_bytes(),
-                    baseline + entries + indexes
-                );
+                assert_eq!(policy::external_side_live_bytes(), baseline + indexes);
             }
             // The pointer above is deliberately not a root. A real full sweep
             // must reach the Map finalizer even after its keys were removed.
@@ -582,5 +536,70 @@ fn a_traced_promotion_keeps_the_live_map_and_reclaims_the_dead_one() {
         dealloc_delta(before).0,
         1,
         "the dead Map's store must be freed by the promotion or the next full"
+    );
+}
+
+/// The public Map owns the collecting store, and the store owns its values.
+/// A weak value witness prevents stale mapped test pages from faking liveness.
+#[test]
+fn map_store_owned_edge_retains_values_after_moving_owner() {
+    owned_edge_witness(false);
+}
+#[test]
+#[ignore = "negative control: erase the Map's only strong store edge"]
+fn negative_control_objtables_map_store() {
+    owned_edge_witness(true);
+}
+fn owned_edge_witness(erase: bool) {
+    let _guard = CopyingNurseryTestGuard::new(3);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _scan = ConservativeScanDisabledGuard::new();
+    crate::weakref::test_support::clear_weak_holders();
+    let map = js_map_alloc(4);
+    let value = unsafe { alloc_old_test_object(0).0 };
+    js_map_set(map, 37.0, f64::from_bits(ptr_bits(value as usize)));
+    let weak = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(value as usize)));
+    js_shadow_slot_set(0, ptr_bits(map as usize));
+    js_shadow_slot_set(1, ptr_bits(weak as usize));
+    let store = unsafe { test_map_store_word(map) };
+    assert!(
+        crate::arena::pointer_in_nursery(store),
+        "stores are born young"
+    );
+    assert!(gc_type_is_movable(GC_TYPE_MAP_STORE));
+    let _ = gc_collect_minor();
+    let moved = ptr_from_slot(0);
+    assert_ne!(moved, map);
+    assert_ne!(
+        unsafe { test_map_store_word(moved) },
+        store,
+        "the store moves too"
+    );
+    if erase {
+        // GC_STORE_AUDIT(TEST): intentional edge deletion is the control.
+        unsafe {
+            std::ptr::write((moved as *mut u8).add(16).cast::<usize>(), 0);
+        }
+    }
+    full_collection();
+    let retained = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1)));
+    assert_ne!(
+        retained.to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "only the Map-to-store-to-value edges retain this weak target"
+    );
+    let moved = ptr_from_slot(0);
+    assert_eq!(js_map_get(moved, 37.0).to_bits(), retained.to_bits());
+    let fresh = js_map_alloc(4);
+    assert_eq!(
+        js_map_get(fresh, 37.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    js_shadow_slot_set(0, 0);
+    full_collection();
+    assert_eq!(
+        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1))).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "no allocation registry roots a dead owner"
     );
 }

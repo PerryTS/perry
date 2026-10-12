@@ -15,11 +15,8 @@
 //! `visit_metadata_usize_slot`, which rewrites a recorded address **without
 //! marking**, and never looks at `(*ptr).description` at all.
 //!
-//! The fix removes the pointer instead of tracing it: the text is copied off
-//! the GC heap at allocation time into an id-keyed thread-local map, and the
-//! field is left null. So the strongest assertion here is structural — there
-//! is no untraced pointer to get wrong — and it is the one a future change
-//! would trip first.
+//! Fresh symbols now carry GC_TYPE_SYMBOL with a real description edge.
+//! The edge moves and dies through ordinary tracing, without an id-keyed map.
 
 use super::*;
 use crate::symbol::SymbolHeader;
@@ -28,39 +25,25 @@ fn symbol_ptr_bits(sym: *mut SymbolHeader) -> u64 {
     ptr_bits(sym as usize)
 }
 
-/// STRUCTURAL. `SymbolHeader::description` must stay null: the whole point of
-/// #7246's fix is that there is no longer a heap pointer in a payload the
-/// collector treats as opaque bytes. A change that re-populates this field
-/// re-opens the defect whether or not any behavioural test happens to catch it
-/// on the day.
+/// The type descriptor, rather than a pointer-free String leaf, owns the edge.
 #[test]
-fn a_fresh_symbol_stores_no_heap_pointer_in_its_payload() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_fresh_symbol_descriptions();
-
+fn a_fresh_symbol_owns_a_traced_description_edge() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     unsafe {
         let desc = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
         let sym = crate::symbol::alloc_symbol(desc, false);
-        assert!(
-            (*sym).description.is_null(),
-            "SymbolHeader::description must stay null — GC_TYPE_STRING is a \
-             pointer-free Leaf, so anything stored there is neither marked nor \
-             rewritten (#7246)"
+        assert_eq!((*sym).description, desc);
+        assert!(!gc_type_is_pointer_free(GC_TYPE_SYMBOL));
+        assert_eq!(
+            gc_type_rewrite_descriptor_kind(GC_TYPE_SYMBOL),
+            GcRewriteDescriptorKind::Symbol
         );
-        // …and the description is still readable, off-heap.
-        let rendered = crate::symbol::js_symbol_to_string(f64::from_bits(symbol_ptr_bits(sym)));
-        assert_string_bytes(rendered as *const crate::StringHeader, b"Symbol(k)");
     }
-
-    crate::symbol::test_clear_fresh_symbol_descriptions();
 }
 
-/// BEHAVIOURAL. The description string is referenced by nothing once
-/// `alloc_symbol` has copied its text, so a collection reclaims it and the
-/// from-space bytes are recycled into later allocations. The symbol itself is
-/// kept alive in a shadow slot — that is deliberately NOT the subject; the
-/// subject is whether its description survives.
+/// BEHAVIOURAL. The symbol is the only owner of its description string.
+/// A collection must retain and repair that edge while the symbol survives.
 ///
 /// The recycling loop after the collection is load-bearing. Without it a stale
 /// read can still find the old bytes intact and the test passes for the wrong
@@ -81,7 +64,6 @@ fn a_symbols_description_survives_reclamation_of_the_string_it_came_from() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
-    crate::symbol::test_clear_fresh_symbol_descriptions();
 
     let sym = unsafe {
         let desc = crate::string::js_string_from_bytes(b"k".as_ptr(), 1);
@@ -109,65 +91,8 @@ fn a_symbols_description_survives_reclamation_of_the_string_it_came_from() {
             crate::symbol::js_symbol_to_string(f64::from_bits(symbol_ptr_bits(sym_after)));
         assert_string_bytes(rendered as *const crate::StringHeader, b"Symbol(k)");
     }
-    assert_eq!(
+    assert_ne!(
         desc_addr_before, 0,
-        "the payload pointer must have been null all along (#7246); a non-null \
-         value here means this test measured the OLD representation and its \
-         green result says nothing"
+        "the fixture must use the owned description edge"
     );
-
-    crate::symbol::test_clear_fresh_symbol_descriptions();
-}
-
-/// The price of interning off-heap is retention, and the issue named it:
-/// "a workload that makes millions of symbols would feel it". `prune_dead_symbol_pointers`
-/// pays it down — the description map is keyed on the symbol id, so the same
-/// liveness verdict that prunes `SYMBOL_POINTERS` prunes the descriptions.
-///
-/// Asserted rather than assumed: without the prune, this table is a leak with a
-/// doc comment claiming otherwise.
-#[test]
-fn dead_symbols_descriptions_are_pruned_with_their_pointers() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_symbol_side_table_roots();
-    crate::symbol::test_clear_fresh_symbol_descriptions();
-
-    // One symbol we keep, and several we abandon.
-    let keeper = unsafe {
-        let desc = crate::string::js_string_from_bytes(b"keeper".as_ptr(), 6);
-        crate::symbol::alloc_symbol(desc, false)
-    };
-    js_shadow_slot_set(0, symbol_ptr_bits(keeper));
-    for _ in 0..8 {
-        unsafe {
-            let desc = crate::string::js_string_from_bytes(b"doomed".as_ptr(), 6);
-            let _ = crate::symbol::alloc_symbol(desc, false);
-        }
-    }
-    let seeded = crate::symbol::test_fresh_symbol_description_count();
-    assert_eq!(
-        seeded, 9,
-        "setup did not record one description per described symbol"
-    );
-
-    // Prune with a predicate that declares everything except the keeper dead —
-    // the same shape `gc::dead_owner` hands `prune_dead_symbol_pointers`.
-    let keeper_addr = keeper as usize;
-    crate::symbol::prune_dead_symbol_pointers(&|ptr| ptr != keeper_addr);
-
-    assert_eq!(
-        crate::symbol::test_fresh_symbol_description_count(),
-        1,
-        "descriptions of dead symbols must be pruned alongside their pointers — \
-         otherwise interning off-heap trades a use-after-free for an unbounded \
-         leak (#7246)"
-    );
-    unsafe {
-        let rendered = crate::symbol::js_symbol_to_string(f64::from_bits(symbol_ptr_bits(keeper)));
-        assert_string_bytes(rendered as *const crate::StringHeader, b"Symbol(keeper)");
-    }
-
-    crate::symbol::test_clear_fresh_symbol_descriptions();
-    crate::symbol::test_clear_symbol_side_table_roots();
 }

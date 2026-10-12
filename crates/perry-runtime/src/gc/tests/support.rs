@@ -86,6 +86,7 @@ pub(super) unsafe fn alloc_old_test_promise() -> *mut crate::promise::Promise {
             async_id: 0,
             trigger_async_id: 0,
             meta: std::ptr::null_mut(),
+            callback_context: std::ptr::null_mut(),
         },
     );
     ptr
@@ -125,8 +126,6 @@ pub(super) unsafe fn alloc_old_test_set(
     ) as *mut crate::set::SetHeader;
     let layout = std::alloc::Layout::from_size_align((capacity as usize * 8).max(8), 8)
         .expect("valid set elements layout");
-    let elements = std::alloc::alloc_zeroed(layout) as *mut u64;
-    assert!(!elements.is_null());
     // #11362: the arena does not zero recycled holes; leaving `meta` (a
     // traced edge) or `used` (the scanned extent) as residue is the same bug
     // as the Map fixture's `store`. Zero the whole payload first.
@@ -136,7 +135,7 @@ pub(super) unsafe fn alloc_old_test_set(
         std::mem::size_of::<crate::set::SetHeader>(),
     );
     (*set).capacity = capacity;
-    (*set).elements = elements as *mut f64;
+    let elements = crate::set::test_init_owned_set_store(set, capacity as usize);
     (set, elements, layout)
 }
 
@@ -145,10 +144,8 @@ pub(super) unsafe fn retire_old_test_set(
     elements: *mut u64,
     layout: std::alloc::Layout,
 ) {
-    (*set).size = 0;
-    (*set).capacity = 0;
-    (*set).elements = std::ptr::null_mut();
-    std::alloc::dealloc(elements as *mut u8, layout);
+    let _ = (elements, layout);
+    crate::set::finalize_set_side_allocation_for_gc(set);
 }
 
 pub(super) fn activate_malloc_registry_for_tests() {
@@ -460,7 +457,6 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::object::test_clear_object_cache_roots();
     crate::object::test_clear_class_side_table_roots();
     crate::object::test_clear_arguments_object_roots();
-    crate::symbol::test_clear_symbol_side_table_roots();
     crate::json::test_clear_parse_roots();
     crate::string::prune_dead_utf16_indexes(&|_| true);
     crate::string::trim_cache::test_clear_trim_cache();
@@ -468,12 +464,10 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::regex::perex_cache::clear_for_tests();
     #[cfg(feature = "regex-engine")]
     crate::regex::perex_cache::reset_registration_for_tests();
-    crate::set::test_clear_set_roots();
     crate::os::test_clear_process_event_listeners();
     crate::promise::test_clear_promise_scanner_roots();
     crate::timer::test_clear_all_timer_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
-    crate::closure::test_clear_closure_side_tables();
     crate::builtins::test_set_console_log_singleton(0);
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();
@@ -843,6 +837,7 @@ pub(super) fn allocate_dead_malloc_churn_headers(per_type: usize) -> Vec<usize> 
                     async_id: 0,
                     trigger_async_id: 0,
                     meta: std::ptr::null_mut(),
+                    callback_context: std::ptr::null_mut(),
                 },
             );
             headers.push(header_from_user_ptr(ptr as *const u8) as usize);
@@ -961,7 +956,7 @@ pub(super) unsafe fn alloc_nursery_test_symbol() -> usize {
     let ptr = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::symbol::SymbolHeader>(),
         std::mem::align_of::<crate::symbol::SymbolHeader>(),
-        GC_TYPE_STRING,
+        GC_TYPE_SYMBOL,
     );
     init_test_symbol(ptr);
     ptr as usize
@@ -971,7 +966,7 @@ pub(super) unsafe fn alloc_old_test_symbol() -> usize {
     let ptr = crate::arena::arena_alloc_gc_old(
         std::mem::size_of::<crate::symbol::SymbolHeader>(),
         std::mem::align_of::<crate::symbol::SymbolHeader>(),
-        GC_TYPE_STRING,
+        GC_TYPE_SYMBOL,
     );
     init_test_symbol(ptr);
     ptr as usize
@@ -980,7 +975,7 @@ pub(super) unsafe fn alloc_old_test_symbol() -> usize {
 pub(super) fn alloc_tracked_test_symbol() -> *mut crate::symbol::SymbolHeader {
     let ptr = gc_malloc(
         std::mem::size_of::<crate::symbol::SymbolHeader>(),
-        GC_TYPE_STRING,
+        GC_TYPE_SYMBOL,
     );
     unsafe {
         init_test_symbol(ptr);
@@ -1032,9 +1027,9 @@ pub(super) unsafe fn alloc_old_test_map(
     ) as *mut crate::map::MapHeader;
     let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
         .expect("valid map entries layout");
-    let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
-    assert!(!entries.is_null());
-    init_test_map_header(map, entries, capacity);
+    init_test_map_header(map, std::ptr::null_mut(), capacity);
+    crate::map::test_init_owned_map_store(map, capacity);
+    let entries = (*map).entries.cast::<u64>();
     (map, entries, layout)
 }
 
@@ -1058,14 +1053,10 @@ pub(super) unsafe fn init_test_map_header(
 
 pub(super) unsafe fn retire_old_test_map(
     map: *mut crate::map::MapHeader,
-    entries: *mut u64,
-    layout: std::alloc::Layout,
+    _entries: *mut u64,
+    _layout: std::alloc::Layout,
 ) {
-    (*map).size = 0;
-    (*map).used = 0;
-    (*map).capacity = 0;
-    (*map).entries = std::ptr::null_mut();
-    std::alloc::dealloc(entries as *mut u8, layout);
+    crate::map::finalize_map_side_allocation_for_gc(map);
 }
 
 /// Charter step 5: re-stamp `obj` with the shape that has its current facts

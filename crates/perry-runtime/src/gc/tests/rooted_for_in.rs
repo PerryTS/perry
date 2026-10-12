@@ -42,7 +42,6 @@ fn run(inherited_proxy: bool, descriptor_trap: bool) {
         scan_runtime_handle_roots_mut,
         MutableRootScannerSource::RuntimeHandles,
     );
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     COPIED.with(|count| count.set(0));
     // This fixture constructs cached descriptor/JSON shapes across moving
     // collections. The isolation guard removes production's root registry;
@@ -196,7 +195,6 @@ fn descriptor_completion_reloads_after_field_getter_collection() {
         scan_runtime_handle_roots_mut,
         MutableRootScannerSource::RuntimeHandles,
     );
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     COPIED.with(|count| count.set(0));
     // As in `run`: the isolation guard removes production's root registry,
     // and the descriptor object's keys are young canonical lists that the

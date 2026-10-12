@@ -1,6 +1,6 @@
 //! Exception-safe entry and cleanup for async-resource execution scopes.
 
-use super::{after, before, destroy, init_resource, AsyncResourceIds, RESOURCES};
+use super::{after, before, destroy, init_resource, AsyncResourceIds};
 
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 
@@ -41,11 +41,8 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
 /// Enter an existing provider's captured AsyncLocalStorage and execution-id
 /// scope for one native callback phase.
 pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), f64> {
-    let context = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&ids.async_id)
-        .map(|meta| meta.context.clone())
+    let context = super::resource_state::get(ids.async_id)
+        .map(|meta| unsafe { (*meta).context.clone() })
         .unwrap_or_default();
     let previous = crate::async_context::enter_context(&context);
     crate::async_context::push_context_guard(

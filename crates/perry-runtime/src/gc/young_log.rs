@@ -246,7 +246,7 @@ pub(crate) fn addr_is_minor_collectible(addr: usize) -> bool {
 pub(crate) fn bits_are_minor_collectible(bits: u64) -> bool {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        addr_is_minor_collectible((bits & POINTER_MASK) as usize)
+        addr_is_minor_collectible(crate::value::addr_class::tagged_heap_addr(bits))
     } else {
         false
     }

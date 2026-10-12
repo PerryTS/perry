@@ -228,7 +228,4 @@ fn growth_preserves_the_custom_prototype_record_when_its_header_bit_is_set() {
         boxed(proto as usize).to_bits(),
         "the header ownership bit must carry the actual prototype edge"
     );
-    crate::object::prototype_chain::prune_dead_object_prototype_owners(&|owner| {
-        owner == initial as usize || owner == grown as usize
-    });
 }

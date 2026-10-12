@@ -761,11 +761,15 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // `{...blob}`/`{...hash}`.
     if !crate::value::addr_class::is_above_handle_band(src_raw)
         || !src_raw.is_multiple_of(8)
-        || crate::symbol::is_registered_symbol(src_raw)
+        || (crate::symbol::may_be_symbol_header(src_raw as *const u8)
+            && crate::symbol::is_registered_symbol(src_raw))
     {
         return target_f64;
     }
 
+    // The source is already a readable receiver at this boundary (the paths
+    // below inspect its header and payload). Its own Symbol magic word rules
+    // out ordinary objects before the allocator admission needed by Symbols.
     // Byte views have their own property surface. Use the existing
     // descriptor-driven copy, including symbols and accessors, instead of
     // a second string-only loop with a raw source address across stores.

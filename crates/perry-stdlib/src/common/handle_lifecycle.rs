@@ -376,7 +376,7 @@ fn release(dead: &[Parked]) {
     }
 }
 
-extern "C" fn observe(bits: u64, _mark: Mark, _ctx: *mut c_void) -> bool {
+extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
     let id = if bits >> 48 == 0x7FFD {
         (bits & 0x0000_FFFF_FFFF_FFFF) as Handle
     } else if bits >> 48 == 0 {
@@ -391,14 +391,33 @@ extern "C" fn observe(bits: u64, _mark: Mark, _ctx: *mut c_void) -> bool {
     if !parked {
         return false;
     }
-    let _ = EPOCH.try_with(|epoch| {
-        if let Some(live) = epoch.borrow_mut().live.as_mut() {
-            live.insert(id);
+    let first = EPOCH
+        .try_with(|epoch| {
+            epoch
+                .borrow_mut()
+                .live
+                .as_mut()
+                .is_some_and(|live| live.insert(id))
+        })
+        .unwrap_or(false);
+    if first {
+        if let Some(bits) = super::handle::native_property_bag(id).filter(|&bits| bits != 0) {
+            mark(bits, ctx);
         }
-    });
+    }
     true
 }
 
 #[cfg(test)]
 #[path = "handle_lifecycle_tests.rs"]
 mod tests;
+
+/// Strong native owners and newborn parked records protect unpublished bags;
+/// old parked records are traced only when a reachable JS value names them.
+pub(super) fn root_native_payload_bag(id: Handle) -> bool {
+    let parked = PARKED.with(|parked| parked.borrow().0.get(&id).copied());
+    parked.is_none_or(|parked| {
+        let current = EPOCH.with(|epoch| epoch.borrow().current);
+        parked.epoch >= current.saturating_sub(1)
+    })
+}

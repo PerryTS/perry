@@ -1007,7 +1007,9 @@ fn classify_heap_space_in_range_uncached(
 
 /// Record headers whose public pointer validators require an exact allocation
 /// start. Maps follow an external payload; box accessors must reject foreign
-/// and interior pointers without consulting a per-cell registry. Other types
+/// and interior pointers without consulting a per-cell registry. Collection
+/// stores and context snapshot holders record theirs so a copying minor can
+/// find the young ones that died (`arena/owned_stores.rs`). Other types
 /// avoid this metadata write on their bump-allocation path.
 #[inline(always)]
 pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
@@ -1019,6 +1021,13 @@ pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
     if !matches!(
         obj_type,
         crate::gc::GC_TYPE_MAP
+            | crate::gc::GC_TYPE_SET
+            | crate::gc::GC_TYPE_SYMBOL
+            | crate::gc::GC_TYPE_MAP_STORE
+            | crate::gc::GC_TYPE_SET_STORE
+            | crate::gc::GC_TYPE_ASYNC_SNAPSHOT
+            | crate::gc::GC_TYPE_PROXY
+            | crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE
             | crate::gc::GC_TYPE_BOX
             | crate::gc::GC_TYPE_I32_BOX
             | crate::gc::GC_TYPE_BOOL_BOX
@@ -1725,7 +1734,10 @@ fn old_arena_ranges(movable_only: bool) -> Vec<(usize, usize, usize, usize)> {
                 if block.data.is_null() || block.size == 0 {
                     return None;
                 }
-                if movable_only && matches!(block.extent_kind, super::region::Kind::LargeObject) {
+                if movable_only
+                    && (matches!(block.extent_kind, super::region::Kind::CollectingHolder)
+                        || matches!(block.extent_kind, super::region::Kind::LargeObject))
+                {
                     return None;
                 }
                 let base = block.data as usize;

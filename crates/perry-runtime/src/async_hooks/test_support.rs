@@ -2,18 +2,22 @@ use super::*;
 
 pub fn reset_for_tests() {
     HOOKS.lock().unwrap().clear();
-    RESOURCES.lock().unwrap().clear();
     GC_DESTROY_QUEUE.lock().unwrap().clear();
-    CONTEXT_SNAPSHOTS.lock().unwrap().clear();
     ASYNC_WRAP_PROVIDERS.store(0, Ordering::Relaxed);
     TOP_LEVEL_RESOURCE.store(0, Ordering::Relaxed);
     HOOKS_ACTIVE.store(0, Ordering::Relaxed);
     PROMISE_HOOKS_ACTIVE.store(0, Ordering::Relaxed);
     NEXT_ASYNC_ID.store(2, Ordering::Relaxed);
-    NEXT_CONTEXT_SNAPSHOT_ID.store(1, Ordering::Relaxed);
     CURRENT_EXECUTION_ID.with(|c| c.set(0));
     CURRENT_TRIGGER_ID.with(|c| c.set(0));
     EXECUTION_STACK.with(|s| s.borrow_mut().clear());
+    CURRENT_EXECUTION_RESOURCE.with(|c| c.set(crate::value::TAG_UNDEFINED));
+}
+
+/// Mark hooks enabled without registering a callback, so scheduler jobs get
+/// state cells and no hook runs.
+pub(crate) fn test_set_hooks_active(active: bool) {
+    HOOKS_ACTIVE.store(usize::from(active), Ordering::Relaxed);
 }
 
 pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader, resource: f64) {
@@ -33,16 +37,9 @@ pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader
     });
     HOOKS_ACTIVE.store(1, Ordering::Relaxed);
     PROMISE_HOOKS_ACTIVE.store(1, Ordering::Relaxed);
-    RESOURCES.lock().unwrap().insert(
-        1,
-        ResourceMeta {
-            type_name: "test".to_string(),
-            trigger_async_id: 0,
-            resource,
-            context: crate::async_context::AsyncContextSnapshot::default(),
-            destroyed: false,
-        },
-    );
+    // The scanner fixture exercises the true C bootstrap singleton, rather
+    // than planting a fake resource address into an owner metadata table.
+    TOP_LEVEL_RESOURCE.store(resource.to_bits(), Ordering::Relaxed);
 }
 
 pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
@@ -52,12 +49,7 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
         .first()
         .map(|hook| hook.callbacks.init as usize)
         .unwrap_or(0);
-    let resource_bits = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&1)
-        .map(|meta| meta.resource.to_bits())
-        .unwrap_or(0);
+    let resource_bits = TOP_LEVEL_RESOURCE.load(Ordering::Relaxed);
     (callback, resource_bits)
 }
 
@@ -77,13 +69,11 @@ mod tests {
         });
         let raw = crate::value::js_nanbox_get_pointer(resource.get_nanbox_f64());
         let ids = unsafe { resource_payload(raw) }.unwrap().ids;
-        let metadata = RESOURCES.lock().unwrap();
         assert_eq!(
-            metadata.get(&ids.async_id).unwrap().resource.to_bits(),
+            resource_state::resource(ids.async_id).to_bits(),
             TAG_UNDEFINED_F64.to_bits(),
-            "the existing async registry must not root the owning provider object"
+            "the owning provider is not retained by its own weak identity slot"
         );
-        drop(metadata);
         crate::async_context::enter_with(token, 22.0);
         let outcome = provider_ffi::owned_provider_scope(resource.get_nanbox_f64(), || {
             assert_eq!(execution_async_id_u64(), ids.async_id);
@@ -99,24 +89,18 @@ mod tests {
         assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
         assert_eq!(crate::async_context::get_store(token), Some(22.0));
         assert_eq!(
-            RESOURCES
-                .lock()
-                .unwrap()
-                .get(&ids.async_id)
-                .unwrap()
-                .resource
-                .to_bits(),
+            resource_state::resource(ids.async_id).to_bits(),
             TAG_UNDEFINED_F64.to_bits()
         );
         provider_ffi::js_async_hooks_owned_provider_destroy(resource.get_nanbox_f64());
         provider_ffi::js_async_hooks_owned_provider_destroy(resource.get_nanbox_f64());
-        assert!(!RESOURCES.lock().unwrap().contains_key(&ids.async_id));
+        assert!(!resource_tracked_for_test(ids.async_id));
         crate::async_context::clear_store(token);
         reset_for_tests();
     }
 
     #[test]
-    fn owned_native_provider_payload_drop_removes_existing_metadata_without_js() {
+    fn closing_a_provider_payload_does_not_release_its_live_objects_owned_state() {
         reset_for_tests();
         let scope = crate::gc::RuntimeHandleScope::new();
         let resource = scope.root_nanbox_f64(unsafe {
@@ -124,14 +108,17 @@ mod tests {
         });
         let raw = crate::value::js_nanbox_get_pointer(resource.get_nanbox_f64());
         let id = unsafe { resource_payload(raw) }.unwrap().ids.async_id;
-        assert!(RESOURCES.lock().unwrap().contains_key(&id));
+        assert!(resource_tracked_for_test(id));
         assert!(
             crate::native_payload::close_attached::<AsyncResourcePayload>(
                 resource.get_nanbox_f64(),
                 &ASYNC_RESOURCE_FAMILY
             )
         );
-        assert!(!RESOURCES.lock().unwrap().contains_key(&id));
+        assert!(
+            resource_tracked_for_test(id),
+            "the live object still owns its GC state after native payload close"
+        );
         reset_for_tests();
     }
 
@@ -233,7 +220,7 @@ mod tests {
         let a = init_resource("A", TAG_UNDEFINED_F64, true);
         let b = init_resource("B", TAG_UNDEFINED_F64, true);
         assert!(a.async_id > 1);
-        assert_eq!(b.async_id, a.async_id + 1);
+        assert_eq!(public_async_id(b.async_id), public_async_id(a.async_id) + 1);
     }
 
     #[test]
@@ -342,19 +329,18 @@ mod tests {
     fn async_hooks_state_survives_a_foreign_reset_for_tests() {
         reset_for_tests();
         let ids = init_resource("survivor", TAG_UNDEFINED_F64, true);
-        assert!(RESOURCES.lock().unwrap().contains_key(&ids.async_id));
+        assert!(resource_tracked_for_test(ids.async_id));
         std::thread::spawn(reset_for_tests)
             .join()
             .expect("the clearing thread panicked");
-        assert!(RESOURCES.lock().unwrap().contains_key(&ids.async_id));
-        assert!(NEXT_ASYNC_ID.load(Ordering::Relaxed) > ids.async_id);
+        assert!(resource_tracked_for_test(ids.async_id));
+        assert!(NEXT_ASYNC_ID.load(Ordering::Relaxed) > public_async_id(ids.async_id));
         reset_for_tests();
     }
 
     #[test]
     fn native_async_resource_accepts_string_and_symbol_expandos() {
         reset_for_tests();
-        crate::symbol::test_clear_symbol_side_table_roots();
         let type_ptr = js_string_from_bytes(b"ExpandoResource".as_ptr(), 15);
         let type_value = crate::value::js_nanbox_string(type_ptr as i64);
         // #10926: `js_async_resource_new` hands JS the ordinary handle OBJECT

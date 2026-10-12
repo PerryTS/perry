@@ -1,0 +1,1 @@
+Removed the legacy per-address overflow vectors and last-owner cache. All overflow fields now use the existing traced ObjectMeta spill buffer; removed the legacy scanner, rekey and sweep cleanup. Added parity and copying-GC controls for wide objects and independent storage.

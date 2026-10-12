@@ -67,7 +67,8 @@ unsafe fn pointer_tagged_string(element_bits: u64) -> Option<*const StringHeader
         return None;
     }
     let address = (element_bits & POINTER_MASK) as usize;
-    if crate::buffer::is_registered_buffer(address) || crate::symbol::is_registered_symbol(address)
+    if crate::buffer::is_registered_buffer(address)
+        || crate::symbol::js_is_symbol(f64::from_bits(element_bits)) != 0
     {
         return None;
     }

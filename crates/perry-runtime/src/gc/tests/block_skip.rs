@@ -222,86 +222,89 @@ unsafe fn plant_around<T>(
     (value, base)
 }
 
-/// (b) A dead promise is a finalize-hook object: its block keeps the
-/// per-object path and `PromiseCleanup` drops its side-table entries.
+/// A collecting native snapshot holder requires its per-object finalizer.
 #[test]
-fn a_dead_promise_keeps_its_block_on_the_per_object_path() {
+fn a_dead_snapshot_holder_keeps_its_block_on_the_per_object_path() {
     run_isolated(|| {
-        let (promise, base) = unsafe {
+        let ((_, token_alive), base) = unsafe {
             plant_around(
                 || {
-                    let p = alloc_old_test_promise();
-                    crate::promise::scanners::test_park_promise_side_table_entries(p);
-                    p
+                    let snapshot = crate::async_context::test_snapshot_with_store(37.0);
+                    let token_alive = crate::async_context::test_snapshot_token_lifetime(&snapshot);
+                    (
+                        crate::async_context::alloc_snapshot_holder_in::<true>(snapshot),
+                        token_alive,
+                    )
                 },
-                |p| *p as usize,
+                |pair| pair.0 as usize,
             )
         };
-        assert_eq!(
-            crate::promise::scanners::test_promise_side_table_counts_for(promise as usize),
-            (1, 1, 1),
-            "premise: one entry parked in each table"
-        );
-
+        assert!(token_alive());
         synchronous_full();
-
-        assert!(!skipped(base), "a block holding a promise must be walked");
-        assert_eq!(
-            crate::promise::scanners::test_promise_side_table_counts_for(promise as usize),
-            (0, 0, 0),
-            "the dead promise's finalizer must have run"
+        assert!(
+            !skipped(base),
+            "a holder with native token custody must be finalized"
+        );
+        assert!(
+            !token_alive(),
+            "the finalizer must release the holder's native Arc"
         );
     });
 }
 
-/// Sabotage for (b): with obligations forgotten the promise's block is skipped
-/// and its finalizer never runs.
+/// Negative control: forgetting the obligation leaks the native token.
 #[test]
-fn sabotaged_obligations_skip_a_promise_finalizer() {
+fn forgotten_obligations_skip_a_snapshot_finalizer() {
     run_isolated(|| {
-        let (promise, base) = unsafe {
+        let ((_, token_alive), base) = unsafe {
             plant_around(
                 || {
-                    let p = alloc_old_test_promise();
-                    crate::promise::scanners::test_park_promise_side_table_entries(p);
-                    p
+                    let snapshot = crate::async_context::test_snapshot_with_store(37.0);
+                    let token_alive = crate::async_context::test_snapshot_token_lifetime(&snapshot);
+                    (
+                        crate::async_context::alloc_snapshot_holder_in::<true>(snapshot),
+                        token_alive,
+                    )
                 },
-                |p| *p as usize,
+                |pair| pair.0 as usize,
             )
         };
-
         {
-            let _sabotage = sabotage::Guard::arm(sabotage::FORGET_OBLIGATIONS);
+            let _control = sabotage::Guard::arm(sabotage::FORGET_OBLIGATIONS);
             synchronous_full();
         }
-
         assert!(
             skipped(base),
-            "sabotage premise: the promise block is skipped"
+            "negative-control premise: the holder block was skipped"
         );
-        assert_eq!(
-            crate::promise::scanners::test_promise_side_table_counts_for(promise as usize),
-            (1, 1, 1),
-            "and the finalizer did not run — the assertion above fails"
+        assert!(
+            token_alive(),
+            "skipping the required finalizer retains its native token"
         );
     });
 }
 
-/// (b) A dead Set keeps its block on the per-object path (its side allocation
-/// is a finalize hook).
+/// (b) A dead Set store requires a per-object finalizer walk. Its header has
+/// no native ownership and may use the whole-block dead shortcut.
 #[test]
-fn a_dead_set_keeps_its_block_on_the_per_object_path() {
+fn a_dead_set_store_keeps_its_block_on_the_per_object_path() {
     run_isolated(|| {
-        let ((set, elements, layout), base) =
-            unsafe { plant_around(|| alloc_old_test_set(4), |(s, _, _)| *s as usize) };
-        let neighbour = *objects_in_block(base)
-            .iter()
-            .find(|&&o| o != set as usize)
-            .unwrap();
+        let (set, elements, layout) = unsafe { alloc_old_test_set(4) };
+        let store = unsafe { crate::set::test_set_store_word(set) };
+        let base = block_base(store);
+        let neighbour = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+        unsafe {
+            std::ptr::write_bytes(neighbour as *mut u8, 0, 40);
+        }
+        assert_eq!(
+            block_base(neighbour),
+            base,
+            "the fixture must share the store's old block"
+        );
 
         synchronous_full();
 
-        assert!(!skipped(base), "a block holding a Set must be walked");
+        assert!(!skipped(base), "a block holding a Set store must be walked");
         assert_eq!(
             header_type(neighbour),
             0,
@@ -346,6 +349,7 @@ fn a_dead_weak_target_block_is_walked_and_the_weak_ref_clears() {
         );
     });
 }
+
 /// (b) A side-table entry the fan-out DOES prune — an element-shape record on
 /// a dead array — is dropped even though its block is skipped.
 #[test]

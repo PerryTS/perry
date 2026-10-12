@@ -1018,6 +1018,11 @@ pub extern "C" fn perry_wasm_host_instance_set_import_context(
 }
 
 #[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_import_context(inst: *mut WasmInstanceHandle) -> u64 {
+    unsafe { inst.as_ref() }.map_or(0, |inst| inst.inner.import_context.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_drop(inst: *mut WasmInstanceHandle) {
     if !inst.is_null() {
         unsafe { drop(Box::from_raw(inst)) };

@@ -143,169 +143,26 @@ fn wasm_unsupported_rejection(api: &str) -> f64 {
 // Live WebAssembly.Module wrapper registry
 // ────────────────────────────────────────────────────────────────────────
 
-/// A module wrapper is a plain heap object stamped with the enumerable
-/// `__wasmKind`/`__wasmModulePtr` properties (see
-/// `crate::webassembly::make_module_object`), so a user object literal can
-/// trivially copy those two fields — including a genuine host pointer. Record
-/// the GC-managed wrapper identity instead and keep its trusted host handle in
-/// this side table. The move/death hooks keep the entry aligned with object
-/// evacuation and prevent an address-reuse false brand. This module is always
-/// compiled so `instanceof` works without `wasm-host`; with the engine off the
-/// registry stays empty and the probe correctly never matches.
-fn module_wrappers() -> &'static std::sync::Mutex<std::collections::HashMap<usize, usize>> {
-    static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, usize>>> =
-        std::sync::OnceLock::new();
-    crate::once_init::get_or_init(&REG, || {
-        std::sync::Mutex::new(std::collections::HashMap::new())
-    })
-}
-
-type ExternWrapperRegistry =
-    std::sync::Mutex<std::collections::HashMap<usize, (&'static [u8], usize)>>;
-
-fn extern_wrappers() -> &'static ExternWrapperRegistry {
-    static REG: std::sync::OnceLock<ExternWrapperRegistry> = std::sync::OnceLock::new();
-    crate::once_init::get_or_init(&REG, || {
-        std::sync::Mutex::new(std::collections::HashMap::new())
-    })
-}
-
-/// Fast-path latch for the GC hooks. Most programs never construct a wasm
-/// module, so their ordinary-object move/death path pays only one atomic load
-/// and never initializes or locks the registry.
-fn module_wrapper_registry_used() -> &'static std::sync::atomic::AtomicBool {
-    static USED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    &USED
-}
-
-/// #11471: thread-exit release for both wrapper registries. The move/death
-/// hooks keep entries aligned with evacuation and GC death, but `Arena::drop`
-/// runs neither, so an exiting thread's wrapper addresses would stay branded
-/// and a fresh object at a reused address would read as a genuine wrapper
-/// carrying the dead thread's host handle. Host handles are process-global
-/// engine objects, so they are dropped from the map, not freed here (the same
-/// as the death hook). Runs from a TLS destructor: process-global locks, one
-/// at a time, no thread-locals, no GC. Only the wasm-host inserters (and
-/// tests) register it; without them the registries stay empty.
-#[cfg(any(test, feature = "wasm-host"))]
-fn release_wasm_wrapper_registries_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
-    if !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
-        return;
-    }
-    module_wrappers()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .retain(|&wrapper, _| !freed.contains(wrapper));
-    extern_wrappers()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .retain(|&wrapper, _| !freed.contains(wrapper));
-}
-
-#[cfg(any(test, feature = "wasm-host"))]
-fn register_thread_exit_hook() {
-    static REGISTER: std::sync::Once = std::sync::Once::new();
-    REGISTER.call_once(|| {
-        crate::arena::thread_exit::register_thread_exit_range_hook(
-            release_wasm_wrapper_registries_in_freed_ranges,
-        )
-    });
-}
-
-/// Bind a genuine wrapper object identity to its private host module handle.
-/// Public `__wasm*` properties are compatibility data, never the brand.
+// The wrapper's meta record owns its trusted native host state. Public
+// __wasm* properties remain compatibility data, never the brand.
+#[path = "webassembly_wrapper_state.rs"]
+pub(crate) mod owned_wrappers;
 #[cfg(any(test, feature = "wasm-host"))]
 pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
-    if wrapper != 0 && host_handle != 0 {
-        register_thread_exit_hook();
-        if let Ok(mut wrappers) = module_wrappers().lock() {
-            wrappers.insert(wrapper, host_handle);
-            module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
-        }
-    }
+    owned_wrappers::attach(wrapper, owned_wrappers::Kind::Module, host_handle);
 }
-
-/// Bind a genuine Memory/Table/Global wrapper identity to the opaque host
-/// external used when another WebAssembly module imports it.
-// No test constructs an extern wrapper — the tests below cover the MODULE
-// registry — so unlike `register_module_wrapper` this one carries the feature
-// gate alone; `any(test, ...)` would leave it dead in a lib-test build.
 #[cfg(feature = "wasm-host")]
 pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_handle: usize) {
-    if wrapper != 0 && host_handle != 0 {
-        register_thread_exit_hook();
-        if let Ok(mut wrappers) = extern_wrappers().lock() {
-            wrappers.insert(wrapper, (kind, host_handle));
-            module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
-        }
+    if let Some(kind) = owned_wrappers::Kind::from_bytes(kind) {
+        owned_wrappers::attach(wrapper, kind, host_handle);
     }
 }
-
-// Read only from `wasm-host`-gated call sites (this file's Memory thunks and
-// `crate::webassembly`), so the definition carries the same gate: without it a
-// build fails `-D warnings` as dead code.
 #[cfg(feature = "wasm-host")]
 pub(crate) fn registered_extern_handle(wrapper: usize, expected_kind: &[u8]) -> Option<usize> {
-    if wrapper == 0 || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
-        return None;
-    }
-    extern_wrappers().lock().ok().and_then(|wrappers| {
-        wrappers
-            .get(&wrapper)
-            .and_then(|(kind, handle)| (*kind == expected_kind).then_some(*handle))
-    })
+    owned_wrappers::handle(wrapper, owned_wrappers::Kind::from_bytes(expected_kind)?)
 }
-
-/// Return the trusted host handle for a registered wrapper identity. A
-/// poisoned lock or unknown address fails closed.
 pub(crate) fn registered_module_handle(wrapper: usize) -> Option<usize> {
-    if wrapper == 0 || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
-        return None;
-    }
-    module_wrappers()
-        .lock()
-        .ok()
-        .and_then(|wrappers| wrappers.get(&wrapper).copied())
-}
-
-/// Migrate a wrapper's identity after ordinary-object evacuation.
-pub(crate) fn module_wrapper_owner_moved(old_wrapper: usize, new_wrapper: usize) {
-    if old_wrapper == new_wrapper
-        || !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire)
-    {
-        return;
-    }
-    if let Ok(mut wrappers) = module_wrappers().lock() {
-        if let Some(host_handle) = wrappers.remove(&old_wrapper) {
-            wrappers.insert(new_wrapper, host_handle);
-        }
-    }
-    if let Ok(mut wrappers) = extern_wrappers().lock() {
-        if let Some(host_handle) = wrappers.remove(&old_wrapper) {
-            wrappers.insert(new_wrapper, host_handle);
-        }
-    }
-}
-
-/// Whether any wrapper identity was ever registered on this process. While
-/// false, [`clear_module_wrapper_for_dead_ptr`] is a no-op for every address,
-/// which is what lets the full sweep reclaim a dead object's whole block
-/// without visiting it (#10182).
-pub(crate) fn module_wrapper_registry_ever_used() -> bool {
-    module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire)
-}
-
-/// Clear the identity before a dead wrapper's address can be reused.
-pub(crate) fn clear_module_wrapper_for_dead_ptr(wrapper: usize) {
-    if !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
-        return;
-    }
-    if let Ok(mut wrappers) = module_wrappers().lock() {
-        wrappers.remove(&wrapper);
-    }
-    if let Ok(mut wrappers) = extern_wrappers().lock() {
-        wrappers.remove(&wrapper);
-    }
+    owned_wrappers::handle(wrapper, owned_wrappers::Kind::Module)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1734,21 +1591,6 @@ mod tests {
             None
         );
         assert_eq!(webassembly_value_ctor_instanceof(genuine, 2.0), None);
-    }
-
-    #[test]
-    fn module_wrapper_registry_tracks_gc_move_and_death() {
-        let old_wrapper = 0xA11C_E000;
-        let new_wrapper = 0xA11C_F000;
-        let host_handle = 0xCAFE_0000;
-
-        register_module_wrapper(old_wrapper, host_handle);
-        module_wrapper_owner_moved(old_wrapper, new_wrapper);
-        assert_eq!(registered_module_handle(old_wrapper), None);
-        assert_eq!(registered_module_handle(new_wrapper), Some(host_handle));
-
-        clear_module_wrapper_for_dead_ptr(new_wrapper);
-        assert_eq!(registered_module_handle(new_wrapper), None);
     }
 
     // Exercises the ArrayBuffer-backed memory fallback, which #10138 gated to

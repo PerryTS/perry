@@ -1,0 +1,1 @@
+Delete `VM_CONTEXTS`, its root-scanner branch and dead-owner prune. The sandbox's private owner-family metadata bag now owns its context fields and options. Main-context execution machinery remains a genuine global root. Add moving-owner/child, fresh-owner, mutation-control and Node parity gap checks.

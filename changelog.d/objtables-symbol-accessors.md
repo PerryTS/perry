@@ -1,0 +1,1 @@
+Move symbol accessor descriptors into each owner's ordinary property slots and shape attributes. Delete the fallback accessor table, full and budgeted scanners, death pruning, and thread-exit release. Add an array-owner moving-GC gap test and an ignored mutation control that deletes the moved accessor pair.

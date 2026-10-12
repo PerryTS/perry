@@ -1,27 +1,21 @@
 //! Set representation for Perry
 //!
 //! Sets are arena-allocated GC objects.
-//! The elements array is separately allocated and can be reallocated
-//! without changing the SetHeader address between GC moves.
+//! A traced store owns inline elements and native index/cursor history.
+//! No address registry, collection scanner, or header finalizer is needed.
 
-use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
-use std::alloc::{alloc, dealloc, realloc, Layout};
+use std::alloc::Layout;
 use std::cell::RefCell;
 use std::ptr;
 
 mod index;
-pub(crate) use index::{
-    prune_dead_identity_owners, prune_dead_identity_owners_young, scan_identity_roots_mut,
-};
 #[cfg(test)]
 pub(crate) use index::{
-    test_identity_count, test_identity_halves, test_identity_prune_visits,
-    test_snapshot as test_index_snapshot,
+    test_erase_key_identity, test_key_identity, test_snapshot as test_index_snapshot,
 };
 
 crate::perry_thread_local! {
-    static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Backing Sets whose `forEach` raw-index walk is currently in flight.
     /// Deletes may leave holes but must not compact them while a cursor still
     /// names the old raw layout (#9082). Nested walks are kept as a stack so
@@ -61,49 +55,8 @@ pub(crate) fn set_foreach_stack_restore(depth: usize) {
     SET_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
-fn mark_set_iterator_array(arr: *mut crate::array::ArrayHeader) {
-    if !arr.is_null() {
-        SET_ITERATOR_ARRAYS.with(|r| {
-            r.borrow_mut().insert(arr as usize);
-        });
-    }
-}
-
 pub fn is_registered_set_iterator(addr: usize) -> bool {
-    SET_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
-}
-
-/// Rekey legacy materialized-iterator brands after array evacuation without
-/// treating the metadata key as a root.
-pub(crate) fn scan_set_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    scan_identity_roots_mut(visitor);
-    SET_ITERATOR_ARRAYS.with(|r| {
-        let mut arrays = r.borrow_mut();
-        let mut moved = Vec::new();
-        for old_addr in arrays.iter().copied() {
-            let mut new_addr = old_addr;
-            if visitor.visit_metadata_usize_slot(&mut new_addr) {
-                moved.push((old_addr, new_addr));
-            }
-        }
-        for (old_addr, new_addr) in moved {
-            arrays.remove(&old_addr);
-            arrays.insert(new_addr);
-        }
-    });
-}
-
-/// Remove legacy Set iterator brands whose array owners are provably dead
-/// under the centralized collection-specific liveness policy.
-pub(crate) fn prune_dead_set_iterator_array_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    SET_ITERATOR_ARRAYS.with(|r| {
-        r.borrow_mut().retain(|owner| !is_dead_owner(*owner));
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_set_iterator_arrays() {
-    SET_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+    crate::array::has_materialized_iterator_brand(addr, 2)
 }
 
 #[cfg(test)]
@@ -157,71 +110,12 @@ pub(crate) fn test_set_side_deallocation_snapshot() -> (u64, u64) {
     )
 }
 
-struct SetSideAllocation {
-    elements: *mut f64,
-    capacity: usize,
-    index: Option<Box<index::SetIndex>>,
-}
-
-impl SetSideAllocation {
-    fn new(elements: *mut f64, capacity: usize) -> Self {
-        Self {
-            elements,
-            capacity,
-            index: None,
-        }
-    }
-
-    fn byte_len(&self) -> usize {
-        elements_layout(self.capacity).size()
-            + self.index.as_ref().map_or(0, |index| index.byte_len())
-    }
-}
-
-impl Drop for SetSideAllocation {
-    fn drop(&mut self) {
-        if self.elements.is_null() || self.capacity == 0 {
-            return;
-        }
-        let layout = elements_layout(self.capacity);
-        unsafe {
-            dealloc(self.elements as *mut u8, layout);
-        }
-        note_test_set_side_deallocation(layout.size());
-        self.elements = std::ptr::null_mut();
-        self.capacity = 0;
-    }
-}
-
-crate::perry_thread_local! {
-    static SET_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, SetSideAllocation>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
-
-/// Has any thread ever registered a `Set`? Monotone twin of
-/// `map::MAP_REGISTRY_EVER_USED` — see that flag for the full rationale and
-/// the #7469 measurement.
-static SET_REGISTRY_EVER_USED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// True when no `Set` has ever been registered, so `is_registered_set` can
-/// answer without touching the thread-local registry.
-#[inline(always)]
-fn set_registry_never_used() -> bool {
-    !SET_REGISTRY_EVER_USED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
-    SET_REGISTRY_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
-    SET_REGISTRY.with(|r| {
-        let mut registry = r.borrow_mut();
-        assert!(
-            !registry.contains_key(&(ptr as usize)),
-            "Set side allocation registered twice for the same header"
-        );
-        registry.insert(ptr as usize, SetSideAllocation::new(elements, capacity));
-    });
-}
+mod store;
+use store::{alloc_store, SetStore};
+pub(crate) use store::{
+    finalize_owned_store, owned_element_slot_range, owned_store_moved_for_gc,
+    refresh_elements_alias,
+};
 
 #[cfg(test)]
 thread_local! {
@@ -238,31 +132,16 @@ pub(crate) fn test_set_registry_probe_count() -> u64 {
 pub fn is_registered_set(addr: usize) -> bool {
     #[cfg(test)]
     TEST_SET_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    // #7469: nothing registered ⟹ nothing to find, without a thread-local
-    // resolution or a hash. See `map::is_registered_map` for the pairing.
-    if set_registry_never_used() {
-        return false;
-    }
-    // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
-    // are NaN-boxed POINTER_TAG values, not heap addresses) before
-    // dereferencing the GC header. Managed Sets are arena-allocated above the
-    // cutoff. See `value::addr_class` for the band map.
-    if crate::value::addr_class::is_handle_band(addr) {
-        return false;
-    }
-    // Registry FIRST: it is authoritative and dereference-free. Probing the
-    // GC header before consulting the registry dereferenced `addr - 8` for
-    // arbitrary candidate pointers (e.g. garbage read off a TypedArray
-    // header by a mis-typed caller) — segfaults on Linux where freed/foreign
-    // pages get unmapped (mimalloc on macOS retains them, hiding the bug).
-    if !SET_REGISTRY.with(|r| r.borrow().contains_key(&addr)) {
-        return false;
-    }
-    // A registered address is a live arena Set; the header read is safe and
-    // guards against a stale entry whose memory was reused by another type.
-    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(header) => header.obj_type == crate::gc::GC_TYPE_SET,
-        None => false,
+    unsafe {
+        let Some(header) = crate::value::addr_class::try_read_tracked_arena_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_SET,
+        ) else {
+            return false;
+        };
+        header.as_ref().size as usize
+            == (crate::gc::GC_HEADER_SIZE + std::mem::size_of::<SetHeader>()).next_multiple_of(8)
+            && !(*(addr as *const SetHeader)).store.is_null()
     }
 }
 
@@ -290,41 +169,9 @@ pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_clear_set_roots() {
-    index::prune_dead_identity_owners(&|_| true);
-    let allocations = SET_REGISTRY.with(|r| {
-        r.borrow_mut()
-            .drain()
-            .map(|(_, allocation)| allocation)
-            .collect::<Vec<_>>()
-    });
-    for allocation in allocations {
-        crate::gc::gc_note_external_side_free(allocation.byte_len());
-        drop(allocation);
-    }
-    SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
-}
-
-pub fn scan_set_roots(_mark: &mut dyn FnMut(f64)) {
-    // Set entries are traced through GC_TYPE_SET. Kept as a no-op
-    // compatibility shim for callers that still link the legacy scanner.
-}
-
-pub fn scan_set_roots_mut(_visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    // Set entries are object-owned external slots, not runtime roots.
-}
-
 fn rebuild_set_index(set: *mut SetHeader) {
     unsafe {
         index::rebuild_index(set);
-    }
-}
-
-pub fn drop_set_index(addr: usize) {
-    if let Some(allocation) = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
-        crate::gc::gc_note_external_side_free(allocation.byte_len());
-        drop(allocation);
     }
 }
 
@@ -332,24 +179,12 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
         return;
     }
-    SET_REGISTRY.with(|r| {
-        let mut registry = r.borrow_mut();
-        let Some(allocation) = registry.remove(&old_addr) else {
-            return;
-        };
-        if registry.contains_key(&new_addr) {
-            registry.insert(old_addr, allocation);
-            panic!("Set move destination already owns a side allocation");
-        }
-        registry.insert(new_addr, allocation);
-    });
-    SET_COMPACTION_LOG.with(|log| {
-        let mut log = log.borrow_mut();
-        log.remove(&new_addr);
-        if let Some(records) = log.remove(&old_addr) {
-            log.insert(new_addr, records);
-        }
-    });
+    unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): ownership transferred to the live copy.
+        let old = old_addr as *mut SetHeader;
+        (*old).store = ptr::null_mut();
+        (*old).elements = ptr::null_mut();
+    }
     SET_FOREACH_STACK.with(|stack| {
         for addr in stack.borrow_mut().iter_mut() {
             if *addr == old_addr {
@@ -359,125 +194,49 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     });
 }
 
+#[cfg(test)]
 pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
-    if set.is_null() {
-        return;
+    let store = std::mem::replace(&mut (*set).store, ptr::null_mut());
+    if !store.is_null() {
+        finalize_owned_store(store.cast(), true);
     }
-    let addr = set as usize;
-    let allocation = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
-    let Some(allocation) = allocation else {
-        return;
-    };
-
-    crate::gc::gc_note_external_side_free(allocation.byte_len());
-    drop(allocation);
-    // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
     if !(*set).meta.is_null() {
         (*(*set).meta).native_state = 0;
     }
-    (*set).elements = std::ptr::null_mut();
-    (*set).capacity = 0;
+    (*set).elements = ptr::null_mut();
     (*set).size = 0;
+    (*set).capacity = 0;
+    (*set).used = 0;
 }
-
-fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
-    crate::gc::owner_is_dead_copied_minor_from_space_of_type(addr, crate::gc::GC_TYPE_SET)
-}
-
-/// #6010: registry-driven finalization of DEAD Sets at sweep entry — the Set
-/// analog of `finalize_dead_registered_maps_post_trace` (see map.rs for the
-/// full rationale: dead collections in the ACTIVE nursery block are never
-/// object-walked by any sweeper, leaking their external elements buffers).
-pub(crate) fn collect_dead_registered_sets_post_trace(full_trace: bool) -> Vec<usize> {
-    SET_REGISTRY.with(|r| {
-        r.borrow()
-            .keys()
-            .copied()
-            .filter(|&addr| unsafe { registered_set_is_dead_post_trace(addr, full_trace) })
-            .collect()
-    })
-}
-
-/// Finalize one collected-dead Set (budget-chunked by the sweep state).
-pub(crate) fn finalize_collected_dead_set(addr: usize) {
-    unsafe {
-        finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
-    }
-}
-
-unsafe fn registered_set_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    if header.obj_type != crate::gc::GC_TYPE_SET {
-        return false;
-    }
-    let flags = header.gc_flags;
-    if flags
-        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
-        != 0
-    {
-        return false;
-    }
-    if full_trace {
-        return true;
-    }
-    if flags & crate::gc::GC_FLAG_TENURED != 0 {
-        return false;
-    }
-    matches!(
-        crate::arena::classify_heap_generation(addr),
-        crate::arena::HeapGeneration::Nursery
-    )
-}
-
-pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
-    let sets = SET_REGISTRY.with(|r| {
-        r.borrow()
-            .keys()
-            .copied()
-            .filter(|&addr| is_dead_copied_minor_from_space_set(addr))
-            .collect::<Vec<_>>()
-    });
-    let count = sets.len();
-    for addr in sets {
-        unsafe {
-            finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
-        }
-    }
-    count
-}
-
 #[cfg(test)]
 pub(crate) fn test_set_index_contains(set: *const SetHeader, value: f64) -> bool {
     unsafe { index::lookup_value(set, normalize_zero(value)).is_some_and(|i| i >= 0) }
 }
-
 #[cfg(test)]
 pub(crate) fn test_set_side_allocation(addr: usize) -> Option<(usize, usize)> {
-    SET_REGISTRY.with(|r| {
-        r.borrow()
-            .get(&addr)
-            .map(|allocation| (allocation.elements as usize, allocation.capacity))
-    })
-}
-
-pub(crate) fn release_current_thread_set_side_allocations() {
-    let allocations = SET_REGISTRY.with(|registry| {
-        registry
-            .borrow_mut()
-            .drain()
-            .map(|(_, allocation)| allocation)
-            .collect::<Vec<_>>()
-    });
-    for allocation in allocations {
-        crate::gc::gc_note_external_side_free(allocation.byte_len());
-        drop(allocation);
+    if !is_registered_set(addr) {
+        return None;
     }
-    SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
+    unsafe {
+        let store = (*(addr as *const SetHeader)).store.as_ref()?;
+        (!store.elements.is_null()).then_some((store.elements as usize, store.capacity))
+    }
+}
+#[cfg(test)]
+pub(crate) unsafe fn test_set_store_word(set: *const SetHeader) -> usize {
+    (*set).store as usize
+}
+#[cfg(test)]
+pub(crate) unsafe fn test_init_owned_set_store(set: *mut SetHeader, capacity: usize) -> *mut u64 {
+    let store = store::alloc_store_in::<true>(capacity);
+    (*store).used = capacity; // all zeroed fixture slots are safe to trace
+    (*set).store = store;
+    (*set).elements = (*store).elements;
+    (*store).elements.cast()
 }
 
-/// Set header - GC-movable address, elements allocated separately
+/// Movable Set header with an owned, movable element store; `elements` is
+/// re-derived by the Set's GC rewrite hook whenever the store moves.
 #[repr(C)]
 pub struct SetHeader {
     /// Number of elements in the set
@@ -499,9 +258,11 @@ pub struct SetHeader {
     /// Bumped whenever an element moves to a LOWER raw index
     /// (`compact_set_elements`) or the extent is discarded (`clear`). Raw-index
     /// cursors record the epoch they last saw and rebase through
-    /// `SET_COMPACTION_LOG` when it has moved (see `set_cursor_next_raw`).
+    /// its owner-local compaction history when it has moved (see `set_cursor_next_raw`).
     /// Appended last; fits in the padding after `used`.
     pub compaction_epoch: u32,
+    /// Strong edge to the young-born, movable element store (same former native word).
+    pub(crate) store: *mut SetStore,
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -511,7 +272,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
-    assert!(std::mem::size_of::<SetHeader>() == 32);
+    assert!(std::mem::size_of::<SetHeader>() == 40);
 };
 
 // ILP32 (wasm32, arm64_32): the two pointer fields are 4 bytes.
@@ -522,7 +283,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
     assert!(std::mem::offset_of!(SetHeader, used) == 16);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
-    assert!(std::mem::size_of::<SetHeader>() == 24);
+    assert!(std::mem::size_of::<SetHeader>() == 28);
 };
 
 /// The tombstone a deleted element's slot takes — same reserved marker as the
@@ -772,6 +533,25 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
         }
     }
 
+    // Installing owner-local state can reserve an array property slot and
+    // grow its allocation. Such a forwarding alias still names the same JS
+    // array, including when one operand has already been refreshed.
+    if a_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && b_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+    {
+        unsafe {
+            let a = (a_bits & crate::value::POINTER_MASK) as usize;
+            let b = (b_bits & crate::value::POINTER_MASK) as usize;
+            if crate::value::addr_class::try_read_gc_header(a)
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+                && crate::value::addr_class::try_read_gc_header(b)
+                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+            {
+                return crate::array::clean_arr_ptr(a as *const crate::array::ArrayHeader)
+                    == crate::array::clean_arr_ptr(b as *const crate::array::ArrayHeader);
+            }
+        }
+    }
     false
 }
 
@@ -870,13 +650,10 @@ impl SetRemovedSlots {
     }
 }
 
-crate::perry_thread_local! {
-    /// Per-Set history of squeezes, keyed by header address. Re-keyed on GC
-    /// move by `set_header_moved_for_gc`; dropped by `js_set_alloc` for a
-    /// reused address and by the dead-owner prune.
-    static SET_COMPACTION_LOG: RefCell<
-        crate::fast_hash::PtrHashMap<usize, SetCompactionLog>,
-    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
+unsafe fn release_set_compaction(set: *mut SetHeader) {
+    if let Some(store) = (*set).store.as_mut() {
+        drop(store.compaction.take());
+    }
 }
 
 /// Append a squeeze record and advance the header epoch (every operation
@@ -885,28 +662,29 @@ unsafe fn note_set_compaction(set: *mut SetHeader, removed: SetRemovedSlots) {
     let epoch = (*set).compaction_epoch.wrapping_add(1);
     (*set).compaction_epoch = epoch;
     let budget = std::cmp::max(SET_COMPACTION_LOG_MIN_BUDGET, (*set).capacity as usize);
-    SET_COMPACTION_LOG.with(|log| {
-        let mut log = log.borrow_mut();
-        let entry = log.entry(set as usize).or_insert_with(|| SetCompactionLog {
+    if (*(*set).store).compaction.is_none() {
+        // Native records contain only indices/epochs, never managed pointers.
+        (*(*set).store).compaction = Some(SetCompactionLog {
             records: std::collections::VecDeque::new(),
             retained: 0,
         });
-        if matches!(removed, SetRemovedSlots::Prefix(_)) {
-            // The extent was discarded: every cursor rebases to 0 through
-            // this record whatever came before, so older history is dead.
-            entry.records.clear();
-            entry.retained = 0;
+    }
+    let entry = (*(*set).store).compaction.as_mut().unwrap();
+    if matches!(removed, SetRemovedSlots::Prefix(_)) {
+        // The extent was discarded: every cursor rebases to 0 through
+        // this record whatever came before, so older history is dead.
+        entry.records.clear();
+        entry.retained = 0;
+    }
+    entry.retained += removed.retained_len();
+    entry
+        .records
+        .push_back(SetCompactionRecord { epoch, removed });
+    while entry.retained > budget && entry.records.len() > 1 {
+        if let Some(oldest) = entry.records.pop_front() {
+            entry.retained -= oldest.removed.retained_len();
         }
-        entry.retained += removed.retained_len();
-        entry
-            .records
-            .push_back(SetCompactionRecord { epoch, removed });
-        while entry.retained > budget && entry.records.len() > 1 {
-            if let Some(oldest) = entry.records.pop_front() {
-                entry.retained -= oldest.removed.retained_len();
-            }
-        }
-    });
+    }
 }
 
 /// Rebase a raw-index cursor that last synchronised at `loop_epoch` onto the
@@ -917,9 +695,8 @@ unsafe fn rebase_set_cursor(set: *const SetHeader, cursor: u32, loop_epoch: u32)
     if (*set).compaction_epoch == loop_epoch {
         return cursor;
     }
-    SET_COMPACTION_LOG.with(|log| {
-        let log = log.borrow();
-        let Some(entry) = log.get(&(set as usize)) else {
+    {
+        let Some(entry) = (*(*set).store).compaction.as_ref() else {
             return cursor;
         };
         let mut c = cursor;
@@ -931,7 +708,7 @@ unsafe fn rebase_set_cursor(set: *const SetHeader, cursor: u32, loop_epoch: u32)
             c -= rec.removed.count_below(c);
         }
         c
-    })
+    }
 }
 
 /// The next live raw index at or after `cursor` (rebased through any
@@ -954,13 +731,6 @@ pub(crate) unsafe fn set_cursor_next_raw(
 #[inline]
 pub(crate) fn set_compaction_epoch(set: *const SetHeader) -> u32 {
     unsafe { (*set).compaction_epoch }
-}
-
-/// Dead-owner prune for `SET_COMPACTION_LOG`.
-pub(crate) fn prune_dead_set_compaction_log_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    SET_COMPACTION_LOG.with(|log| {
-        log.borrow_mut().retain(|owner, _| !is_dead_owner(*owner));
-    });
 }
 
 /// C-ABI, for the `for…of` fast path: next live raw index at or after
@@ -1020,9 +790,16 @@ unsafe fn compact_set_elements(set: *mut SetHeader) {
     }
     debug_assert_eq!(out as u32, (*set).size);
     (*set).used = out as u32;
+    if !(*set).store.is_null() {
+        (*(*set).store).used = (*set).used as usize;
+    }
     if out > 0 {
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): compaction is followed by a dirty-span barrier for every surviving slot.
-        crate::gc::runtime_write_barrier_external_slot_span(set as usize, elements as usize, out);
+        crate::gc::replay_old_parent_slot_range_barriers(
+            (*set).store as usize,
+            elements as *mut u64,
+            out,
+        );
     }
     rebuild_set_index(set);
     if !removed.is_empty() {
@@ -1112,32 +889,29 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
         capacity * 2,
         b"Set maximum size exceeded",
     );
-    let old_layout = elements_layout(capacity as usize);
-    let new_layout = elements_layout(new_capacity as usize);
-
-    let new_elements =
-        realloc((*set).elements as *mut u8, old_layout, new_layout.size()) as *mut f64;
-    if new_elements.is_null() {
-        // #5067 — a constructor-driven `new Set(hugeIterable)` can hit this
-        // growth path; surface a catchable RangeError instead of aborting.
-        crate::error::throw_allocation_failed();
-    }
-
-    // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
-    (*set).elements = new_elements;
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let previous = (*set).store;
+    let next = alloc_store(new_capacity as usize);
+    ptr::copy_nonoverlapping((*previous).elements, (*next).elements, (*set).used as usize);
+    (*next).used = (*set).used as usize;
+    (*next).index = (*previous).index.take();
+    (*next).compaction = (*previous).compaction.take();
+    // GC_STORE_AUDIT(BARRIERED): publish the owned store and copied young slots.
+    (*set).elements = (*next).elements;
     (*set).capacity = new_capacity;
-    SET_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let allocation = registry
-            .get_mut(&(set as usize))
-            .expect("grown Set must retain its side-allocation owner record");
-        allocation.elements = new_elements;
-        allocation.capacity = new_capacity as usize;
-    });
-    // #6010: growth delta counts as external churn (see js_set_alloc). The
-    // header is consistent again, and a triggered cycle is conservative +
-    // non-moving, so the caller's raw `set`/elements pointers stay valid.
-    crate::gc::gc_note_external_side_alloc(new_layout.size() - old_layout.size());
+    crate::gc::runtime_store_gc_heap_word_slot(
+        set as usize,
+        std::ptr::addr_of_mut!((*set).store) as usize,
+        next as u64,
+    );
+    crate::gc::replay_old_parent_slot_range_barriers(
+        next as usize,
+        (*next).elements as *mut u64,
+        (*next).used,
+    );
+    (*previous).elements = ptr::null_mut();
+    (*previous).capacity = 0;
+    (*previous).used = 0;
     true
 }
 
@@ -1150,46 +924,28 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
     let capacity =
         crate::object::shape_rule3::checked_plus_four_word(capacity, b"Set maximum size exceeded");
     let cap = if capacity == 0 { 4 } else { capacity };
-    let elem_layout = elements_layout(cap as usize);
+    // The store is the larger young birth, so it is allocated first, while
+    // nothing unrooted is live, and keeps the allocation's normal GC pacing.
+    // Only the header birth and the publication need the no-move window.
+    let store = unsafe { alloc_store(cap as usize) };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let ptr =
+        crate::arena::arena_alloc_gc(std::mem::size_of::<SetHeader>(), 8, crate::gc::GC_TYPE_SET)
+            .cast::<SetHeader>();
     unsafe {
-        let ptr = crate::arena::arena_alloc_gc(
-            std::mem::size_of::<SetHeader>(),
-            8,
-            crate::gc::GC_TYPE_SET,
-        ) as *mut SetHeader;
-        let elements = alloc(elem_layout) as *mut f64;
-        if elements.is_null() {
-            // #5067 — catchable RangeError instead of aborting on OOM.
-            crate::error::throw_allocation_failed();
-        }
-
-        // Initialize header
+        // GC_STORE_AUDIT(INIT): bounded birth, followed by an exact owner edge barrier.
         (*ptr).size = 0;
         (*ptr).capacity = cap;
-        // GC_STORE_AUDIT(INIT): set elements buffer is external storage; element stores are barriered separately.
-        (*ptr).elements = elements;
-        // The arena allocator reuses free-list memory without zeroing, so an
-        // uninitialised meta edge would be a garbage pointer the GC follows.
-        (*ptr).meta = std::ptr::null_mut();
+        (*ptr).elements = (*store).elements;
+        (*ptr).meta = ptr::null_mut();
         (*ptr).used = 0;
         (*ptr).compaction_epoch = 0;
-        // A previous tenant of this address may have left a compaction log
-        // behind if the dead-owner prune has not run yet; a fresh Set must
-        // start with no history.
-        SET_COMPACTION_LOG.with(|log| {
-            log.borrow_mut().remove(&(ptr as usize));
-        });
-
-        // Register in set registry for runtime type detection
-        register_set(ptr, elements, cap as usize);
-
-        // #6010: the elements buffer is invisible to the arena/malloc GC
-        // triggers; record its bytes as external churn so Set-heavy
-        // workloads still collect (and finalize dead siblings). Safe here:
-        // the header is fully initialized + registered, and the triggered
-        // cycle is conservative + non-moving, so `ptr` stays valid.
-        crate::gc::gc_note_external_side_alloc(elem_layout.size());
-
+        (*ptr).store = store;
+        crate::gc::runtime_write_barrier_gc_slot(
+            ptr as usize,
+            std::ptr::addr_of!((*ptr).store) as usize,
+            store as u64,
+        );
         ptr
     }
 }
@@ -1306,23 +1062,26 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
         let used = (*set).used;
         let elements = elements_ptr_mut(set);
         if grew && used > 0 {
-            crate::gc::runtime_write_barrier_external_slot_span(
-                set as usize,
-                elements as usize,
+            crate::gc::replay_old_parent_slot_range_barriers(
+                (*set).store as usize,
+                elements as *mut u64,
                 used as usize,
             );
         }
 
         // Write the value
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            set as usize,
+        // GC_STORE_AUDIT(BARRIERED): Set append stores through its owned heap store.
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*set).store as usize,
             elements.add(used as usize) as usize,
             value.to_bits(),
         );
 
         (*set).size = size + 1;
         (*set).used = used + 1;
+        if !(*set).store.is_null() {
+            (*(*set).store).used = (*set).used as usize;
+        }
         index::insert_value(set, value, used);
     }
 }
@@ -1358,22 +1117,25 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
         let used = (*set).used;
         let elements = elements_ptr_mut(set);
         if grew && used > 0 {
-            crate::gc::runtime_write_barrier_external_slot_span(
-                set as usize,
-                elements as usize,
+            crate::gc::replay_old_parent_slot_range_barriers(
+                (*set).store as usize,
+                elements as *mut u64,
                 used as usize,
             );
         }
 
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            set as usize,
+        // GC_STORE_AUDIT(BARRIERED): Set append stores through its owned heap store.
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*set).store as usize,
             elements.add(used as usize) as usize,
             value.to_bits(),
         );
 
         (*set).size = size + 1;
         (*set).used = used + 1;
+        if !(*set).store.is_null() {
+            (*(*set).store).used = (*set).used as usize;
+        }
         index::insert_value(set, value, used);
     }
 }
@@ -1572,8 +1334,8 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         // the overwritten value; iteration skips holes, and delete-then-
         // re-add still appends at the end (#2831). Holes are squeezed out
         // when they outnumber the live elements, or before growing.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            set as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*set).store as usize,
             elements.add(idx as usize) as usize,
             SET_HOLE_VALUE_BITS,
         );
@@ -1729,6 +1491,9 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
         if (*set).size == 0 {
             if !active_foreach && extent > 0 {
                 (*set).used = 0;
+                if !(*set).store.is_null() {
+                    (*(*set).store).used = (*set).used as usize;
+                }
                 note_set_compaction(set, SetRemovedSlots::Prefix(extent));
             }
             return;
@@ -1743,8 +1508,8 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
             let elements = elements_ptr_mut(set);
             for i in 0..used {
                 if ptr::read(elements.add(i)).to_bits() != SET_HOLE_VALUE_BITS {
-                    crate::gc::runtime_store_external_jsvalue_slot(
-                        set as usize,
+                    crate::gc::runtime_store_gc_jsvalue_slot(
+                        (*set).store as usize,
                         elements.add(i) as usize,
                         SET_HOLE_VALUE_BITS,
                     );
@@ -1756,6 +1521,9 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
             // [[SetData]] is emptied in place, later adds are visited), so
             // record it as a squeeze of the whole extent.
             (*set).used = 0;
+            if !(*set).store.is_null() {
+                (*(*set).store).used = (*set).used as usize;
+            }
             note_set_compaction(set, SetRemovedSlots::Prefix(extent));
         }
     }
@@ -1890,8 +1658,7 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
             crate::array::rebuild_array_layout_exact(array);
         }
         let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_set_iterator_array(array);
-        array
+        crate::array::mark_materialized_iterator(array, 2)
     }
 }
 
@@ -3099,6 +2866,7 @@ mod tests {
             meta: std::ptr::null_mut(),
             used: 1,
             compaction_epoch: 0,
+            store: std::ptr::null_mut(),
         };
 
         let cases: &[(&str, *mut f64)] = &[
@@ -3211,4 +2979,9 @@ mod set_tombstone_tests;
 #[cfg(test)]
 pub(crate) fn test_enter_catch_foreach() {
     set_foreach_enter(js_set_alloc(4));
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_remove_compaction_history(set: *mut SetHeader) {
+    release_set_compaction(set);
 }

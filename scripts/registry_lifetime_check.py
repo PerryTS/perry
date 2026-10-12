@@ -155,9 +155,12 @@ ACCESSOR_RETURN = re.compile(
 # Removing perry-ext-streams drops six currently enumerated registries (224 ->
 # 218). Preserve the four-entry parser-liveness margin by lowering the floor
 # from 220 to 214.
-MIN_REGISTRIES = 214
+# The objtables lane moves per-object facts onto their owners and deletes 23
+# owner-keyed tables, 21 of them with a removal path (218 -> 195 enumerated,
+# 143 -> 122 removing). The floors keep the four-entry margin below them.
+MIN_REGISTRIES = 191
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
-MIN_REMOVING = 140
+MIN_REMOVING = 118
 
 MIN_WHY = 20
 

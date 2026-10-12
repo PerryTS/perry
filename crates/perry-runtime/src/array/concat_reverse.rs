@@ -87,7 +87,11 @@ pub extern "C" fn js_array_concat(
     // SET_REGISTRY; convert to array first so spread-into-array
     // `[...new Set(...)]` reads the right elements instead of the
     // SetHeader's raw memory.
-    if crate::set::is_registered_set(src as usize) {
+    // One allocation-proven header read names the source's kind; an array
+    // (the common source) never asks the collection brands.
+    let kind = unsafe { crate::value::addr_class::try_read_tracked_gc_header(src as usize) }
+        .map(|header| unsafe { header.as_ref().obj_type });
+    if kind == Some(crate::gc::GC_TYPE_SET) && crate::set::is_registered_set(src as usize) {
         let arr = crate::set::js_set_to_array(src as *const crate::set::SetHeader);
         return js_array_concat(dest, arr);
     }
@@ -97,7 +101,7 @@ pub extern "C" fn js_array_concat(
     // the wrong offsets, producing garbage f64s (issue #540). The
     // companion `Array.from(map)` path goes through `js_array_clone`
     // which already has the matching Map arm.
-    if crate::map::is_registered_map(src as usize) {
+    if kind == Some(crate::gc::GC_TYPE_MAP) && crate::map::is_registered_map(src as usize) {
         let arr = crate::map::js_map_entries(src as *const crate::map::MapHeader);
         return js_array_concat(dest, arr);
     }

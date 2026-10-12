@@ -1,5 +1,7 @@
 use super::*;
+mod owned;
 use crate::value::JSValue;
+use owned::with_metadata;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -40,8 +42,6 @@ struct ObjectMetadata {
 }
 
 crate::perry_thread_local! {
-    static OBJECT_METADATA: RefCell<crate::fast_hash::PtrHashMap<usize, ObjectMetadata>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
     static PENDING_FINALIZERS: RefCell<VecDeque<FinalizerRecord>> =
         const { RefCell::new(VecDeque::new()) };
 }
@@ -61,14 +61,16 @@ pub(crate) fn finalizer(
 }
 
 pub(crate) fn cancel_finalizer(owner: usize, id: u64) {
-    OBJECT_METADATA.with(|table| {
-        if let Some(metadata) = table.borrow_mut().get_mut(&owner) {
-            metadata.finalizers.retain(|finalizer| finalizer.id != id);
-        }
+    with_metadata(owner, false, |metadata| {
+        metadata.finalizers.retain(|finalizer| finalizer.id != id)
     });
-    PENDING_FINALIZERS.with(|queue| {
-        queue.borrow_mut().retain(|finalizer| finalizer.id != id);
-    });
+    cancel_pending(id);
+}
+fn cancel_pending(id: u64) {
+    PENDING_FINALIZERS.with(|queue| queue.borrow_mut().retain(|finalizer| finalizer.id != id));
+}
+pub(crate) fn cancel_finalizer_link(link: u64, id: u64) {
+    owned::cancel_link(link, id);
 }
 
 pub(crate) fn owner_from_bits(bits: u64) -> Option<usize> {
@@ -96,21 +98,14 @@ pub(crate) fn attach_external_finalizer(
     callback: NapiFinalize,
     hint: *mut c_void,
 ) {
-    OBJECT_METADATA.with(|table| {
-        let mut table = table.borrow_mut();
-        let metadata = table.entry(owner).or_default();
+    with_metadata(owner, true, |metadata| {
         metadata.external = Some(data as usize);
         metadata.external_finalizer = finalizer(callback, data, hint);
     });
 }
 
 pub(crate) fn is_external_owner(owner: usize) -> bool {
-    OBJECT_METADATA.with(|table| {
-        table
-            .borrow()
-            .get(&owner)
-            .is_some_and(|metadata| metadata.external.is_some())
-    })
+    with_metadata(owner, false, |metadata| metadata.external.is_some()).unwrap_or(false)
 }
 
 fn enqueue_metadata_finalizers(mut metadata: ObjectMetadata) {
@@ -127,8 +122,12 @@ fn enqueue_metadata_finalizers(mut metadata: ObjectMetadata) {
     if callbacks.is_empty() {
         return;
     }
-    PENDING_FINALIZERS.with(|queue| queue.borrow_mut().extend(callbacks));
-    crate::event_pump::js_notify_main_thread();
+    if PENDING_FINALIZERS
+        .try_with(|queue| queue.borrow_mut().extend(callbacks))
+        .is_ok()
+    {
+        crate::event_pump::js_notify_main_thread();
+    }
 }
 
 pub(crate) fn enqueue_finalizer(finalizer: FinalizerRecord) {
@@ -137,48 +136,7 @@ pub(crate) fn enqueue_finalizer(finalizer: FinalizerRecord) {
 }
 
 pub(crate) fn enqueue_all_object_finalizers() {
-    let all = OBJECT_METADATA.with(|table| {
-        std::mem::take(&mut *table.borrow_mut())
-            .into_values()
-            .collect::<Vec<_>>()
-    });
-    for metadata in all {
-        enqueue_metadata_finalizers(metadata);
-    }
-}
-
-pub(crate) fn scan_object_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    OBJECT_METADATA.with(|table| {
-        let old = std::mem::take(&mut *table.borrow_mut());
-        let mut rebuilt = crate::fast_hash::new_ptr_hash_map();
-        for (owner, metadata) in old {
-            let mut new_owner = owner;
-            visitor.visit_metadata_usize_slot(&mut new_owner);
-            rebuilt.insert(new_owner, metadata);
-        }
-        *table.borrow_mut() = rebuilt;
-    });
-}
-
-/// GC dead-owner registry callback. Removal is the one point that schedules
-/// finalization, so moving collections can re-key live owners without rooting
-/// them and both copying and mark/sweep paths have identical behavior.
-pub(crate) fn prune_dead_object_meta_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let removed = OBJECT_METADATA.with(|table| {
-        let mut table = table.borrow_mut();
-        let owners: Vec<_> = table
-            .keys()
-            .copied()
-            .filter(|owner| is_dead_owner(*owner))
-            .collect();
-        owners
-            .into_iter()
-            .filter_map(|owner| table.remove(&owner))
-            .collect::<Vec<_>>()
-    });
-    for metadata in removed {
-        enqueue_metadata_finalizers(metadata);
-    }
+    owned::enqueue_all();
 }
 
 pub(crate) fn drain_pending_finalizers() -> i32 {
@@ -226,9 +184,7 @@ pub unsafe extern "C" fn napi_wrap(
         Ok(owner) => owner,
         Err(status) => return set_status(env, status, "value must be an object"),
     };
-    let inserted = OBJECT_METADATA.with(|table| {
-        let mut table = table.borrow_mut();
-        let metadata = table.entry(owner).or_default();
+    let inserted = with_metadata(owner, true, |metadata| {
         if metadata.wrap.is_some() {
             return false;
         }
@@ -238,7 +194,7 @@ pub unsafe extern "C" fn napi_wrap(
         });
         true
     });
-    if !inserted {
+    if inserted != Some(true) {
         return set_status(env, NapiStatus::InvalidArg, "object is already wrapped");
     }
     if !result.is_null() {
@@ -263,12 +219,10 @@ pub unsafe extern "C" fn napi_unwrap(
         Ok(owner) => owner,
         Err(status) => return set_status(env, status, "value must be an object"),
     };
-    let data = OBJECT_METADATA.with(|table| {
-        table
-            .borrow()
-            .get(&owner)
-            .and_then(|metadata| metadata.wrap.as_ref().map(|wrap| wrap.data))
-    });
+    let data = with_metadata(owner, false, |metadata| {
+        metadata.wrap.as_ref().map(|wrap| wrap.data)
+    })
+    .flatten();
     let Some(data) = data else {
         return set_status(env, NapiStatus::InvalidArg, "object is not wrapped");
     };
@@ -289,12 +243,7 @@ pub unsafe extern "C" fn napi_remove_wrap(
         Ok(owner) => owner,
         Err(status) => return set_status(env, status, "value must be an object"),
     };
-    let wrap = OBJECT_METADATA.with(|table| {
-        table
-            .borrow_mut()
-            .get_mut(&owner)
-            .and_then(|metadata| metadata.wrap.take())
-    });
+    let wrap = with_metadata(owner, false, |metadata| metadata.wrap.take()).flatten();
     let Some(wrap) = wrap else {
         return set_status(env, NapiStatus::InvalidArg, "object is not wrapped");
     };
@@ -319,23 +268,31 @@ pub unsafe extern "C" fn napi_add_finalizer(
         Err(status) => return set_status(env, status, "value must be an object"),
     };
     let finalizer_id = finalizer.id;
-    OBJECT_METADATA.with(|table| {
-        table
-            .borrow_mut()
-            .entry(owner)
-            .or_default()
-            .finalizers
-            .push(finalizer);
-    });
+    if with_metadata(owner, true, |metadata| metadata.finalizers.push(finalizer)).is_none() {
+        return set_status(
+            env,
+            NapiStatus::ObjectExpected,
+            "value has no owning property holder",
+        );
+    }
     if !result.is_null() {
         let status = napi_create_reference(env, object, 0, result);
         if status != NapiStatus::Ok {
-            cancel_finalizer(owner, finalizer_id);
+            if let Some(live_owner) = value_bits(env, object).ok().and_then(owner_from_bits) {
+                cancel_finalizer(live_owner, finalizer_id);
+            } else {
+                cancel_pending(finalizer_id);
+            }
             return status;
+        }
+        let live_owner = value_bits(env, object).ok().and_then(owner_from_bits);
+        let link = live_owner.and_then(owned::weak_link);
+        if let Some(bits) = link {
+            crate::gc::runtime_write_barrier_root_nanbox(bits);
         }
         with_env_mut(env, |env| {
             if let Some(reference) = env.reference_mut(*result) {
-                reference.finalizer_link = Some((owner, finalizer_id));
+                reference.finalizer_link = link.map(|link| (link, finalizer_id));
             }
         });
     }
@@ -355,14 +312,8 @@ pub unsafe extern "C" fn napi_get_value_external(
         Ok(bits) => bits,
         Err(status) => return set_status(env, status, "value is not a live handle"),
     };
-    let data = owner_from_bits(bits).and_then(|owner| {
-        OBJECT_METADATA.with(|table| {
-            table
-                .borrow()
-                .get(&owner)
-                .and_then(|metadata| metadata.external)
-        })
-    });
+    let data = owner_from_bits(bits)
+        .and_then(|owner| with_metadata(owner, false, |metadata| metadata.external).flatten());
     let Some(data) = data else {
         return set_status(env, NapiStatus::InvalidArg, "value is not an external");
     };
@@ -383,9 +334,7 @@ pub unsafe extern "C" fn napi_type_tag_object(
         Ok(owner) => owner,
         Err(status) => return set_status(env, status, "value must be an object"),
     };
-    let inserted = OBJECT_METADATA.with(|table| {
-        let mut table = table.borrow_mut();
-        let metadata = table.entry(owner).or_default();
+    let inserted = with_metadata(owner, true, |metadata| {
         if metadata.type_tag.is_some() {
             false
         } else {
@@ -393,7 +342,7 @@ pub unsafe extern "C" fn napi_type_tag_object(
             true
         }
     });
-    if !inserted {
+    if inserted != Some(true) {
         return set_status(env, NapiStatus::InvalidArg, "object already has a type tag");
     }
     ok(env)
@@ -417,12 +366,38 @@ pub unsafe extern "C" fn napi_check_object_type_tag(
         Ok(owner) => owner,
         Err(status) => return set_status(env, status, "value must be an object"),
     };
-    *result = OBJECT_METADATA.with(|table| {
-        table
-            .borrow()
-            .get(&owner)
-            .and_then(|metadata| metadata.type_tag)
-            .is_some_and(|stored| stored == *type_tag)
-    });
+    *result = with_metadata(owner, false, |metadata| metadata.type_tag)
+        .flatten()
+        .is_some_and(|stored| stored == *type_tag);
     ok(env)
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_owned_metadata(owner: usize) {
+    with_metadata(owner, true, |metadata| {
+        metadata.wrap = Some(NativeWrap {
+            data: 37,
+            finalizer: None,
+        });
+        metadata.type_tag = Some(NapiTypeTag {
+            lower: 11,
+            upper: 13,
+        });
+    })
+    .expect("fixture owns metadata");
+}
+#[cfg(test)]
+pub(crate) fn test_owned_metadata(owner: usize) -> Option<(usize, u64, u64)> {
+    with_metadata(owner, false, |metadata| {
+        Some((
+            metadata.wrap.as_ref()?.data,
+            metadata.type_tag?.lower,
+            metadata.type_tag?.upper,
+        ))
+    })
+    .flatten()
+}
+#[cfg(test)]
+pub(crate) fn test_erase_owned_metadata(owner: usize) {
+    owned::erase(owner);
 }

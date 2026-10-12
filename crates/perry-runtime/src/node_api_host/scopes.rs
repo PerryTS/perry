@@ -200,8 +200,8 @@ pub unsafe extern "C" fn napi_delete_reference(env: NapiEnv, reference: NapiRef)
     });
     match deleted {
         Some(Ok(link)) => {
-            if let Some((owner, id)) = link {
-                super::metadata::cancel_finalizer(owner, id);
+            if let Some((holder, id)) = link {
+                super::metadata::cancel_finalizer_link(holder, id);
             }
             ok(env)
         }

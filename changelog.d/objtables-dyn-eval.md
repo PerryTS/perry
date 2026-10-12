@@ -1,0 +1,1 @@
+Delete the interpreter's function registry, closure-owner lifetime table, young-owner log, move hook and both prunes. A closure's capture zero now owns a collecting native parsed-function cell. Nested AST memos live on their parent AST; the existing bounded source cache stores native ASTs, and active interpreter frames retain their existing throw-safe pins.

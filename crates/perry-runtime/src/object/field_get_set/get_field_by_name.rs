@@ -8,7 +8,7 @@ mod shape_inherited;
 
 /// Wall 10 — read a property a framework attached to a native registry handle
 /// via `Object.setPrototypeOf(handle, proto)` (Express's `res`/`req`). The link
-/// is keyed by the handle id in `OBJECT_PROTOTYPES`. Returns `None` (so the
+/// is keyed by the handle id in the owner property bag. Returns `None` (so the
 /// caller yields `undefined`) when no recorded prototype carries the key.
 /// Cheap when no prototype was recorded (the common handle case).
 fn handle_proto_inherited_field(

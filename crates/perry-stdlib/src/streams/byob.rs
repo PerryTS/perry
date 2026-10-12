@@ -274,6 +274,7 @@ pub(super) unsafe fn get_reader_for_stream(stream_id: usize, is_byob: bool) -> u
     READERS.lock().unwrap().insert(
         reader_id,
         ReaderData {
+            props: Default::default(),
             stream_handle: stream_id,
             locked: true,
             closed_promise: closed_p,

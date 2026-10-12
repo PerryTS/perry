@@ -1604,6 +1604,8 @@ fn fs_codec_is_filehandle(value: f64) -> bool {
 }
 
 fn build_filehandle_object(fd: i32) -> f64 {
+    // Bounded native initialization; the created closures do not execute JS.
+    let _no_move = crate::gc::GcSuppressScope::new();
     // Arm BEFORE the object exists: every FileHandle (attached or detached)
     // is minted here, so the thread codec is live from the first moment a
     // probe could ever match.
@@ -1756,9 +1758,9 @@ fn build_filehandle_object(fd: i32) -> f64 {
             0,
         ),
     );
-    FILEHANDLE_OBJECT_FDS.with(|fds| {
-        fds.borrow_mut().insert(obj as usize, fd);
-    });
+    unsafe {
+        set_filehandle_owner_fd(obj, fd);
+    }
     handle
 }
 

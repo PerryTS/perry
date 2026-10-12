@@ -1,0 +1,1 @@
+Worker teardown releases the native AST reference held by a compact interpreted-function cell, including a cell pinned by an active native frame. The cleanup is idempotent and uses no TLS or JS callbacks. A teardown-path test holds only a weak AST witness and checks that the native reference is released.

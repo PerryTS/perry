@@ -4,21 +4,25 @@
 
 use super::*;
 
-pub(super) fn register_context_snapshot(
-    snapshot: crate::async_context::AsyncContextSnapshot,
-) -> usize {
-    let id = NEXT_CONTEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
-    CONTEXT_SNAPSHOTS.lock().unwrap().insert(id, snapshot);
-    id
+/// The returned closure owns the snapshot through capture 0. A detached
+/// closure releases its native snapshot tokens with ordinary GC reachability.
+pub(crate) fn snapshot_for_closure(
+    closure: *const ClosureHeader,
+) -> crate::async_context::AsyncContextSnapshot {
+    let bits = crate::closure::js_closure_get_capture_bits(closure, 0);
+    if bits == crate::value::TAG_UNDEFINED {
+        return Default::default();
+    }
+    let holder =
+        (bits & crate::value::POINTER_MASK) as *const crate::async_context::AsyncSnapshotHolder;
+    unsafe { (*holder).snapshot.clone() }
 }
 
-pub(super) fn run_with_context_snapshot(snapshot_id: usize, f: impl FnOnce() -> f64) -> f64 {
-    let snapshot = CONTEXT_SNAPSHOTS
-        .lock()
-        .unwrap()
-        .get(&snapshot_id)
-        .cloned()
-        .unwrap_or_default();
+pub(super) fn run_with_context_snapshot(
+    closure: *const ClosureHeader,
+    f: impl FnOnce() -> f64,
+) -> f64 {
+    let snapshot = snapshot_for_closure(closure);
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut snapshot = snapshot;
     let snapshot_roots = crate::async_context::root_snapshot(&scope, &snapshot);
@@ -89,8 +93,7 @@ pub(super) extern "C" fn async_local_storage_snapshot_trampoline(
     callback_value: f64,
     rest: f64,
 ) -> f64 {
-    let snapshot_id = js_closure_get_capture_ptr(closure, 0) as usize;
-    run_with_context_snapshot(snapshot_id, || {
+    run_with_context_snapshot(closure, || {
         // AsyncLocalStorage.snapshot() intentionally invokes the supplied
         // callback as a plain function. The receiver used to call the snapshot
         // wrapper itself is not forwarded.
@@ -98,19 +101,35 @@ pub(super) extern "C" fn async_local_storage_snapshot_trampoline(
     })
 }
 
-pub(super) fn async_local_storage_static_snapshot_value() -> f64 {
-    let snapshot_id = register_context_snapshot(crate::async_context::capture_context());
+pub(crate) fn snapshot_closure(
+    snapshot: crate::async_context::AsyncContextSnapshot,
+) -> *mut ClosureHeader {
+    // No user code or poll occurs while the native snapshot is published.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let holder = if snapshot.is_empty() {
+        crate::value::TAG_UNDEFINED
+    } else {
+        crate::value::POINTER_TAG | crate::async_context::alloc_snapshot_holder(snapshot) as u64
+    };
     let closure = js_closure_alloc(
         crate::fn_info!(async_local_storage_snapshot_trampoline, 2; with_rest(1)),
         1,
     );
-    if closure.is_null() {
-        return TAG_UNDEFINED_F64;
+    if !closure.is_null() {
+        crate::closure::js_closure_set_capture_bits(closure, 0, holder);
+        crate::object::set_builtin_closure_length(closure as usize, 1);
+        crate::object::set_bound_native_closure_name(closure, "bound");
     }
-    js_closure_set_capture_ptr(closure, 0, snapshot_id as i64);
-    crate::object::set_builtin_closure_length(closure as usize, 1);
-    crate::object::set_bound_native_closure_name(closure, "bound");
-    crate::value::js_nanbox_pointer(closure as i64)
+    closure
+}
+
+pub(super) fn async_local_storage_static_snapshot_value() -> f64 {
+    let closure = snapshot_closure(crate::async_context::capture_context());
+    if closure.is_null() {
+        TAG_UNDEFINED_F64
+    } else {
+        crate::value::js_nanbox_pointer(closure as i64)
+    }
 }
 
 pub extern "C" fn js_async_local_storage_static_snapshot_method(

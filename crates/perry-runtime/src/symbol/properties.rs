@@ -33,39 +33,14 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
             })
             .collect();
     }
-    let mut entries = {
-        let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-        guard
-            .as_ref()
-            .and_then(|m| m.get(&src_obj_ptr))
-            .cloned()
-            .unwrap_or_default()
-    };
-    // Accessor-keyed entries are order-preserving placeholders whose real
-    // descriptor lives in `SYMBOL_ACCESSOR_PROPERTIES` (see
-    // `set_symbol_accessor_property`). Every consumer of this clone
-    // (console formatting, the freeze/seal walks) handles accessors through
-    // the accessor table separately, so hand back only the data entries —
-    // the same view they got when conversion removed the entry outright.
-    if !entries.is_empty() {
-        let accessor_keys = accessors::owner_symbol_accessor_keys(src_obj_ptr);
-        if !accessor_keys.is_empty() {
-            entries.retain(|(sym, _)| !accessor_keys.contains(sym));
-        }
-    }
-    entries
+    Vec::new()
 }
 
 pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
     if unsafe { crate::object::shaped_symbols::owner(owner).is_some() } {
         return unsafe { crate::object::shaped_symbols::get(owner, sym_key) };
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard.as_ref().and_then(|map| {
-        map.get(&owner)
-            .and_then(|entries| entries.iter().find(|(key, _)| *key == sym_key))
-            .map(|(_, value_bits)| *value_bits)
-    })
+    None
 }
 
 /// Install a symbol-keyed data descriptor after the caller has completed
@@ -93,10 +68,7 @@ pub(crate) fn get_symbol_property_attrs(
             }
         });
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&(owner, sym_key)).copied())
+    None
 }
 
 pub(crate) fn set_symbol_property_attrs(
@@ -120,12 +92,10 @@ pub(crate) fn set_symbol_property_attrs(
         }
         return;
     }
-    super::note_symbol_key_installed(sym_key);
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_fast_key_hash_map());
-    }
-    guard.as_mut().unwrap().insert((owner, sym_key), attrs);
+    debug_assert!(
+        false,
+        "symbol descriptor owner must have an ordinary holder"
+    );
 }
 
 pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64) -> i32 {
@@ -146,55 +116,7 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     if crate::object::shaped_symbols::delete(obj_key, sym_key) {
         return 1;
     }
-    accessors::clear_symbol_accessor_property(obj_key, sym_key);
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-        if let Some(map) = guard.as_mut() {
-            let should_remove_owner = if let Some(entries) = map.get_mut(&obj_key) {
-                entries.retain(|(key, _)| *key != sym_key);
-                entries.is_empty()
-            } else {
-                false
-            };
-            if should_remove_owner {
-                map.remove(&obj_key);
-            }
-        }
-    }
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
-        if let Some(map) = guard.as_mut() {
-            map.remove(&(obj_key, sym_key));
-        }
-    }
-    crate::symbol::symbol_property_ic_epoch_bump();
     1
-}
-
-/// #6710: drop ALL symbol-keyed props (data + attrs + accessors) owned by
-/// `obj_key`. Used when a handle id is recycled so the reused id starts with a
-/// clean symbol side table — mirrors `handle_expando_clear` for the string
-/// table. The three tables are keyed by `obj_key` (`SYMBOL_PROPERTIES`) or
-/// `(obj_key, sym_key)` (attrs / accessors), so a single object drops in one
-/// `remove` and two `retain`s.
-pub(crate) fn clear_all_symbol_properties_for_object(obj_key: usize) {
-    if obj_key == 0 {
-        return;
-    }
-    accessors::clear_all_symbol_accessor_properties_for_object(obj_key);
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-        if let Some(map) = guard.as_mut() {
-            map.remove(&obj_key);
-        }
-    }
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
-        if let Some(map) = guard.as_mut() {
-            map.retain(|(o, _), _| *o != obj_key);
-        }
-    }
-    crate::symbol::symbol_property_ic_epoch_bump();
 }
 
 /// #6710: clear every per-handle JS-property side table for a recycled handle
@@ -210,7 +132,6 @@ pub extern "C" fn js_handle_clear_side_tables(handle: i64) {
         return;
     }
     crate::object::handle_expando::handle_expando_clear(handle);
-    clear_all_symbol_properties_for_object(handle as usize);
 }
 
 pub(crate) fn symbol_property_is_enumerable(owner: usize, sym_key: usize) -> bool {
@@ -516,11 +437,7 @@ fn object_symbol_data_property_exists(obj_key: usize, sym_key: usize) -> bool {
         return unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) }
             .is_some_and(|entry| entry & crate::object::key_attrs::ENTRY_ACCESSOR == 0);
     }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard.as_ref().is_some_and(|map| {
-        map.get(&obj_key)
-            .is_some_and(|entries| entries.iter().any(|&(sk, _)| sk == sym_key))
-    })
+    false
 }
 
 /// True when an existing symbol-keyed own data property is non-writable — the
@@ -731,16 +648,6 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     }
     if crate::object::shaped_symbols::owner(obj_key).is_some() {
         return crate::object::shaped_symbols::entry(obj_key, sym_key).is_some();
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    if let Some(map) = guard.as_ref() {
-        if let Some(entries) = map.get(&obj_key) {
-            for &(sk, _) in entries.iter() {
-                if sk == sym_key {
-                    return true;
-                }
-            }
-        }
     }
     false
 }

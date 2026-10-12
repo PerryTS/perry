@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
@@ -178,12 +177,10 @@ struct ScriptMetadata {
     column_offset: i32,
 }
 
-static VM_COMPILED_FUNCTION_SOURCES: OnceLock<Mutex<HashMap<usize, String>>> = OnceLock::new();
+pub(crate) mod owned_state;
 
 crate::perry_thread_local! {
     static VM_INTRINSIC_GLOBAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static VM_CONTEXTS: std::cell::RefCell<HashMap<usize, ContextState>> =
-        std::cell::RefCell::new(HashMap::new());
     static MAIN_CONTEXT: std::cell::RefCell<Option<ContextState>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -217,34 +214,8 @@ impl Default for ContextOptions {
     }
 }
 
-static VM_SCRIPTS: OnceLock<Mutex<HashMap<usize, ScriptMetadata>>> = OnceLock::new();
-
-// #11541: both tables register their thread-exit hook when they are first
-// created (every insert goes through these accessors; the dead-owner sweep
-// and the lookups read the `OnceLock` directly), instead of being named in
-// `arena::thread_exit`'s dispatcher, which linked `node:vm` into every binary.
-fn scripts() -> &'static Mutex<HashMap<usize, ScriptMetadata>> {
-    crate::once_init::get_or_init(&VM_SCRIPTS, || {
-        crate::arena::thread_exit::register_thread_exit_range_hook(
-            release_vm_owner_entries_in_freed_ranges,
-        );
-        Mutex::new(HashMap::new())
-    })
-}
-
-fn compiled_function_sources() -> &'static Mutex<HashMap<usize, String>> {
-    crate::once_init::get_or_init(&VM_COMPILED_FUNCTION_SOURCES, || {
-        crate::arena::thread_exit::register_thread_exit_range_hook(
-            release_vm_owner_entries_in_freed_ranges,
-        );
-        Mutex::new(HashMap::new())
-    })
-}
-
 pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<String> {
-    VM_COMPILED_FUNCTION_SOURCES
-        .get()
-        .and_then(|sources| sources.lock().ok()?.get(&closure).cloned())
+    owned_state::function_source(closure)
 }
 
 pub(crate) fn function_source_for_closure(closure: usize) -> String {
@@ -1050,27 +1021,23 @@ fn context_from_arg(value: f64, arg_name: &str, options: ContextOptions) -> f64 
     }
     let key = context_key(sandbox);
     if !dont_contextify {
-        if let Some(existing) = VM_CONTEXTS.with(|contexts| contexts.borrow().get(&key).cloned()) {
+        if let Some(existing) = owned_state::context_state(key) {
             return f64::from_bits(existing.returned_bits);
         }
     }
     let state = new_context_state(sandbox, dont_contextify, options);
     let returned = f64::from_bits(state.returned_bits);
-    VM_CONTEXTS.with(|contexts| {
-        contexts.borrow_mut().insert(context_key(returned), state);
-    });
+    owned_state::set_context_state(context_key(returned), &state);
     returned
 }
 
 fn is_context(value: f64) -> bool {
     let key = context_key(value);
-    key != 0 && VM_CONTEXTS.with(|contexts| contexts.borrow().contains_key(&key))
+    key != 0 && owned_state::context_state(key).is_some()
 }
 
 fn require_context_state(value: f64, arg_name: &str) -> ContextState {
-    if let Some(state) =
-        VM_CONTEXTS.with(|contexts| contexts.borrow().get(&context_key(value)).cloned())
-    {
+    if let Some(state) = owned_state::context_state(context_key(value)) {
         state
     } else {
         let message = format!(
@@ -1129,8 +1096,7 @@ pub(crate) fn eval_dynamic_module_expression(source: &str) -> f64 {
 }
 
 fn script_metadata(script_value: f64) -> Option<ScriptMetadata> {
-    object_ptr_from_value(script_value)
-        .and_then(|ptr| scripts().lock().unwrap().get(&(ptr as usize)).cloned())
+    object_ptr_from_value(script_value).and_then(|ptr| owned_state::script_metadata(ptr as usize))
 }
 
 fn install_script_method(
@@ -1276,9 +1242,9 @@ fn make_script(code: String, options: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        scripts().lock().unwrap().insert(
+        owned_state::set_script_metadata(
             obj as usize,
-            ScriptMetadata {
+            &ScriptMetadata {
                 source: code,
                 filename: source_options.filename,
                 line_offset: source_options.line_offset,
@@ -1529,9 +1495,9 @@ pub extern "C" fn js_vm_compile_function(code: f64, params: f64, options: f64) -
     }));
     let closure = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
     crate::object::set_builtin_closure_length(closure, params.len() as u32);
-    compiled_function_sources().lock().unwrap().insert(
+    owned_state::set_function_source(
         crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
-        format!("function ({}) {{\n{}\n}}", params.join(", "), body),
+        &format!("function ({}) {{\n{}\n}}", params.join(", "), body),
     );
     if let Some(bytes) = cached_data {
         set_value_field(
@@ -1630,19 +1596,6 @@ pub extern "C" fn js_vm_script_call(_code: f64, _options: f64) -> f64 {
 }
 
 pub fn scan_vm_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    VM_CONTEXTS.with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
-        let mut rebuilt = HashMap::with_capacity(contexts.len());
-        for (_, mut state) in contexts.drain() {
-            visitor.visit_nanbox_u64_slot(&mut state.returned_bits);
-            visitor.visit_nanbox_u64_slot(&mut state.sandbox_bits);
-            visitor.visit_nanbox_u64_slot(&mut state.global_this_bits);
-            visitor.visit_nanbox_u64_slot(&mut state.intrinsics_bits);
-            visitor.visit_nanbox_u64_slot(&mut state.lexical_env_bits);
-            rebuilt.insert(context_key(f64::from_bits(state.returned_bits)), state);
-        }
-        *contexts = rebuilt;
-    });
     MAIN_CONTEXT.with(|main| {
         if let Some(state) = main.borrow_mut().as_mut() {
             visitor.visit_nanbox_u64_slot(&mut state.returned_bits);
@@ -1652,112 +1605,15 @@ pub fn scan_vm_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             visitor.visit_nanbox_u64_slot(&mut state.lexical_env_bits);
         }
     });
-    if let Some(scripts) = VM_SCRIPTS.get() {
-        let mut guard = scripts.lock().unwrap();
-        let mut rewrites = Vec::new();
-        for old in guard.keys().copied().collect::<Vec<_>>() {
-            let mut new = old;
-            if visitor.visit_metadata_usize_slot(&mut new) && new != old {
-                rewrites.push((old, new));
-            }
-        }
-        for (old, new) in rewrites {
-            if let Some(source) = guard.remove(&old) {
-                if new != 0 {
-                    guard.insert(new, source);
-                }
-            }
-        }
-    }
-    if let Some(sources) = VM_COMPILED_FUNCTION_SOURCES.get() {
-        let mut guard = sources.lock().unwrap();
-        let mut rewrites = Vec::new();
-        for old in guard.keys().copied().collect::<Vec<_>>() {
-            let mut new = old;
-            if visitor.visit_metadata_usize_slot(&mut new) && new != old {
-                rewrites.push((old, new));
-            }
-        }
-        for (old, new) in rewrites {
-            if let Some(source) = guard.remove(&old) {
-                if new != 0 {
-                    guard.insert(new, source);
-                }
-            }
-        }
-    }
 }
 
-/// Prune VM metadata whose owner is provably dead. `VM_CONTEXTS` is local to
-/// the calling thread; process-global script/source entries owned by another
-/// thread are retained because their deadness cannot be attributed here.
-pub(crate) fn prune_dead_vm_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    VM_CONTEXTS.with(|contexts| {
-        contexts
-            .borrow_mut()
-            .retain(|owner, _| !is_dead_owner(*owner));
-    });
-    if let Some(scripts) = VM_SCRIPTS.get() {
-        if let Ok(mut guard) = scripts.lock() {
-            guard.retain(|owner, _| !is_dead_owner(*owner));
-        }
-    }
-    if let Some(sources) = VM_COMPILED_FUNCTION_SOURCES.get() {
-        if let Ok(mut guard) = sources.lock() {
-            guard.retain(|owner, _| !is_dead_owner(*owner));
-        }
-    }
-}
-
-/// #11471: thread-exit release for `VM_SCRIPTS` / `VM_COMPILED_FUNCTION_SOURCES`.
-/// The death prune above retains other threads' owners, so an exiting thread's
-/// Script objects and compiled closures would keep their entries and a fresh
-/// cell at a reused address would report the dead one's source. Runs from a
-/// TLS destructor: process-global locks only, no thread-locals, no GC.
-pub(crate) fn release_vm_owner_entries_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    use std::sync::PoisonError;
-    if let Some(scripts) = VM_SCRIPTS.get() {
-        let mut guard = scripts.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.retain(|owner, _| !freed.contains(*owner));
-    }
-    if let Some(sources) = VM_COMPILED_FUNCTION_SOURCES.get() {
-        let mut guard = sources.lock().unwrap_or_else(PoisonError::into_inner);
-        guard.retain(|owner, _| !freed.contains(*owner));
-    }
-}
-
-/// Test probe (#11471): `(VM_SCRIPTS has owner, VM_COMPILED_FUNCTION_SOURCES has owner)`.
+/// Test probe (#11471): whether an owner carries Script metadata and source.
 #[doc(hidden)]
 pub fn vm_owner_entries_for_test(owner: usize) -> (bool, bool) {
-    let script = VM_SCRIPTS.get().is_some_and(|m| {
-        m.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&owner)
-    });
     (
-        script,
+        owned_state::script_metadata(owner).is_some(),
         compiled_function_source_for_closure(owner).is_some(),
     )
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_vm_script_entry(owner: usize, source: &str) {
-    scripts().lock().unwrap().insert(
-        owner,
-        ScriptMetadata {
-            source: source.to_string(),
-            filename: "evalmachine.<anonymous>".to_string(),
-            line_offset: 0,
-            column_offset: 0,
-        },
-    );
-}
-
-#[cfg(test)]
-pub(crate) fn test_vm_script_entry_exists(owner: usize) -> bool {
-    scripts().lock().unwrap().contains_key(&owner)
 }
 
 /// Dispatch a `node:vm` method reached as a value/namespace call.

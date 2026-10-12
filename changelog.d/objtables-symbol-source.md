@@ -1,0 +1,1 @@
+Object assignment reuses the existing Symbol payload discriminator before the exact allocation brand check. Ordinary object sources avoid a redundant allocator lookup after the Symbol registry removal. No cache or per-site code sequence is added.

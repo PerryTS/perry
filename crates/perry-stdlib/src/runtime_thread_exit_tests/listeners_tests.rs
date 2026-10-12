@@ -93,8 +93,8 @@ fn thread_exit_disables_the_threads_async_hooks_create_hook_record() {
 }
 
 #[test]
-fn thread_exit_releases_the_threads_async_hooks_resources_and_snapshots() {
-    let (async_id, store_bits, live) = std::thread::spawn(|| {
+fn thread_exit_releases_the_threads_async_hooks_resources() {
+    let (async_id, live) = std::thread::spawn(|| {
         let als_payload = perry_runtime::async_context::AsyncLocalStoragePayload::default();
         let als_token = als_payload.token();
         let scope = RuntimeHandleScope::new();
@@ -111,11 +111,8 @@ fn thread_exit_releases_the_threads_async_hooks_resources_and_snapshots() {
         );
         let _snapshot =
             perry_runtime::async_hooks::js_async_local_storage_static_snapshot_direct(0);
-        let store_bits =
-            JSValue::pointer(store.get_raw_mut_ptr::<ObjectHeader>() as *const u8).bits();
-        let live = perry_runtime::async_hooks::resource_tracked_for_test(ids.async_id)
-            && perry_runtime::async_hooks::context_snapshot_holds_for_test(store_bits);
-        (ids.async_id, store_bits, live)
+        let live = perry_runtime::async_hooks::resource_tracked_for_test(ids.async_id);
+        (ids.async_id, live)
     })
     .join()
     .unwrap();
@@ -126,10 +123,6 @@ fn thread_exit_releases_the_threads_async_hooks_resources_and_snapshots() {
     assert!(
         !perry_runtime::async_hooks::resource_tracked_for_test(async_id),
         "a dead thread's async resource outlived its heap"
-    );
-    assert!(
-        !perry_runtime::async_hooks::context_snapshot_holds_for_test(store_bits),
-        "a dead thread's AsyncLocalStorage snapshot outlived its heap"
     );
 }
 

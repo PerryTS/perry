@@ -77,10 +77,8 @@ unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, 
     old_bits
 }
 
-/// Only genuine shaped objects carry a meta record at the ObjectHeader offset.
-/// Every other GC type (RegExp, errors, maps, ...) has unrelated bytes there —
-/// those owners use their own expando bags. Classification uses the
-/// canonical GcHeader kind, mirroring `gc_object_meta_slot`.
+/// Spill storage belongs to an ordinary object holder, including the bags
+/// that carry exotic properties. Check the kind before reading ObjectHeader.
 #[inline]
 pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
     if obj_ptr == 0 {

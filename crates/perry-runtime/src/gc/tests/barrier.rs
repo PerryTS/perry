@@ -600,9 +600,11 @@ fn test_old_young_edge_verifier_accepts_map_external_slot() {
         (*map).used = 1;
         *entries = ptr_bits(young);
         (*map_header).gc_flags |= GC_FLAG_MARKED;
+        (*header_from_user_ptr(crate::map::test_map_store_word(map) as *const u8)).gc_flags |=
+            GC_FLAG_MARKED;
     }
     write_barrier_slot_inner(
-        ptr_bits(map as usize),
+        ptr_bits(unsafe { crate::map::test_map_store_word(map) }),
         entries as usize,
         ptr_bits(young),
         true,
@@ -628,13 +630,18 @@ fn test_old_young_edge_verifier_accepts_set_external_slot() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
     let (set, elements, layout) = unsafe { alloc_old_test_set(1) };
-    let set_header = unsafe { header_from_user_ptr(set as *const u8) };
+    let store = unsafe { crate::set::test_set_store_word(set) };
+    let set_header = unsafe { header_from_user_ptr(store as *const u8) };
     unsafe {
         (*set).size = 1;
         (*set).used = 1;
         (*set_header).gc_flags |= GC_FLAG_MARKED;
     }
-    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
+    runtime_store_gc_jsvalue_slot(
+        unsafe { crate::set::test_set_store_word(set) },
+        elements as usize,
+        ptr_bits(young),
+    );
 
     let stats = verify_old_to_young_edges_covered();
 
@@ -969,7 +976,7 @@ fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
         *entries.add(clean_idx) = POINTER_TAG | clean_child as u64;
     }
     write_barrier_slot_inner(
-        POINTER_TAG | map as u64,
+        POINTER_TAG | unsafe { crate::map::test_map_store_word(map) } as u64,
         dirty_slot as usize,
         POINTER_TAG | dirty_child as u64,
         true,
@@ -978,8 +985,8 @@ fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
     let valid_ptrs = build_valid_pointer_set();
     let stats = mark_remembered_set_roots(&valid_ptrs);
     assert_eq!(stats.dirty_pages_scanned, 1);
-    assert_eq!(stats.old_objects_considered, 1);
-    assert_eq!(stats.dirty_objects_scanned, 1);
+    assert!(stats.old_objects_considered >= 1);
+    assert!(stats.dirty_objects_scanned >= 1);
     assert_eq!(stats.dirty_slot_ranges_scanned, 1);
     assert!(
         stats.dirty_slots_scanned <= 512,
@@ -1079,13 +1086,13 @@ fn test_dirty_page_map_external_dedupes_and_clears() {
     }
     let slot = unsafe { entries.add(1) };
     write_barrier_slot_inner(
-        POINTER_TAG | map as u64,
+        POINTER_TAG | unsafe { crate::map::test_map_store_word(map) } as u64,
         slot as usize,
         POINTER_TAG | young as u64,
         true,
     );
     write_barrier_slot_inner(
-        POINTER_TAG | map as u64,
+        POINTER_TAG | unsafe { crate::map::test_map_store_word(map) } as u64,
         slot as usize,
         POINTER_TAG | young as u64,
         true,
@@ -1099,37 +1106,33 @@ fn test_dirty_page_map_external_dedupes_and_clears() {
 }
 
 #[test]
-fn test_dirty_page_map_realloc_span_marks_new_entries_pages() {
+fn test_dirty_page_map_growth_span_marks_new_entries_pages() {
     let _guard = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_remembered_set();
     clear_marks();
     let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let (map, entries, layout) = unsafe { alloc_old_test_map(1024) };
-    unsafe {
-        (*map).size = 1024;
-        (*map).used = 1024;
-        *entries.add(1023) = POINTER_TAG | young as u64;
+    // The grown store must be born old (over the large-object threshold) for
+    // its copied young children to need the replayed barrier.
+    let map = crate::map::js_map_alloc(8192);
+    for i in 0..8192 {
+        crate::map::js_map_set(map, i as f64, 0.0);
     }
-    let new_layout = std::alloc::Layout::from_size_align(2048 * 16, 8).unwrap();
-    let new_entries = unsafe { std::alloc::alloc_zeroed(new_layout) as *mut u64 };
-    assert!(!new_entries.is_null());
-    unsafe {
-        std::ptr::copy_nonoverlapping(entries, new_entries, 2048);
-        (*map).entries = new_entries as *mut f64;
-        (*map).capacity = 2048;
-    }
-    dirty_external_slot_span(map as usize, new_entries as usize, 2048);
-
-    let valid_ptrs = build_valid_pointer_set();
-    let stats = mark_remembered_set_roots(&valid_ptrs);
+    crate::map::js_map_set(map, 8191.0, f64::from_bits(ptr_bits(young)));
+    reset_remembered_set();
+    crate::map::js_map_set(map, 8192.0, 0.0);
+    assert_eq!(unsafe { (*map).capacity }, 16384);
+    assert!(crate::arena::pointer_in_old_gen(unsafe {
+        crate::map::test_map_store_word(map)
+    }));
+    let stats = mark_remembered_set_roots(&build_valid_pointer_set());
     assert!(stats.dirty_pages_scanned >= 1);
-    assert_eq!(stats.old_objects_considered, 1);
     assert_eq!(stats.newly_marked, 1);
     unsafe {
-        let header = header_from_user_ptr(young as *const u8);
-        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
-        retire_old_test_map(map, new_entries, new_layout);
-        std::alloc::dealloc(entries as *mut u8, layout);
+        assert_ne!(
+            (*header_from_user_ptr(young as *const u8)).gc_flags & GC_FLAG_MARKED,
+            0
+        );
     }
     clear_marks();
     remembered_set_clear();
@@ -1147,7 +1150,11 @@ fn test_dirty_page_set_external_slot_marks_child() {
         (*set).size = 1;
         (*set).used = 1;
     }
-    runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
+    runtime_store_gc_jsvalue_slot(
+        unsafe { crate::set::test_set_store_word(set) },
+        elements as usize,
+        ptr_bits(young),
+    );
 
     assert!(
         remembered_set_size() > 0,
@@ -1156,7 +1163,8 @@ fn test_dirty_page_set_external_slot_marks_child() {
 
     let valid_ptrs = build_valid_pointer_set();
     let stats = mark_remembered_set_roots(&valid_ptrs);
-    assert_eq!(stats.old_objects_considered, 1);
+    // The fixture's old header and its old store can share the dirty page.
+    assert!((1..=2).contains(&stats.old_objects_considered));
     assert_eq!(stats.newly_marked, 1);
     unsafe {
         let header = header_from_user_ptr(young as *const u8);
@@ -1190,7 +1198,7 @@ fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
         *elements.add(clean_idx) = POINTER_TAG | clean_child as u64;
     }
     write_barrier_slot_inner(
-        POINTER_TAG | set as u64,
+        POINTER_TAG | unsafe { crate::set::test_set_store_word(set) } as u64,
         dirty_slot as usize,
         POINTER_TAG | dirty_child as u64,
         true,
@@ -1425,7 +1433,7 @@ fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
         *entries.add(clean_idx) = POINTER_TAG | clean_child as u64;
     }
     write_barrier_slot_inner(
-        POINTER_TAG | map as u64,
+        POINTER_TAG | unsafe { crate::map::test_map_store_word(map) } as u64,
         dirty_slot as usize,
         POINTER_TAG | dirty_child as u64,
         true,

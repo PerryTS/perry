@@ -23,6 +23,7 @@ pub(super) struct HeadersStore {
 /// is deliberately not `Clone`; copying a record means copying its `store`.
 #[derive(Default)]
 pub(super) struct HeadersRecord {
+    pub(super) props: u64,
     pub(super) store: HeadersStore,
     pub(super) method_values: std::collections::HashMap<&'static str, u64>,
 }
@@ -30,6 +31,7 @@ pub(super) struct HeadersRecord {
 impl From<HeadersStore> for HeadersRecord {
     fn from(store: HeadersStore) -> Self {
         Self {
+            props: 0,
             store,
             method_values: Default::default(),
         }

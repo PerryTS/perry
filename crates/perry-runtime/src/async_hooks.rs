@@ -51,8 +51,8 @@ const TAG_UNDEFINED_F64: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
 // gets an id > 1 — observable through `executionAsyncId()` inside its
 // callback (#789).
 //
-// #7680: `NEXT_ASYNC_ID`, `HOOKS_ACTIVE`, and `PROMISE_HOOKS_ACTIVE` (with `HOOKS` / `RESOURCES` /
-// `GC_DESTROY_QUEUE` / `NEXT_CONTEXT_SNAPSHOT_ID` / `CONTEXT_SNAPSHOTS` /
+// #7680: `NEXT_ASYNC_ID`, `HOOKS_ACTIVE`, and `PROMISE_HOOKS_ACTIVE` (with `HOOKS` /
+// `GC_DESTROY_QUEUE` /
 // `ASYNC_WRAP_PROVIDERS` below) are `per_test_global!`: `reset_for_tests()`
 // clears all nine from whatever thread runs it, and before this fix that
 // thread could be any of four disjoint lock domains (this module's own
@@ -82,19 +82,9 @@ pub struct AsyncResourceIds {
     pub trigger_async_id: u64,
 }
 
-#[derive(Clone)]
-struct ResourceMeta {
-    // #854: async_hooks resource metadata; real createHook lifecycle is #789
-    #[allow(dead_code)]
-    type_name: String,
-    // #854: async_hooks resource metadata; real createHook lifecycle is #789
-    #[allow(dead_code)]
-    trigger_async_id: u64,
-    resource: f64,
-    context: crate::async_context::AsyncContextSnapshot,
-    destroyed: bool,
-}
+pub(crate) mod resource_state;
 
+pub(crate) use resource_state::public_id as public_async_id;
 #[derive(Clone, Copy)]
 struct HookCallbacks {
     init: *const ClosureHeader,
@@ -156,30 +146,25 @@ struct HookRecord {
 
 // #7680: see the `NEXT_ASYNC_ID` / `HOOKS_ACTIVE` comment above — these six
 // are the rest of what `reset_for_tests()` clears, converted for the same
-// reason. `scan_async_hooks_roots_mut` (below) already reaches `HOOKS`,
-// `RESOURCES`, `CONTEXT_SNAPSHOTS` and `ASYNC_WRAP_PROVIDERS` through a
+// reason. `scan_async_hooks_roots_mut` (below) reaches `HOOKS` and
+// `ASYNC_WRAP_PROVIDERS` through a
 // registered scanner defined in THIS file, so `scripts/gc_runtime_root_holders.py`
 // already covers them; `per_test_global!` only changes which instance a test
 // thread resolves to, not the scanner's reach.
 per_test_global! {
     static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-    // #10522: aHash, not SipHash — every `setTimeout` inserts and every clear
-    // or fire removes an entry, keyed by our own monotonic async id, so there
-    // is no untrusted key to defend against and SipHash's rounds were a
-    // measurable share of timer churn.
-    static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta, ahash::RandomState>>> =
-        LazyLock::new(|| Mutex::new(HashMap::default()));
-    static GC_DESTROY_QUEUE: Mutex<VecDeque<u64>> = Mutex::new(VecDeque::new());
-    static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
-    static CONTEXT_SNAPSHOTS: LazyLock<
-        Mutex<HashMap<usize, crate::async_context::AsyncContextSnapshot>>,
-    > = LazyLock::new(|| Mutex::new(HashMap::new()));
+    static GC_DESTROY_QUEUE: Mutex<VecDeque<(u64, bool)>> = Mutex::new(VecDeque::new());
     static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 }
 
 thread_local! {
-    static EXECUTION_STACK: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
+    // (execution id, trigger id, scheduled resource bits) of each enclosing scope.
+    static EXECUTION_STACK: RefCell<Vec<(u64, u64, u64)>> = const { RefCell::new(Vec::new()) };
     static CURRENT_EXECUTION_ID: Cell<u64> = const { Cell::new(0) };
+    // The resource of the running scheduler job (nextTick, queueMicrotask,
+    // timer) when its queue entry owns the job's async state; TAG_UNDEFINED
+    // for any other scope, whose resource is read from its state cell.
+    static CURRENT_EXECUTION_RESOURCE: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     static CURRENT_TRIGGER_ID: Cell<u64> = const { Cell::new(0) };
     // Node defers hook-list mutations made by a hook callback until the
     // outermost hook-delivery cascade has finished.  In particular, an init
@@ -203,14 +188,6 @@ impl Drop for AsyncHookPayload {
     fn drop(&mut self) {
         if self.index != usize::MAX {
             retire_hook(self.index);
-        }
-    }
-}
-
-impl Drop for AsyncResourcePayload {
-    fn drop(&mut self) {
-        if self.ids.async_id != 0 {
-            RESOURCES.lock().unwrap().remove(&self.ids.async_id);
         }
     }
 }
@@ -443,7 +420,7 @@ pub fn trigger_async_id_u64() -> u64 {
 
 #[no_mangle]
 pub extern "C" fn js_async_hooks_execution_async_id() -> f64 {
-    execution_async_id_u64() as f64
+    async_id_to_js_number(execution_async_id_u64())
 }
 
 #[no_mangle]
@@ -453,18 +430,13 @@ pub extern "C" fn js_async_hooks_trigger_async_id() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_async_hooks_execution_async_resource() -> f64 {
-    let current_id = execution_async_id_u64();
-    if current_id != 0 {
-        if let Some(resource) = RESOURCES
-            .lock()
-            .unwrap()
-            .get(&current_id)
-            .map(|meta| meta.resource)
-        {
-            if !JSValue::from_bits(resource.to_bits()).is_undefined() {
-                return resource;
-            }
-        }
+    let scheduled = CURRENT_EXECUTION_RESOURCE.with(Cell::get);
+    if scheduled != crate::value::TAG_UNDEFINED {
+        return f64::from_bits(scheduled);
+    }
+    let resource = resource_state::resource(execution_async_id_u64());
+    if !JSValue::from_bits(resource.to_bits()).is_undefined() {
+        return resource;
     }
 
     let cached = TOP_LEVEL_RESOURCE.load(Ordering::Acquire);
@@ -1094,12 +1066,11 @@ pub(crate) fn init_esm_evaluation_promise() {
 ///
 /// Promises created before the first hook is enabled still need a stable id so
 /// a later child reaction can name that promise as its trigger. They must not
-/// be inserted into `RESOURCES`, because doing so would turn the resource value
-/// into a strong GC root before any observer exists.
+/// be inserted into a metadata cell before any observer exists.
 pub fn reserve_resource_ids(trigger_async_id: u64) -> AsyncResourceIds {
     AsyncResourceIds {
         async_id: NEXT_ASYNC_ID.fetch_add(1, Ordering::Relaxed),
-        trigger_async_id,
+        trigger_async_id: public_async_id(trigger_async_id),
     }
 }
 
@@ -1118,10 +1089,47 @@ pub fn init_resource_with_trigger(
     force_allocate: bool,
     trigger_async_id: u64,
 ) -> AsyncResourceIds {
-    let ids = init_resource_metadata(type_name, resource, force_allocate, trigger_async_id);
+    let ids = init_resource_metadata(
+        type_name,
+        resource,
+        force_allocate,
+        trigger_async_id,
+        resource_state::Owner::Resource,
+    );
     if ids.async_id != 0 {
         emit_init(ids.async_id, type_name, trigger_async_id, resource);
     }
+    ids
+}
+
+/// Ids for a scheduler job (nextTick, queueMicrotask, timer) whose queue
+/// entry owns the job's async state.
+///
+/// Without an enabled hook nothing can observe the job's lifecycle, so the
+/// job gets a public serial only: the entry carries its resource and context
+/// itself and [`before_scheduled`] publishes the resource while it runs.
+/// With hooks the job gets a state cell whose only owner is the token in the
+/// queue entry (traced by the queue's root scanner) and, once popped, the
+/// dispatching scope: the resource does not point back at it, so the cell dies
+/// with its last entry or its destroy notification. The caller must keep the
+/// returned token reachable (a handle, or its queue entry) until it is queued.
+pub fn init_scheduled_resource(
+    type_name: &str,
+    resource: f64,
+    trigger_async_id: Option<u64>,
+) -> AsyncResourceIds {
+    let trigger_async_id = trigger_async_id.unwrap_or_else(execution_async_id_u64);
+    if !hooks_active() {
+        return reserve_resource_ids(trigger_async_id);
+    }
+    let ids = init_resource_metadata(
+        type_name,
+        resource,
+        true,
+        trigger_async_id,
+        resource_state::Owner::Scheduler,
+    );
+    emit_init(ids.async_id, type_name, trigger_async_id, resource);
     ids
 }
 
@@ -1130,45 +1138,33 @@ fn init_resource_metadata(
     resource: f64,
     force_allocate: bool,
     trigger_async_id: u64,
+    owner: resource_state::Owner,
 ) -> AsyncResourceIds {
     if !force_allocate && !hooks_active() {
         return AsyncResourceIds {
             async_id: 0,
-            trigger_async_id,
+            trigger_async_id: public_async_id(trigger_async_id),
         };
     }
-
-    let async_id = NEXT_ASYNC_ID.fetch_add(1, Ordering::Relaxed);
-    // Native resources such as an accepted TCP socket can be materialized by
-    // the main-thread pump after the originating callback has returned.  At
-    // that point Perry's current execution id is the bootstrap scope even
-    // though the provider has an explicit trigger.  Inherit the trigger's
-    // captured store in that narrow case so AsyncLocalStorage crosses the
-    // native hand-off just as it does in Node.
+    let _publication = crate::gc::GcSuppressScope::new();
     let context = if execution_async_id_u64() == 0 && trigger_async_id != 0 {
-        RESOURCES
-            .lock()
-            .unwrap()
-            .get(&trigger_async_id)
-            .map(|meta| meta.context.clone())
+        resource_state::get(trigger_async_id)
+            .map(|meta| unsafe { (*meta).context.clone() })
             .unwrap_or_else(crate::async_context::capture_context)
     } else {
         crate::async_context::capture_context()
     };
-    RESOURCES.lock().unwrap().insert(
-        async_id,
-        ResourceMeta {
-            type_name: type_name.to_string(),
+    let serial = NEXT_ASYNC_ID.fetch_add(1, Ordering::Relaxed);
+    AsyncResourceIds {
+        async_id: resource_state::new(
+            serial,
+            type_name,
             trigger_async_id,
             resource,
             context,
-            destroyed: false,
-        },
-    );
-
-    AsyncResourceIds {
-        async_id,
-        trigger_async_id,
+            owner,
+        ),
+        trigger_async_id: public_async_id(trigger_async_id),
     }
 }
 
@@ -1180,6 +1176,11 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
         return;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
+    // A native context can have no JavaScript resource owner. Retain its
+    // newborn cell through the init hook until the caller publishes it.
+    if let Some(state) = resource_state::get(async_id) {
+        scope.root_raw_mut_ptr(state);
+    }
     let resource_handle = scope.root_nanbox_f64(resource);
     let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);
     let type_value_handle = scope.root_nanbox_f64(box_string(type_ptr as *const u8));
@@ -1187,7 +1188,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
         js_closure_call4(
             callback,
             crate::closure::plain_call_receiver(),
-            async_id as f64,
+            async_id_to_js_number(async_id),
             type_value_handle.get_nanbox_f64(),
             async_id_to_js_number(trigger_async_id),
             resource_handle.get_nanbox_f64(),
@@ -1196,60 +1197,100 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
 }
 
 /// Temporarily publish an AsyncResource object through
-/// `executionAsyncResource()`. The RESOURCES table must not permanently root
-/// the object it describes, or the object's payload finalizer can never run.
+/// `executionAsyncResource()` through the object-owned weak resource slot.
 fn swap_resource_value(async_id: u64, value: f64) -> f64 {
-    let mut resources = RESOURCES.lock().unwrap();
-    let Some(meta) = resources.get_mut(&async_id) else {
-        return TAG_UNDEFINED_F64;
-    };
-    std::mem::replace(&mut meta.resource, value)
+    resource_state::swap_resource(async_id, value)
 }
 
-fn before_with_kind(async_id: u64, trigger_async_id: u64, is_promise: bool) {
+fn before_with_kind(async_id: u64, trigger_async_id: u64, is_promise: bool, resource: u64) {
     if async_id == 0 {
         return;
     }
     EXECUTION_STACK.with(|stack| {
-        stack
-            .borrow_mut()
-            .push((execution_async_id_u64(), trigger_async_id_u64()));
+        stack.borrow_mut().push((
+            execution_async_id_u64(),
+            trigger_async_id_u64(),
+            CURRENT_EXECUTION_RESOURCE.with(Cell::get),
+        ));
     });
     CURRENT_EXECUTION_ID.with(|c| c.set(async_id));
+    if resource_state::get(async_id).is_some() {
+        crate::gc::runtime_write_barrier_root_nanbox(POINTER_TAG | async_id);
+    }
+    CURRENT_EXECUTION_RESOURCE.with(|c| c.set(resource));
+    if JSValue::from_bits(resource).is_pointer() {
+        crate::gc::runtime_write_barrier_root_nanbox(resource);
+    }
     CURRENT_TRIGGER_ID.with(|c| c.set(trigger_async_id));
+    // The public id is fixed now: a hook may collect, and the id it reports
+    // must not be re-derived from the token afterwards.
+    let public = async_id_to_js_number(async_id);
     with_hook_callbacks(HookPhase::Before, is_promise, |callback| {
-        js_closure_call1(
-            callback,
-            crate::closure::plain_call_receiver(),
-            async_id as f64,
-        );
+        js_closure_call1(callback, crate::closure::plain_call_receiver(), public);
     });
+}
+
+/// Enter a scheduler job created by [`init_scheduled_resource`]; `resource`
+/// is the job's resource, which its queue entry carried.
+pub fn before_scheduled(async_id: u64, trigger_async_id: u64, resource: f64) {
+    let bits = if resource_state::get(async_id).is_some() {
+        crate::value::TAG_UNDEFINED
+    } else {
+        resource.to_bits()
+    };
+    before_with_kind(async_id, trigger_async_id, false, bits);
+}
+
+/// Destroy a scheduler job created by [`init_scheduled_resource`]. A job
+/// queued before any hook was enabled has no state cell; Node still reports
+/// its destroy to the hooks enabled by the time it ran.
+pub fn destroy_scheduled(async_id: u64) {
+    if async_id == 0 {
+        return;
+    }
+    if resource_state::get(async_id).is_some() {
+        destroy(async_id);
+    } else if hooks_active() {
+        emit_destroy_notification(async_id, false);
+    }
 }
 
 pub fn before(async_id: u64, trigger_async_id: u64) {
-    before_with_kind(async_id, trigger_async_id, false);
+    before_with_kind(
+        async_id,
+        trigger_async_id,
+        false,
+        crate::value::TAG_UNDEFINED,
+    );
 }
 
 pub fn before_promise(async_id: u64, trigger_async_id: u64) {
-    before_with_kind(async_id, trigger_async_id, true);
+    before_with_kind(
+        async_id,
+        trigger_async_id,
+        true,
+        crate::value::TAG_UNDEFINED,
+    );
+}
+
+fn restore_execution_scope() {
+    let prev = EXECUTION_STACK
+        .with(|stack| stack.borrow_mut().pop())
+        .unwrap_or((0, 0, crate::value::TAG_UNDEFINED));
+    CURRENT_EXECUTION_ID.with(|c| c.set(prev.0));
+    CURRENT_TRIGGER_ID.with(|c| c.set(prev.1));
+    CURRENT_EXECUTION_RESOURCE.with(|c| c.set(prev.2));
 }
 
 fn after_with_kind(async_id: u64, is_promise: bool) {
     if async_id == 0 {
         return;
     }
+    let public = async_id_to_js_number(async_id);
     with_hook_callbacks(HookPhase::After, is_promise, |callback| {
-        js_closure_call1(
-            callback,
-            crate::closure::plain_call_receiver(),
-            async_id as f64,
-        );
+        js_closure_call1(callback, crate::closure::plain_call_receiver(), public);
     });
-    let prev = EXECUTION_STACK
-        .with(|stack| stack.borrow_mut().pop())
-        .unwrap_or((0, 0));
-    CURRENT_EXECUTION_ID.with(|c| c.set(prev.0));
-    CURRENT_TRIGGER_ID.with(|c| c.set(prev.1));
+    restore_execution_scope();
 }
 
 pub fn after(async_id: u64) {
@@ -1265,11 +1306,7 @@ pub fn after_promise(async_id: u64) {
 /// inside `js_throw` (via a context guard), where re-entering user JS is not
 /// safe (#788).
 pub(crate) fn unwind_execution_scope() {
-    let prev = EXECUTION_STACK
-        .with(|stack| stack.borrow_mut().pop())
-        .unwrap_or((0, 0));
-    CURRENT_EXECUTION_ID.with(|c| c.set(prev.0));
-    CURRENT_TRIGGER_ID.with(|c| c.set(prev.1));
+    restore_execution_scope();
 }
 
 pub fn promise_resolve(async_id: u64) {
@@ -1280,36 +1317,16 @@ pub fn promise_resolve(async_id: u64) {
         js_closure_call1(
             callback,
             crate::closure::plain_call_receiver(),
-            async_id as f64,
+            async_id_to_js_number(async_id),
         );
     });
 }
 
 fn destroy_with_kind(async_id: u64, is_promise: bool) {
-    if async_id == 0 {
+    let Some((serial, _)) = resource_state::destroy_notification(async_id) else {
         return;
-    }
-    let should_emit = {
-        let mut resources = RESOURCES.lock().unwrap();
-        match resources.get_mut(&async_id) {
-            Some(meta) if !meta.destroyed => {
-                meta.destroyed = true;
-                true
-            }
-            Some(_) | None => false,
-        }
     };
-    if !should_emit {
-        return;
-    }
-    with_hook_callbacks(HookPhase::Destroy, is_promise, |callback| {
-        js_closure_call1(
-            callback,
-            crate::closure::plain_call_receiver(),
-            async_id as f64,
-        );
-    });
-    RESOURCES.lock().unwrap().remove(&async_id);
+    emit_destroy_notification(serial, is_promise);
 }
 
 pub fn destroy(async_id: u64) {
@@ -1319,7 +1336,7 @@ pub fn destroy(async_id: u64) {
 /// Explicit `AsyncResource.emitDestroy()` notification. Unlike native
 /// provider teardown, Node does not make this API idempotent: every call emits
 /// a destroy hook for the resource id. Keep the captured context metadata so
-/// the still-live object remains reusable; its payload Drop removes the entry.
+/// the still-live object remains reusable; collection of the owning object releases the cell.
 fn emit_explicit_destroy(async_id: u64) {
     if async_id == 0 {
         return;
@@ -1328,7 +1345,7 @@ fn emit_explicit_destroy(async_id: u64) {
         js_closure_call1(
             callback,
             crate::closure::plain_call_receiver(),
-            async_id as f64,
+            async_id_to_js_number(async_id),
         );
     });
 }
@@ -1337,9 +1354,25 @@ pub fn destroy_promise(async_id: u64) {
     destroy_with_kind(async_id, true);
 }
 
+fn queue_destroy_notification(serial: u64, promise: bool) {
+    GC_DESTROY_QUEUE
+        .lock()
+        .unwrap()
+        .push_back((serial, promise));
+}
+fn emit_destroy_notification(serial: u64, promise: bool) {
+    with_hook_callbacks(HookPhase::Destroy, promise, |callback| {
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            serial as f64,
+        );
+    });
+}
+
 pub fn enqueue_gc_destroy(async_id: u64) {
-    if async_id != 0 {
-        GC_DESTROY_QUEUE.lock().unwrap().push_back(async_id);
+    if let Some((serial, promise)) = resource_state::destroy_notification(async_id) {
+        queue_destroy_notification(serial, promise);
     }
 }
 
@@ -1348,13 +1381,10 @@ pub(crate) fn gc_destroy_work_pending() -> bool {
 }
 
 pub fn drain_gc_destroy_queue() -> i32 {
-    let ids: Vec<u64> = {
-        let mut q = GC_DESTROY_QUEUE.lock().unwrap();
-        q.drain(..).collect()
-    };
-    let count = ids.len() as i32;
-    for id in ids {
-        destroy(id);
+    let notifications: Vec<(u64, bool)> = GC_DESTROY_QUEUE.lock().unwrap().drain(..).collect();
+    let count = notifications.len() as i32;
+    for (serial, promise) in notifications {
+        emit_destroy_notification(serial, promise);
     }
     count
 }
@@ -1413,7 +1443,13 @@ fn new_async_resource_with_public_value(
             )
         }
     });
-    let ids = init_resource_metadata(&type_name, public.get_nanbox_f64(), true, trigger_async_id);
+    let ids = init_resource_metadata(
+        &type_name,
+        public.get_nanbox_f64(),
+        true,
+        trigger_async_id,
+        resource_state::Owner::Resource,
+    );
     let public_raw = crate::value::js_nanbox_get_pointer(public.get_nanbox_f64());
     if let Some(payload) = unsafe { resource_payload(public_raw) } {
         payload.ids = ids;
@@ -1488,8 +1524,22 @@ pub extern "C" fn js_async_resource_async_id(handle: i64) -> f64 {
         return TAG_UNDEFINED_F64;
     };
     unsafe { resource_payload(handle) }
-        .map(|resource| resource.ids.async_id as f64)
+        .map(|resource| async_id_to_js_number(resource.ids.async_id))
         .unwrap_or(TAG_UNDEFINED_F64)
+}
+
+/// The runtime token of an AsyncResource-family object (its state cell),
+/// for native scope entry and as a native provider's trigger. The public
+/// `asyncId` is a serial number and names no state: passing it back into
+/// [`js_async_hooks_provider_enter`] or a provider trigger loses the
+/// resource's captured context. Valid while `handle` is reachable.
+#[no_mangle]
+pub extern "C" fn js_async_resource_runtime_async_id(handle: i64) -> u64 {
+    resolve_async_resource_handle(handle)
+        .and_then(|handle| {
+            unsafe { resource_payload(handle) }.map(|resource| resource.ids.async_id)
+        })
+        .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -1802,7 +1852,7 @@ pub extern "C" fn js_async_local_storage_static_bind_direct(
     js_async_resource_static_bind_value(callback_value, TAG_UNDEFINED_F64, TAG_UNDEFINED_F64)
 }
 
-mod context_snapshots;
+pub(crate) mod context_snapshots;
 pub use context_snapshots::{
     js_async_local_storage_static_snapshot_direct, js_async_local_storage_static_snapshot_method,
 };
@@ -1822,22 +1872,23 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         visitor.visit_raw_const_ptr_slot(&mut hook.callbacks.promise_resolve);
     }
     drop(hooks);
-    let mut resources = RESOURCES.lock().unwrap();
-    for meta in resources.values_mut() {
-        // Resource identity is weak: the resource's owning scheduler/promise
-        // keeps it alive, while its finalizer enqueues the destroy event and
-        // removes this metadata. Marking the value here made PROMISE entries
-        // immortal and forced the runtime to fake destroy-at-settlement.
-        visitor.visit_metadata_nanbox_f64_slot(&mut meta.resource);
-        crate::async_context::scan_snapshot_roots_mut(&mut meta.context, visitor);
-    }
-    drop(resources);
-
-    let mut snapshots = CONTEXT_SNAPSHOTS.lock().unwrap();
-    for snapshot in snapshots.values_mut() {
-        crate::async_context::scan_snapshot_roots_mut(snapshot, visitor);
-    }
-    drop(snapshots);
+    CURRENT_EXECUTION_ID.with(|current| {
+        let mut id = current.get();
+        resource_state::scan_token(&mut id, visitor);
+        current.set(id);
+    });
+    CURRENT_EXECUTION_RESOURCE.with(|current| {
+        let mut bits = current.get();
+        if visitor.visit_nanbox_u64_slot(&mut bits) {
+            current.set(bits);
+        }
+    });
+    EXECUTION_STACK.with(|stack| {
+        for (id, _, resource) in stack.borrow_mut().iter_mut() {
+            resource_state::scan_token(id, visitor);
+            visitor.visit_nanbox_u64_slot(resource);
+        }
+    });
 
     let mut providers_bits = ASYNC_WRAP_PROVIDERS.load(Ordering::Relaxed);
     if providers_bits != 0 {
@@ -1857,7 +1908,7 @@ mod thread_exit;
 pub(crate) use thread_exit::release_async_hooks_in_freed_ranges;
 #[doc(hidden)]
 pub use thread_exit::{
-    cached_singletons_for_test, clear_cached_singletons_for_test, context_snapshot_holds_for_test,
+    cached_singletons_for_test, clear_cached_singletons_for_test,
     hook_callback_registered_for_test, resource_tracked_for_test,
 };
 
@@ -1867,5 +1918,5 @@ mod test_support;
 pub use test_support::reset_for_tests;
 #[cfg(test)]
 pub(crate) use test_support::{
-    test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots,
+    test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots, test_set_hooks_active,
 };

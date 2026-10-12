@@ -21,10 +21,9 @@ fn alloc_proxy_endpoint() -> (*mut u8, f64) {
 }
 
 #[test]
-fn full_trace_prunes_an_unobserved_proxy_and_its_registry_only_graph() {
+fn unreachable_proxy_cell_and_its_owned_graph_die_in_full_trace() {
     let _guard = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let reclaimed_before = crate::proxy::test_proxy_gc_reclaimed_total();
     let (target_ptr, target) = alloc_proxy_endpoint();
     let (handler_ptr, handler) = alloc_proxy_endpoint();
     let proxy = crate::proxy::js_proxy_new(target, handler);
@@ -32,20 +31,14 @@ fn full_trace_prunes_an_unobserved_proxy_and_its_registry_only_graph() {
     full_collect();
 
     assert!(!crate::proxy::test_proxy_slot_is_live(proxy));
-    assert_eq!(
-        crate::proxy::test_proxy_gc_reclaimed_total(),
-        reclaimed_before + 1,
-        "the prune counter proves the full-trace reclamation path ran"
-    );
     assert!(!malloc_user_ptr_tracked(target_ptr));
     assert!(!malloc_user_ptr_tracked(handler_ptr));
 }
 
 #[test]
-fn a_minor_trace_keeps_the_registry_strong_and_never_prunes_proxy_ids() {
+fn a_minor_keeps_the_old_proxy_until_full_collection() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     let (target_ptr, target) = alloc_proxy_endpoint();
     let (handler_ptr, handler) = alloc_proxy_endpoint();
     let proxy = crate::proxy::js_proxy_new(target, handler);
@@ -83,7 +76,7 @@ fn a_shadow_root_keeps_a_proxy_and_its_graph_until_the_next_full_trace() {
 }
 
 #[test]
-fn a_proxy_in_a_pointer_free_heap_range_is_still_observed() {
+fn a_proxy_in_an_object_field_is_traced_as_a_heap_edge() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (_target_ptr, target) = alloc_proxy_endpoint();
@@ -92,7 +85,7 @@ fn a_proxy_in_a_pointer_free_heap_range_is_still_observed() {
     let (owner, fields) = unsafe { alloc_old_test_object(1) };
     unsafe {
         *fields = proxy.to_bits();
-        layout_init_pointer_free(owner as *mut u8);
+        layout_init_all_pointer_slots(owner as *mut u8);
     }
     js_shadow_slot_set(0, ptr_bits(owner as usize));
 
@@ -100,7 +93,7 @@ fn a_proxy_in_a_pointer_free_heap_range_is_still_observed() {
 
     assert!(
         crate::proxy::test_proxy_slot_is_live(proxy),
-        "the full trace must inspect proxy-band values even in a range whose heap layout is pointer-free"
+        "the ordinary object field must retain the proxy GC cell"
     );
 
     js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
@@ -127,4 +120,88 @@ fn observing_an_outer_proxy_recursively_keeps_its_proxy_target_live() {
     full_collect();
     assert!(!crate::proxy::test_proxy_slot_is_live(outer));
     assert!(!crate::proxy::test_proxy_slot_is_live(inner));
+}
+
+#[test]
+fn proxy_target_and_handler_copy_without_moving_proxy_identity() {
+    check_owned_proxy(false);
+}
+#[test]
+#[ignore = "negative control: clear the proxy target edge"]
+fn negative_control_objtables_proxies() {
+    check_owned_proxy(true);
+}
+fn check_owned_proxy(erase: bool) {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _scan = ConservativeScanDisabledGuard::new();
+    crate::weakref::test_support::clear_weak_holders();
+    register_runtime_handle_root_scanner_for_tests();
+    let target = crate::object::js_object_alloc(0, 1);
+    let handler = crate::object::js_object_alloc(0, 0);
+    unsafe {
+        crate::object::js_object_set_field_f64(target, 0, 73.0);
+    }
+    let proxy = crate::proxy::js_proxy_new(
+        f64::from_bits(ptr_bits(target as usize)),
+        f64::from_bits(ptr_bits(handler as usize)),
+    );
+    let cell = crate::proxy::canonical_address(proxy).unwrap();
+    js_shadow_slot_set(0, proxy.to_bits());
+    let _ = gc_collect_minor();
+    assert_eq!(js_shadow_slot_get(0), proxy.to_bits());
+    unsafe {
+        let state = &mut *(cell as *mut crate::proxy::ProxyEntry);
+        assert_ne!(
+            (state.target.to_bits() & POINTER_MASK) as usize,
+            target as usize
+        );
+        assert_ne!(
+            (state.handler.to_bits() & POINTER_MASK) as usize,
+            handler as usize
+        );
+        let weak = crate::weakref::js_weakref_new(state.target);
+        js_shadow_slot_set(0, proxy.to_bits());
+        let scope = RuntimeHandleScope::new();
+        let weak = scope.root_nanbox_f64(f64::from_bits(ptr_bits(weak as usize)));
+        if erase {
+            state.target = 0.0;
+        }
+        full_collect();
+        assert_ne!(
+            crate::weakref::js_weakref_deref(weak.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "only the proxy's target field keeps this object live"
+        );
+        assert_eq!(
+            crate::object::js_object_get_field_f64(
+                (state.target.to_bits() & POINTER_MASK) as *const crate::ObjectHeader,
+                0
+            ),
+            73.0
+        );
+        crate::proxy::js_proxy_revoke(proxy);
+        full_collect();
+        assert_eq!(
+            crate::weakref::js_weakref_deref(weak.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        assert!(state.revoked);
+        assert_eq!(state.target.to_bits(), 0);
+        assert_eq!(state.handler.to_bits(), 0);
+    }
+    js_shadow_slot_set(0, 0);
+    full_collect();
+    assert!(!crate::proxy::test_proxy_slot_is_live(proxy));
+}
+#[test]
+fn odd_ordinary_allocation_does_not_admit_a_proxy_brand() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let object = crate::object::js_object_alloc(0, 0);
+    let fake = f64::from_bits(ptr_bits(object as usize) | 1);
+    assert!(crate::proxy::canonical_address(fake).is_none());
+    assert_eq!(
+        crate::value::addr_class::tagged_heap_addr(fake.to_bits()),
+        0
+    );
 }

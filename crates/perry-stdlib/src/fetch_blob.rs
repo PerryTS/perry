@@ -253,6 +253,7 @@ pub unsafe extern "C" fn js_file_new(
         blob_to_number(last_modified)
     };
     let data = BlobData {
+        props: 0,
         body,
         content_type: type_str,
         file_name: Some(name_str),

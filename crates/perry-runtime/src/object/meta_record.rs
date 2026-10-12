@@ -40,9 +40,12 @@ pub struct ObjectMeta {
     /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
     /// unset (fall back to default prototype resolution).
     pub prototype: u64,
-    /// Reserved words preserve the offsets addressed by emitted code.
-    /// Descriptor facts live exclusively in holder shapes.
-    pub reserved_descriptor_words: [u64; 2],
+    /// The boxed Number/String/Boolean/BigInt/Symbol primitive, NaN-boxed.
+    /// This private child slot replaces the address-keyed payload table.
+    /// Reuse a retired descriptor word so emitted metadata offsets stay fixed.
+    pub boxed_primitive: u64,
+    /// Private Reflect metadata record, a traced NaN-boxed object edge.
+    pub reflect_metadata: u64,
     /// Object state and compact scalar proof payloads. Bit 0 records native
     /// fallback after an ordinary undefined read; shape minting projects that
     /// fact into OrdinaryNativeAlias. Bits 3..4 are unused. Bits 1..2 and
@@ -123,8 +126,14 @@ pub struct ObjectMeta {
     /// Installed by `js_array_subclass_init` under
     /// `array_subclass_elements_enabled()`; never present otherwise.
     pub elements: u64,
-    /// Reserved words preserve the metadata layout across this migration.
-    pub reserved_descriptor_identity: [u64; 2],
+    /// Scalar identity of a movable Set key; zero means unassigned.
+    pub key_identity: u64,
+    /// Private owner-family state bag, a traced raw array edge. Promises use
+    /// three combinator/reaction slots; ordinary property holders use three
+    /// VM state slots. Node-API metadata, when present on a property holder,
+    /// uses a fourth slot without interpreting the first three. Other owner
+    /// families have separate cells and record layouts.
+    pub owned_state: u64,
     /// #10868 step 2.5 stage 1: the ordered own-key list of a DICTIONARY-MODE
     /// receiver — a `GC_TYPE_ARRAY` (`*mut ArrayHeader` bits, 0 = none)
     /// private to this object, holding the same NaN-boxed key strings (and

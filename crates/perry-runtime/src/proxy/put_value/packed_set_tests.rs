@@ -410,18 +410,16 @@ fn delete_leaves_the_published_shape() {
     );
 }
 
-/// A Proxy is a POINTER-tagged id in the handle band, which the emitted
-/// small-handle test (`handle > 0xFFFFF`) refuses before any header load.
+/// A Proxy's tagged receiver word cannot match a shape, so emitted shape
+/// comparisons miss and route to the shared proxy helper.
 #[test]
-fn proxies_live_below_the_small_handle_floor() {
-    use crate::value::addr_class::{HANDLE_BAND_MAX, PROXY_ID_BAND_START};
-    // The emitted receiver test refuses every payload below HANDLE_BAND_MAX
-    // (`perry-codegen` spells it `2^48 - HANDLE_BAND_MAX` after the bias).
-    assert!(PROXY_ID_BAND_START < HANDLE_BAND_MAX);
+fn proxies_cannot_match_an_ordinary_receiver_shape() {
     let target = parsed(SRC);
     let handler = parsed(b"{}");
     let proxy = crate::proxy::js_proxy_new(target, handler);
-    assert!((proxy.to_bits() & POINTER_MASK) < HANDLE_BAND_MAX as u64);
+    let receiver = (proxy.to_bits() & POINTER_MASK) as *const u8;
+    assert!(crate::proxy::canonical_address(proxy).is_some());
+    assert_eq!(unsafe { receiver.add(4).cast::<u32>().read_unaligned() }, 0);
 }
 
 /// A forwarded cell keeps the new user address in its first eight payload

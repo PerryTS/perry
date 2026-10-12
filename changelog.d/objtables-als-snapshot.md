@@ -1,0 +1,1 @@
+Delete `CONTEXT_SNAPSHOTS` and its ID allocator, scanner, and thread-exit prune. An `AsyncLocalStorage.snapshot()` closure now captures an old, nonmoving GC-owned snapshot holder. Stores follow its GC edge, and native snapshot tokens are released when the closure stops owning it. Add moving-owner/store, empty-context, release, mutation-control, and Node parity gap checks.

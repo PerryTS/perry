@@ -49,7 +49,6 @@ crates/perry-runtime/src/promise/native_async.rs::CLEANUP_FINALIZER_CALLS
 crates/perry-runtime/src/promise/then_probe.rs::ON
 crates/perry-runtime/src/registry_latch.rs::LATCH
 crates/perry-runtime/src/symbol.rs::PERRY_SYMBOL_PROPERTY_IC_EPOCH
-crates/perry-runtime/src/symbol.rs::SYMBOL_EVER_REGISTERED
 crates/perry-runtime/src/timer/tests_inline.rs::RAN
 crates/perry-runtime/src/timer/tests_inline.rs::SAW_HAS_REF
 crates/perry-runtime/src/timer/tests_inline.rs::SAW_KNOWN

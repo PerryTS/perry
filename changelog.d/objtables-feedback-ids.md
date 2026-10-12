@@ -1,0 +1,1 @@
+Typed-feedback observations now keep scalar ShapeIds instead of owner/shape heap addresses. Removed their GC scanner and address-based thread-exit prune. Diagnostic history remains valid after a worker heap is released. Added shape-key and moving-owner controls.

@@ -120,10 +120,10 @@ impl MallocState {
     ///   teardown, never mid-program, so this cannot yank live objects out from
     ///   under running code.
     ///
-    /// # Why finalizers are deliberately NOT run here (except native handles)
+    /// # Why general finalizers are deliberately NOT run here
     /// The sweep path pairs `dealloc` with `gc_type_finalize_unmarked_payload` /
     /// `layout_clear_for_ptr`, which reach into *other* thread-locals
-    /// (`MAP_REGISTRY`, `MAP_INDEX`, `PROMISE_CONTEXTS`, the async-hooks queues,
+    /// (the async-hooks queues,
     /// …). Thread-local destruction order is unspecified, so touching one of
     /// those during this Drop could hit an already-destroyed TLS and panic
     /// ("cannot access a Thread Local Storage value during or after
@@ -148,6 +148,7 @@ impl MallocState {
             unsafe {
                 if (*header).gc_flags & GC_FLAG_PINNED != 0
                     && (*header).obj_type != GC_TYPE_NATIVE_HANDLE
+                    && (*header).obj_type != GC_TYPE_INTERP_FUNCTION
                 {
                     continue;
                 }
@@ -168,6 +169,15 @@ impl MallocState {
                             as *mut crate::native_handle::NativeHandleHeader,
                     );
                 }
+                // Parsed-function cells own only a native Rc<AST>. Like the
+                // native-handle teardown above, its basic cleanup never uses
+                // TLS, collector bookkeeping, allocation or JS callbacks.
+                #[cfg(feature = "dyn-eval")]
+                if (*header).obj_type == GC_TYPE_INTERP_FUNCTION {
+                    crate::dyn_eval::function_cell::finalize(
+                        header.cast::<u8>().add(GC_HEADER_SIZE),
+                    );
+                }
                 let layout = Layout::from_size_align(total_size, 8).unwrap();
                 dealloc(header as *mut u8, layout);
                 freed_bytes = freed_bytes.saturating_add(total_size as u64);
@@ -186,9 +196,8 @@ impl Drop for MallocState {
         //
         // #11471: these blocks go back to the system allocator, so another
         // thread can be handed the same addresses. Process-global tables
-        // keyed by, or holding, a `gc_malloc` address (fresh `Symbol()`
-        // headers in `SYMBOL_POINTERS`, malloc'd strings and closures in
-        // listener tables) hear about it here, exactly as they do for arena
+        // keyed by, or holding, a `gc_malloc` address (malloc'd strings
+        // and closures in listener tables) hear about it here, as for arena
         // blocks in `Arena::drop`. Reported before the frees, so a hook still
         // sees mapped memory. Test builds skip it for the same reason
         // `Arena::drop` does: their side tables are per-thread.
@@ -725,6 +734,21 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
 
 #[cfg(test)]
 impl MallocState {
+    #[cfg(feature = "dyn-eval")]
+    pub(super) unsafe fn retire_interp_cell_via_teardown(user: *mut u8) {
+        let header = user.sub(GC_HEADER_SIZE).cast::<GcHeader>();
+        assert_eq!((*header).obj_type, GC_TYPE_INTERP_FUNCTION);
+        MALLOC_STATE.with(|current| {
+            let mut current = current.borrow_mut();
+            let index = current.objects.iter().position(|&p| p == header).unwrap();
+            current.objects.swap_remove(index);
+            current.set.remove(&(header as usize));
+        });
+        let mut exiting = Self::new_empty_for_test();
+        exiting.objects.push(header);
+        drop(exiting);
+    }
+
     /// Build an empty, TLS-independent `MallocState` for unit tests.
     fn new_empty_for_test() -> Self {
         MallocState {
@@ -888,4 +912,18 @@ pub(super) fn malloc_resident_bytes() -> usize {
                 total.saturating_add(kind.survivor_bytes as usize)
             })
     })
+}
+
+/// Visit current malloc custody during native environment shutdown. The
+/// visitor may enqueue plain native finalizer records, but never collect or
+/// invoke JS. This does not alter incremental sweep snapshot/forwarding state.
+#[cfg(feature = "node-api-host")]
+pub(crate) fn walk_malloc_headers_for_native_shutdown(visit: &mut dyn FnMut(*mut GcHeader)) {
+    let _no_move = super::GcSuppressScope::new();
+    let headers = MALLOC_STATE.with(|state| state.borrow().objects.clone());
+    for header in headers {
+        if !header.is_null() {
+            visit(header);
+        }
+    }
 }

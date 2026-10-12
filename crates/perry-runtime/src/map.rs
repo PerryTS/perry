@@ -4,9 +4,8 @@
 //! The entries array is separately allocated and can be reallocated
 //! without changing the MapHeader address between GC moves.
 
-use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
-use std::alloc::{alloc, dealloc, realloc, Layout};
+use std::alloc::Layout;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
@@ -15,7 +14,6 @@ use std::ptr;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 crate::perry_thread_local! {
-    static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Backing Maps whose `forEach` raw-entry walk is currently active. A
     /// compaction would move entries behind those cursors (#9082).
     static MAP_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
@@ -196,48 +194,8 @@ pub(crate) fn map_compaction_epoch(map: *const MapHeader) -> u32 {
     unsafe { (*map).compaction_epoch }
 }
 
-fn mark_map_iterator_array(arr: *mut crate::array::ArrayHeader) {
-    if !arr.is_null() {
-        MAP_ITERATOR_ARRAYS.with(|r| {
-            r.borrow_mut().insert(arr as usize);
-        });
-    }
-}
-
 pub fn is_registered_map_iterator(addr: usize) -> bool {
-    MAP_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
-}
-
-/// Rekey legacy materialized-iterator brands after array evacuation without
-/// treating the metadata key as a root.
-pub(crate) fn scan_map_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    MAP_ITERATOR_ARRAYS.with(|r| {
-        let mut arrays = r.borrow_mut();
-        let mut moved = Vec::new();
-        for old_addr in arrays.iter().copied() {
-            let mut new_addr = old_addr;
-            if visitor.visit_metadata_usize_slot(&mut new_addr) {
-                moved.push((old_addr, new_addr));
-            }
-        }
-        for (old_addr, new_addr) in moved {
-            arrays.remove(&old_addr);
-            arrays.insert(new_addr);
-        }
-    });
-}
-
-/// Remove legacy Map iterator brands whose array owners are provably dead
-/// under the centralized collection-specific liveness policy.
-pub(crate) fn prune_dead_map_iterator_array_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    MAP_ITERATOR_ARRAYS.with(|r| {
-        r.borrow_mut().retain(|owner| !is_dead_owner(*owner));
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_map_iterator_arrays() {
-    MAP_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+    crate::array::has_materialized_iterator_brand(addr, 1)
 }
 
 /// Test-only: the allocation-time reset a fresh Map performs on a reused
@@ -335,15 +293,14 @@ mod store;
 mod string_key;
 
 use store::*;
-pub(crate) use store::{
-    drop_map_store_at_thread_exit, finalize_dead_copied_minor_from_space_maps,
-    finalize_map_side_allocation_for_gc, map_header_moved_for_gc, map_stores_never_allocated,
-    release_current_thread_map_side_allocations,
-};
 #[cfg(test)]
 pub(crate) use store::{
-    test_from_space_map_finalizations, test_map_index_bytes, test_map_side_allocation,
-    test_map_store_word,
+    finalize_map_side_allocation_for_gc, test_init_owned_map_store, test_map_index_bytes,
+    test_map_side_allocation, test_map_store_word,
+};
+pub(crate) use store::{
+    finalize_owned_store, map_header_moved_for_gc, owned_entry_slot_range,
+    owned_store_moved_for_gc, refresh_entries_alias,
 };
 use string_key::StrKey;
 
@@ -954,17 +911,19 @@ pub(crate) fn resolve_map_receiver(map: *const MapHeader) -> *const MapHeader {
     clean_map_ptr(map)
 }
 
-/// Map header - GC-movable address, entries allocated separately
+/// Movable Map header with an owned, movable entry store.
 #[repr(C)]
 pub struct MapHeader {
     /// Number of key-value pairs in the map
     pub size: u32,
     /// Capacity (allocated space for entries)
     pub capacity: u32,
-    /// Pointer to entries array (separately allocated)
+    /// Alias of the owned store's inline entry payload. Re-derived by the
+    /// Map's GC rewrite hook whenever the store moves; never cache it across
+    /// a call that can reach a moving safepoint.
     pub entries: *mut f64,
-    /// Owned native storage; stable across header evacuation. Not a GC edge.
-    store: *mut MapStore,
+    /// Strong GC edge to the young-born, movable entry/index store.
+    pub(crate) store: *mut MapStore,
     /// #6759 phase 1 (header unification): per-object metadata record, or
     /// null — the same `ObjectMeta` cell an `ObjectHeader` hangs off its own
     /// `meta` field. Appended LAST so every preceding field keeps its offset.
@@ -1231,52 +1190,29 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         if capacity == 0 { 4 } else { capacity },
         b"Map maximum size exceeded",
     );
-    let ent_layout = entries_layout(cap as usize);
-
-    // Allocate the fixed-size header in the managed arena. The entries buffer
-    // remains external and is traced through the Map rewrite descriptor.
+    // The store is the larger young birth, so it is allocated first, while
+    // nothing unrooted is live, and keeps the allocation's normal GC pacing.
+    // Only the header birth and the publication need the no-move window.
+    let store = unsafe { alloc_store(cap as usize) };
+    let _no_move = crate::gc::GcSuppressScope::new();
     let ptr =
         crate::arena::arena_alloc_gc(std::mem::size_of::<MapHeader>(), 8, crate::gc::GC_TYPE_MAP)
-            as *mut MapHeader;
-
+            .cast::<MapHeader>();
     unsafe {
-        // Entries array uses standard alloc (not gc-tracked, just data).
-        // Zero the buffer at allocation: libc hands out raw memory and a
-        // freshly-allocated Map after a sibling was freed often lands on
-        // the same address. find_key_index walks entries[0..size]; if a
-        // realloc-grow leaves stale bytes in the live range a `has()`
-        // check can find a stale key from a prior Map. Witnessed in
-        // ecs-perf-test/repro/foreach-many.ts iter 5: 2500 stale entries
-        // from iter 4's freed buffer made `Map.has(5121)` return true
-        // on a fresh Map that never saw entity 5121.
-        let entries = alloc(ent_layout) as *mut f64;
-        if entries.is_null() {
-            // #5067 — catchable RangeError instead of aborting on OOM.
-            crate::error::throw_allocation_failed();
-        }
-        ptr::write_bytes(entries as *mut u8, 0u8, ent_layout.size());
-
-        // Initialize header
+        // GC_STORE_AUDIT(INIT): native-only birth under no-move; ordinary
+        // descriptors trace the store edge and its inline value slots.
         (*ptr).size = 0;
         (*ptr).capacity = cap;
-        // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
-        (*ptr).entries = entries;
-        (*ptr).store = std::ptr::null_mut();
-        // #6759 phase 1: the arena allocator reuses free-list memory without
-        // zeroing, so this MUST be initialised explicitly — an uninitialised
-        // meta edge is a garbage pointer the collector would follow.
-        (*ptr).meta = std::ptr::null_mut();
+        (*ptr).entries = (*store).entries;
+        (*ptr).store = store;
+        (*ptr).meta = ptr::null_mut();
         (*ptr).used = 0;
         (*ptr).compaction_epoch = 0;
-        (*ptr).store = Box::into_raw(Box::new(MapStore::new(entries, cap as usize)));
-
-        // #6010: the entries buffer is invisible to the arena/malloc GC
-        // triggers; record its bytes as external churn so Map-heavy
-        // workloads still collect (and finalize dead siblings). Safe here:
-        // the header and its owned storage are fully initialized, and the triggered
-        // cycle is conservative + non-moving, so `ptr` stays valid.
-        crate::gc::gc_note_external_side_alloc(ent_layout.size());
-
+        crate::gc::runtime_write_barrier_gc_slot(
+            ptr as usize,
+            std::ptr::addr_of!((*ptr).store) as usize,
+            store as u64,
+        );
         ptr
     }
 }
@@ -1409,11 +1345,12 @@ unsafe fn compact_map_entries(map: *mut MapHeader) {
     }
     debug_assert_eq!(out as u32, (*map).size);
     (*map).used = out as u32;
+    (*(*map).store).used = (*map).used as usize;
     if out > 0 {
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): compaction is followed by a dirty-span barrier for every surviving slot.
-        crate::gc::runtime_write_barrier_external_slot_span(
-            map as usize,
-            entries as usize,
+        crate::gc::replay_old_parent_slot_range_barriers(
+            (*map).store as usize,
+            entries as *mut u64,
             out * 2,
         );
     }
@@ -1618,7 +1555,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
     } else {
         // Pointer-key fast path (#6084): objects/symbols/closures by
         // identity bits, bigints by content. Safe under the moving GC
-        // because `GcRewriteHookKind::MapIndex` rebuilds this table
+        // because `GcRewriteHookKind::OwnedMapIndex` rebuilds this table
         // whenever a GC pass changes indexed key bits.
         // A present-but-missing entry is a definitive miss: every insert
         // path (`js_map_set`), delete (`rebuild_map_index`), clear, GC
@@ -1734,25 +1671,40 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
         capacity * 2,
         b"Map maximum size exceeded",
     );
-    let old_layout = entries_layout(capacity as usize);
-    let new_layout = entries_layout(new_capacity as usize);
-
-    let new_entries = realloc((*map).entries as *mut u8, old_layout, new_layout.size()) as *mut f64;
-    if new_entries.is_null() {
-        // #5067 — a constructor-driven `new Map(hugeIterable)` can hit this
-        // growth path; surface a catchable RangeError instead of aborting.
-        crate::error::throw_allocation_failed();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let previous = (*map).store;
+    let next = alloc_store(new_capacity as usize);
+    ptr::copy_nonoverlapping(
+        (*previous).entries,
+        (*next).entries,
+        (*map).used as usize * 2,
+    );
+    (*next).used = (*map).used as usize;
+    (*next).numeric = std::mem::replace(&mut (*previous).numeric, NumericIndex::new());
+    (*next).strings = std::mem::take(&mut (*previous).strings);
+    (*next).pointers = std::mem::take(&mut (*previous).pointers);
+    (*next).compaction = (*previous).compaction.take();
+    #[cfg(test)]
+    {
+        (*next).pointer_rebuilds = (*previous).pointer_rebuilds;
     }
-
-    // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
-    (*map).entries = new_entries;
+    // GC_STORE_AUDIT(BARRIERED): both published edges and every copied child
+    // receive exact heap barriers; retiring the old holder stops its tracing.
+    (*map).entries = (*next).entries;
     (*map).capacity = new_capacity;
-    (*(*map).store).entries = new_entries;
-    (*(*map).store).capacity = new_capacity as usize;
-    // #6010: growth delta counts as external churn (see js_map_alloc). The
-    // header is consistent again, and a triggered cycle is conservative +
-    // non-moving, so the caller's raw `map`/entries pointers stay valid.
-    crate::gc::gc_note_external_side_alloc(new_layout.size() - old_layout.size());
+    crate::gc::runtime_store_gc_heap_word_slot(
+        map as usize,
+        std::ptr::addr_of_mut!((*map).store) as usize,
+        next as u64,
+    );
+    crate::gc::replay_old_parent_slot_range_barriers(
+        next as usize,
+        (*next).entries as *mut u64,
+        (*next).used * 2,
+    );
+    (*previous).entries = ptr::null_mut();
+    (*previous).used = 0;
+    (*previous).capacity = 0;
     true
 }
 
@@ -1766,9 +1718,9 @@ unsafe fn map_set_string_key_value(
     if idx >= 0 {
         let entries = entries_ptr_mut(map);
         let value_slot = entries.add((idx as usize) * 2 + 1);
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
+        // GC_STORE_AUDIT(BARRIERED): exact heap slot belongs to the owned store.
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*map).store as usize,
             value_slot as usize,
             value.to_bits(),
         );
@@ -1788,9 +1740,9 @@ unsafe fn map_set_string_key_value(
     let used = (*map).used;
     let entries = entries_ptr_mut(map);
     if grew && used > 0 {
-        crate::gc::runtime_write_barrier_external_slot_span(
-            map as usize,
-            entries as usize,
+        crate::gc::replay_old_parent_slot_range_barriers(
+            (*map).store as usize,
+            entries as *mut u64,
             used as usize * 2,
         );
     }
@@ -1799,19 +1751,20 @@ unsafe fn map_set_string_key_value(
     let key_slot = entries.add((used as usize) * 2);
     let value_slot = entries.add((used as usize) * 2 + 1);
     // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
-    crate::gc::runtime_store_external_jsvalue_slot(
-        map as usize,
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        (*map).store as usize,
         key_slot as usize,
         key_value.to_bits(),
     );
-    crate::gc::runtime_store_external_jsvalue_slot(
-        map as usize,
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        (*map).store as usize,
         value_slot as usize,
         value.to_bits(),
     );
 
     (*map).size = size + 1;
     (*map).used = used + 1;
+    (*(*map).store).used = (*map).used as usize;
 
     if let Some(h) = string_content_hash(key_value.to_bits()) {
         (*(*map).store).strings.insert(h, used);
@@ -1868,9 +1821,9 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
             // Update existing value (key position unchanged → no index update)
             let entries = entries_ptr_mut(map);
             let value_slot = entries.add((idx as usize) * 2 + 1);
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
-            crate::gc::runtime_store_external_jsvalue_slot(
-                map as usize,
+            // GC_STORE_AUDIT(BARRIERED): exact heap slot belongs to the owned store.
+            crate::gc::runtime_store_gc_jsvalue_slot(
+                (*map).store as usize,
                 value_slot as usize,
                 value.to_bits(),
             );
@@ -1893,9 +1846,9 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         let used = (*map).used;
         let entries = entries_ptr_mut(map);
         if grew && used > 0 {
-            crate::gc::runtime_write_barrier_external_slot_span(
-                map as usize,
-                entries as usize,
+            crate::gc::replay_old_parent_slot_range_barriers(
+                (*map).store as usize,
+                entries as *mut u64,
                 used as usize * 2,
             );
         }
@@ -1903,19 +1856,20 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         let key_slot = entries.add((used as usize) * 2);
         let value_slot = entries.add((used as usize) * 2 + 1);
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*map).store as usize,
             key_slot as usize,
             key.to_bits(),
         );
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
+        crate::gc::runtime_store_gc_jsvalue_slot(
+            (*map).store as usize,
             value_slot as usize,
             value.to_bits(),
         );
 
         (*map).size = size + 1;
         (*map).used = used + 1;
+        (*(*map).store).used = (*map).used as usize;
 
         // Update the O(1) side-tables: numeric keys by bits, string keys by
         // content hash, pointer keys (objects/symbols/bigints) in the
@@ -2109,9 +2063,9 @@ unsafe fn heal_forwarded_array_value(
         return value;
     }
     let live_value = crate::value::js_nanbox_pointer(live as i64);
-    // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
-    crate::gc::runtime_store_external_jsvalue_slot(
-        map as usize,
+    // GC_STORE_AUDIT(BARRIERED): exact heap slot belongs to the owned store.
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        (*map).store as usize,
         value_slot as usize,
         live_value.to_bits(),
     );
@@ -2358,13 +2312,13 @@ unsafe fn delete_entry_at_index(map: *mut MapHeader, idx: i32) -> i32 {
     // overwritten child. Iteration walks raw indices and skips holes;
     // delete-then-re-add still appends at the end. Tombstones are squeezed
     // out when they outnumber the live entries, or on growth.
-    crate::gc::runtime_store_external_jsvalue_slot(
-        map as usize,
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        (*map).store as usize,
         entries.add(idx * 2) as usize,
         MAP_HOLE_KEY_BITS,
     );
-    crate::gc::runtime_store_external_jsvalue_slot(
-        map as usize,
+    crate::gc::runtime_store_gc_jsvalue_slot(
+        (*map).store as usize,
         entries.add(idx * 2 + 1) as usize,
         crate::value::TAG_UNDEFINED,
     );
@@ -2413,58 +2367,43 @@ unsafe fn forget_map_index_entry(map: *mut MapHeader, deleted_key: f64, deleted_
 /// (content hash + u32 entry offsets) are stable across GC moves, so the
 /// GC rewrite hook needs to refresh just this table.
 unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
-    if map.is_null() {
-        return;
-    }
-    let used = (*map).used as usize;
-    let capacity = (*map).capacity as usize;
-    if used > capacity || used > 16_000_000 || (*map).entries.is_null() {
-        return;
-    }
-    let entries = entries_ptr(map);
-    #[cfg(test)]
-    {
-        (*(*map).store).pointer_rebuilds += 1;
-    }
-    {
-        let slot = &mut (*(*map).store).pointers;
-        let before = hash_index_bytes(slot);
-        slot.clear();
-        for i in 0..used {
-            let entry_key = ptr::read(entries.add(i * 2));
-            if is_ptr_index_key(entry_key.to_bits()) {
-                slot.insert(MapPtrKey(entry_key), i as u32);
-            }
+    rebuild_owned_map_ptr_index((*map).store.cast());
+}
+#[cfg(test)]
+pub(crate) fn rebuild_map_ptr_index_for_gc(map: *mut MapHeader) {
+    if !map.is_null() {
+        unsafe {
+            rebuild_owned_map_ptr_index((*map).store.cast());
         }
-        note_index_bytes_changed(before, hash_index_bytes(slot));
     }
 }
-
-/// GC rewrite hook (`GcRewriteHookKind::MapIndex`, #6084): a GC pass changed
-/// one or more of this Map's entry slots (key pointees evacuated), so every
-/// `MapPtrKey`'s stored bits may be stale. Rebuild from the rewritten
-/// entries buffer, invoked via `run_gc_rewrite_hook`.
-pub(crate) fn rebuild_map_ptr_index_for_gc(map: *mut MapHeader) {
-    unsafe {
-        if map.is_null() {
-            return;
-        }
-        if (*map).used > (*map).capacity || (*map).used > 16_000_000 || (*map).entries.is_null() {
-            return;
-        }
-        let Some(store) = (*map).store.as_ref() else {
-            return;
-        };
-        // Values and metadata can move without changing a key. Compare bits,
-        // never hash/deref the old (possibly evacuated) pointer keys.
-        if store.pointers.iter().all(|(key, &index)| {
-            index < (*map).used
-                && ptr::read((*map).entries.add(index as usize * 2)).to_bits() == key.0.to_bits()
-        }) {
-            return;
-        }
-        rebuild_map_ptr_index(map);
+pub(crate) unsafe fn rebuild_owned_map_ptr_index(store: *mut u8) {
+    let Some(store) = store.cast::<MapStore>().as_mut() else {
+        return;
+    };
+    if store.entries.is_null() || store.used > store.capacity {
+        return;
     }
+    if store.pointers.iter().all(|(key, &index)| {
+        (index as usize) < store.used
+            && ptr::read(store.entries.add(index as usize * 2)).to_bits() == key.0.to_bits()
+    }) {
+        return;
+    }
+    #[cfg(test)]
+    {
+        store.pointer_rebuilds += 1;
+    }
+    let slot = &mut store.pointers;
+    let before = hash_index_bytes(slot);
+    slot.clear();
+    for i in 0..store.used {
+        let key = ptr::read(store.entries.add(i * 2));
+        if is_ptr_index_key(key.to_bits()) {
+            slot.insert(MapPtrKey(key), i as u32);
+        }
+    }
+    note_index_bytes_changed(before, hash_index_bytes(slot));
 }
 
 /// Clear all entries from the map
@@ -2484,6 +2423,7 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
         if !map_foreach_is_active(map) && used > 0 {
             unsafe {
                 (*map).used = 0;
+                (*(*map).store).used = (*map).used as usize;
                 note_map_compaction(map, RemovedSlots::Prefix(used));
             }
         }
@@ -2499,13 +2439,13 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
             let entries = entries_ptr_mut(map);
             for i in 0..used as usize {
                 if ptr::read(entries.add(i * 2)).to_bits() != MAP_HOLE_KEY_BITS {
-                    crate::gc::runtime_store_external_jsvalue_slot(
-                        map as usize,
+                    crate::gc::runtime_store_gc_jsvalue_slot(
+                        (*map).store as usize,
                         entries.add(i * 2) as usize,
                         MAP_HOLE_KEY_BITS,
                     );
-                    crate::gc::runtime_store_external_jsvalue_slot(
-                        map as usize,
+                    crate::gc::runtime_store_gc_jsvalue_slot(
+                        (*map).store as usize,
                         entries.add(i * 2 + 1) as usize,
                         crate::value::TAG_UNDEFINED,
                     );
@@ -2517,6 +2457,7 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
             // the [[MapData]] list is emptied in place, later adds are
             // visited), so record it as a squeeze of the whole extent.
             (*map).used = 0;
+            (*(*map).store).used = (*map).used as usize;
             note_map_compaction(map, RemovedSlots::Prefix(used));
         }
     }
@@ -2715,8 +2656,7 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
         let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         crate::array::rebuild_array_layout_exact(result);
 
-        mark_map_iterator_array(result);
-        result
+        crate::array::mark_materialized_iterator(result, 1)
     }
 }
 
@@ -2748,8 +2688,7 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
         }
 
         let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_map_iterator_array(array);
-        array
+        crate::array::mark_materialized_iterator(array, 1)
     }
 }
 
@@ -2781,8 +2720,7 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
         }
 
         let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_map_iterator_array(array);
-        array
+        crate::array::mark_materialized_iterator(array, 1)
     }
 }
 
@@ -3335,7 +3273,10 @@ mod tests {
             js_map_set(map, i as f64, (i * 10) as f64);
         }
 
-        assert_eq!(unsafe { (*map).store }, initial_store);
+        assert_ne!(unsafe { (*map).store }, initial_store);
+        assert!(crate::arena::pointer_in_nursery(unsafe {
+            (*map).store as usize
+        }));
         for i in 0..64 {
             assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
             assert!(test_map_numeric_index_contains(map, i as f64));

@@ -57,13 +57,13 @@ fn descriptor_holder_refusal_covers_primitive_cells() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let string = crate::string::js_string_from_bytes(b"plain".as_ptr(), 5) as usize;
-    // A fresh symbol is a leaf cell of the string kind (#7246).
+    // A fresh symbol has a dedicated primitive GC kind.
     let symbol_value = unsafe { crate::symbol::js_symbol_new_empty() };
     let symbol = crate::value::js_nanbox_get_pointer(symbol_value) as usize;
     let bigint = crate::bigint::js_bigint_from_i64(3) as usize;
     for (kind, owner) in [
         (crate::gc::GC_TYPE_STRING, string),
-        (crate::gc::GC_TYPE_STRING, symbol),
+        (crate::gc::GC_TYPE_SYMBOL, symbol),
         (crate::gc::GC_TYPE_BIGINT, bigint),
     ] {
         let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }
@@ -101,9 +101,8 @@ fn descriptor_holder_refusal_reads_ignore_a_native_registry_collision() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let capture = crate::r#box::js_box_alloc(1.0) as usize;
-    // Plant exactly the obsolete address-keyed state. A query must refuse
-    // even when the native registry has a bag at this GC cell's address.
-    unsafe { super::super::handle_expando::handle_property_bag_ensure(capture as i64) };
+    // An allocator-owned capture is not an admitted native payload.
+    assert!(super::super::handle_expando::handle_property_bag(capture as i64).is_null());
     let result = std::panic::catch_unwind(|| unsafe {
         let bag = descriptor_route(capture).bag;
         bag.is_null()
@@ -153,39 +152,29 @@ fn forwarded_object_descriptor_holder_resolves_reads_and_writes() {
 }
 
 #[test]
-fn native_fetch_band_descriptor_holder_uses_the_stable_registry_owner() {
+fn native_payload_descriptor_holder_uses_its_record() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
-    let handle = 0x4_2428i64;
-    unsafe {
-        let descriptor = crate::object::js_object_alloc(0, 3);
-        for (name, value) in [
-            ("value", 42.0),
-            ("enumerable", f64::from_bits(crate::value::TAG_TRUE)),
-            ("configurable", f64::from_bits(crate::value::TAG_TRUE)),
-        ] {
-            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            crate::object::js_object_set_field_by_name(descriptor, key, value);
-        }
-        let key = crate::string::js_string_from_bytes(b"lane12201".as_ptr(), 9);
-        crate::object::js_object_define_property(
-            crate::value::js_nanbox_pointer(handle),
-            crate::value::js_nanbox_string(key as i64),
-            crate::value::js_nanbox_pointer(descriptor as i64),
-        );
-        assert_eq!(
-            super::super::handle_expando::handle_expando_data_get(handle, "lane12201"),
-            Some(42.0)
-        );
-        assert!(!get_property_attrs(handle as usize, "lane12201")
-            .unwrap()
-            .writable());
-        super::super::handle_expando::handle_expando_clear(handle);
-        assert!(
-            descriptor_holder(handle as usize).is_null(),
-            "release drops the holder edge"
-        );
-    }
+    let native = super::super::handle_expando::test_support::TestNativeOwner::new();
+    let handle = native.handle();
+    super::super::handle_expando::handle_expando_set(handle, "lane12201", 42.0);
+    set_property_attrs(
+        handle as usize,
+        "lane12201".into(),
+        PropertyAttrs::new(false, true, true),
+    );
+    assert_eq!(
+        super::super::handle_expando::handle_expando_data_get(handle, "lane12201"),
+        Some(42.0)
+    );
+    assert!(!get_property_attrs(handle as usize, "lane12201")
+        .unwrap()
+        .writable());
+    super::super::handle_expando::handle_expando_clear(handle);
+    assert!(
+        unsafe { descriptor_holder(handle as usize).is_null() },
+        "release drops the holder edge"
+    );
 }
 
 #[test]

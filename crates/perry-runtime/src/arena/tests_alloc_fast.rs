@@ -97,8 +97,28 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
         });
         drop(arena);
         let after = crate::map::test_thread_map_side_deallocation_snapshot();
-        assert_eq!(after.0, before.0 + 1, "pending Map store must be finalized");
+        assert_eq!(
+            after.0,
+            before.0 + 1,
+            "Eden owns the header and its young store; its drop finalizes the store"
+        );
         assert!(after.1 > before.1);
+        let before = after;
+        let old = OLD_ARENA.with(|cell| {
+            let arena = &mut *cell.get();
+            let empty = Arena {
+                blocks: Vec::new(),
+                current: 0,
+                generation: HeapGeneration::Old,
+                space: HeapSpace::Old,
+                allocated_bytes: 0,
+                large_allocated_bytes: 0,
+            };
+            std::mem::replace(arena, empty)
+        });
+        drop(old);
+        let after = crate::map::test_thread_map_side_deallocation_snapshot();
+        assert_eq!(after, before, "nothing of the Map lives in the old arena");
     });
 }
 

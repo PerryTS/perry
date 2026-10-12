@@ -24,8 +24,13 @@ pub(crate) fn heap_stats() -> HeapStats {
     let mut arena_used = 0;
     let mut arena_reserved = 0;
     crate::arena::js_arena_stats(&mut arena_used, &mut arena_reserved);
-    let free_slots: std::collections::HashSet<*mut u8> =
-        ARENA_FREE_LIST.with(|slots| slots.borrow().iter().map(|&(ptr, _)| ptr).collect());
+    // Probed twice per heap object: the pointer hasher, not SipHash.
+    let free_slots: crate::fast_hash::PtrHashSet<usize> = ARENA_FREE_LIST.with(|slots| {
+        let slots = slots.borrow();
+        let mut set = crate::fast_hash::new_ptr_hash_set_with_capacity(slots.len());
+        set.extend(slots.iter().map(|&(ptr, _)| ptr as usize));
+        set
+    });
     let mut counts = [0u64; GC_TYPE_MAX as usize + 1];
     let mut pinned = [0u64; GC_TYPE_MAX as usize + 1];
     let mut malloc_bytes = 0u64;
@@ -37,8 +42,8 @@ pub(crate) fn heap_stats() -> HeapStats {
         if gc_type_info(header.obj_type).is_none()
             || header.size == 0
             || header.gc_flags & GC_FLAG_FORWARDED != 0
-            || free_slots.contains(&ptr)
-            || free_slots.contains(&ptr.add(GC_HEADER_SIZE))
+            || free_slots.contains(&(ptr as usize))
+            || free_slots.contains(&(ptr as usize + GC_HEADER_SIZE))
         {
             return;
         }

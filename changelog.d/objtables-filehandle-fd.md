@@ -1,0 +1,1 @@
+Delete FILEHANDLE_OBJECT_FDS, its metadata scanner and death prune. FileHandle objects carry the immutable initial fd as scalar metadata state; their public mutable fd property keeps its existing behavior. Preserve the external descriptor registry. Add a moving-GC gap and an ignored control that erases the owned fd.

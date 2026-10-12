@@ -1,0 +1,9 @@
+{
+  "name": "objtables-metadata-gap",
+  "private": true,
+  "perry": {
+    "compilePackages": ["objtables-metadata-addon"],
+    "allow": {"compilePackages": ["objtables-metadata-addon"]},
+    "nativeAddons": ["objtables-metadata-addon"]
+  }
+}

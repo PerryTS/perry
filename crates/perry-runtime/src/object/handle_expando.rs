@@ -1,35 +1,14 @@
 //! Native handles own an ordinary property bag through their existing
-//! expando registry. Its shape entries carry attributes and accessor identity;
+//! native payload record. Its shape entries carry attributes and accessor identity;
 //! its slots carry data values and getter/setter pairs. The registered root
-//! scanner traces that single bag edge, and releasing a handle drops it.
+//! owner scanner traces that bag edge, and releasing its record drops it.
 
 use super::descriptor_state::{
     get_handle_accessor_descriptor, get_handle_property_attrs, PropertyAttrs,
 };
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-// Per-thread storage: each runtime thread has its own arena + GC, and the
-// stored values are NaN-boxed references into THAT thread's arena. A
-// process-global table would let one thread's GC scanner trace/rewrite another
-// thread's values across arena boundaries (cross-thread values are deep-copied,
-// so a handle id never legitimately escapes its owning thread). Thread-local
-// keeps the side-table aligned with the per-thread GC, matching the documented
-// threading model. The mutable root scanner is registered once but reads the
-// CURRENT thread's table on each GC, so each thread traces only its own values.
-//
-// The per-handle entry is a `Vec<(name, bits)>` rather than a `HashMap` so own
-// keys come back in INSERTION order — `Object.keys(handle)` / `{...handle}` are
-// ordered in JS, and handles carry a handful of expandos at most, so the linear
-// scan is cheaper than hashing.
-crate::perry_thread_local! {
-    static HANDLE_EXPANDO_PROPS: RefCell<HashMap<i64, u64>> =
-        RefCell::new(HashMap::new());
-}
-
 /// Store an arbitrary own property `name = value` on the handle `handle`.
-/// Mirrors `closure_set_dynamic_prop`. The value is kept alive by the GC
-/// scanner below; a write barrier publishes it for incremental/young marking.
+/// Mirrors `closure_set_dynamic_prop`. The native owner traces its bag; a write barrier publishes it for
+/// incremental and young marking.
 pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
     if handle == 0 {
         return;
@@ -44,24 +23,17 @@ pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
 
 /// Drop every expando property stored under `handle`.
 ///
-/// #6710: handle ids are recycled through perry-ffi's freelist — a freed
-/// `IncomingMessage`/`ServerResponse`/Blob/stream id is handed back out by a
-/// later `register_handle`. This table (like the symbol-property table) is
-/// keyed by that id, so without an explicit clear the NEW owner inherits the
-/// PREVIOUS owner's arbitrary JS props. Under concurrent HTTP requests that
-/// crosses per-request state — Next.js stores `isRSCRequest` /
-/// `NextInternalRequestMeta` on `req`, so a recycled id makes one request read
-/// another's flags and the App Router render pipeline wedges. Callers clear a
-/// recycled id's side tables on the MAIN (JS-owning) thread before reuse.
+/// Releasing or reusing an existing native payload drops its bag word. The
+/// replacement record starts without a bag, so descriptor and data state
+/// cannot cross handle generations.
+
 pub fn handle_expando_clear(handle: i64) {
     if handle == 0 {
         return;
     }
-    HANDLE_EXPANDO_PROPS.with(|cell| {
-        cell.borrow_mut().remove(&handle);
-    });
-    // Removing the bag edge releases its attributes and accessor values too.
-    // Native addresses never need to be interpreted as cell headers here.
+    unsafe {
+        super::class_handles::native_property_bag_access(handle, 1, 0);
+    }
 }
 
 /// Read back an own property previously stored via `handle_expando_set`.
@@ -78,7 +50,16 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
     if handle == 0 {
         return None;
     }
-    if let Some(acc) = handle_expando_accessor(handle, name) {
+    // One owner-record probe answers both the accessor and the data read.
+    let bag = handle_property_bag(handle);
+    if bag.is_null() {
+        return None;
+    }
+    let accessor = unsafe {
+        crate::object::accessor_pair::own_accessor(bag as usize, name.as_bytes())
+            .map(crate::object::accessor_pair::descriptor_from)
+    };
+    if let Some(acc) = accessor {
         if acc.get == 0 {
             // Setter-only accessor: reads yield `undefined`, they do NOT fall
             // through to a stale data value.
@@ -94,7 +75,15 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
             crate::closure::plain_call_receiver(),
         ));
     }
-    handle_expando_data_get(handle, name)
+    unsafe { bag_data_get(bag, name) }
+}
+
+/// The stored data value for `name` in an owner's bag.
+unsafe fn bag_data_get(bag: *mut super::ObjectHeader, name: &str) -> Option<f64> {
+    let keys = crate::object::object_keys(bag);
+    let slot =
+        crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())?;
+    Some(crate::object::key_attrs::object_slot_data_f64(bag, slot))
 }
 
 /// The stored DATA value for `(handle, name)`, ignoring any accessor. Used by
@@ -106,13 +95,7 @@ pub(crate) fn handle_expando_data_get(handle: i64, name: &str) -> Option<f64> {
         if bag.is_null() {
             return None;
         }
-        let keys = crate::object::object_keys(bag);
-        let slot = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
-            keys.count(),
-            name.as_bytes(),
-        )?;
-        Some(crate::object::key_attrs::object_slot_data_f64(bag, slot))
+        bag_data_get(bag, name)
     }
 }
 
@@ -171,42 +154,15 @@ pub fn handle_expando_has_any(handle: i64) -> bool {
     !bag.is_null() && unsafe { crate::object::object_keys(bag).count() != 0 }
 }
 
-/// Mutable GC root scanner for the handle expando side-table.
-///
-/// Keys are stable small handle ids (never heap-moved), so this only traces the
-/// stored VALUES — exactly the value half of
-/// `scan_closure_dynamic_props_roots_mut`. Registered in `gc/mod.rs`. The
-/// per-owner entry is removed (borrow dropped) before invoking the visitor on
-/// each value, because the visitor may move objects and re-enter the runtime
-/// (e.g. a `handle_expando_set` on this same thread) — matching the closure
-/// scanner's contract.
-pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let owners: Vec<i64> =
-        HANDLE_EXPANDO_PROPS.with(|cell| cell.borrow().keys().copied().collect());
-    for owner in owners {
-        let Some(bits) = HANDLE_EXPANDO_PROPS.with(|cell| cell.borrow().get(&owner).copied())
-        else {
-            continue;
-        };
-        let mut value = f64::from_bits(bits);
-        visitor.visit_nanbox_f64_slot(&mut value);
-        HANDLE_EXPANDO_PROPS.with(|cell| {
-            if let Some(current) = cell.borrow_mut().get_mut(&owner) {
-                if *current == bits {
-                    *current = value.to_bits();
-                }
-            }
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::test_support::TestNativeOwner;
     use super::*;
 
     #[test]
     fn set_get_roundtrip() {
-        let h = 0x4_2424i64;
+        let native = TestNativeOwner::new();
+        let h = native.handle();
         assert!(handle_expando_get(h, "colors").is_none());
         let v = f64::from_bits(0x7FFD_AAAA_BBBB_CCCC);
         handle_expando_set(h, "colors", v);
@@ -216,15 +172,14 @@ mod tests {
         );
         assert!(handle_expando_has_any(h));
         // cleanup
-        HANDLE_EXPANDO_PROPS.with(|cell| {
-            cell.borrow_mut().remove(&h);
-        });
+        handle_expando_clear(h);
     }
 
     #[test]
     fn clear_drops_all_props() {
         // #6710: a recycled handle id must not carry the prior owner's props.
-        let h = 0x4_2426i64;
+        let native = TestNativeOwner::new();
+        let h = native.handle();
         handle_expando_set(h, "a", f64::from_bits(0x7FFD_0000_0000_0011));
         handle_expando_set(h, "b", f64::from_bits(0x7FFD_0000_0000_0022));
         assert!(handle_expando_has_any(h));
@@ -248,7 +203,8 @@ mod tests {
         use super::super::descriptor_state::{
             get_property_attrs, set_property_attrs, PropertyAttrs,
         };
-        let h = 0x4_2427i64;
+        let native = TestNativeOwner::new();
+        let h = native.handle();
         set_property_attrs(
             h as usize,
             "d".to_string(),
@@ -262,43 +218,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scanner_visits_the_owned_property_bag() {
-        let h = 0x4_2425i64;
-        let v_bits = 0x7FFD_1234_5678_9ABCu64;
-        handle_expando_set(h, "x", f64::from_bits(v_bits));
-        let bag = handle_property_bag(h);
-        assert_eq!(handle_expando_get(h, "x").unwrap().to_bits(), v_bits);
-        let bag_bits = crate::value::js_nanbox_pointer(bag as i64).to_bits();
-        let mut seen: Vec<u64> = Vec::new();
-        {
-            let mut mark = |v: f64| seen.push(v.to_bits());
-            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
-            scan_handle_expando_roots_mut(&mut visitor);
-        }
-        assert!(
-            seen.contains(&bag_bits),
-            "scanner must trace the holder owning the value slots, seen={seen:x?}"
-        );
-        HANDLE_EXPANDO_PROPS.with(|cell| {
-            cell.borrow_mut().remove(&h);
-        });
-    }
-
     /// #6363: own keys come back in INSERTION order (`Object.keys(handle)` /
     /// `{...handle}` are ordered in JS), and a re-set of an existing key must
     /// update in place rather than move it to the back.
     #[test]
     fn own_keys_preserve_insertion_order() {
-        let h = 0x4_2426i64;
+        let native = TestNativeOwner::new();
+        let h = native.handle();
         for name in ["b", "a", "c"] {
             handle_expando_set(h, name, f64::from_bits(crate::value::TAG_TRUE));
         }
         handle_expando_set(h, "b", f64::from_bits(crate::value::TAG_FALSE));
         assert_eq!(handle_expando_own_keys(h, false), vec!["b", "a", "c"]);
-        HANDLE_EXPANDO_PROPS.with(|cell| {
-            cell.borrow_mut().remove(&h);
-        });
+        handle_expando_clear(h);
     }
 
     /// #6363: a `defineProperty` default descriptor is NON-enumerable, so it
@@ -306,7 +238,8 @@ mod tests {
     /// and being non-configurable, `[[Delete]]` must reject it.
     #[test]
     fn non_enumerable_define_hides_from_keys_and_rejects_delete() {
-        let h = 0x4_2427i64;
+        let native = TestNativeOwner::new();
+        let h = native.handle();
         handle_expando_set(h, "vis", f64::from_bits(crate::value::TAG_TRUE));
         handle_expando_set(h, "hid", f64::from_bits(crate::value::TAG_TRUE));
         super::super::descriptor_state::set_property_attrs(
@@ -328,9 +261,7 @@ mod tests {
         assert!(handle_expando_delete(h, "vis"));
         assert!(!handle_expando_has(h, "vis"));
 
-        HANDLE_EXPANDO_PROPS.with(|cell| {
-            cell.borrow_mut().remove(&h);
-        });
+        handle_expando_clear(h);
         crate::object::descriptor_state::clear_property_attrs(h as usize, "hid");
     }
 
@@ -362,8 +293,12 @@ mod tests {
         assert!(handle_expando_attrs(h, "eventEmitter").enumerable());
         assert!(handle_expando_own_keys(h, true).is_empty());
         let original = *words;
-        handle_expando_set(h, "eventEmitter", 42.0);
-        assert_eq!(handle_expando_get(h, "eventEmitter"), Some(42.0));
+        assert!(crate::exception::js_call_catching(|| {
+            handle_expando_set(h, "eventEmitter", 42.0);
+            0.0
+        })
+        .is_err());
+        assert_eq!(handle_expando_get(h, "eventEmitter"), None);
         handle_expando_clear(h);
         assert!(
             handle_property_bag(h).is_null(),
@@ -377,25 +312,32 @@ mod tests {
     }
 }
 
-/// Native handles already own an expando registry entry. Its value is the
-/// ordinary property bag, whose shape owns all descriptor state.
+/// The existing native owner record contains the ordinary property bag word.
 pub(crate) fn handle_property_bag(handle: i64) -> *mut super::ObjectHeader {
-    HANDLE_EXPANDO_PROPS
-        .with(|cell| cell.borrow().get(&handle).copied())
-        .map_or(std::ptr::null_mut(), |bits| {
-            (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
-        })
+    if !super::class_handles::native_property_bag_published() {
+        return std::ptr::null_mut();
+    }
+    let bits = unsafe { super::class_handles::native_property_bag_access(handle, 0, 0) };
+    bits.map_or(std::ptr::null_mut(), |bits| {
+        (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
+    })
 }
 pub(crate) unsafe fn handle_property_bag_ensure(handle: i64) -> *mut super::ObjectHeader {
-    let bag = handle_property_bag(handle);
-    if !bag.is_null() {
-        return bag;
+    let Some(bits) = super::class_handles::native_property_bag_access(handle, 0, 0) else {
+        crate::collection_iter::throw_type_error("Invalid native property owner");
+    };
+    if bits != 0 {
+        return (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader;
     }
+    let _publication = crate::gc::GcSuppressScope::new();
     let bag = super::js_object_alloc(0, 0);
     let bits = crate::value::js_nanbox_pointer(bag as i64).to_bits();
-    HANDLE_EXPANDO_PROPS.with(|cell| {
-        cell.borrow_mut().insert(handle, bits);
-    });
+    if super::class_handles::native_property_bag_access(handle, 1, bits).is_none() {
+        crate::collection_iter::throw_type_error("Native property owner was released");
+    }
     crate::gc::runtime_write_barrier_external_slot(0, 0, bits);
     bag
 }
+
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -304,7 +304,6 @@ fn perex_dispatch_actual_throws_restore_this_roots_and_accounting() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     for (mode, expected) in [(0, 843.0), (1, 844.0), (2, 843.0)] {
         let scope = RuntimeHandleScope::new();
         let receiver = object(&scope);
@@ -411,7 +410,6 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let input = text(&scope, b"original-proxy-input");
@@ -460,7 +458,6 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     for nested_trap in [false, true] {
         let scope = RuntimeHandleScope::new();
         let receiver = object(&scope);

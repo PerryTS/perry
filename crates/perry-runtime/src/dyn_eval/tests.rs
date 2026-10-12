@@ -969,7 +969,7 @@ fn script_adapter_separates_global_this_from_intrinsic_lookup() {
 /// the window (`--test-threads` > 1 included), and put both process-globals
 /// back. Restoring is not a lie — once this test's array is unreachable the
 /// latch's claim is no longer true, exactly the correction #7737 made for the
-/// sibling `OBJECT_PROTOTYPES_NONEMPTY` latch.
+/// owned-prototype routing.
 struct ArrayPrototypeLatchGuard {
     _guard_tests: std::sync::MutexGuard<'static, ()>,
     latch: bool,

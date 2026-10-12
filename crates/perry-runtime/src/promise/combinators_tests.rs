@@ -7,7 +7,6 @@ use crate::value::js_nanbox_pointer;
 
 fn reset_promise_test_state() {
     TASK_QUEUE.with(|q| q.borrow_mut().clear());
-    PROMISE_ALL_STATES.with(|s| s.borrow_mut().clear());
 }
 
 fn thenable_value(func: *const crate::closure::JsFunctionInfo, captured: f64) -> f64 {
@@ -201,8 +200,8 @@ fn promise_all_with_shared_pending_input_resolves_both() {
         assert_eq!((*all_a).state, PromiseState::Pending);
         assert_eq!((*all_b).state, PromiseState::Pending);
 
-        // PROMISE_ALL_STATES must hold TWO entries keyed on `shared`.
-        let registered = PROMISE_ALL_STATES.with(|s| s.borrow_mut().count_for_key(shared as usize));
+        // The shared Promise must own TWO combinator records.
+        let registered = (*owned_state::state_list(shared, owned_state::ALL_STATES)).length / 4;
         assert_eq!(
             registered, 2,
             "expected two Promise.all states keyed on the shared pending promise"

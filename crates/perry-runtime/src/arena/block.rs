@@ -612,6 +612,29 @@ pub(crate) struct Arena {
     pub(crate) large_allocated_bytes: usize,
 }
 
+/// The GC kinds whose payload owns native memory released at thread exit.
+const OWNED_HOLDER_KIND_FIRST: u8 = crate::gc::GC_TYPE_ASYNC_SNAPSHOT;
+const OWNED_HOLDER_KIND_LAST: u8 = crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE;
+const _: () = {
+    let kinds = [
+        crate::gc::GC_TYPE_SET_STORE,
+        crate::gc::GC_TYPE_MAP_STORE,
+        crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE,
+        crate::gc::GC_TYPE_ASYNC_SNAPSHOT,
+    ];
+    let mut i = 0;
+    while i < kinds.len() {
+        assert!(kinds[i] >= OWNED_HOLDER_KIND_FIRST && kinds[i] <= OWNED_HOLDER_KIND_LAST);
+        i += 1;
+    }
+    // No byte-cell kind sits below the holder range or inside it.
+    let mut kind = 0u8;
+    while kind <= OWNED_HOLDER_KIND_LAST {
+        assert!(!crate::gc::is_byte_family_type(kind));
+        kind += 1;
+    }
+};
+
 impl Drop for Arena {
     fn drop(&mut self) {
         // Runtime-owned payloads can now be in the last unsynchronized Eden
@@ -640,7 +663,6 @@ impl Drop for Arena {
                 .filter(|block| !block.data.is_null())
                 .map(|block| (block.data as usize, block.data as usize + block.size))
                 .collect();
-            crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
             // #11471: every other process-global table keyed by, or holding,
             // an address in these blocks (see `arena::thread_exit`).
             super::thread_exit::release_freed_ranges(&ranges);
@@ -655,13 +677,29 @@ impl Drop for Arena {
                 continue;
             }
             super::walk::for_each_block_header(block, |header| unsafe {
+                // Every kind with thread-exit work (byte cells, native-owning
+                // holders) has an id at or above the first holder id, so an
+                // ordinary object, array, string or closure leaves after one
+                // compare.
+                let kind = (*header).obj_type;
+                if kind < OWNED_HOLDER_KIND_FIRST {
+                    return;
+                }
                 crate::buffer::drop_owned_backing_at_thread_exit(header);
-            });
-            super::map_allocations::walk_block_maps(block, &mut |header| unsafe {
-                if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
-                    crate::map::drop_map_store_at_thread_exit(
-                        header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE).cast(),
-                    );
+                if kind > OWNED_HOLDER_KIND_LAST {
+                    return;
+                }
+                let user = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE);
+                match kind {
+                    crate::gc::GC_TYPE_SET_STORE => crate::set::finalize_owned_store(user, false),
+                    crate::gc::GC_TYPE_MAP_STORE => crate::map::finalize_owned_store(user, false),
+                    crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE => {
+                        crate::async_hooks::resource_state::finalize(user.cast(), false)
+                    }
+                    crate::gc::GC_TYPE_ASYNC_SNAPSHOT => {
+                        crate::async_context::finalize_snapshot_holder(user.cast())
+                    }
+                    _ => {}
                 }
             });
             // #11463: a typed-array cache hit must not survive reuse of this
@@ -773,12 +811,38 @@ impl Arena {
     /// here — a bypassed site silently skews the OldReclaim trigger.
     #[inline]
     fn try_block_alloc(&mut self, idx: usize, size: usize, align: usize) -> Option<*mut u8> {
+        if matches!(
+            self.blocks[idx].extent_kind,
+            super::region::Kind::CollectingHolder
+        ) {
+            return None;
+        }
         let before = self.blocks[idx].offset;
         let ptr = self.blocks[idx].alloc(size, align)?;
         self.note_allocation(self.blocks[idx].offset - before, size >= 16 * 1024);
         if self.generation == HeapGeneration::Old {
             old_gen_in_use_bytes_add(self.blocks[idx].offset - before);
         }
+        Some(ptr)
+    }
+
+    pub(crate) fn try_alloc_collecting_holder(
+        &mut self,
+        size: usize,
+        align: usize,
+    ) -> Option<*mut u8> {
+        let idx = self.blocks.iter().rposition(|b| {
+            matches!(b.extent_kind, super::region::Kind::CollectingHolder)
+                && !b.data.is_null()
+                && ((b.offset + align - 1) & !(align - 1))
+                    .checked_add(size)
+                    .is_some_and(|n| n <= b.size)
+        })?;
+        let before = self.blocks[idx].offset;
+        let ptr = self.blocks[idx].alloc(size, align)?;
+        let bytes = self.blocks[idx].offset - before;
+        self.note_allocation(bytes, size >= 16 * 1024);
+        old_gen_in_use_bytes_add(bytes);
         Some(ptr)
     }
 
@@ -791,6 +855,12 @@ impl Arena {
         align: usize,
         excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
     ) -> Option<*mut u8> {
+        if matches!(
+            self.blocks[idx].extent_kind,
+            super::region::Kind::CollectingHolder
+        ) {
+            return None;
+        }
         let before = self.blocks[idx].offset;
         let ptr = self.blocks[idx].alloc_excluding_pages(size, align, excluded_pages)?;
         self.note_allocation(self.blocks[idx].offset - before, size >= 16 * 1024);
@@ -982,6 +1052,26 @@ impl Arena {
         }
         self.alloc_fresh_block_excluding_pages(size, align, excluded_pages)
     }
+}
+
+/// Reserve collecting-holder backing outside an arena borrow. The class
+/// lives on the existing block, and its objects use the normal old page index.
+pub(crate) unsafe fn arena_cell_alloc_collecting_holder(
+    arena: *mut Arena,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    if let Some(ptr) = (*arena).try_alloc_collecting_holder(size, align) {
+        return ptr;
+    }
+    let mut fresh = reserve_arena_block_for(size, HeapGeneration::Old);
+    fresh.extent_kind = super::region::Kind::CollectingHolder;
+    let previous = (*arena).current;
+    (*arena).install_reserved_block(fresh);
+    (*arena).set_current(previous);
+    (*arena)
+        .try_alloc_collecting_holder(size, align)
+        .expect("fresh collecting-holder block")
 }
 
 /// Allocate from an arena that lives behind a thread-local `UnsafeCell`,

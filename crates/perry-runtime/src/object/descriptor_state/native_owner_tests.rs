@@ -20,12 +20,19 @@ fn a_native_owner_that_decodes_as_a_map_keeps_its_bytes() {
         crate::value::addr_class::is_plausible_heap_addr(owner),
         "premise: the native buffer is heap-plausible"
     );
-    set_accessor_descriptor(
-        owner,
-        "k".to_string(),
-        AccessorDescriptor { get: 0, set: 0 },
+    assert!(
+        crate::exception::js_call_catching(|| {
+            set_accessor_descriptor(
+                owner,
+                "k".to_string(),
+                AccessorDescriptor { get: 0, set: 0 },
+            );
+            0.0
+        })
+        .is_err(),
+        "an unregistered native allocation has no property owner"
     );
-    assert!(get_handle_accessor_descriptor(owner, "k").is_some());
+    assert!(get_handle_accessor_descriptor(owner, "k").is_none());
     clear_accessor_descriptor(owner, "k");
     assert_eq!(
         buf[1 + meta_word],

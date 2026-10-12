@@ -142,7 +142,13 @@ mod tests {
     #[test]
     fn gc_destroy_jobs_are_not_skipped() {
         isolated(|| {
-            crate::async_hooks::enqueue_gc_destroy(u64::MAX - 1);
+            let resource = crate::object::js_object_alloc(0, 0);
+            let ids = crate::async_hooks::init_resource(
+                "destroy-job",
+                crate::value::js_nanbox_pointer(resource as i64),
+                true,
+            );
+            crate::async_hooks::enqueue_gc_destroy(ids.async_id);
             assert!(!can_skip_callback_phases());
             assert!(js_promise_run_microtasks_event_loop() > 0);
             assert!(!crate::async_hooks::gc_destroy_work_pending());

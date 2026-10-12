@@ -1,0 +1,1 @@
+Store Reflect metadata in a private traced record on the target's property holder, reusing a retired ObjectMeta descriptor word. Delete REFLECT_METADATA, its scanner branch, prune and rekey receipt. Preserve decorator class/prototype aliasing, scoped member keys and the existing coercion behavior. Add moving-GC child coverage and a deliberately red edge-erasure control.

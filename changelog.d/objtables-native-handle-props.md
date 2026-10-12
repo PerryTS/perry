@@ -1,0 +1,3 @@
+Delete `HANDLE_EXPANDO_PROPS` and its scanner. Existing native payload, Fetch and stream records own their ordinary property bag; its shape holds descriptors and symbol keys, and its slots hold values and accessor pairs. Existing native lifetime scanners trace and rewrite that edge. Reclaimable native owners trace bags only when reachable, preventing a bag-to-handle cycle from retaining its owner. Releasing a record and worker allocation-range teardown clear its bag without querying retired TLS.
+
+Add a dedicated Node gap, a copying-GC owner/release fixture, and a negative control that removes the native bag edge. Native headerless bytes cannot impersonate an allocator-owned object or acquire properties without an existing native owner.

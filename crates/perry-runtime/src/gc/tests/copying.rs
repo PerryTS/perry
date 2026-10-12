@@ -309,9 +309,14 @@ fn test_copying_minor_relocates_managed_map() {
     assert!(!crate::map::is_registered_map(map as usize));
     assert!(crate::map::is_registered_map(map_after as usize));
     assert_eq!(crate::map::test_map_side_allocation(map as usize), None);
+    // The young store moves with its Map; the header's alias follows it and
+    // the capacity (with its native indexes) is carried over unchanged.
+    let side_allocation_after = crate::map::test_map_side_allocation(map_after as usize)
+        .expect("a moved Map keeps its store");
+    assert_eq!(side_allocation_after.1, side_allocation_before.1);
     assert_eq!(
-        crate::map::test_map_side_allocation(map_after as usize),
-        Some(side_allocation_before)
+        unsafe { (*map_after).entries } as usize,
+        side_allocation_after.0
     );
     assert!(crate::map::test_map_numeric_index_contains(map_after, 8.0));
     assert!(crate::map::test_map_string_index_contains(
@@ -1664,18 +1669,8 @@ fn malloc_backed_large_closure_capture_in_old_container_survives_copied_minor() 
 
 #[test]
 fn copied_minor_rewrites_dirty_set_external_element_and_reindexes() {
-    struct SetRootGuard;
-
-    impl Drop for SetRootGuard {
-        fn drop(&mut self) {
-            crate::set::test_clear_set_roots();
-        }
-    }
-
     let _guard = CopyingNurseryTestGuard::new(1);
-    let _set_guard = SetRootGuard;
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::set::test_clear_set_roots();
 
     let (child_obj, _child_fields) = unsafe { alloc_nursery_test_object(0) };
     let child = child_obj as usize;
@@ -1685,7 +1680,7 @@ fn copied_minor_rewrites_dirty_set_external_element_and_reindexes() {
     assert_eq!(
         remembered_set_size(),
         0,
-        "young managed Set stores should not dirty old-to-young metadata"
+        "a young Set store traces its young element itself; nothing is remembered"
     );
 
     js_shadow_slot_set(0, ptr_bits(set as usize));

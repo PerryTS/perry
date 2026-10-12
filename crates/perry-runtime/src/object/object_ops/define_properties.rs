@@ -383,7 +383,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // path below rejects the handle (`is_valid_obj_ptr` is false for a small
     // id), so without this the prototype was silently dropped and every
     // express response method no-op'd (the Wall-10 express/NestJS blocker).
-    // Record the link in the SAME `OBJECT_PROTOTYPES` side-table keyed by the
+    // Record the link in the SAME owner property bag for the
     // handle id; the small-handle method/property dispatch fallbacks then walk
     // it via `resolve_inherited_field`, binding `this` to the handle so the
     // express method's internal `this.end(...)` / `this.statusCode = …` route

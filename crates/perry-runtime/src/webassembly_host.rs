@@ -88,6 +88,7 @@ extern "C" {
         import_context: u64,
         out_err: *mut *mut c_char,
     ) -> *mut c_void;
+    pub(super) fn perry_wasm_host_instance_import_context(inst: *mut c_void) -> u64;
     #[allow(dead_code)]
     pub(super) fn perry_wasm_host_instance_drop(inst: *mut c_void);
     pub(super) fn perry_wasm_host_instance_memory_span(

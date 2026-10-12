@@ -566,8 +566,12 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
     let resource_value = resource_handle
         .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64));
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_resource(type_name, resource_value, true)
+        crate::async_hooks::init_scheduled_resource(type_name, resource_value, None)
     });
+    // The queue entry owns the job's state; keep it reachable until queued.
+    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+        scope.root_raw_mut_ptr(state);
+    }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     QUEUED_MICROTASKS.with(|q| {
         q.borrow_mut().push_back(QueuedMicrotask {
@@ -575,6 +579,8 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
             context,
             async_id: ids.async_id,
             trigger_async_id: ids.trigger_async_id,
+            resource: resource_handle
+                .with_mut_ptr::<u8, _>(|resource| crate::value::js_nanbox_pointer(resource as i64)),
             args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         });
     });
@@ -583,8 +589,12 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
 pub(crate) struct QueuedMicrotask {
     pub callback: i64,
     pub context: crate::async_context::AsyncContextSnapshot,
+    /// Owns the job's async state (a state token, or a bare serial when no
+    /// hook was enabled at queue time).
     pub async_id: u64,
     pub trigger_async_id: u64,
+    /// The job's `executionAsyncResource()`.
+    pub resource: f64,
     pub args: Vec<f64>,
 }
 
@@ -626,9 +636,16 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 context,
                 async_id,
                 trigger_async_id,
+                resource,
                 args,
             }) => {
                 let scope = crate::gc::RuntimeHandleScope::new();
+                // The popped entry no longer owns the job's state: this scope
+                // does until its destroy.
+                if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+                    scope.root_raw_mut_ptr(state);
+                }
+                let resource_handle = scope.root_nanbox_f64(resource);
                 let callback_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
                 let arg_handles = scope.root_nanbox_f64_slice(&args);
@@ -636,7 +653,11 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
                 });
-                crate::async_hooks::before(async_id, trigger_async_id);
+                crate::async_hooks::before_scheduled(
+                    async_id,
+                    trigger_async_id,
+                    resource_handle.get_nanbox_f64(),
+                );
                 let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
                 let cb_ptr = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
                 match a.len() {
@@ -729,7 +750,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                     },
                 }
                 crate::async_hooks::after(async_id);
-                crate::async_hooks::destroy(async_id);
+                crate::async_hooks::destroy_scheduled(async_id);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     if let Some(previous) = stack.borrow_mut().pop() {
                         crate::async_context::restore_context(previous);
@@ -756,6 +777,8 @@ pub fn scan_queued_microtask_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     QUEUED_MICROTASKS.with(|q| {
         for task in q.borrow_mut().iter_mut() {
             visitor.visit_i64_slot(&mut task.callback);
+            crate::async_hooks::resource_state::scan_token(&mut task.async_id, visitor);
+            visitor.visit_nanbox_f64_slot(&mut task.resource);
             crate::async_context::scan_snapshot_roots_mut(&mut task.context, visitor);
             // #1351: trailing nextTick args may be heap pointers — keep
             // them rooted alongside the callback closure.
@@ -782,10 +805,33 @@ pub(crate) fn test_seed_queued_microtask(callback: i64, context_store: f64) {
             context,
             async_id: 0,
             trigger_async_id: 0,
+            resource: f64::from_bits(crate::value::TAG_UNDEFINED),
             args: Vec::new(),
         });
     });
     QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().clear());
+}
+
+/// Queue one job entry that owns `async_id` (no callback: never drained).
+#[cfg(test)]
+pub(crate) fn test_seed_queued_job_owner(async_id: u64, resource: f64) {
+    QUEUED_MICROTASKS.with(|q| {
+        let mut q = q.borrow_mut();
+        q.clear();
+        q.push_back(QueuedMicrotask {
+            callback: 0,
+            context: Default::default(),
+            async_id,
+            trigger_async_id: 0,
+            resource,
+            args: Vec::new(),
+        });
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_queued_jobs() {
+    QUEUED_MICROTASKS.with(|q| q.borrow_mut().clear());
 }
 
 #[cfg(test)]

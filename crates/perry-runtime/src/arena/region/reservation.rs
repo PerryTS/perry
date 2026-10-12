@@ -58,7 +58,7 @@ fn decode_space(word: u64) -> HeapSpace {
 fn kind_bits(kind: Kind) -> u64 {
     (match kind {
         Kind::NurseryBlock => 1,
-        Kind::OldBlock => 2,
+        Kind::OldBlock | Kind::CollectingHolder => 2,
         Kind::LargeObject => 3,
         Kind::ByteStore => 4,
         Kind::Payload => 5,

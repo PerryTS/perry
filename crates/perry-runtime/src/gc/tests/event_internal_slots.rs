@@ -4,7 +4,18 @@ use super::support::*;
 
 #[test]
 fn event_symbol_properties_survive_a_moving_collection() {
+    check_event_symbols(false);
+}
+#[test]
+#[ignore = "negative control: omit the event symbol cache root scanner"]
+fn negative_control_objtables_event_symbol_cache() {
+    check_event_symbols(true);
+}
+fn check_event_symbols(omit_roots: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
+    if !omit_roots {
+        gc_register_mutable_root_scanner(crate::event_target::state::scan_roots);
+    }
     unsafe {
         let owner = crate::event_target::js_event_target_new();
         js_shadow_slot_set(0, ptr_bits(owner as usize));
@@ -67,6 +78,7 @@ fn event_symbol_properties_survive_a_moving_collection() {
 #[test]
 fn promoted_event_symbol_property_barrier_keeps_a_new_child() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::event_target::state::scan_roots);
     let _tenuring = tenuring::set_survivals_for_test(tenuring::GC_TENURING_SURVIVALS_MAX);
     let mut owner = crate::event_target::js_event_target_new();
     js_shadow_slot_set(0, ptr_bits(owner as usize));

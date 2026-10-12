@@ -314,28 +314,6 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
     }
     let obj_type = (*header).obj_type;
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-    // An explicit `Object.setPrototypeOf` value recorded in the residual
-    // registry is a child edge of its owner, whatever the owner's kind: marking
-    // retains it and a moving collection rewrites it after
-    // `gc/layout/transfer.rs` rekeyed the entry. It used to be emitted from the
-    // array and ordinary-object arms only, so a Map, Set, Error, Promise, Date,
-    // RegExp, Temporal cell, lazy JSON array or closure owner kept a stale
-    // prototype address once the prototype moved. First, ahead of the kind
-    // arms, so no arm's early return can skip it.
-    if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
-        && crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
-        // #10362: the per-OWNER half. The latch above is exact for a process
-        // that never re-prototyped a non-object and useless for one that has —
-        // it is what made a single `Object.setPrototypeOf(anArray, p)` charge
-        // every traced cell of every owner-capable kind a global mutex and a
-        // SipHash probe. This asks the owner's own header instead.
-        && crate::object::prototype_chain::residual_entry_possible_for(header)
-    {
-        crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
-            user_ptr as usize,
-            |slot| visit(fixed_slot(slot)),
-        );
-    }
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
             layout_descriptors!();
@@ -381,8 +359,46 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 &mut (*promise).on_rejected as *mut _ as *mut usize,
             ));
             visit(pointer_slot(&mut (*promise).next as *mut _ as *mut usize));
+            if crate::async_hooks::resource_state::get((*promise).async_id).is_some() {
+                visit(pointer_slot(
+                    std::ptr::addr_of_mut!((*promise).async_id).cast(),
+                ));
+            }
             // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
             visit(pointer_slot(&mut (*promise).meta as *mut _ as *mut usize));
+            visit(pointer_slot(
+                &mut (*promise).callback_context as *mut _ as *mut usize,
+            ));
+        }
+        GcRewriteDescriptorKind::Symbol => {
+            let symbol = user_ptr as *mut crate::symbol::SymbolHeader;
+            if !(*symbol).description.is_null() {
+                visit(pointer_slot(
+                    std::ptr::addr_of_mut!((*symbol).description).cast::<usize>(),
+                ));
+            }
+        }
+        GcRewriteDescriptorKind::AsyncResourceState => {
+            let state = user_ptr as *mut crate::async_hooks::resource_state::ResourceState;
+            visit(fixed_slot(std::ptr::addr_of_mut!((*state).resource).cast()));
+            visit(fixed_slot(
+                std::ptr::addr_of_mut!((*state).lease_resource).cast(),
+            ));
+            crate::async_context::for_each_snapshot_store_slot(
+                &mut (*state).context,
+                &mut |slot| {
+                    visit(fixed_slot(slot.cast()));
+                },
+            );
+        }
+        GcRewriteDescriptorKind::AsyncSnapshot => {
+            let holder = user_ptr as *mut crate::async_context::AsyncSnapshotHolder;
+            crate::async_context::for_each_snapshot_store_slot(
+                &mut (*holder).snapshot,
+                &mut |slot| {
+                    visit(fixed_slot(slot.cast::<u64>()));
+                },
+            );
         }
         GcRewriteDescriptorKind::Error => {
             let error = user_ptr as *mut crate::error::ErrorHeader;
@@ -404,60 +420,37 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
         }
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
-            let size = (*map).size;
-            let used = (*map).used;
-            let capacity = (*map).capacity;
-            // Corruption guard only: mirror Set's 16M bound (set.rs
-            // gc_element_slot_range). Every GC walk (mark, copy, rewrite,
-            // dirty-scan, verify) funnels through this descriptor, so a
-            // lower cap makes larger maps invisible to the collector —
-            // entries reachable only through a >cap map would be swept
-            // while live and never rewritten after a move.
-            if size > used || used > capacity || used > 16_000_000 || (*map).entries.is_null() {
-                return;
-            }
-            // Defensive tripwire (# fabricated-Map): if a fabricated Map
-            // header ever slips past `plausible_gc_header`, the `entries`
-            // field would be a NaN-boxed JSValue (top bits 0x7FFD…) or some
-            // other non-pointer word read from the original object's
-            // payload. Reject it rather than dereference a derived slot
-            // range from a garbage base. This is a backstop; the primary
-            // fix is the fixed-layout size check in `plausible_gc_header`.
-            // Use the shared heap-address classifier so the bound is
-            // platform-correct (a fixed `>> 47` cutoff would false-reject
-            // genuine entries on aarch64 Linux, where user space reaches
-            // bit 48) and so low / handle-band garbage is rejected too,
-            // not only the NaN-box signature.
-            let entries_addr = (*map).entries as usize;
-            if !crate::value::addr_class::is_plausible_heap_addr(entries_addr) {
-                if crate::gc::gc_diag_enabled() {
-                    eprintln!(
-                        "[gc-tripwire] Map entries is not a plausible heap address: {:#x} (fabricated Map?)",
-                        entries_addr
-                    );
-                }
-                return;
-            }
-            visit(GcMutableSlotDescriptor::Range {
-                range: HeapSlotRange::new((*map).entries as *mut u64, used as usize * 2),
-                layout_kind: None,
-            });
-            // #6759 phase 1: the metadata edge. This arm is the MARK path as
-            // well as the rewrite path (`trace_heap_rewrite_slots` drives it),
-            // so visiting here keeps the record — and anything reachable only
-            // through it — alive.
-            visit(pointer_slot(&mut (*map).meta as *mut _ as *mut usize));
+            visit(pointer_slot(std::ptr::addr_of_mut!((*map).store).cast()));
+            visit(pointer_slot(std::ptr::addr_of_mut!((*map).meta).cast()));
         }
-        GcRewriteDescriptorKind::Set => {
-            let set = user_ptr as *mut crate::set::SetHeader;
-            if let Some(range) = crate::set::gc_element_slot_range(set) {
+        GcRewriteDescriptorKind::MapStore => {
+            if let Some(range) = crate::map::owned_entry_slot_range(user_ptr) {
                 visit(GcMutableSlotDescriptor::Range {
                     range,
                     layout_kind: None,
                 });
             }
-            // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
-            visit(pointer_slot(&mut (*set).meta as *mut _ as *mut usize));
+        }
+        GcRewriteDescriptorKind::Set => {
+            let set = user_ptr as *mut crate::set::SetHeader;
+            visit(pointer_slot(std::ptr::addr_of_mut!((*set).store).cast()));
+            visit(pointer_slot(std::ptr::addr_of_mut!((*set).meta).cast()));
+        }
+        GcRewriteDescriptorKind::Proxy => {
+            let proxy = user_ptr.cast::<crate::proxy::ProxyEntry>();
+            visit(GcMutableSlotDescriptor::Range {
+                range: HeapSlotRange::new(std::ptr::addr_of_mut!((*proxy).target).cast(), 2),
+                layout_kind: None,
+            });
+            visit(pointer_slot(std::ptr::addr_of_mut!((*proxy).props).cast()));
+        }
+        GcRewriteDescriptorKind::SetStore => {
+            if let Some(range) = crate::set::owned_element_slot_range(user_ptr) {
+                visit(GcMutableSlotDescriptor::Range {
+                    range,
+                    layout_kind: None,
+                });
+            }
         }
         GcRewriteDescriptorKind::LazyArray => {
             let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
@@ -511,6 +504,16 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // 0-unset sentinels, which the slot visitor ignores).
             let meta = user_ptr as *mut crate::object::ObjectMeta;
             visit(fixed_slot(&mut (*meta).prototype as *mut u64));
+            // The private boxed primitive is a child edge (string, BigInt,
+            // or Symbol), with scalars ignored by the ordinary slot visitor.
+            // Most metadata records have no boxed payload; zero cannot name
+            // a GC child (including the numeric payload +0).
+            if (*meta).boxed_primitive != 0 {
+                visit(fixed_slot(&mut (*meta).boxed_primitive as *mut u64));
+            }
+            if (*meta).reflect_metadata != 0 {
+                visit(fixed_slot(&mut (*meta).reflect_metadata as *mut u64));
+            }
             // #6812: the object-owned overflow buffer is a raw-pointer child
             // edge (0 = none), traced and rewritten exactly like `prototype`.
             visit(fixed_slot(&mut (*meta).spill as *mut u64));
@@ -542,6 +545,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             visit(fixed_slot(
                 &mut (*meta).private_evaluation_brand as *mut u64,
             ));
+            if (*meta).owned_state != 0 {
+                visit(fixed_slot(&mut (*meta).owned_state as *mut u64));
+            }
             // Native payload and weak-collection `native_state` is its
             // POINTER_TAG-boxed owned cell, reachable ONLY through this
             // record, so it is a child edge exactly like `arguments`. A plain

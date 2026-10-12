@@ -2,9 +2,10 @@
 //! entry point. Split out of `proxy.rs` to keep that file under the size gate.
 
 use super::{
-    call_trap, handler_trap, is_callable_function, js_reflect_is_extensible, lookup, nanbox_bool,
-    pin_proxy_for_native_call, reflect_non_object_typeerror, reflect_target_get_prototype_of,
-    reflect_value_is_object, revoked_return, throw_type_error, PROXIES, TAG_NULL, TAG_UNDEFINED,
+    call_trap, entry, handler_trap, is_callable_function, js_reflect_is_extensible, lookup,
+    nanbox_bool, pin_proxy_for_native_call, reflect_non_object_typeerror,
+    reflect_target_get_prototype_of, reflect_value_is_object, revoked_return, throw_type_error,
+    TAG_NULL, TAG_UNDEFINED,
 };
 
 /// `Reflect.setPrototypeOf(target, proto)` (#2761).
@@ -61,17 +62,13 @@ fn proxy_set_prototype_of(proxy_boxed: f64, proto: f64) -> f64 {
         Some(id) => id,
         None => return nanbox_bool(false),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }

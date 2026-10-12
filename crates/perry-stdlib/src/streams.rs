@@ -338,6 +338,8 @@ unsafe fn settle_stream_action_promise(promise: *mut Promise, actions: &[*mut Pr
 
 mod byob;
 mod expando;
+mod native_properties;
+pub(crate) use native_properties::{native_property_bag, set_native_property_bag};
 mod gc;
 mod idalloc;
 mod native;
@@ -426,6 +428,7 @@ enum WritableState {
 }
 
 struct ReadableStreamData {
+    props: perry_ffi::NativePropertyBag,
     native_source: Option<native::NativeSource>,
     tee_cancel_promise: Option<*mut Promise>,
     body_consumer: Option<native::BodyConsumer>,
@@ -486,6 +489,7 @@ impl ReadableStreamData {
 
 #[allow(dead_code)]
 struct WritableStreamData {
+    props: perry_ffi::NativePropertyBag,
     state: WritableState,
     write_cb: i64,
     close_cb: i64,
@@ -512,6 +516,7 @@ struct WritableStreamData {
 }
 
 struct TransformStreamData {
+    props: perry_ffi::NativePropertyBag,
     readable_handle: usize,
     writable_handle: usize,
     transform_cb: i64,
@@ -542,6 +547,7 @@ enum NativeTransformKind {
 }
 
 struct ReaderData {
+    props: perry_ffi::NativePropertyBag,
     stream_handle: usize,
     locked: bool,
     closed_promise: *mut Promise,
@@ -552,6 +558,7 @@ struct ReaderData {
 }
 
 struct WriterData {
+    props: perry_ffi::NativePropertyBag,
     stream_handle: usize,
     locked: bool,
     closed_promise: *mut Promise,
@@ -1020,6 +1027,7 @@ fn alloc_readable_with_strategy(
     READABLE_STREAMS.lock().unwrap().insert(
         id,
         ReadableStreamData {
+            props: Default::default(),
             native_source: None,
             tee_cancel_promise: None,
             body_consumer: None,
@@ -1080,6 +1088,7 @@ fn alloc_writable_with_strategy(
     WRITABLE_STREAMS.lock().unwrap().insert(
         id,
         WritableStreamData {
+            props: Default::default(),
             state: WritableState::Writable,
             write_cb,
             close_cb,
@@ -1584,6 +1593,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
             READERS.lock().unwrap().insert(
                 reader_id,
                 ReaderData {
+                    props: Default::default(),
                     stream_handle: id,
                     locked: true,
                     closed_promise: closed_p,

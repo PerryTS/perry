@@ -36,7 +36,7 @@ fn test_unrooted_regexp_instance_and_data_reclaimed_by_copying_collection() {
         crate::string::intern_ascii_literal(b"tag"),
         f64::from_bits(crate::value::JSValue::int32(7).bits()),
     );
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+
     let data = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(addr as i64)).unwrap()
         as usize;
     // The construction cache holds the compiled program, not the header, but

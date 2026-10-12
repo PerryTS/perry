@@ -1003,7 +1003,7 @@ pub fn longlived_end() -> usize {
 /// cleared, because the rebuild has just emptied the list.
 pub(crate) fn old_arena_walk_all_headers_listing_holes(
     mut block_filter: impl FnMut(usize) -> bool,
-    mut callback: impl FnMut(*mut u8, usize) -> bool,
+    mut callback: impl FnMut(*mut u8, usize, bool) -> bool,
 ) {
     use crate::gc::GcHeader;
     let old_block_start = longlived_end();
@@ -1029,7 +1029,11 @@ pub(crate) fn old_arena_walk_all_headers_listing_holes(
                     if total_size == 0 || total_size > block.size {
                         break;
                     }
-                    listed |= callback(header_ptr, block_idx);
+                    listed |= callback(
+                        header_ptr,
+                        block_idx,
+                        matches!(block.extent_kind, super::region::Kind::CollectingHolder),
+                    );
                     offset = aligned + total_size;
                 }
             }

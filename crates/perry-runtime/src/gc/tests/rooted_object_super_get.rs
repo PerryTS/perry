@@ -44,13 +44,12 @@ fn object_super_get_roots_home_and_receiver_across_moving_key_coercion() {
     register_runtime_handle_root_scanner_for_tests();
     // The isolation guard resets the production scanner registry. Reinstall
     // object-model roots because the fixture depends on shape descriptors,
-    // transition metadata, canonical keys, and symbol properties surviving
-    // the forced move.
+    // transition metadata and canonical keys surviving the forced move (symbol
+    // properties live in the owners' shapes).
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
     SUPER_GET_COPIED_OBJECTS.store(0, Ordering::Relaxed);
 
     unsafe {

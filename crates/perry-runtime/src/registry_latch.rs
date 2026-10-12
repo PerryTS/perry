@@ -320,61 +320,6 @@ impl<const WORDS: usize> RegistryAddrFilter<WORDS> {
             .map(|w| w.load(Ordering::Acquire).count_ones())
             .sum()
     }
-
-    /// Test hook: empty the filter, so a test can establish a state in which
-    /// only what it registers is admitted.
-    ///
-    /// Only a test may have this: the soundness argument is that bits are never
-    /// cleared, so a production clear would make live registered addresses read
-    /// as unregistered. A test that calls this must restore what it cleared —
-    /// see [`Self::restore_for_tests`].
-    #[cfg(test)]
-    pub(crate) fn take_for_tests(&self) -> [u64; WORDS] {
-        let mut previous = [0u64; WORDS];
-        for (slot, word) in previous.iter_mut().zip(self.words.iter()) {
-            *slot = word.swap(0, Ordering::AcqRel);
-        }
-        previous
-    }
-
-    /// Test hook: OR the saved bits back in.
-    #[cfg(test)]
-    pub(crate) fn restore_for_tests(&self, saved: [u64; WORDS]) {
-        for (word, bits) in self.words.iter().zip(saved.iter()) {
-            word.fetch_or(*bits, Ordering::AcqRel);
-        }
-    }
-
-    /// Test hook: the current bit words, as a plain value.
-    #[cfg(test)]
-    pub(crate) fn snapshot_for_tests(&self) -> [u64; WORDS] {
-        let mut words = [0u64; WORDS];
-        for (slot, word) in words.iter_mut().zip(self.words.iter()) {
-            *slot = word.load(Ordering::Acquire);
-        }
-        words
-    }
-
-    /// Test hook: what [`may_contain`](Self::may_contain) WOULD have answered
-    /// for `addr` against a snapshot taken earlier.
-    ///
-    /// This is what lets a test prove a widening was load-bearing rather than
-    /// lucky: "the address the collector moved this symbol to is not one the
-    /// filter already happened to accept" is only checkable against the filter
-    /// as it stood BEFORE the move.
-    #[cfg(test)]
-    pub(crate) fn snapshot_may_contain(words: &[u64; WORDS], addr: usize) -> bool {
-        let (a, b, c) = Self::bit_positions(addr);
-        [a, b, c]
-            .into_iter()
-            .all(|bit| words[(bit / 64) as usize] & (1u64 << (bit % 64)) != 0)
-    }
-
-    /// The word count, so a caller can name the snapshot type.
-    #[cfg(test)]
-    pub(crate) const fn words() -> usize {
-        WORDS
-    }
 }
 
 /// The addresses an owner currently holds, sized from that population and

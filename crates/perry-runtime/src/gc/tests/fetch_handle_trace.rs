@@ -124,7 +124,7 @@ fn only_fetch_band_words_reach_the_provider() {
         "boxed and raw handle ids must reach it"
     );
     abort_full_trace();
-    assert!(!handle_trace_active() || crate::proxy::gc_full_trace_active());
+    assert!(!handle_trace_active());
 }
 
 // #11453: the shared native-handle pool's weak-owner provider.

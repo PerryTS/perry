@@ -1278,7 +1278,7 @@ pub(crate) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
     if !is_heap_ptr {
         return false;
     }
-    let ptr_val = (value_bits & POINTER_MASK) as usize;
+    let ptr_val = crate::value::addr_class::tagged_heap_addr(value_bits);
     if ptr_val == 0 {
         return false;
     }
@@ -1404,17 +1404,9 @@ pub(super) unsafe fn mark_decoded_field_into_worklist(
     // cannot see them, because they are arrays and not the strings it was
     // written for.
     //
-    // Ordinary arrays require NO ACTIVE HANDLE TRACE. Private shared key/
-    // attribute storage has no handle-id words and may also skip this walk.
-    // `trace_heap_rewrite_slots` reads
-    // every word of a POINTER-FREE payload through `gc_observe_traced_value`
-    // when `proxy_trace_active`, because a proxy id is a POINTER_TAG value in
-    // the proxy-id band and not a heap pointer — which is exactly why the
-    // layout mask calls that payload pointer free. Skipping the object would
-    // leave the entry unobserved, `gc_finish_full_trace` would prune it, and a
-    // LIVE proxy's target and handler would be collected. The other two
-    // consumers of this predicate ignore `PointerFreeRange` and carry no such
-    // term; the asymmetry is deliberate.
+    // Native numeric handles still need their provider observer, including
+    // pointer-free ranges. Proxies are ordinary heap edges now. Private shared
+    // key/attribute storage has no handle-id words and may skip this walk.
     #[cfg(not(test))]
     let proxy_gate = proxy_trace_active;
     #[cfg(test)]
@@ -1437,10 +1429,10 @@ pub(super) unsafe fn mark_decoded_field_into_worklist(
 
 /// Sabotage switches for the zero-slot skip (#10362). Test builds only.
 ///
-/// `respecting_proxy_gate` DISARMS the `!proxy_trace_active` term, i.e. makes
-/// the full mark skip a pointer-free array even while a proxy trace is running.
-/// That is the defect the gate exists to prevent, and
-/// `gc::tests::zero_slot_skip` requires it to strand a live proxy's target.
+/// `respecting_proxy_gate` DISARMS the handle-observer term, i.e. makes the
+/// full mark skip a pointer-free payload even while a handle observer is
+/// active. That is the defect the gate exists to prevent; the observer gate
+/// tests require it to strand the payload.
 #[cfg(test)]
 pub(crate) mod zero_slot_skip_sabotage {
     use std::cell::Cell;

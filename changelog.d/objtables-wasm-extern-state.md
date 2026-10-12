@@ -1,0 +1,3 @@
+Delete the Memory/Table/Global wrapper address registry. Each trusted host handle and kind lives in a native payload owned by its wrapper's meta record. The final wrapper registry's move, death and thread-exit hooks and ever-used latch disappear; ordinary-object evacuation and block reclamation no longer consult them. Host engine-object lifetime follows the existing host policy.
+
+Validation: moving-wrapper, fresh-owner/wrong-kind and collection tests pass. Removing the owning edge makes the external binding's negative control fail at its retention assertion. A dedicated Node gap covers genuine external wrappers and copied fields.

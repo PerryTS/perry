@@ -11,6 +11,7 @@ pub(super) fn alloc_response(
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
+            props: 0,
             status,
             status_text,
             headers,
@@ -188,6 +189,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 cloned
             });
             FetchResponse {
+                props: 0,
                 status: resp.status,
                 status_text: resp.status_text.clone(),
                 headers: response_headers_snapshot(resp),

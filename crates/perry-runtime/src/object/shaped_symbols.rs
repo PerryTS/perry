@@ -5,7 +5,9 @@ use super::*;
 pub(crate) const PRIVATE_ENTRY: u8 = 0x40;
 
 pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
-    let bag = if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
+    let bag = if crate::value::addr_class::is_proxy_id_band(addr) {
+        crate::proxy::property_bag(addr)
+    } else if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
         descriptor_state::descriptor_holder(addr)
     } else {
         super::handle_expando::handle_property_bag(addr as i64)

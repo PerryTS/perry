@@ -1,0 +1,1 @@
+Delete the Wasm imports address table, its scanner and token counter. Instances, exported wrappers and table function captures own a stable collecting native context cell whose traced owner slot holds the imports object. Moving collections rewrite the object edge while the host's opaque context remains stable.

@@ -72,8 +72,11 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
         if payload > 0xFFFF_FFFF {
             return None;
         }
-        let addr = payload as usize;
-        return (addr != 0).then_some(RootWord::Nanboxed { addr, tag });
+        let addr = crate::value::addr_class::tagged_heap_addr(bits);
+        return (addr != 0).then_some(RootWord::Nanboxed {
+            addr,
+            tag: tag | (bits & 1),
+        });
     }
     // Not a heap tag. Everything else in the NaN-tag space is an immediate.
     if tag >= NAN_TAG_FLOOR {
@@ -90,7 +93,7 @@ pub(super) fn decode_root_word(bits: u64) -> Option<RootWord> {
         return None;
     }
     Some(RootWord::Bare {
-        addr: bits as usize,
+        addr: crate::value::addr_class::canonical_raw_receiver(bits as usize),
     })
 }
 
@@ -123,7 +126,9 @@ impl PreciseRoot {
     fn address(self) -> Option<usize> {
         match self {
             Self::JSValue(bits) => decode_tagged_root_word(bits).map(RootWord::addr),
-            Self::GcPointer(addr) => (addr != 0).then_some(addr),
+            Self::GcPointer(addr) => {
+                (addr != 0).then_some(crate::value::addr_class::canonical_raw_receiver(addr))
+            }
         }
     }
 
@@ -332,10 +337,10 @@ fn decode_tagged_root_word(bits: u64) -> Option<RootWord> {
             if payload > usize::MAX as u64 {
                 return None;
             }
-            let addr = payload as usize;
+            let addr = crate::value::addr_class::tagged_heap_addr(bits);
             (addr != 0).then_some(RootWord::Nanboxed {
                 addr,
-                tag: bits & TAG_MASK,
+                tag: (bits & TAG_MASK) | (bits & 1),
             })
         }
         _ => None,

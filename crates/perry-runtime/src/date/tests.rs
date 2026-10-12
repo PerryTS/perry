@@ -386,7 +386,6 @@ fn a_headerless_symbol_behind_a_date_cell_tag_is_not_a_date() {
             id: 56,
         });
     }
-    crate::symbol::register_symbol_pointer(sym as usize);
     let addr = sym as usize;
     assert_eq!(
         unsafe { crate::value::addr_class::try_read_gc_header(addr) }.map(|h| h.obj_type),
@@ -394,12 +393,12 @@ fn a_headerless_symbol_behind_a_date_cell_tag_is_not_a_date() {
         "fixture: the word before the symbol must read as a DateCell tag"
     );
     assert!(
-        crate::symbol::is_registered_symbol(addr),
-        "fixture: the symbol must be registered"
+        !crate::symbol::is_registered_symbol(addr),
+        "an untracked spoof is not a registered symbol"
     );
     assert!(
         !is_date_cell_addr(addr),
-        "a registered symbol must never classify as a DateCell"
+        "a symbol payload must never classify as a DateCell"
     );
     let boxed = f64::from_bits(crate::value::JSValue::pointer(addr as *const u8).bits());
     assert!(!is_date_value(boxed));

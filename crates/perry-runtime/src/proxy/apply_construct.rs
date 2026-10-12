@@ -5,9 +5,9 @@
 //! (split-large-files recipe). Pure relocation; behavior is unchanged.
 
 use super::{
-    closure_from, create_list_from_array_like, handler_trap, lookup, pin_proxy_for_native_call,
-    reflect_value_is_object, revoked_return, throw_type_error, value_display_string, POINTER_MASK,
-    POINTER_TAG, PROXIES, TAG_NULL, TAG_UNDEFINED,
+    closure_from, create_list_from_array_like, entry, handler_trap, lookup,
+    pin_proxy_for_native_call, reflect_value_is_object, revoked_return, throw_type_error,
+    value_display_string, POINTER_MASK, POINTER_TAG, TAG_NULL, TAG_UNDEFINED,
 };
 use crate::closure::js_closure_call3;
 
@@ -42,12 +42,7 @@ pub(crate) fn is_callable_function(value: f64) -> bool {
 
 pub(crate) fn is_constructor_function(value: f64) -> bool {
     if let Some(id) = lookup(value) {
-        return PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|e| e.as_ref())
-                .is_some_and(|e| e.constructable)
-        });
+        return entry(id).is_some_and(|e| e.constructable);
     }
     // #11229: a per-evaluation class object (a class that captures its
     // enclosing scope -- every such class in a CommonJS module, and any class
@@ -193,17 +188,13 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }
@@ -307,17 +298,13 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
+    let (target, handler, revoked) = entry(id)
+        .map(|e| (e.target, e.handler, e.revoked))
+        .unwrap_or((
+            f64::from_bits(TAG_UNDEFINED),
+            f64::from_bits(TAG_UNDEFINED),
+            false,
+        ));
     if revoked {
         return revoked_return();
     }

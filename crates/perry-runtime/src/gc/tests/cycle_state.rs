@@ -1539,7 +1539,6 @@ fn full_cycle_class_static_field_store_after_root_scan_preserves_new_value() {
 fn full_cycle_symbol_property_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_symbol_side_table_roots();
 
     let owner = alloc_tracked_test_object();
     let sym = alloc_tracked_test_symbol();
@@ -1568,14 +1567,12 @@ fn full_cycle_symbol_property_store_after_root_scan_preserves_new_value() {
         malloc_user_ptr_tracked(child),
         "symbol property value stored after root scan should survive via the side-table root barrier"
     );
-    crate::symbol::test_clear_symbol_side_table_roots();
 }
 
 #[test]
 fn full_cycle_class_static_symbol_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    crate::symbol::test_clear_symbol_side_table_roots();
 
     let sym = alloc_tracked_test_symbol();
     let child = alloc_tracked_test_closure();
@@ -1603,7 +1600,6 @@ fn full_cycle_class_static_symbol_store_after_root_scan_preserves_new_value() {
         malloc_user_ptr_tracked(child),
         "class static symbol value stored after root scan should survive via the side-table root barrier"
     );
-    crate::symbol::test_clear_symbol_side_table_roots();
 }
 
 #[test]
@@ -1897,14 +1893,9 @@ fn full_cycle_console_singleton_store_after_root_scan_preserves_new_value() {
     crate::builtins::test_set_console_log_singleton(0);
 }
 
-// Regression (2026-07 GC audit, sync/step scanner divergence): cycle-based
-// collections run ONLY the budgeted STEP scanner when one is registered, and
-// the promise step machine lacked the PROMISE_OVERFLOW_REACTIONS phase its
-// sync twin visits — the 2nd+ `.then()` on a still-pending promise parks its
-// reaction closure and chained `next` promise ONLY in that table, so every
-// full/fallback collection swept them while the promise was pending.
+// A full cycle must propagate the rooted Promise's owned overflow list.
 #[test]
-fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
+fn full_cycle_traces_owned_promise_overflow_reactions() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     gc_register_budgeted_mutable_root_scanner_with_source(
@@ -1919,7 +1910,7 @@ fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
     let cb1 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     let cb2 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     // First reaction lands inline in the promise's own fields; the second
-    // goes to PROMISE_OVERFLOW_REACTIONS — the table under test.
+    // goes to the Promise-owned overflow list.
     let _next1 = crate::promise::js_promise_then(promise, cb1, std::ptr::null());
     let next2 = crate::promise::js_promise_then(promise, cb2, std::ptr::null());
 
@@ -1932,8 +1923,10 @@ fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
         assert!(root_steps < 100_000, "root scan did not finish");
     }
 
-    // Marked during RootScan by the step scanner itself (not via promise
-    // field propagation — cb2/next2 are reachable ONLY through the table).
+    // The callbacks are heap children now. Complete propagation before
+    // checking their marks; the root scanner visits the Promise, not each
+    // individual owned field. Stop before sweep clears the marks.
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
     assert_heap_child_marked(cb2 as *const u8, "overflow on_fulfilled closure");
     assert_heap_child_marked(next2 as *const u8, "overflow next promise");
 

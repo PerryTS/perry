@@ -312,7 +312,8 @@ fn test_descriptor_meta_summary_gates_probes() {
         assert!(!crate::object::descriptor_state::may_have_descriptor_entry(
             addr, "x", true
         ));
-        let handle = 0x400usize;
+        let native = crate::object::handle_expando::test_support::TestNativeOwner::new();
+        let handle = native.handle() as usize;
         crate::object::handle_expando::handle_expando_clear(handle as i64);
         assert!(!crate::object::descriptor_state::may_have_descriptor_entry(
             handle, "x", false
@@ -323,7 +324,8 @@ fn test_descriptor_meta_summary_gates_probes() {
             crate::object::PropertyAttrs::new(false, true, true),
         );
         assert!(
-            crate::object::get_property_attrs(handle, "h").is_some_and(|a| !a.writable()),
+            crate::object::descriptor_state::get_handle_property_attrs(handle, "h")
+                .is_some_and(|a| !a.writable()),
             "handle-band install must round-trip via the conservative arm"
         );
         crate::object::clear_property_attrs(handle, "h");

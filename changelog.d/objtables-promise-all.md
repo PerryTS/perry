@@ -1,0 +1,1 @@
+Delete the global Promise.all input-state multimap, its full/budgeted root scans and copied-minor/death cleanup. A pending input Promise now owns a private GC array of ordered combinator records through its metadata. Reuse a retired metadata word without changing metadata size. Add a moving-owner/three-child gap test and an ignored control that removes the list edge.

@@ -562,6 +562,7 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
             g.insert(
                 new_id,
                 ReadableStreamData {
+                    props: Default::default(),
                     native_source: None,
                     tee_cancel_promise: None,
                     body_consumer: None,

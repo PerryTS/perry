@@ -858,13 +858,12 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     if count > 0 {
         let needs_resource = !SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(name);
         if needs_resource {
-            let resource = crate::object::js_object_alloc_null_proto(0, 0);
-            let async_id = crate::async_hooks::init_resource(
-                "SIGNALWRAP",
-                crate::value::js_nanbox_pointer(resource as i64),
-                true,
-            )
-            .async_id;
+            crate::arena::thread_exit::register_thread_exit_range_hook(
+                release_signal_resources_in_freed_ranges,
+            );
+            let async_id = unsafe {
+                crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+            };
             SIGNAL_ASYNC_IDS
                 .lock()
                 .unwrap()
@@ -1421,5 +1420,47 @@ mod tests {
         assert!(!has_active_process_signal_listeners());
         assert!(take_pending_process_signals().is_empty());
         set_process_signal_listener_count("SIGTERM", 0);
+    }
+}
+
+/// Signal registrations are native leases. A retiring mutator frees their
+/// pinned state cells, so process-wide routing must release those tokens too.
+fn release_signal_resources_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    if let Ok(mut ids) = SIGNAL_ASYNC_IDS.lock() {
+        ids.retain(|_, token| !freed.contains(*token as usize));
+    }
+}
+
+#[cfg(test)]
+mod resource_teardown_tests {
+    #[test]
+    fn native_signal_tokens_clear_with_their_retiring_allocation_range() {
+        check(false);
+    }
+    #[test]
+    #[ignore = "negative control: omit the native signal allocation-range invalidation"]
+    fn negative_control_objtables_signal_resource_teardown() {
+        check(true);
+    }
+    fn check(omit: bool) {
+        let _guard = crate::gc::global_side_table_test_lock();
+        let token =
+            unsafe { crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10) };
+        assert!(crate::async_hooks::resource_state::get(token).is_some());
+        const NAME: &str = "objtables-native-signal-range";
+        super::SIGNAL_ASYNC_IDS
+            .lock()
+            .unwrap()
+            .insert(NAME.into(), token);
+        let ranges =
+            crate::arena::thread_exit::FreedRanges::new(&[(token as usize, token as usize + 1)]);
+        if !omit {
+            super::release_signal_resources_in_freed_ranges(&ranges);
+        }
+        assert!(
+            !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
+            "retired signal state must not remain in native routing"
+        );
+        crate::async_hooks::destroy(token);
     }
 }

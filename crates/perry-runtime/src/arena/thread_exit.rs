@@ -126,9 +126,6 @@ pub(crate) fn release_freed_ranges(ranges: &[(usize, usize)]) {
     crate::plugin::release_plugin_registry_in_freed_ranges(&freed);
     #[cfg(feature = "ohos-napi")]
     crate::media_playback::release_media_callbacks_in_freed_ranges(&freed);
-    crate::symbol::release_symbol_tables_in_freed_ranges(&freed);
-    crate::symbol::release_symbol_accessors_in_freed_ranges(&freed);
-    crate::object::prototype_chain::release_object_prototypes_in_freed_ranges(&freed);
     crate::async_hooks::release_async_hooks_in_freed_ranges(&freed);
     crate::object::release_global_this_ptr_in_freed_ranges(&freed);
     crate::promise::native_async::release_native_async_tokens_in_freed_ranges(&freed);

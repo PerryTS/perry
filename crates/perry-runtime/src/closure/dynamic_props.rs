@@ -6,50 +6,10 @@
 //! `ObjectHeader` (the "bag", `closure::props`) whose keys and slots are the
 //! function's own string-keyed data properties, in ordinary creation order.
 //! The bag is a traced child edge of the closure, so it moves and dies with
-//! it; the three address-keyed side tables it replaces (own values, deleted
-//! synthesized keys, recorded [[Prototype]]) and their young log, re-key hook,
-//! dead-owner prune and root scanner are gone. What remains keyed by address
-//! is the wasm-host funcref table below.
+//! it; own values, deleted markers, prototypes and native function-reference
+//! lifetime all follow ordinary owned edges. There is no closure-address table.
 
 use super::*;
-#[cfg(feature = "wasm-host")]
-use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
-#[cfg(feature = "wasm-host")]
-use std::sync::{Mutex, OnceLock};
-
-#[cfg(feature = "wasm-host")]
-per_test_global! {
-    /// Host-owned funcref handles whose JavaScript wrappers are closures.
-    /// The closure address is a weak owner key; move/death hooks rekey or
-    /// release the handle without keeping the wrapper alive.
-    static WASM_FUNCREF_EXTERNALS: OnceLock<Mutex<PtrHashMap<usize, usize>>> = OnceLock::new();
-}
-
-#[cfg(feature = "wasm-host")]
-fn get_wasm_funcref_externals() -> &'static Mutex<PtrHashMap<usize, usize>> {
-    crate::once_init::get_or_init(&WASM_FUNCREF_EXTERNALS, || Mutex::new(new_ptr_hash_map()))
-}
-
-#[cfg(feature = "wasm-host")]
-fn drop_wasm_funcref_external(handle: usize) {
-    crate::webassembly::drop_host_extern_handle(handle);
-}
-
-#[cfg(feature = "wasm-host")]
-pub(crate) fn register_wasm_funcref_external(owner: usize, handle: usize) {
-    if owner == 0 || handle == 0 {
-        drop_wasm_funcref_external(handle);
-        return;
-    }
-    let replaced = match get_wasm_funcref_externals().lock() {
-        Ok(mut externals) => externals.insert(owner, handle),
-        Err(_) => Some(handle),
-    };
-    if let Some(replaced) = replaced {
-        drop_wasm_funcref_external(replaced);
-    }
-}
-
 /// Record that `key` was `delete`d off the closure at `ptr` — the #3655
 /// marker for a SYNTHESIZED own property (`name`, `length`, `prototype`, a
 /// builtin static) that has no stored value to drop. Kept in the bag's
@@ -104,154 +64,6 @@ pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
         return None;
     }
     unsafe { super::props::state_prototype(closure_ptr) }
-}
-
-/// Dead-payload sweep arm: release the wasm-host funcref handle owned by the
-/// DEAD closure at `ptr`. Own properties need nothing — they die with it.
-pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
-    if ptr == 0 {
-        return;
-    }
-    #[cfg(feature = "wasm-host")]
-    let external = get_wasm_funcref_externals()
-        .lock()
-        .ok()
-        .and_then(|mut externals| externals.remove(&ptr));
-    #[cfg(feature = "wasm-host")]
-    if let Some(external) = external {
-        drop_wasm_funcref_external(external);
-    }
-}
-
-/// Cheap sweep gate: true when any closure-keyed side table has entries.
-pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
-    #[cfg(feature = "wasm-host")]
-    return get_wasm_funcref_externals()
-        .lock()
-        .is_ok_and(|m| !m.is_empty());
-    #[cfg(not(feature = "wasm-host"))]
-    false
-}
-
-/// Death pruning for the closure-keyed wasm-host funcref table, with one of
-/// the GC's deadness predicates.
-pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
-    #[cfg(not(feature = "wasm-host"))]
-    let _ = is_dead_closure;
-    #[cfg(feature = "wasm-host")]
-    let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
-        let mut removed = Vec::new();
-        externals.retain(|owner, handle| {
-            let keep = !is_dead_closure(*owner);
-            if !keep {
-                removed.push(*handle);
-            }
-            keep
-        });
-        removed
-    } else {
-        Vec::new()
-    };
-    #[cfg(feature = "wasm-host")]
-    for external in removed {
-        drop_wasm_funcref_external(external);
-    }
-}
-
-/// Thread-heap teardown (#11319): drop every entry of the PROCESS-GLOBAL
-/// closure side table (the wasm-host funcref table) whose owner lies in one
-/// of `ranges` — the blocks an exiting thread's arena is about to free.
-///
-/// The table outlives the thread that inserted an entry, and the owner's
-/// memory goes back to the allocator. [`prune_dead_closure_side_table_owners`]
-/// cannot reach these entries (a foreign address does not attribute), so
-/// without this they leak for the life of the process, and once another
-/// thread's arena reuses the address range a stale entry would name a new
-/// closure allocated there. A function's own properties are not here: they
-/// live in the function object (`closure/props.rs`) and die with it.
-///
-/// Only the mutexed process-global table is touched: this runs from a TLS
-/// destructor, where the thread-local tables (box captures) may already be
-/// gone, and they die with the thread anyway.
-pub(crate) fn release_closure_side_table_owners_in_ranges(ranges: &[(usize, usize)]) {
-    #[cfg(not(feature = "wasm-host"))]
-    let _ = ranges;
-    #[cfg(feature = "wasm-host")]
-    {
-        if ranges.is_empty() {
-            return;
-        }
-        // Arena blocks never overlap, so a start-sorted list answers
-        // membership with one binary search per owner.
-        let mut ranges = ranges.to_vec();
-        ranges.sort_unstable_by_key(|&(start, _)| start);
-        let in_ranges = |owner: usize| {
-            let after = ranges.partition_point(|&(start, _)| start <= owner);
-            after > 0 && owner < ranges[after - 1].1
-        };
-        let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
-            let mut removed = Vec::new();
-            externals.retain(|owner, handle| {
-                let keep = !in_ranges(*owner);
-                if !keep {
-                    removed.push(*handle);
-                }
-                keep
-            });
-            removed
-        } else {
-            Vec::new()
-        };
-        for external in removed {
-            drop_wasm_funcref_external(external);
-        }
-    }
-}
-
-/// [`prune_dead_closure_side_table_owners`] for a MINOR. The wasm-host table
-/// is tiny and only exists with that feature, so a minor walks it whole.
-pub(crate) fn prune_dead_closure_side_table_owners_young(is_dead_closure: &dyn Fn(usize) -> bool) {
-    prune_dead_closure_side_table_owners(is_dead_closure);
-}
-
-/// Owner-move hook (`GcMoveHookKind::ClosureDynamicProps`): re-key the
-/// wasm-host funcref table. Own properties move with the closure.
-pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
-    if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
-        return;
-    }
-    #[cfg(feature = "wasm-host")]
-    let replaced = get_wasm_funcref_externals()
-        .lock()
-        .ok()
-        .and_then(|mut externals| {
-            let handle = externals.remove(&old_owner)?;
-            externals.insert(new_owner, handle)
-        });
-    #[cfg(feature = "wasm-host")]
-    if let Some(replaced) = replaced {
-        drop_wasm_funcref_external(replaced);
-    }
-}
-
-/// Mutable GC scanner for the wasm-host funcref table: its keys are
-/// metadata (re-keyed when a closure moves, never a root).
-pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    #[cfg(feature = "wasm-host")]
-    {
-        let owners: Vec<usize> = get_wasm_funcref_externals()
-            .lock()
-            .map(|m| m.keys().copied().collect())
-            .unwrap_or_default();
-        for owner in owners {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
-                closure_dynamic_props_owner_moved(owner, new_owner);
-            }
-        }
-    }
-    #[cfg(not(feature = "wasm-host"))]
-    let _ = visitor;
 }
 
 /// Is `ptr` a live function object (`GC_TYPE_CLOSURE` cell)? Safe for an
@@ -800,24 +612,6 @@ pub fn closure_delete_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
     removed
 }
 
-#[cfg(test)]
-pub(crate) fn test_clear_closure_side_tables() {
-    #[cfg(feature = "wasm-host")]
-    let externals = get_wasm_funcref_externals()
-        .lock()
-        .map(|mut externals| {
-            externals
-                .drain()
-                .map(|(_, handle)| handle)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    #[cfg(feature = "wasm-host")]
-    for external in externals {
-        drop_wasm_funcref_external(external);
-    }
-}
-
 /// Snapshot every dynamic property on a closure as `(name, value)` pairs in
 /// ECMA-262 own-key order: integer indices ascending, then other strings in
 /// property-creation order. Used by all function-object enumeration paths and
@@ -1060,20 +854,4 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }
-}
-
-/// `PERRY_GC_CENSUS`: closure-keyed side tables (own properties are object
-/// storage now and are counted with the heap).
-pub(super) fn dynamic_props_census() -> Vec<crate::gc::census::SideTableRow> {
-    #[allow(unused_mut)]
-    let mut rows = Vec::new();
-    #[cfg(feature = "wasm-host")]
-    if let Ok(m) = get_wasm_funcref_externals().lock() {
-        rows.push((
-            "closure.wasm_funcref_externals",
-            m.len(),
-            crate::gc::census::map_bytes(&m),
-        ));
-    }
-    rows
 }

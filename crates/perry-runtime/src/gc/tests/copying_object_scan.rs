@@ -46,8 +46,8 @@ fn minor_over_a_plain_object_with(
                 ptr_bits(proto),
             );
             assert!(
-                crate::object::prototype_chain::object_static_prototypes_maybe_nonempty(),
-                "premise: the residual registry latch is armed"
+                crate::object::prototype_chain::object_static_prototype(array as usize).is_some(),
+                "premise: the array owns its prototype"
             );
         }
         let (parent, fields) = unsafe { alloc_nursery_test_object(FIELDS as u32) };
@@ -101,7 +101,7 @@ fn a_minor_scans_a_plain_object_through_its_plan_and_moves_every_child() {
 }
 
 #[test]
-fn an_armed_residual_prototype_registry_does_not_turn_the_plain_object_path_away() {
+fn an_array_prototype_bag_does_not_turn_the_plain_object_path_away() {
     // Recording an ARRAY's prototype also latches the process-wide array
     // prototype flags; restore them, as `dyn_eval/tests.rs`'
     // `ArrayPrototypeLatchGuard` does, or later tests inherit them.

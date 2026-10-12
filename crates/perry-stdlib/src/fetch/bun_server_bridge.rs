@@ -48,6 +48,7 @@ pub unsafe extern "C" fn js_bun_http_request_from_json(snapshot_ptr: *const Stri
     let signal = body_metadata::signal_or_default(f64::from_bits(TAG_UNDEFINED));
     let id = alloc_fetch_handle_id();
     let record = RequestRecord {
+        props: 0,
         url: snapshot.url,
         method: snapshot.method,
         body: snapshot.body,

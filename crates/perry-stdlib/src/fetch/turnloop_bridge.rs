@@ -267,6 +267,7 @@ fn response_head(stream: usize, response: &ResponseOut) {
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
+            props: 0,
             status: response.status,
             status_text: response.status_text.clone(),
             headers,

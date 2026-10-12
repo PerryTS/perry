@@ -24,13 +24,12 @@ fn keyed_symbol_holder_and_key_evacuate_and_still_hit() {
         crate::object::scan_object_cache_roots_mut,
         crate::object::scan_shape_cache_roots_mut,
         crate::object::shapes::scan_shape_table_rekey_mut,
-        crate::symbol::scan_symbol_side_table_roots_mut,
     ] {
         gc_register_mutable_root_scanner(scanner);
     }
     unsafe {
         let sym = alloc_nursery_test_symbol();
-        crate::symbol::test_seed_symbol_pointer_root(sym);
+
         let key = f64::from_bits(ptr_bits(sym));
         let proto = crate::object::js_object_alloc(0, 4);
         crate::symbol::js_object_set_symbol_property(

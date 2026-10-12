@@ -330,7 +330,6 @@ fn closure_name_and_length_ignore_plain_assignment() {
     // and this test's own populate-then-assert must not be wiped by the gc
     // test guards' state reset (#6965). Hold the global side-table lock.
     let _global = crate::gc::global_side_table_test_lock();
-    crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
             crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
@@ -367,7 +366,6 @@ fn closure_name_can_be_redefined_with_define_property() {
     // See closure_name_and_length_ignore_plain_assignment: the clear and the
     // populate-then-assert both need the global side-table lock (#6965).
     let _global = crate::gc::global_side_table_test_lock();
-    crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
             crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
@@ -439,7 +437,6 @@ fn closure_name_can_be_redefined_with_define_property() {
 #[test]
 fn builtin_constructor_name_and_length_are_own_runtime_properties() {
     let _global = crate::gc::global_side_table_test_lock();
-    crate::closure::test_clear_closure_side_tables();
     let global_ptr = js_object_alloc(0, 0);
     super::global_this::populate_global_this_builtins(global_ptr);
 
@@ -512,7 +509,6 @@ fn closure_accessor_define_property_is_own_and_invoked() {
     // See closure_name_and_length_ignore_plain_assignment: the clear and the
     // populate-then-assert both need the global side-table lock (#6965).
     let _global = crate::gc::global_side_table_test_lock();
-    crate::closure::test_clear_closure_side_tables();
     let closure = crate::closure::js_closure_alloc(
         crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
         0,
@@ -568,7 +564,6 @@ fn symbol_define_property_attrs_round_trip_descriptor() {
     // The symbol side tables are PROCESS-global: the clear below and the
     // populate-then-assert both need the global side-table lock (#6965).
     let _global = crate::gc::global_side_table_test_lock();
-    crate::symbol::test_clear_symbol_side_table_roots();
     unsafe {
         let obj = js_object_alloc(0, 0);
         assert!(!obj.is_null());
@@ -662,7 +657,6 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     // position — both rest on the order-preserving placeholder that
     // `set_symbol_accessor_property` leaves in `SYMBOL_PROPERTIES`.
     let _global = crate::gc::global_side_table_test_lock();
-    crate::symbol::test_clear_symbol_side_table_roots();
     unsafe {
         let own_symbol_order = |obj_value: f64| -> Vec<usize> {
             let arr = crate::symbol::js_object_get_own_property_symbols(obj_value)
@@ -736,7 +730,6 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
 #[test]
 fn undefined_symbol_value_still_counts_as_an_own_property() {
     let _global = crate::gc::global_side_table_test_lock();
-    crate::symbol::test_clear_symbol_side_table_roots();
     unsafe {
         let obj = js_object_alloc(0, 0);
         assert!(!obj.is_null());

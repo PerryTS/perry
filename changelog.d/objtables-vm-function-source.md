@@ -1,0 +1,1 @@
+Delete `VM_COMPILED_FUNCTION_SOURCES`, its scanner branch and death/thread-exit prunes. Compiled-function source text is a GC string in the closure property's private metadata bag. Reuse the existing metadata word without growing the header or metadata record. Add moving-owner, fresh-owner, mutation-control and Node parity gap checks.

@@ -314,7 +314,7 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     rest: f64,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    let runtime_async_id = crate::async_hooks::js_async_resource_async_id(resource) as u64;
+    let runtime_async_id = crate::async_hooks::js_async_resource_runtime_async_id(resource);
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
     }

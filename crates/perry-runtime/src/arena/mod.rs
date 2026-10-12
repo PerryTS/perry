@@ -14,13 +14,18 @@ mod construction;
 mod from_space;
 mod region;
 pub(crate) use construction::ConstructionBatch;
+pub(crate) use region::Kind as ArenaBlockKind;
 mod inline;
-mod map_allocations;
 mod page_meta;
 mod pinned;
 pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
 /// #11842: record, poison and protect what the non-moving sweeps free.
 mod old_sweep_quarantine;
+mod owned_stores;
+pub(crate) use owned_stores::{
+    finalize_dead_copied_minor_from_space_owned_stores, note_owned_store_copied,
+    note_young_owned_store, young_owned_stores_may_exist,
+};
 /// #7742: whole-block in-place promotion of a (near-)fully-live young
 /// generation, in place of object-by-object evacuation.
 mod promote;
@@ -37,7 +42,6 @@ mod stats;
 /// #11471: thread-exit release of process-global address-keyed tables.
 pub mod thread_exit;
 mod walk;
-pub(crate) use map_allocations::walk_map_allocations;
 
 #[cfg(test)]
 mod tests;
@@ -50,9 +54,9 @@ mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_page_meta_audit;
 #[cfg(test)]
-mod tests_promoted_runs;
-#[cfg(test)]
 mod tests_page_walk;
+#[cfg(test)]
+mod tests_promoted_runs;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
 // `use super::*;`). These are not part of the crate-public surface
@@ -112,8 +116,8 @@ pub use allocators::{
     arena_alloc_longlived, arena_alloc_old, js_arena_alloc,
 };
 pub(crate) use allocators::{
-    arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages,
-    arena_alloc_gc_promoted, arena_alloc_gc_survivor,
+    arena_alloc_gc_collecting_holder, arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured,
+    arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted, arena_alloc_gc_survivor,
 };
 
 // walk.rs

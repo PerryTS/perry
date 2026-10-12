@@ -76,9 +76,6 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
         // cell must never be observable carrying a dead tenant's shape.
         (*ptr).meta = std::ptr::null_mut();
         (*ptr).ts = ts;
-        // A previous (collected) Date at this address may have left expando
-        // properties in the side table; a fresh Date must start clean.
-        crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);
         f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
     }
 }
@@ -144,8 +141,9 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
         // claude-code 2.1.112's `doctor` SIGSEGV'd reading `defaultProps` off
         // a React element-type symbol. Every symbol carries `SYMBOL_MAGIC` in
         // its first word, so the screen is one load for a real Date.
-        !(crate::symbol::may_be_symbol_header(addr as *const u8)
-            && crate::symbol::is_registered_symbol(addr))
+        // A real Date starts with a null or aligned ObjectMeta pointer; the
+        // odd SYMBOL_MAGIC cannot occur there, so no address registry is needed.
+        !crate::symbol::may_be_symbol_header(addr as *const u8)
     }
 }
 

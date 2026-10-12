@@ -24,7 +24,6 @@ extern "C" {
         usages: u32,
         bit_length: u32,
     );
-    fn perry_thread_exit_probe_object_prototype_recorded(owner: usize) -> bool;
 }
 
 extern "C" fn probe_thunk(
@@ -205,7 +204,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
     );
 }
 
-/// Is the symbol `(addr, id)` still in `SYMBOL_POINTERS`?
+/// Is the symbol `(addr, id)` still owned by the current heap?
 ///
 /// #11539: the address alone is not an identity. The dead thread's `Symbol()`
 /// header is returned to the system allocator at thread exit, and a
@@ -218,9 +217,8 @@ fn symbol_still_registered(addr: usize, id: u64) -> bool {
     perry_runtime::symbol::registered_symbol_id_for_test(addr) == Some(id)
 }
 
-/// `SYMBOL_POINTERS`: `Symbol()` headers are `gc_malloc`'d, not arena cells;
-/// `MallocState`'s TLS destructor (`gc/malloc.rs`) reports their freed ranges
-/// to `arena::thread_exit::release_freed_ranges` before freeing them.
+/// Fresh symbol headers are GC cells. Their owning thread frees its heap
+/// at exit; another thread must not recognize that former address as live.
 #[test]
 fn thread_exit_releases_the_threads_fresh_symbol_pointers() {
     let (sym, id) = std::thread::spawn(|| {
@@ -235,7 +233,7 @@ fn thread_exit_releases_the_threads_fresh_symbol_pointers() {
     let id = id.expect("Symbol() must be registered while its thread lives");
     assert!(
         !symbol_still_registered(sym, id),
-        "a dead thread's Symbol() stayed in SYMBOL_POINTERS"
+        "a dead thread's Symbol() retained heap ownership"
     );
 }
 
@@ -270,8 +268,8 @@ fn symbol_verdict_is_by_identity_not_by_address() {
 }
 
 #[test]
-fn thread_exit_releases_the_threads_residual_prototype_entry() {
-    let (owner, alive) = std::thread::spawn(|| {
+fn thread_exit_drops_the_threads_owned_prototype() {
+    let alive = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let arr = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
         let proto = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
@@ -279,21 +277,38 @@ fn thread_exit_releases_the_threads_residual_prototype_entry() {
             js_nanbox_pointer(arr.get_raw_mut_ptr::<u8>() as i64),
             js_nanbox_pointer(proto.get_raw_mut_ptr::<u8>() as i64),
         );
-        let owner = arr.get_raw_mut_ptr::<u8>() as usize;
-        (owner, unsafe {
-            perry_thread_exit_probe_object_prototype_recorded(owner)
-        })
+        perry_runtime::object::js_object_get_prototype_of(js_nanbox_pointer(
+            arr.get_raw_mut_ptr::<u8>() as i64,
+        ))
+        .to_bits()
+            == js_nanbox_pointer(proto.get_raw_mut_ptr::<u8>() as i64).to_bits()
     })
     .join()
     .unwrap();
     assert!(
         alive,
-        "Object.setPrototypeOf(array) must record a residual entry"
+        "the array must own its prototype while the thread lives"
     );
-    assert!(
-        !unsafe { perry_thread_exit_probe_object_prototype_recorded(owner) },
-        "a dead thread's residual prototype entry outlived its heap"
-    );
+    std::thread::spawn(|| {
+        let scope = RuntimeHandleScope::new();
+        let fresh = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
+        let prototype = perry_runtime::object::js_object_get_prototype_of(js_nanbox_pointer(
+            fresh.get_raw_mut_ptr::<u8>() as i64,
+        ));
+        let key = string_value("__objtables_worker_prototype");
+        assert_eq!(
+            perry_runtime::object::js_object_get_field_by_name_f64(
+                perry_runtime::value::js_nanbox_get_pointer(prototype)
+                    as *const perry_runtime::ObjectHeader,
+                perry_runtime::value::js_nanbox_get_pointer(key)
+                    as *const perry_runtime::StringHeader,
+            )
+            .to_bits(),
+            TAG_UNDEFINED
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]
@@ -442,10 +457,8 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
     );
 }
 
-/// `VM_SCRIPTS` only: `VM_COMPILED_FUNCTION_SOURCES` is filled by
-/// `vm.compileFunction`, which needs perry-runtime's `dyn-eval` feature, off in
-/// this crate's test build (`default-features = false`). The same hook clears
-/// both maps by the same owner-address rule.
+/// Script metadata is reached through the owner's private bag. The main
+/// thread must not find the exited thread's cells in its tracked heap.
 #[test]
 fn thread_exit_releases_the_threads_vm_script_entry() {
     let (script, alive) = std::thread::spawn(|| {

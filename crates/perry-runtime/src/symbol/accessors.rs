@@ -1,10 +1,4 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-use super::{
-    obj_key_from_f64, publish_symbol_side_table_root_edges, sym_key_from_f64, SYMBOL_PROPERTIES,
-    TAG_UNDEFINED,
-};
+use super::{obj_key_from_f64, sym_key_from_f64, TAG_UNDEFINED};
 
 #[derive(Clone, Copy)]
 pub(super) struct SymbolAccessorDescriptor {
@@ -12,127 +6,24 @@ pub(super) struct SymbolAccessorDescriptor {
     pub(super) set: u64,
 }
 
-per_test_global! {
-    static SYMBOL_ACCESSOR_PROPERTIES: Mutex<
-        Option<HashMap<(usize, usize), SymbolAccessorDescriptor>>,
-    > = Mutex::new(None);
-}
-
 pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
-    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
-        if let Some(entry) = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) } {
-            if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
-                unsafe {
-                    crate::object::shaped_symbols::define(
-                        obj_key,
-                        sym_key,
-                        TAG_UNDEFINED,
-                        entry & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK,
-                    );
-                }
+    if let Some(entry) = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) } {
+        if entry & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+            unsafe {
+                crate::object::shaped_symbols::define(
+                    obj_key,
+                    sym_key,
+                    TAG_UNDEFINED,
+                    entry & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK,
+                );
             }
         }
-        return;
-    }
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    if let Some(map) = guard.as_mut() {
-        if map.remove(&(obj_key, sym_key)).is_some() {
-            crate::symbol::symbol_property_ic_epoch_bump();
-        }
     }
 }
 
-/// #6710: drop every symbol accessor descriptor owned by `obj_key` — used when
-/// a handle id is recycled so a reused id can't carry the prior owner's
-/// accessors. Keyed by `(obj_key, sym_key)`, so retain everything else.
-pub(super) fn clear_all_symbol_accessor_properties_for_object(obj_key: usize) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    if let Some(map) = guard.as_mut() {
-        let before = map.len();
-        map.retain(|(o, _), _| *o != obj_key);
-        if map.len() != before {
-            crate::symbol::symbol_property_ic_epoch_bump();
-        }
-    }
-}
-
-/// #8195: death pruning for `SYMBOL_ACCESSOR_PROPERTIES`, called from
-/// `symbol::prune_dead_symbol_property_owners` so all three symbol tables
-/// share one deadness verdict per owner.
-///
-/// The `sym_key` half of the key is a strong root
-/// (`scan_symbol_accessor_roots_mut`'s `visit_usize_slot`); the OWNER half is
-/// metadata-only and rekeyed, so it can go stale. Until now the only bulk
-/// removal was `clear_all_symbol_accessor_properties_for_object`, reached
-/// solely from the handle-recycle path — never for a plain heap object. Two
-/// consequences, both closed here: the accessor closures held in the
-/// descriptor were immortal, and the dead owner address survived into the next
-/// cycle's rewrite pass (#8040's shape; see `gc::dead_owner`).
-pub(super) fn prune_dead_symbol_accessor_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    if let Some(map) = guard.as_mut() {
-        map.retain(|(owner, _), _| !is_dead_owner(*owner));
-    }
-}
-
-/// #11471: thread-exit release for `SYMBOL_ACCESSOR_PROPERTIES`. Death
-/// pruning above only attributes the collecting thread's heap, so an exiting
-/// thread's accessor entries (owner or symbol in its arena, or get/set
-/// closures from it) would outlive its blocks: a new object at a reused owner
-/// address would gain the dead one's accessor, and
-/// `scan_symbol_accessor_roots_mut` would trace the dangling closure bits.
-///
-/// Runs from `Arena::drop` (a TLS destructor): a plain `lock()`, never
-/// `lock_gc_root_registry` (thread-local depth counter + deferred-GC flush).
-pub(crate) fn release_symbol_accessors_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    let mut guard = SYMBOL_ACCESSOR_PROPERTIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
-    let before = map.len();
-    map.retain(|&(owner, sym), acc| {
-        !freed.contains(owner)
-            && !freed.contains(sym)
-            && !freed.holds_bits(acc.get)
-            && !freed.holds_bits(acc.set)
-    });
-    let changed = map.len() != before;
-    drop(guard);
-    if changed {
-        crate::symbol::symbol_property_ic_epoch_bump();
-    }
-}
-
-/// Test probe (#11471): is there a symbol accessor for `(owner, sym)`?
 #[doc(hidden)]
-pub fn symbol_accessor_held_for_test(owner: usize, sym: usize) -> bool {
-    SYMBOL_ACCESSOR_PROPERTIES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .is_some_and(|map| map.contains_key(&(owner, sym)))
-}
-
-#[cfg(test)]
-pub(crate) fn test_symbol_accessor_property_count() -> usize {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard.as_ref().map_or(0, |map| map.len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_symbol_accessor_property(obj_key: usize, sym_key: usize, get_bits: u64) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard.get_or_insert_with(HashMap::new).insert(
-        (obj_key, sym_key),
-        SymbolAccessorDescriptor {
-            get: get_bits,
-            set: TAG_UNDEFINED,
-        },
-    );
+pub fn symbol_accessor_held_for_test(owner: usize, symbol: usize) -> bool {
+    unsafe { crate::object::shaped_symbols::accessor(owner, symbol).is_some() }
 }
 
 /// One bit per symbol that has ever carried an accessor, hashed by the
@@ -143,8 +34,7 @@ pub(crate) fn test_seed_symbol_accessor_property(obj_key: usize, sym_key: usize,
 /// costs the walk that a correct answer needed anyway.
 ///
 /// Keyed by `SymbolHeader::id`, not by the symbol's ADDRESS: a moving
-/// collection rewrites the accessor table's pointer keys (see
-/// `scan_symbol_accessor_roots_mut`) but copies the id verbatim, so an
+/// collection rewrites the owner's shape keys but copies the id verbatim, so an
 /// id-keyed filter needs no rescan, no rekey and no GC root. Monotonic —
 /// removing an accessor leaves the bit set, which only costs a walk.
 static SYMBOL_ACCESSOR_IDS: [std::sync::atomic::AtomicU64; SYMBOL_ACCESSOR_ID_WORDS] =
@@ -176,8 +66,8 @@ pub(super) unsafe fn symbol_may_have_accessor(sym_key: usize) -> bool {
     SYMBOL_ACCESSOR_IDS[word].load(std::sync::atomic::Ordering::Acquire) & mask != 0
 }
 
-/// Record that `sym_key` carries an accessor. Published BEFORE the table
-/// insert, so a reader that sees a clear bit cannot miss the entry.
+/// Record that `sym_key` carries an accessor. Published BEFORE the shape
+/// store, so a reader that sees a clear bit cannot miss the entry.
 ///
 /// # Safety
 /// Same contract as [`symbol_accessor_id_bit`].
@@ -209,54 +99,12 @@ pub(crate) unsafe fn set_symbol_accessor_property(
     crate::symbol::note_symbol_key_installed(sym_key);
     crate::symbol::note_symbol_owner_installed(obj_key);
     note_symbol_accessor_key(sym_key);
-    if crate::object::shaped_symbols::define_accessor(obj_key, sym_key, get_bits, set_bits) {
-        return;
-    }
-    {
-        // `SYMBOL_PROPERTIES` is the only insertion-ordered record of symbol
-        // property CREATION order, which `[[OwnPropertyKeys]]` must report
-        // (test262 getOwnPropertySymbols/order-after-define-property).
-        // Removing the data entry on a data→accessor redefine — or never
-        // adding one for a fresh accessor install — destroys that position,
-        // so the key re-enumerated at the end (or in creation-id order, which
-        // is not install order). Keep an order-preserving placeholder instead:
-        // same key, TAG_UNDEFINED value bits so the old data value stops
-        // being rooted. Readers never mistake it for a data value — get, set,
-        // gOPD and has-own all consult `SYMBOL_ACCESSOR_PROPERTIES` first,
-        // and `clone_symbol_entries_for_obj_ptr` filters accessor-keyed
-        // entries out for the raw-entry consumers (formatting, freeze/seal).
-        crate::closure::shape::note_function_own_state_changed(obj_key);
-        let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-        if props.is_none() {
-            *props = Some(crate::fast_hash::new_ptr_hash_map());
-        }
-        let entries = props.as_mut().unwrap().entry(obj_key).or_default();
-        if let Some(entry) = entries.iter_mut().find(|entry| entry.0 == sym_key) {
-            entry.1 = crate::value::TAG_UNDEFINED;
-        } else {
-            entries.push((sym_key, crate::value::TAG_UNDEFINED));
-        }
-    }
-    {
-        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard.as_mut().unwrap().insert(
-            (obj_key, sym_key),
-            SymbolAccessorDescriptor {
-                get: get_bits,
-                set: set_bits,
-            },
-        );
-    }
-    crate::symbol::symbol_property_ic_epoch_bump();
-    if get_bits != 0 {
-        publish_symbol_side_table_root_edges(sym_key, get_bits);
-    }
-    if set_bits != 0 {
-        publish_symbol_side_table_root_edges(sym_key, set_bits);
-    }
+    let installed =
+        crate::object::shaped_symbols::define_accessor(obj_key, sym_key, get_bits, set_bits);
+    debug_assert!(
+        installed,
+        "symbol accessor owner must have a property holder"
+    );
 }
 
 pub(super) unsafe fn symbol_accessor_property(
@@ -268,28 +116,16 @@ pub(super) unsafe fn symbol_accessor_property(
     if obj_key == 0 || sym_key == 0 {
         return None;
     }
-    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
-        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
-            .map(|(get, set)| SymbolAccessorDescriptor { get, set });
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
+    unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
+        .map(|(get, set)| SymbolAccessorDescriptor { get, set })
 }
 
 pub(super) fn symbol_accessor_property_by_key(
     obj_key: usize,
     sym_key: usize,
 ) -> Option<SymbolAccessorDescriptor> {
-    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
-        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
-            .map(|(get, set)| SymbolAccessorDescriptor { get, set });
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|m| m.get(&(obj_key, sym_key)).copied())
+    unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key) }
+        .map(|(get, set)| SymbolAccessorDescriptor { get, set })
 }
 
 /// Setter twin of [`invoke_symbol_accessor_getter`] (#10481): runs `set_bits`
@@ -326,118 +162,18 @@ pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64)
     crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(receiver))
 }
 
-pub(super) fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut rewrites = Vec::new();
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
-
-    for (old_owner, old_sym_key) in map.keys().copied().collect::<Vec<_>>() {
-        let Some(acc) = map.get_mut(&(old_owner, old_sym_key)) else {
-            continue;
-        };
-        let mut new_owner = old_owner;
-        let mut new_sym_key = old_sym_key;
-        let owner_changed =
-            visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner;
-        let sym_changed = visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != old_sym_key;
-        if acc.get != 0 {
-            visitor.visit_nanbox_u64_slot(&mut acc.get);
-        }
-        if acc.set != 0 {
-            visitor.visit_nanbox_u64_slot(&mut acc.set);
-        }
-        if owner_changed || sym_changed {
-            rewrites.push(((old_owner, old_sym_key), (new_owner, new_sym_key)));
-        }
-    }
-
-    for (old_key, new_key) in rewrites {
-        if let Some(acc) = map.remove(&old_key) {
-            map.insert(new_key, acc);
-        }
-    }
-}
-
-/// Snapshot of the accessor table's keys for the budgeted step scanner.
-pub(super) fn accessor_property_keys() -> Vec<(usize, usize)> {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .map(|m| m.keys().copied().collect())
-        .unwrap_or_default()
-}
-
-/// Step twin of `scan_symbol_accessor_roots_mut` for one snapshot key:
-/// strong-visits the get/set closures and rekeys owner/sym on a move.
-/// Cycle-based collections run ONLY the step scanner, so before this
-/// existed, symbol-keyed getter/setter closures reachable solely through
-/// this table were swept by every full/fallback collection.
-pub(super) fn scan_symbol_accessor_root_slot(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    owner: usize,
-    sym_key: usize,
-) {
-    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
-    let Some(acc) = map.get_mut(&(owner, sym_key)) else {
-        return;
-    };
-    let mut new_owner = owner;
-    let mut new_sym_key = sym_key;
-    let owner_changed = visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner;
-    let sym_changed = visitor.visit_usize_slot(&mut new_sym_key) && new_sym_key != sym_key;
-    if acc.get != 0 {
-        visitor.visit_nanbox_u64_slot(&mut acc.get);
-    }
-    if acc.set != 0 {
-        visitor.visit_nanbox_u64_slot(&mut acc.set);
-    }
-    if owner_changed || sym_changed {
-        if let Some(acc) = map.remove(&(owner, sym_key)) {
-            map.insert((new_owner, new_sym_key), acc);
-        }
-    }
-}
-
 pub(super) fn has_own_symbol_accessor(obj_key: usize, sym_key: usize) -> bool {
-    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
-        return unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key).is_some() };
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .is_some_and(|m| m.contains_key(&(obj_key, sym_key)))
+    unsafe { crate::object::shaped_symbols::accessor(obj_key, sym_key).is_some() }
 }
 
 /// Symbol keys (raw `SymbolHeader` pointers) of every accessor-only property
 /// installed on `obj_key`. Used by `getOwnPropertySymbols`, which must report
-/// symbol-keyed accessors even though they live outside `SYMBOL_PROPERTIES`.
+/// symbol-keyed accessors even though they live in the owner's shape.
 pub(super) fn owner_symbol_accessor_keys(obj_key: usize) -> Vec<usize> {
-    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
-        return unsafe { crate::object::shaped_symbols::entries(obj_key, false) }
-            .into_iter()
-            .filter_map(|(sym, _)| unsafe {
-                crate::object::shaped_symbols::accessor(obj_key, sym).map(|_| sym)
-            })
-            .collect();
-    }
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .map(|m| {
-            m.keys()
-                .filter(|(owner, _)| *owner == obj_key)
-                .map(|(_, sym_key)| *sym_key)
-                .collect()
+    unsafe { crate::object::shaped_symbols::entries(obj_key, false) }
+        .into_iter()
+        .filter_map(|(sym, _)| unsafe {
+            crate::object::shaped_symbols::accessor(obj_key, sym).map(|_| sym)
         })
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-pub(super) fn test_clear_symbol_accessor_roots() {
-    *crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES) = None;
+        .collect()
 }

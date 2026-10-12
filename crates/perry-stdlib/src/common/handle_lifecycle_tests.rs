@@ -188,3 +188,122 @@ fn a_million_mixed_common_and_ffi_cycles_never_exhaust_the_band() {
         );
     });
 }
+
+#[test]
+fn native_property_bag_follows_a_reachable_reclaimable_payload() {
+    on_mutator(|| {
+        unsafe {
+            crate::common::dispatch::js_stdlib_init_dispatch();
+        }
+        let id = register_reclaimable_handle(73_u64);
+        let roots = RuntimeHandleScope::new();
+        let owner = roots.root_nanbox_u64(boxed(id));
+        let value = perry_runtime::object::js_object_alloc(0, 1);
+        unsafe {
+            perry_runtime::object::js_object_set_field_f64(value, 0, 73.0);
+        }
+        let boxed_value = perry_runtime::value::js_nanbox_pointer(value as i64);
+        perry_runtime::object::handle_expando::handle_expando_set(id, "payload", boxed_value);
+        collect();
+        let stored =
+            perry_runtime::object::handle_expando::handle_expando_get(id, "payload").unwrap();
+        unsafe {
+            assert_eq!(
+                perry_runtime::object::js_object_get_field_f64(
+                    perry_runtime::value::js_nanbox_get_pointer(stored)
+                        as *mut perry_runtime::ObjectHeader,
+                    0
+                ),
+                73.0
+            );
+        }
+        owner.set_nanbox_u64(UNDEFINED);
+        collect();
+        assert!(
+            !handle_exists(id),
+            "property bag must not become an independent owner"
+        );
+    });
+}
+
+#[test]
+fn native_property_bag_to_handle_cycle_dies_with_its_last_js_owner() {
+    on_mutator(|| {
+        unsafe {
+            crate::common::dispatch::js_stdlib_init_dispatch();
+        }
+        let id = register_reclaimable_handle(41_u64);
+        perry_runtime::object::handle_expando::handle_expando_set(
+            id,
+            "self",
+            f64::from_bits(boxed(id)),
+        );
+        collect();
+        assert!(
+            !handle_exists(id),
+            "an unreachable record/bag cycle is not a C-frame owner"
+        );
+    });
+}
+
+#[test]
+fn ffi_payload_record_owns_and_releases_its_property_bag() {
+    on_mutator(|| {
+        unsafe {
+            crate::common::dispatch::js_stdlib_init_dispatch();
+        }
+        let id = perry_ffi::register_handle(29_u64);
+        perry_runtime::object::handle_expando::handle_expando_set(id, "payload", 73.0);
+        collect();
+        assert_eq!(
+            perry_runtime::object::handle_expando::handle_expando_get(id, "payload"),
+            Some(73.0)
+        );
+        perry_ffi::drop_handle(id);
+        assert!(perry_ffi::native_handle_props(id).is_none());
+        assert!(perry_runtime::object::handle_expando::handle_expando_get(id, "payload").is_none());
+    });
+}
+
+/// A property set on a native handle from another thread lands in that
+/// thread's own bag on the record, the way the former per-thread tables kept
+/// it: it neither throws nor touches the publishing thread's properties.
+#[test]
+fn another_thread_sets_its_own_property_bag_on_a_shared_handle() {
+    on_mutator(|| {
+        unsafe {
+            crate::common::dispatch::js_stdlib_init_dispatch();
+        }
+        let id = register_handle(17_u64);
+        perry_runtime::object::handle_expando::handle_expando_set(id, "a", 1.0);
+        std::thread::spawn(move || {
+            perry_runtime::gc::gc_init();
+            unsafe {
+                crate::common::dispatch::js_stdlib_init_dispatch();
+            }
+            assert_eq!(
+                perry_runtime::object::handle_expando::handle_expando_get(id, "a"),
+                None,
+                "the publishing thread's bag is not this thread's"
+            );
+            perry_runtime::object::handle_expando::handle_expando_set(id, "b", 2.0);
+            perry_runtime::gc::js_gc_collect();
+            assert_eq!(
+                perry_runtime::object::handle_expando::handle_expando_get(id, "b"),
+                Some(2.0)
+            );
+        })
+        .join()
+        .unwrap();
+        collect();
+        assert_eq!(
+            perry_runtime::object::handle_expando::handle_expando_get(id, "a"),
+            Some(1.0)
+        );
+        assert_eq!(
+            perry_runtime::object::handle_expando::handle_expando_get(id, "b"),
+            None
+        );
+        drop_handle(id);
+    });
+}

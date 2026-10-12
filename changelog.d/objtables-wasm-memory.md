@@ -1,0 +1,1 @@
+Delete the Wasm memory-binding table, metadata scanner and dead-owner prune. The instance's collecting context owns native span facts and a private GC bag for the published buffer and Memory wrapper. Only active native call frames contribute C roots, and table function wrappers retain their context across collections.

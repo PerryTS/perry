@@ -67,18 +67,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     }
     let mut entries: Vec<(usize, u64)> = Vec::new();
 
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    let stored_entries = guard
-        .as_ref()
-        .and_then(|m| m.get(&obj_key))
-        .cloned()
-        .unwrap_or_default();
-    drop(guard);
-    let stored_entries = if crate::object::shaped_symbols::owner(obj_key).is_some() {
-        crate::object::shaped_symbols::entries(obj_key, false)
-    } else {
-        stored_entries
-    };
+    let stored_entries = crate::object::shaped_symbols::entries(obj_key, false);
     for entry in stored_entries {
         if !entries.iter().any(|(sym_key, _)| *sym_key == entry.0) {
             entries.push(entry);
@@ -87,7 +76,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     // `entries` is the full own-symbol-key list in property-CREATION order:
     // data entries hold their value, accessor properties hold an
     // order-preserving placeholder written by `set_symbol_accessor_property`
-    // (the descriptor itself lives in `SYMBOL_ACCESSOR_PROPERTIES`). That
+    // (the descriptor itself lives in the owner's accessor-pair slots). That
     // placeholder is what keeps a data→accessor redefine at its original
     // position (test262 getOwnPropertySymbols/order-after-define-property)
     // and an interleaved `defineProperty(o, sym, {get})` between two data

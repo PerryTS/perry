@@ -7,57 +7,15 @@
 //! `proto`, and an inherited property read (`obj.x` where `x` lives on `proto`)
 //! walks to it.
 //!
-//! Storage is split by owner kind (#6759 Phase B):
+//! Ordinary objects answer from their shape or ObjectMeta. Every other
+//! public owner keeps the value in its ordinary property holder's ObjectMeta.
+//! The bag is a traced child of its owner, so relocation and death need no
+//! address registry, per-owner scanner, rekey hook or prune.
 //!
-//! * A genuine shaped `GC_TYPE_OBJECT` stores the recorded bits in its own
-//!   per-object [`crate::object::ObjectMeta`] record, reached from the
-//!   object header in two dependent loads — no mutex, no address-keyed
-//!   probe, and structurally immune to the stale-address-reuse hazard (the
-//!   record lives and dies with its owner; GC traces/rewrites it through
-//!   the ordinary Object descriptor).
-//! * Every other owner kind — real/lazy arrays, typed arrays, native
-//!   handle-band ids, proxy ids — keeps the RESIDUAL address-keyed registry
-//!   below, with its original GC hooks (scanner, owner-move rekey,
-//!   dead-owner prune). Migrating arrays needs an `ArrayHeader` slot and is
-//!   a later #6759 tranche.
-//!
-//! `proto_bits` for an explicit `Object.setPrototypeOf(obj, null)` is
-//! `TAG_NULL`, so a recorded-null entry is distinguishable from "no entry
-//! recorded" (default prototype); in the meta record, 0 means unset.
-//!
-//! # What the residual registry costs an inherited read: nothing (measured)
-//!
-//! The 2026-09-20 object-model design note proposed deleting `OBJECT_PROTOTYPES`
-//! on the theory that its `Mutex` plus a hash probe per chain level was "likely
-//! part of the 950 ns inherited read". Callgrind says otherwise. On
-//! `const P={a:1}; const O=Object.create(P); O.a` at 200 k reads (v0.5.1619,
-//! `--debug-symbols`, x86-64-v3), ~1300 instructions per inherited read split
-//! as: `native_get::try_data_get_bytes` self 344; `class_prototype_object` 192,
-//! of which 118 is the SipHash of the `CLASS_PROTOTYPE_OBJECTS` probe;
-//! `keys_find_slot_by_bytes_resolved` 180 (twice — receiver, then holder);
-//! `get_field_ic_miss_impl` self 153; `closure_dynamic_prop_by_key` 90;
-//! `shape_descriptor_by_id` 70; `is_anon_shape_class_id` 54;
-//! `class_decl_prototype_object` 41; `from_utf8` 38; `is_arguments_object` 28.
-//! Neither `get_object_prototypes` nor `pthread_mutex_lock` appears at all,
-//! because #6759 phase B already took every `GC_TYPE_OBJECT` off this table —
-//! the prototype of an `Object.create` receiver comes from the class registry,
-//! not from here.
-//!
-//! So the table is not a duplicate of `ObjectMeta.prototype` waiting to be
-//! deleted; it is the ONLY storage the kinds below have. Removing it means
-//! giving each of them a prototype slot of its own, kind by kind: arrays and
-//! lazy arrays (an `ArrayHeader` slot — the #6759 tranche this module's header
-//! already names), typed arrays, `ArrayBuffer`/`SharedArrayBuffer`/`DataView`
-//! (`BufferHeader`), `GC_TYPE_REGEXP`, `Map`/`Set`/`Error`/`Promise`/`Date`/
-//! `Temporal` cells, closures (`dyn_eval`), and native handle-band ids, which
-//! are integers with no cell at all (the Express `res`/`req` case in
-//! `object_ops::define_properties`) and so need a different answer entirely.
-//! None of that work makes an inherited property read faster.
+//! A stored TAG_NULL distinguishes an explicit null from the unset word 0.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 /// Set when `Object.setPrototypeOf` has retargeted a REAL ARRAY's
 /// [[Prototype]] anywhere in the program. The typed-feedback array guards
@@ -72,7 +30,6 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
-static OBJECT_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
 crate::perry_thread_local! {
     /// Owners currently walking a recorded prototype chain. Although
     /// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
@@ -205,146 +162,9 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
     true
 }
 
-/// Latched true by the first recorded `Object.setPrototypeOf`. Lets hot
-/// per-object probes (e.g. JSON.stringify's `toJSON` fast-negative check,
-/// #6009) skip the map mutex entirely in processes that never re-prototype
-/// an object — the overwhelmingly common case.
-static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
-
-/// #10362: mark `obj_ptr`'s own header as an owner in the residual registry.
-///
-/// Called under the registry lock and BEFORE the insert, the same discipline
-/// `OBJECT_PROTOTYPES_NONEMPTY` uses one line below: the proof is published
-/// before the fact it guards, so a reader that can observe the entry already
-/// observes the bit.
-///
-/// Silently does nothing for a `GC_TYPE_OBJECT` owner. Such an owner normally
-/// never reaches the registry at all (`meta_capable_object` takes it), but it
-/// can when that function turns it away for a non-type reason — and bit 6 means
-/// `OBJ_FLAG_NULL_PROTO` there, so it must not be reused. Those owners keep the
-/// latch-only gate, which is what every owner had before this change.
-unsafe fn set_residual_proto_owner_bit(obj_ptr: usize) {
-    #[cfg(test)]
-    if residual_proto_bit_sabotage::suppressed() {
-        return;
-    }
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
-        return;
-    };
-    if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-        return;
-    }
-    let header = (obj_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*header)._reserved |= crate::gc::GC_RESIDUAL_PROTO_OWNER;
-}
-
-/// Can the cell at `header` own a residual-prototype entry, judged from its own
-/// header rather than from the process-global latch?
-///
-/// This is the per-owner half of the registry's gate. Callers keep asking
-/// [`object_static_prototypes_maybe_nonempty`] FIRST — it is one byte load and
-/// false for any process that never re-prototyped a non-object — and ask this
-/// second, which is what stops an ARMED process paying per traced cell.
-///
-/// Conservative for `GC_TYPE_OBJECT`: see `set_residual_proto_owner_bit`.
-///
-/// # Safety
-///
-/// `header` is a readable `GcHeader` of a live allocation.
-#[inline]
-pub(crate) unsafe fn residual_entry_possible_for(header: *const crate::gc::GcHeader) -> bool {
-    if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
-        return true;
-    }
-    (*header)._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER != 0
-}
-
-/// The invariant the collector's gates rest on: a LIVE non-object owner that
-/// has an entry in the registry carries the bit.
-///
-/// Asserted in test and debug builds — including `cargo test --release`, how the
-/// GC suites run — for the same reason
-/// `gc::layout::transfer::assert_relocation_copied_the_header` is: a test proves
-/// today's code, an assertion proves tomorrow's. A future path that inserts an
-/// entry without the bit would make every collector gate skip that owner's
-/// prototype edge, which is #10493's bug exactly — correct before a collection,
-/// wrong after, exit code 0 and no warning.
-///
-/// Only this direction is an invariant. The reverse (bit set implies an entry)
-/// is deliberately NOT asserted: the bit is set-only, and the two rekey paths
-/// remove-then-insert with the lock released in between, so a bit without an
-/// entry is a legal transient and a benign steady state.
-#[inline]
-pub(crate) unsafe fn debug_assert_residual_owner_bit(obj_ptr: usize) {
-    #[cfg(any(test, debug_assertions))]
-    {
-        #[cfg(test)]
-        if residual_proto_bit_sabotage::suppressed() {
-            return;
-        }
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) {
-            if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-                assert!(
-                    header._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER != 0,
-                    "residual prototype registry: owner {obj_ptr:#x} (obj_type {}) has an \
-                     entry but not `GC_RESIDUAL_PROTO_OWNER`, so every collector gate will \
-                     skip its prototype edge — the prototype is neither retained nor \
-                     rewritten (#10493's failure mode)",
-                    header.obj_type
-                );
-            }
-        }
-    }
-    #[cfg(not(any(test, debug_assertions)))]
-    {
-        let _ = obj_ptr;
-    }
-}
-
-/// Test-only sabotage for [`set_residual_proto_owner_bit`]: the bit is never
-/// set, so every per-owner gate falls back to "no entry here" and the collector
-/// skips the prototype edge.
-///
-/// Both tests in `gc/tests/residual_prototype_relocation.rs` MUST fail while
-/// this is armed. If they pass, the bit is not load-bearing and is
-/// documentation — the failure mode CLAUDE.md calls "a gate that cannot fail".
-#[cfg(test)]
-pub(crate) mod residual_proto_bit_sabotage {
-    use std::cell::Cell;
-
-    thread_local! {
-        static SUPPRESSED: Cell<bool> = const { Cell::new(false) };
-    }
-
-    pub(crate) fn suppressed() -> bool {
-        SUPPRESSED.with(Cell::get)
-    }
-
-    pub(crate) struct Guard(bool);
-
-    impl Guard {
-        pub(crate) fn arm() -> Self {
-            Self(SUPPRESSED.with(|s| s.replace(true)))
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            SUPPRESSED.with(|s| s.set(self.0));
-        }
-    }
-}
-
-fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
-    crate::once_init::get_or_init(&OBJECT_PROTOTYPES, || Mutex::new(HashMap::new()))
-}
-
 /// #6759 Phase B: classify `obj_ptr` as a genuine shaped `GC_TYPE_OBJECT`
-/// whose header can carry the per-object meta record. Everything else —
-/// arrays, typed arrays, native handle-band ids, proxy ids, and the dedicated
-/// `GC_TYPE_REGEXP` cell — returns `None` and stays on the residual registry.
-/// The classification is a pure function of the allocation, so an owner is
-/// always on exactly one of the two storages.
+/// whose shape can name its prototype directly. Other public owners answer
+/// from their own property holder instead.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
     (receiver_header_type(obj_ptr)? == crate::gc::GC_TYPE_OBJECT)
         .then_some(obj_ptr as *mut crate::ObjectHeader)
@@ -363,6 +183,24 @@ unsafe fn receiver_header_type(obj_ptr: usize) -> Option<u8> {
         return None;
     }
     Some(crate::value::addr_class::try_read_gc_header(obj_ptr)?.obj_type)
+}
+
+/// Public heap receivers whose own-property holder can record a prototype.
+pub(crate) fn owned_prototype_receiver_type(kind: u8) -> bool {
+    crate::gc::is_byte_family_type(kind)
+        || matches!(
+            kind,
+            crate::gc::GC_TYPE_ARRAY
+                | crate::gc::GC_TYPE_OBJECT
+                | crate::gc::GC_TYPE_CLOSURE
+                | crate::gc::GC_TYPE_PROMISE
+                | crate::gc::GC_TYPE_ERROR
+                | crate::gc::GC_TYPE_MAP
+                | crate::gc::GC_TYPE_LAZY_ARRAY
+                | crate::gc::GC_TYPE_SET
+                | crate::gc::GC_TYPE_DATE_CELL
+                | crate::gc::GC_TYPE_TEMPORAL
+        )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -464,11 +302,11 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
         };
         if obj_type == crate::gc::GC_TYPE_ARRAY {
             // #10593: a retargeted ordinary array is a PER-ARRAY fact. The
-            // registry insert below sets `GC_ARRAY_CUSTOM_PROTO` on this
-            // array's own header, and every inline element guard tests that
+            // owner sets `GC_ARRAY_CUSTOM_PROTO` on its own header, and
+            // every inline element guard tests that
             // bit next to the global byte, so only THIS array leaves the fast
             // path. The runtime latch stays: it only gates the slow paths'
-            // per-array side-table probe.
+            // per-array property-bag probe.
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             // `Array.prototype` itself heads every default chain, so a new
             // `[[Prototype]]` there IS global. Resolving its address can
@@ -477,6 +315,11 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             let (array_prototype, owner) =
                 owner_handle.across_mut::<u8, _>(crate::array::array_prototype_addr);
             obj_ptr = owner as usize;
+            unsafe {
+                let header = crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8)
+                    as *mut crate::gc::GcHeader;
+                (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
+            }
             if array_prototype != 0 && array_prototype == obj_ptr {
                 crate::array::invalidate_array_index_fast_path();
             }
@@ -510,8 +353,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // `prototype` word is what every reader returns (`shapes_prototype`).
     // Only a receiver whose shape answers nothing about it
     // (`PROTO_ID_PER_OBJECT`: a native-module namespace, an exotic-read
-    // receiver) records it in its meta record. Non-object owners fall through
-    // to the residual registry.
+    // receiver) records it in its meta record. Other owners use their property holder below.
     unsafe {
         if crate::buffer::header::is_owned_byte_cell(obj_ptr) {
             crate::buffer::store::bag_set(
@@ -581,32 +423,24 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             return;
         }
     }
-    let mut slot_addr = 0usize;
-    if let Ok(mut map) = get_object_prototypes().lock() {
-        // Latch BEFORE the insert, and UNDER THE LOCK (#7737).
-        //
-        // Before the insert, because a concurrent `object_static_prototype`
-        // that observed the latch in the insert-but-before-the-store window
-        // would skip the mutex and miss an already-recorded prototype.
-        //
-        // Under the lock, because the latch is now CLEARED when a prune
-        // empties the map. With the store outside, this interleaving loses an
-        // entry: writer stores `true`; pruner takes the lock, retains to
-        // empty, clears the latch; writer then takes the lock and inserts —
-        // leaving a non-empty map with the latch false, which every reader
-        // skips. Serialising both under the same mutex makes that impossible.
-        // The publish property is unchanged: a reader that sees `true` takes
-        // the lock and therefore sees whatever the writer committed.
-        OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
-        // #10362: the per-OWNER half of the same proof, published under the
-        // same lock and before the same insert, for the same reason.
-        unsafe { set_residual_proto_owner_bit(obj_ptr) };
-        let slot = map.entry(obj_ptr).or_insert(0);
-        *slot = proto_bits;
-        slot_addr = slot as *mut u64 as usize;
-    }
-    if slot_addr != 0 {
-        crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, proto_bits);
+    // The owner already supplies its property holder through an ordinary
+    // traced edge. Allocation is bounded to publishing that private bag/meta;
+    // no JS runs in this no-move window.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let _edit = crate::object::descriptor_state::HolderEdit::new(obj_ptr);
+    unsafe {
+        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
+        if !holder.is_null() {
+            let meta = crate::object::object_meta_ensure(holder);
+            // GC_STORE_AUDIT(BARRIERED): the bag owns this NaN-boxed prototype
+            // edge; the exact metadata-slot barrier follows the store.
+            (*meta).prototype = proto_bits;
+            crate::gc::runtime_write_barrier_slot(
+                meta as usize,
+                std::ptr::addr_of!((*meta).prototype) as usize,
+                proto_bits,
+            );
+        }
     }
 }
 
@@ -639,23 +473,23 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
                 return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
                     .map(f64::to_bits);
             }
+            Some(kind)
+                if !owned_prototype_receiver_type(kind)
+                    && crate::value::addr_class::try_read_tracked_gc_header(obj_ptr).is_some() =>
+            {
+                return None;
+            }
             _ => {}
         }
     }
-    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
-        return None;
+    unsafe {
+        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
+        if holder.is_null() || (*holder).meta.is_null() {
+            return None;
+        }
+        let bits = (*(*holder).meta).prototype;
+        (bits != 0).then_some(bits)
     }
-    let recorded = get_object_prototypes()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(&obj_ptr).copied());
-    // #10362: the invariant every collector gate rests on, checked on the read
-    // paths that are NOT gated by the bit — asserting it inside a bit-gated
-    // path would be vacuous.
-    if recorded.is_some() {
-        unsafe { debug_assert_residual_owner_bit(obj_ptr) };
-    }
-    recorded
 }
 
 /// True when this receiver's recorded prototype diverges from its class
@@ -940,189 +774,6 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
     Some(proto_bits)
 }
 
-/// Death pruning (2026-07-09 GC audit wave 2): entries survived owner death,
-/// so the recorded prototype object stayed strongly rooted forever and a
-/// fresh object at a recycled address inherited the dead owner's prototype
-/// (dangling/wrong `getPrototypeOf`, phantom inherited reads).
-/// `is_dead_owner` is one of the GC's deadness predicates (`gc::dead_owner`).
-pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
-        return;
-    }
-    if let Ok(mut map) = get_object_prototypes().lock() {
-        map.retain(|owner, _| !is_dead_owner(*owner));
-        // #7737: release the latch when the registry drains.
-        //
-        // It used to be one-way. Since #7733 the evacuation move hook reads it
-        // once per moved object, so a SINGLE `Object.setPrototypeOf` against a
-        // non-meta-capable owner — anywhere in a process's lifetime, even one
-        // that later dies and is pruned right here — permanently disabled that
-        // fast path for the rest of the run. That is #7510's "one immortal
-        // side-table entry nullified every is_empty() fast path" recurring.
-        //
-        // Safe to clear here because the set is now under this same lock: no
-        // insert can be in flight past its latch store while we hold it.
-        if map.is_empty() {
-            OBJECT_PROTOTYPES_NONEMPTY.store(false, Ordering::Release);
-        }
-    }
-}
-
-/// #11471: thread-exit release for `OBJECT_PROTOTYPES`. Death pruning above
-/// only attributes the collecting thread's heap, so an exiting thread's
-/// entries (owner in its arena, or a prototype value from it) would outlive
-/// its blocks and a fresh object at a reused address would inherit the dead
-/// owner's prototype. Runs from `Arena::drop` (TLS destructor): one plain
-/// process-global lock, no thread-locals, no allocation. The owner's header
-/// bit (`set_residual_proto_owner_bit`) lives in the freed memory itself.
-pub(crate) fn release_object_prototypes_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
-        return;
-    }
-    let Some(registry) = OBJECT_PROTOTYPES.get() else {
-        return;
-    };
-    let mut map = registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.retain(|&owner, bits| !freed.contains(owner) && !freed.holds_bits(*bits));
-    // Same latch release as the death prune, under the same lock (#7737).
-    if map.is_empty() {
-        OBJECT_PROTOTYPES_NONEMPTY.store(false, Ordering::Release);
-    }
-}
-
-/// Test probe (#11471): does the residual registry hold an entry for `owner`?
-/// Exported unmangled because this module is crate-private.
-#[doc(hidden)]
-#[no_mangle]
-pub extern "C" fn perry_thread_exit_probe_object_prototype_recorded(owner: usize) -> bool {
-    OBJECT_PROTOTYPES.get().is_some_and(|registry| {
-        registry
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&owner)
-    })
-}
-
-/// Can the residual owner registry hold an entry at all?
-///
-/// The latch is stored (`Release`) before the first insert, so `false` proves
-/// the registry empty — the same proof [`object_static_prototype_owner_moved`]
-/// makes on entry, exposed so the relocation funnel
-/// (`gc/layout/transfer.rs`) can decide without the call (#10362).
-#[inline]
-pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
-    OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
-}
-
-/// Can a cell of `obj_type` own an entry in the residual registry?
-///
-/// The registry's population is every owner [`meta_capable_object`] turns
-/// away, and the recorder is reached with whatever the caller holds:
-/// `Object.setPrototypeOf` with an array, lazy JSON array, Map, Set, Error,
-/// Promise, Date, RegExp or Temporal cell, `dyn_eval` with a closure. Only the
-/// kinds that can never be a receiver stand outside it: strings and bigints
-/// are primitives, meta records and compiled regex programs are internal.
-/// `GC_TYPE_OBJECT` stays inside — its prototypes live in its meta record, and
-/// the registry's obligations were always met for it too.
-///
-/// The collector keys both of the registry's per-owner obligations on this
-/// one predicate: the relocation rekey (`gc/layout/transfer.rs`) and the
-/// value visit (`gc/layout_slot_visit.rs`). Both used to be wired to arrays
-/// and ordinary objects by hand, so every other movable owner lost its
-/// explicit prototype at its first relocation, and none had the prototype
-/// value traced or rewritten.
-#[inline]
-pub(crate) fn residual_prototype_owner_type(obj_type: u8) -> bool {
-    !crate::gc::is_byte_family_type(obj_type)
-        && !matches!(
-            obj_type,
-            crate::gc::GC_TYPE_STRING
-                | crate::gc::GC_TYPE_BIGINT
-                | crate::gc::GC_TYPE_OBJECT_META
-                | crate::gc::GC_TYPE_REGEX_PROGRAM
-        )
-}
-
-/// Migrate the residual side-table entry when an owner's allocation address
-/// changes, either through moving GC or an `ArrayHeader` growth replacement.
-/// Mirrors `closure_dynamic_props_owner_moved`.
-pub(crate) fn object_static_prototype_owner_moved(old_owner: usize, new_owner: usize) {
-    if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
-        return;
-    }
-    // The residual registry is EMPTY until a non-meta-capable owner records a
-    // prototype, and the latch is stored (`Release`) *before* that insert — so
-    // a `false` read here proves there is no entry to migrate. Its two sibling
-    // readers (`object_static_prototype`, `prune_dead_object_prototype_owners`)
-    // already gate on it; this one did not, so every evacuated object took a
-    // process-global `Mutex<HashMap>` and paid a SipHash probe against an empty
-    // map. On a promotion-heavy workload that is one lock + one hash per moved
-    // object (2.5 M of each on `gc-handoff/bench/retain.ts`), and it showed up
-    // as `pthread_mutex_lock` + `RandomState` in a single-threaded profile.
-    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
-        return;
-    }
-    if let Ok(mut map) = get_object_prototypes().lock() {
-        if let Some(proto_bits) = map.remove(&old_owner) {
-            map.insert(new_owner, proto_bits);
-        }
-    }
-}
-
-/// GC scanner: visit the stored prototype-value slot for `owner` so a moving
-/// collector can rewrite a forwarded prototype pointer. A `TAG_NULL` entry is
-/// not a pointer, so the collector simply leaves it unchanged.
-pub(crate) fn visit_object_static_prototype_slot_mut(
-    owner: usize,
-    mut visit: impl FnMut(*mut u64),
-) {
-    if owner == 0 {
-        return;
-    }
-    // The residual registry is EMPTY until a non-meta-capable owner records a
-    // prototype, and the latch is stored (`Release`) *before* that insert, so
-    // a `false` read proves there is nothing here to visit. Its siblings
-    // (`object_static_prototype`, `object_static_prototype_owner_moved`,
-    // `prune_dead_object_prototype_owners`) already gate on it; THIS one is
-    // the collector's per-object rewrite hook, so without the gate every
-    // traced object took a process-global `Mutex<HashMap>` and paid a SipHash
-    // probe against an empty map. Measured on `gc-handoff/bench/retain.ts`:
-    // `pthread_mutex_lock` and `RandomState::hash_one` were both visible under
-    // the mark drain in a single-threaded profile.
-    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
-        return;
-    }
-    // Take the entry OUT and run the visit with the lock RELEASED: a
-    // copying-minor rewrite visitor can move the prototype object, and
-    // move fixup re-enters `object_static_prototype_owner_moved`, which
-    // takes this same lock — visiting under it self-deadlocks the
-    // collector. Same hazard and fix as the closure static-prototype
-    // visitor in `closure::dynamic_props`.
-    let Some(mut proto_bits) = get_object_prototypes()
-        .lock()
-        .ok()
-        .and_then(|mut map| map.remove(&owner))
-    else {
-        return;
-    };
-    visit(&mut proto_bits as *mut u64);
-    // The visit can forward the owner itself (self-referential
-    // prototype); re-key the entry to the forwarded address.
-    let new_owner = unsafe {
-        crate::value::addr_class::try_read_gc_header(owner)
-            .filter(|h| h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
-            .map(|h| crate::gc::forwarding_address(h as *const _) as usize)
-            .unwrap_or(owner)
-    };
-    if let Ok(mut map) = get_object_prototypes().lock() {
-        map.insert(new_owner, proto_bits);
-    }
-}
-
 /// Resolve an inherited property read for an object whose own keys did not
 /// contain `key`. Walks the recorded prototype chain (bounded to guard against
 /// user-induced cycles). Returns `Some(value)` when a prototype in the chain
@@ -1220,17 +871,12 @@ pub(crate) fn resolve_inherited_field_from_prototype(
 /// typed-feedback / proxy guard test in the same process — the hazard
 /// `gc::tests::dead_owner_side_tables` documents inline. Once that test's
 /// array is unreachable the latch's claim is no longer TRUE, which is the
-/// same correction #7737 made for `OBJECT_PROTOTYPES_NONEMPTY`. Such a test
+/// tests must restore the process flag after their owner becomes unreachable. A test
 /// restores what it found; see `ArrayPrototypeLatchGuard` in
 /// `dyn_eval/tests.rs`.
 #[cfg(test)]
 pub(crate) fn test_swap_array_static_proto_recorded(value: bool) -> bool {
     ARRAY_TARGET_PROTO_RECORDED.swap(value, Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(crate) fn test_prototype_registry_latch_armed() -> bool {
-    OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
 }
 
 #[cfg(test)]
@@ -1422,106 +1068,6 @@ mod tests {
         crate::exception::js_try_end();
 
         assert_eq!(resolution_stack_savepoint(), base_depth);
-    }
-}
-
-#[cfg(test)]
-mod latch_drain_tests_7737 {
-    use super::*;
-
-    /// #7737: the registry's "non-empty" latch must be RELEASED when a prune
-    /// drains the map, not held for the life of the process.
-    ///
-    /// Since #7733 the evacuation move hook (`object_static_prototype_owner_moved`)
-    /// reads this latch once per moved object to skip a process-global mutex
-    /// and a SipHash lookup. While it was one-way, a single
-    /// `Object.setPrototypeOf` against a non-meta-capable owner — anywhere in
-    /// a process's lifetime, including one that dies and is pruned moments
-    /// later — permanently disabled that fast path for the rest of the run.
-    ///
-    /// That is #7510's finding recurring: "one immortal side-table entry
-    /// nullified every `is_empty()` fast path". The assertion that matters is
-    /// the LAST one — that the latch comes back down — because everything
-    /// before it passes with the bug present.
-    #[test]
-    fn a_drained_prototype_registry_releases_the_fast_path_latch() {
-        let _lock = crate::gc::global_side_table_test_lock();
-
-        // Start from a known state: drain whatever earlier tests recorded.
-        prune_dead_object_prototype_owners(&|_| true);
-
-        let owner: usize = 0x5000_0000;
-        let proto_bits: u64 = 0x7FFC_0000_0000_0001;
-        if let Ok(mut map) = get_object_prototypes().lock() {
-            OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
-            map.insert(owner, proto_bits);
-        }
-        assert!(
-            test_prototype_registry_latch_armed(),
-            "setup: recording an owner must arm the latch"
-        );
-
-        // The owner dies and is pruned — the registry is empty again.
-        prune_dead_object_prototype_owners(&|o| o == owner);
-        assert!(
-            get_object_prototypes()
-                .lock()
-                .map(|m| m.is_empty())
-                .unwrap_or(false),
-            "setup: the prune must actually have emptied the map"
-        );
-
-        assert!(
-            !test_prototype_registry_latch_armed(),
-            "#7737: the registry is empty but the latch is still armed, so \
-             every evacuated object keeps paying the mutex + SipHash lookup \
-             for the rest of the process"
-        );
-    }
-
-    /// The collector's per-object rewrite hook now gates on the same latch.
-    ///
-    /// Both halves are asserted, because only the pair is a fix: a hook that
-    /// skips an EMPTY registry is the optimisation, and a hook that still
-    /// reaches a RECORDED entry is the thing the optimisation must not break.
-    /// Without the second assertion, `return;` at the top of the function
-    /// would also pass.
-    #[test]
-    fn the_gc_visit_hook_skips_an_empty_registry_and_still_reaches_a_recorded_one() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        prune_dead_object_prototype_owners(&|_| true);
-
-        // A REAL old-gen allocation, not a synthetic address: on the armed
-        // path the visitor re-reads the owner's `GcHeader` to re-key a
-        // self-referential prototype, so a made-up owner segfaults there. (The
-        // #7737 test above never calls the visitor, which is why it can use
-        // one.)
-        let owner = crate::arena::arena_alloc_gc_old(64, 8, crate::gc::GC_TYPE_OBJECT) as usize;
-        let proto_bits: u64 = 0x7FFC_0000_0000_0001;
-
-        let mut visits = 0usize;
-        visit_object_static_prototype_slot_mut(owner, |_| visits += 1);
-        assert_eq!(
-            visits, 0,
-            "an empty registry must be answered by the latch, not by a \
-             process-global mutex plus a SipHash probe — this hook runs once \
-             per TRACED object"
-        );
-
-        if let Ok(mut map) = get_object_prototypes().lock() {
-            OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
-            map.insert(owner, proto_bits);
-        }
-        let mut seen = 0u64;
-        let mut visits = 0usize;
-        visit_object_static_prototype_slot_mut(owner, |slot| {
-            visits += 1;
-            seen = unsafe { *slot };
-        });
-        assert_eq!(visits, 1, "a recorded prototype slot must still be visited");
-        assert_eq!(seen, proto_bits);
-
-        prune_dead_object_prototype_owners(&|o| o == owner);
     }
 }
 

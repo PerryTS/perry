@@ -21,8 +21,9 @@ pub type Handle = i64;
 pub const INVALID_HANDLE: Handle = 0;
 
 /// Global handle registry using DashMap for concurrent access
-pub(super) static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> =
-    Lazy::new(DashMap::new);
+pub(super) static HANDLES: Lazy<
+    DashMap<Handle, perry_ffi::NativePayloadRecord, perry_ffi::HandleIdBuildHasher>,
+> = Lazy::new(|| DashMap::with_hasher(perry_ffi::HandleIdBuildHasher::default()));
 
 // Band boundary owned by `perry_runtime::value::addr_class`.
 #[cfg(test)]
@@ -141,7 +142,7 @@ fn publish_payload<T: 'static + Send + Sync>(
     identity: NativeRegistrationIdentity,
 ) -> Handle {
     let handle = identity.numeric_id();
-    let previous = HANDLES.insert(handle, Box::new(value));
+    let previous = HANDLES.insert(handle, perry_ffi::NativePayloadRecord::new(value));
     assert!(
         previous.is_none(),
         "pending Common id must have an empty payload slot"
@@ -210,7 +211,10 @@ pub fn register_handle_payload_releaser<T: 'static + Send + Sync>(
 /// Thread-exit hook (#11471): run each registered payload releaser over the
 /// payloads of its type, then retire the payloads a releaser asked to drop.
 /// Payload types with no releaser hold no GC value and are left alone.
-fn release_handle_payloads_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+pub(crate) fn release_handle_payloads_in_freed_ranges(
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) {
+    clear_native_payload_bags_in_freed_ranges(freed);
     let releasers: Vec<(std::any::TypeId, ErasedPayloadReleaser)> = PAYLOAD_RELEASERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -289,7 +293,7 @@ fn remove_payload(handle: Handle) -> Option<Box<dyn Any + Send + Sync>> {
     if !REGISTRATIONS.begin_retirement_of(identity) {
         return None;
     }
-    let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
+    let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
     super::handle_lifecycle::park_retired(identity);
     removed
 }
@@ -411,3 +415,43 @@ mod tests {
 #[cfg(test)]
 #[path = "handle_registration_tests.rs"]
 mod registration_tests;
+
+pub(crate) fn native_property_bag(handle: Handle) -> Option<u64> {
+    HANDLES.get(&handle).and_then(|entry| entry.props())
+}
+pub(crate) fn set_native_property_bag(handle: Handle, bits: u64) -> bool {
+    let stored = HANDLES
+        .get_mut(&handle)
+        .is_some_and(|mut entry| entry.set_props(bits));
+    if stored && bits != 0 {
+        perry_ffi::gc_register_mutable_root_scanner_named(
+            "stdlib:native-payloads",
+            scan_native_payload_roots,
+        );
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_handle_payloads_in_freed_ranges,
+        );
+    }
+    stored
+}
+fn scan_native_payload_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    // Full marks reach parked owners through the existing handle observer.
+    // Minors and relocation scans rewrite every bag owned by this mutator.
+    for mut entry in HANDLES.iter_mut() {
+        if visitor.is_full_mark() && !super::handle_lifecycle::root_native_payload_bag(*entry.key())
+        {
+            continue;
+        }
+        if let Some(slot) = entry.props_slot() {
+            visitor.visit_nanbox_u64_slot(slot);
+        }
+    }
+}
+pub(crate) fn clear_native_payload_bags_in_freed_ranges(
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) {
+    for mut entry in HANDLES.iter_mut() {
+        entry.clear_props_if(|address| freed.contains(address));
+    }
+    perry_ffi::clear_native_handle_props_in_ranges(|address| freed.contains(address));
+}

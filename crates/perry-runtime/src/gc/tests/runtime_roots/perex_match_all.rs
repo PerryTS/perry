@@ -493,7 +493,6 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     let scope = RuntimeHandleScope::new();
     let re = regex(&scope, b"a/b", b"g");
     let constructor = scope.root_nanbox_f64(get(&re, b"constructor"));
@@ -704,7 +703,6 @@ fn perex_match_all_species_rejects_proxy_of_arrow_before_flags_and_keeps_revoked
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
-    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     let scope = RuntimeHandleScope::new();
     let (receiver, _) = custom(&scope, b"g");
     let holder = scope.root_nanbox_f64(get(&receiver, b"constructor"));

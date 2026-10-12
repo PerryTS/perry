@@ -130,6 +130,7 @@ fn attached_reader_dies_with_terminal_stream_but_not_before() {
     READERS.lock().unwrap().insert(
         reader,
         ReaderData {
+            props: Default::default(),
             stream_handle: stream,
             locked: true,
             closed_promise: 0x2345_6780 as *mut Promise,
@@ -162,6 +163,7 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
         readable.insert(
             1,
             ReadableStreamData {
+                props: Default::default(),
                 native_source: None,
                 tee_cancel_promise: None,
                 body_consumer: None,

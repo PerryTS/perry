@@ -6,7 +6,7 @@ use perry_ffi::{JsValue, TransientRootScope};
 extern "C" {
     fn js_async_hooks_owned_provider_new(name: *const u8, len: usize, trigger: u64) -> f64;
     fn js_async_hooks_owned_provider_emit_init(resource: f64);
-    fn js_async_resource_async_id(owner: i64) -> f64;
+    fn js_async_resource_runtime_async_id(owner: i64) -> u64;
     fn js_async_hooks_owned_provider_destroy(resource: f64);
 }
 
@@ -23,12 +23,14 @@ pub(crate) fn notify(resource: f64) {
         js_async_hooks_owned_provider_emit_init(resource);
     }
 }
+/// The provider's runtime token (not its public serial): a trigger passed to
+/// `new` must name the trigger's state so a native hand-off inherits its
+/// AsyncLocalStorage context. Use it only while `resource` is reachable.
 pub(crate) fn id(resource: f64) -> u64 {
     if !JsValue::from_bits(resource.to_bits()).is_pointer() {
         return 0;
     }
-    let value = unsafe { js_async_resource_async_id(p::raw_owner(resource)) };
-    JsValue::from_bits(value.to_bits()).to_number().max(0.0) as u64
+    unsafe { js_async_resource_runtime_async_id(p::raw_owner(resource)) }
 }
 pub(crate) fn retire(resource: f64) {
     unsafe {

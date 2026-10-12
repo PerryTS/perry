@@ -98,6 +98,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         );
         fn js_register_handle_own_property_names_dispatch(f: unsafe extern "C" fn(i64) -> f64);
         fn js_register_handle_prototype_dispatch(f: unsafe extern "C" fn(i64) -> f64);
+        fn js_register_native_property_bag_dispatch(
+            f: unsafe extern "C" fn(i64, u32, u64, *mut u64) -> bool,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
@@ -117,6 +120,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
+    js_register_native_property_bag_dispatch(native_property_bag_dispatch);
     crate::string_decoder::string_decoder_prototype_value();
     // Dynamic `new <bound async_hooks ctor>()` -> real handle. Next.js does
     // `globalThis.AsyncLocalStorage = AsyncLocalStorage` then
@@ -553,4 +557,44 @@ unsafe fn prototype_crypto(handle: i64) -> Option<f64> {
         }
     }
     None
+}
+
+/// Bridge to bag slots on the existing native records. GC allocation remains
+/// in the runtime, outside every native-registry borrow.
+unsafe extern "C" fn native_property_bag_dispatch(
+    handle: i64,
+    operation: u32,
+    bits: u64,
+    out: *mut u64,
+) -> bool {
+    if out.is_null() || operation > 1 {
+        return false;
+    }
+    if let Some(previous) = crate::common::handle::native_property_bag(handle) {
+        *out = previous;
+        return operation == 0 || crate::common::handle::set_native_property_bag(handle, bits);
+    }
+    if let Some(previous) = perry_ffi::native_handle_props(handle) {
+        *out = previous;
+        if operation == 0 {
+            return true;
+        }
+        if bits != 0 {
+            perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+                crate::common::handle::release_handle_payloads_in_freed_ranges,
+            );
+        }
+        return perry_ffi::set_native_handle_props(handle, bits);
+    }
+    #[cfg(feature = "web-fetch")]
+    if let Some(previous) = crate::fetch::native_property_bag(handle as usize) {
+        *out = previous;
+        return operation == 0 || crate::fetch::set_native_property_bag(handle as usize, bits);
+    }
+    #[cfg(feature = "bundled-streams")]
+    if let Some(previous) = crate::streams::native_property_bag(handle as usize) {
+        *out = previous;
+        return operation == 0 || crate::streams::set_native_property_bag(handle as usize, bits);
+    }
+    false
 }

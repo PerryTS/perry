@@ -1,0 +1,93 @@
+//! A real C-frame-owned native bag slot for runtime-only adapter fixtures.
+use std::cell::UnsafeCell;
+const MAGIC: u64 = 0xface_0000_1221_ba69;
+#[repr(C)]
+struct Record {
+    magic: u64,
+    bag: UnsafeCell<f64>,
+}
+pub(crate) struct TestNativeOwner {
+    // Drop the root scope before freeing the native argument cell.
+    _roots: crate::gc::RuntimeHandleScope,
+    record: Box<Record>,
+}
+impl TestNativeOwner {
+    pub(crate) fn new() -> Self {
+        unsafe {
+            super::super::class_handles::js_register_native_property_bag_dispatch(access);
+        }
+        let record = Box::new(Record {
+            magic: MAGIC,
+            bag: UnsafeCell::new(0.0),
+        });
+        let roots = crate::gc::RuntimeHandleScope::new();
+        unsafe {
+            roots.root_nanbox_cell(&record.bag);
+        }
+        Self {
+            _roots: roots,
+            record,
+        }
+    }
+    pub(crate) fn handle(&self) -> i64 {
+        (&*self.record as *const Record) as i64
+    }
+    pub(crate) fn clear(&self) {
+        unsafe {
+            *self.record.bag.get() = 0.0;
+        }
+    }
+}
+thread_local! {
+    static SMALL_HANDLES: std::cell::RefCell<Vec<(i64, *const Record)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// A small handle-band id (the node:http IncomingMessage shape) whose bag
+/// lives in a real native record, as the stdlib handle registry supplies it.
+pub(crate) struct TestSmallHandleOwner {
+    id: i64,
+    _owner: TestNativeOwner,
+}
+impl TestSmallHandleOwner {
+    pub(crate) fn new(id: i64) -> Self {
+        assert!(crate::value::addr_class::is_handle_band(id as usize));
+        let owner = TestNativeOwner::new();
+        let record = &*owner.record as *const Record;
+        SMALL_HANDLES.with(|s| s.borrow_mut().push((id, record)));
+        Self { id, _owner: owner }
+    }
+    /// The handle id NaN-boxed as a POINTER.
+    pub(crate) fn value(&self) -> f64 {
+        f64::from_bits(0x7FFD_0000_0000_0000 | self.id as u64)
+    }
+}
+impl Drop for TestSmallHandleOwner {
+    fn drop(&mut self) {
+        SMALL_HANDLES.with(|s| s.borrow_mut().retain(|(id, _)| *id != self.id));
+    }
+}
+unsafe extern "C" fn access(handle: i64, operation: u32, bits: u64, out: *mut u64) -> bool {
+    if handle <= 0 || out.is_null() {
+        return false;
+    }
+    let record = if crate::value::addr_class::is_handle_band(handle as usize) {
+        match SMALL_HANDLES.with(|s| s.borrow().iter().find(|(id, _)| *id == handle).map(|e| e.1)) {
+            Some(record) => record as *mut Record,
+            None => return false,
+        }
+    } else {
+        handle as *mut Record
+    };
+    if (*record).magic != MAGIC {
+        return false;
+    }
+    *out = (*(*record).bag.get()).to_bits();
+    match operation {
+        0 => true,
+        1 => {
+            *(*record).bag.get() = f64::from_bits(bits);
+            true
+        }
+        _ => false,
+    }
+}

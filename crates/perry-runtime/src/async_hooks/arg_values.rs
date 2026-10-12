@@ -15,7 +15,7 @@ pub(super) fn async_id_to_js_number(id: u64) -> f64 {
     if id == u64::MAX {
         -1.0
     } else {
-        id as f64
+        super::public_async_id(id) as f64
     }
 }
 

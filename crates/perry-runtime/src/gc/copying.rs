@@ -1096,8 +1096,15 @@ pub(super) fn run_copied_minor_attempt(
     // `should_attempt_first_cycle_promotion` for why, and for why both extra
     // preconditions here are about making the ROLLBACK's obligations provably
     // empty rather than about liveness.
+    // A young Map/Set store or context-snapshot holder owns native buffers
+    // that only the copying walk of from-space releases when it dies, and the
+    // retag leaves no from-space to walk: a speculative promotion would carry
+    // every dead holder's buffers into old-gen until the next full sweep. That
+    // is the retention `malloc_registry_empty_at_start` already rules out for
+    // malloc-owned payloads, so both preconditions read the same way.
     let speculate_first_cycle = may_speculate
         && ptrs.malloc_registry_empty_at_start
+        && !crate::arena::young_owned_stores_may_exist()
         && untraced_promotion_instrument_veto().is_none()
         && super::should_attempt_first_cycle_promotion();
     let promotion_phase_start = PhaseDiag::start(&phase_diag);
