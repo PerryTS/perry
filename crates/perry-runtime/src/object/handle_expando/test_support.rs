@@ -6,35 +6,48 @@ struct Record {
     magic: u64,
     bag: UnsafeCell<f64>,
 }
+/// The 8 bytes before a native owner are whatever the allocator keeps there,
+/// and the descriptor LOOKUP path (`attrs_live_in_keys`, unproven by design)
+/// decodes them as a `GcHeader`: stale bytes that read as an unforwarded
+/// OBJECT header send the lookup into the wrong memory. The guard word pins
+/// those 8 bytes to zero so the fixture does not depend on heap layout.
+#[repr(C)]
+struct Guarded {
+    guard: u64,
+    record: Record,
+}
 pub(crate) struct TestNativeOwner {
     // Drop the root scope before freeing the native argument cell.
     _roots: crate::gc::RuntimeHandleScope,
-    record: Box<Record>,
+    owner: Box<Guarded>,
 }
 impl TestNativeOwner {
     pub(crate) fn new() -> Self {
         unsafe {
             super::super::class_handles::js_register_native_property_bag_dispatch(access);
         }
-        let record = Box::new(Record {
-            magic: MAGIC,
-            bag: UnsafeCell::new(0.0),
+        let owner = Box::new(Guarded {
+            guard: 0,
+            record: Record {
+                magic: MAGIC,
+                bag: UnsafeCell::new(0.0),
+            },
         });
         let roots = crate::gc::RuntimeHandleScope::new();
         unsafe {
-            roots.root_nanbox_cell(&record.bag);
+            roots.root_nanbox_cell(&owner.record.bag);
         }
         Self {
             _roots: roots,
-            record,
+            owner,
         }
     }
     pub(crate) fn handle(&self) -> i64 {
-        (&*self.record as *const Record) as i64
+        (&self.owner.record as *const Record) as i64
     }
     pub(crate) fn clear(&self) {
         unsafe {
-            *self.record.bag.get() = 0.0;
+            *self.owner.record.bag.get() = 0.0;
         }
     }
 }
@@ -52,7 +65,7 @@ impl TestSmallHandleOwner {
     pub(crate) fn new(id: i64) -> Self {
         assert!(crate::value::addr_class::is_handle_band(id as usize));
         let owner = TestNativeOwner::new();
-        let record = &*owner.record as *const Record;
+        let record = &owner.owner.record as *const Record;
         SMALL_HANDLES.with(|s| s.borrow_mut().push((id, record)));
         Self { id, _owner: owner }
     }
