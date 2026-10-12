@@ -1,0 +1,1 @@
+Fix macOS links of every compiled program after the image-string validators (#12440): the runtime now asks ld64 for the exact `section$start/end$__TEXT$__perry_strings` names (without Mach-O's `_` prefix), and the section sentinel is kept with `used(linker)` and a real reference from the bounds check. The PE anchors get the same `used(linker)`.

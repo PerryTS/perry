@@ -4,7 +4,12 @@ use super::*;
 
 // Always create the section, including in Rust tests and runtime-only links.
 // The sentinel is not a string and cannot pass the header checks below.
-#[used]
+// `used(linker)` keeps it through `-dead_strip` / `--gc-sections` / `/OPT:REF`,
+// and `bounds()` references it, so the object that needs the section bounds
+// always brings the section with it. Without both, ld64 drops the section in a
+// program that has no image strings and then cannot synthesize
+// `section$start/end$__TEXT$__perry_strings`, so every link fails.
+#[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
@@ -14,22 +19,28 @@ use super::*;
 static IMAGE_SECTION_SENTINEL: [u64; 1] = [0];
 
 #[cfg(target_os = "windows")]
-#[used]
+#[used(linker)]
 #[link_section = ".perrystr$a"]
 static IMAGE_START: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
-#[used]
+#[used(linker)]
 #[link_section = ".perrystr$z"]
 static IMAGE_END: [u64; 1] = [0];
 
 #[inline]
 fn bounds() -> (usize, usize) {
+    // A real reference: whatever links this function links the sentinel too.
+    std::hint::black_box(std::ptr::addr_of!(IMAGE_SECTION_SENTINEL));
     #[cfg(target_vendor = "apple")]
     {
+        // ld64 synthesizes `section$start$SEG$SECT` only under that exact
+        // name. The leading \x01 tells LLVM not to add Mach-O's `_` global
+        // prefix; without it the linker sees `_section$start$...`, which it
+        // never defines, and every link fails.
         unsafe extern "C" {
-            #[link_name = "section$start$__TEXT$__perry_strings"]
+            #[link_name = "\u{1}section$start$__TEXT$__perry_strings"]
             static START: u8;
-            #[link_name = "section$end$__TEXT$__perry_strings"]
+            #[link_name = "\u{1}section$end$__TEXT$__perry_strings"]
             static END: u8;
         }
         (
