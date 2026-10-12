@@ -137,6 +137,169 @@ MOD_DECL_RE = re.compile(
     r"(?m)^(" + _ATTRS + r")[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
 )
 CFG_TEST_ATTR_RE = re.compile(r"#\[cfg\(test\)\]")
+
+
+class _CfgParser:
+    """Parse Rust cfg predicates without interpreting unknown keys as false."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.pos = 0
+
+    def _space(self) -> None:
+        while self.pos < len(self.text) and self.text[self.pos].isspace():
+            self.pos += 1
+
+    def _ident(self) -> str:
+        self._space()
+        start = self.pos
+        if self.pos < len(self.text) and (
+            "A" <= self.text[self.pos] <= "Z"
+            or "a" <= self.text[self.pos] <= "z"
+            or self.text[self.pos] == "_"
+        ):
+            self.pos += 1
+            while self.pos < len(self.text) and (
+                "A" <= self.text[self.pos] <= "Z"
+                or "a" <= self.text[self.pos] <= "z"
+                or "0" <= self.text[self.pos] <= "9"
+                or self.text[self.pos] == "_"
+            ):
+                self.pos += 1
+        if start == self.pos:
+            raise ValueError("expected cfg identifier")
+        return self.text[start:self.pos]
+
+    def _string(self) -> str:
+        self._space()
+        if self.pos >= len(self.text) or self.text[self.pos] != '"':
+            raise ValueError("expected quoted cfg value")
+        self.pos += 1
+        out = []
+        while self.pos < len(self.text):
+            ch = self.text[self.pos]
+            self.pos += 1
+            if ch == '"':
+                return "".join(out)
+            if ch == "\\":
+                if self.pos >= len(self.text):
+                    raise ValueError("unfinished cfg string escape")
+                escaped = self.text[self.pos]
+                self.pos += 1
+                if escaped not in ('\\', '"'):
+                    raise ValueError("unsupported cfg string escape")
+                out.append(escaped)
+            else:
+                out.append(ch)
+        raise ValueError("unterminated cfg string")
+
+    def _expr(self):
+        key = self._ident()
+        self._space()
+        if self.pos < len(self.text) and self.text[self.pos] == "(":
+            self.pos += 1
+            args = []
+            self._space()
+            if self.pos < len(self.text) and self.text[self.pos] == ")":
+                self.pos += 1
+                if key not in ("all", "any"):
+                    raise ValueError("empty not operator")
+                return (key, args)
+            while self.pos < len(self.text) and self.text[self.pos] != ")":
+                args.append(self._expr())
+                self._space()
+                if self.pos < len(self.text) and self.text[self.pos] == ",":
+                    self.pos += 1
+                    self._space()
+                    continue
+                if self.pos >= len(self.text) or self.text[self.pos] != ")":
+                    raise ValueError("expected comma or closing parenthesis")
+            if self.pos >= len(self.text):
+                raise ValueError("unclosed cfg operator")
+            self.pos += 1
+            if key not in ("all", "any", "not") or (key == "not" and len(args) != 1):
+                raise ValueError("unsupported cfg operator")
+            return (key, args)
+        if self.pos < len(self.text) and self.text[self.pos] == "=":
+            self.pos += 1
+            return ("eq", key, self._string())
+        return ("flag", key)
+
+    def parse(self):
+        result = self._expr()
+        self._space()
+        if self.pos != len(self.text):
+            raise ValueError("trailing cfg input")
+        return result
+
+
+def _cfg_value(expr):
+    """Return bool or None (unknown), treating malformed/unsupported as unknown."""
+    kind = expr[0]
+    if kind == "flag":
+        return False if expr[1] == "test" else None
+    if kind == "eq":
+        return None
+    values = [_cfg_value(child) for child in expr[1]]
+    if kind == "not":
+        return None if values[0] is None else not values[0]
+    if kind == "all":
+        return False if False in values else (True if all(v is True for v in values) else None)
+    if kind == "any":
+        return True if True in values else (False if all(v is False for v in values) else None)
+    return None
+
+
+def cfg_is_provably_false(text: str) -> bool:
+    try:
+        return _cfg_value(_CfgParser(text).parse()) is False
+    except ValueError:
+        return False
+
+
+def cfg_attributes(attrs: str) -> list[str]:
+    """Extract only complete, direct cfg attributes from an attribute run."""
+    found = []
+    i = 0
+    while i < len(attrs):
+        start = attrs.find("#[", i)
+        if start < 0:
+            break
+        j = start + 2
+        square_depth = 1
+        quoted = False
+        escaped = False
+        while j < len(attrs) and square_depth:
+            ch = attrs[j]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    quoted = False
+            elif ch == '"':
+                quoted = True
+            elif ch == "[":
+                square_depth += 1
+            elif ch == "]":
+                square_depth -= 1
+            j += 1
+        # An incomplete attribute makes its cfg status unknown; stop here so
+        # cfg-looking text inside malformed string content cannot be promoted.
+        if square_depth:
+            found.append("<malformed>")
+            return found
+        content = attrs[start + 2:j - 1].strip()
+        match = re.fullmatch(r"cfg\s*\((.*)\)", content, flags=re.DOTALL)
+        if match:
+            found.append(match.group(1))
+        i = j
+    return found
+
+
+def has_proven_false_cfg(attrs: str) -> bool:
+    return any(cfg_is_provably_false(expr) for expr in cfg_attributes(attrs))
 # `#[path = "x.rs"]` names the file outright, relative to the directory of the
 # declaring file. If the checker resolved such a `mod` by its stem alone, a
 # test file whose name differs from its module would read as shipping code.
@@ -252,9 +415,9 @@ def shipping_raw_declarations(src: str) -> int:
     for m in RAW_RE.finditer(src):
         if any(open_at < m.start() < close_at for open_at, close_at in gated_spans):
             continue
-        preceding = src[: m.start()].rstrip()
-        line = preceding[preceding.rfind("\n") + 1 :].strip()
-        if line == "#[cfg(test)]":
+        preceding = src[: m.start()].rstrip() + "\n"
+        attrs_match = re.search(r"(?m)^((?:[ \t]*#\[[^\]\n]*\][ \t]*\n)+)[ \t]*\Z", preceding)
+        if attrs_match and has_proven_false_cfg(attrs_match.group(1)):
             continue
         open_at, close_at = brace_span(src, m.start())
         count += len(DECL_RE.findall(src[open_at + 1 : close_at]))
@@ -448,6 +611,17 @@ def self_test() -> int:
         write_allowlist(root, CRATES, allowlist)
         gated = {
             "attribute": "#[cfg(test)]\nthread_local! { static G: u8 = const { 0 }; }\n",
+            "compound all": (
+                '#[cfg(all(test, target_vendor = "apple"))]\n'
+                'thread_local! { static G: u8 = const { 0 }; }\n'
+            ),
+            "nested all any": (
+                '#[cfg(all(test, any(target_env = "gnu", target_os = "macos")))]\n'
+                'thread_local! { static G: u8 = const { 0 }; }\n'
+            ),
+            "attribute with blank lines": (
+                "#[cfg(test)]\n\nthread_local! { static G: u8 = const { 0 }; }\n"
+            ),
             "inline mod": (
                 "#[cfg(test)]\nmod t {\n"
                 "    thread_local! { static G: u8 = const { 0 }; }\n"
@@ -456,11 +630,52 @@ def self_test() -> int:
         }
         for shape, body in gated.items():
             write_source(src_dir / "gated.rs", body)
-            if verify(root, CRATES, allowlist):
+            if any("gated.rs" in p for p in verify(root, CRATES, allowlist)):
                 failures.append(f"a `#[cfg(test)]` {shape} declaration was counted")
-            write_source(src_dir / "gated.rs", body.replace("#[cfg(test)]\n", ""))
+            write_source(src_dir / "gated.rs", re.sub(r"#\[cfg\([^\n]*\)\]\n", "", body, count=1))
             if not verify(root, CRATES, allowlist):
                 failures.append(f"an UNGATED {shape} declaration passed")
+        (src_dir / "gated.rs").unlink()
+
+        # 5b. Only proven-false expressions are skipped. Unknown/unsupported,
+        #     disjunctions that can be true, and cfg_attr fail closed.
+        negative = {
+            "any test": '#[cfg(any(test, target_vendor = "apple"))]\n',
+            "not test": "#[cfg(not(test))]\n",
+            "feature named test": '#[cfg(feature = "test")]\n',
+            "unsupported key": "#[cfg(target_os = \"macos\")]\n",
+            "malformed": "#[cfg(all(test))] junk\n",
+            "test key-value": '#[cfg(test = "enabled")]\n',
+            "quoted doc text": '#[doc = "#[cfg(test)"]\n',
+            "trailing attribute text": "#[cfg(test) junk]\n",
+            "invalid identifier": "#[cfg(all(test, 123abc))]\n",
+            "cfg_attr": '#[cfg_attr(test, cfg(target_os = "macos"))]\n',
+            "nested cfg text in cfg_attr": '#[cfg_attr(feature = "x", doc = "#[cfg(test)")]\n',
+            "unterminated quoted doc": '#[doc = "#[cfg(test)]\n',
+            "non-ascii identifier": "#[cfg(all(test, a²))]\n",
+        }
+        for shape, attr in negative.items():
+            write_source(src_dir / "gated.rs", attr + "thread_local! { static G: u8 = const { 0 }; }\n")
+            if not any("gated.rs" in p for p in verify(root, CRATES, allowlist)):
+                failures.append(f"a fail-closed `{shape}` cfg passed")
+        (src_dir / "gated.rs").unlink()
+
+        # Empty operators and whitespace follow Rust cfg truth tables.
+        truth_cases = {
+            "all()": False,
+            "any()": True,
+            "all( test )": True,
+            "all(test,)": True,
+            "not(not(test))": True,
+            'not(any(not(test), target_os = "wasi"))': True,
+            'not(all(not(test), target_os = "wasi"))': False,
+        }
+        for expr, skipped in truth_cases.items():
+            write_source(src_dir / "gated.rs", f"#[cfg({expr})]\nthread_local! {{ static G: u8 = const {{ 0 }}; }}\n")
+            problems = verify(root, CRATES, allowlist)
+            counted = any("gated.rs" in p for p in problems)
+            if counted == skipped:
+                failures.append(f"cfg({expr}) produced the wrong shipping classification")
         (src_dir / "gated.rs").unlink()
 
         # 6. A whole file declared `#[cfg(test)] mod <stem>;` is out of scope,
@@ -487,6 +702,7 @@ def self_test() -> int:
         separated = {
             "cfg then path": '#[cfg(test)]\n#[path = "probes.rs"]\nmod probes;\n',
             "path then cfg": '#[path = "probes.rs"]\n#[cfg(test)]\nmod probes;\n',
+            "cfg then unrelated attr": '#[cfg(test)]\n#[allow(dead_code)]\nmod probes;\n',
         }
         for shape, decl in separated.items():
             write_source(src_dir / "lib.rs", decl)
@@ -515,11 +731,28 @@ def self_test() -> int:
         if not verify(root, CRATES, allowlist):
             failures.append("an UNGATED file named by `#[path]` passed")
 
+        # Compound external-module predicates remain in shipping scope in this
+        # narrow repair. Preserve the legacy literal-cfg(test) behavior.
+        write_source(src_dir / "probes.rs", "thread_local! { static G: u8 = const { 0 }; }\n")
+        write_source(src_dir / "lib.rs", '#[cfg(all(test, target_os = "wasi"))]\nmod probes;\n')
+        if not any("probes.rs" in p for p in verify(root, CRATES, allowlist)):
+            failures.append("a compound external-module cfg was treated as test-only")
+        write_source(src_dir / "lib.rs", "// #[cfg(test)]\nmod probes;\n")
+        if not any("probes.rs" in p for p in verify(root, CRATES, allowlist)):
+            failures.append("a commented cfg attribute hid a shipping module file")
+        write_source(src_dir / "lib.rs", "mod probes;\n")
+
+        # A cfg-looking comment immediately before a macro is not an attribute.
+        write_source(src_dir / "gated.rs", "// #[cfg(test)]\nthread_local! { static G: u8 = const { 0 }; }\n")
+        if not any("gated.rs" in p for p in verify(root, CRATES, allowlist)):
+            failures.append("a commented cfg attribute hid a shipping declaration")
+        (src_dir / "gated.rs").unlink()
+
     for f in failures:
         print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
     if failures:
         return 1
-    print("self-test: the checker can fail in all eleven directions")
+    print("self-test: the checker can fail in all tested directions")
     return 0
 
 
