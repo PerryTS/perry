@@ -111,19 +111,18 @@ pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64])
         fn js_sqlite_close(db_handle: i64) -> i32;
     }
 
-    // Helper: extract a raw StringHeader pointer from a NaN-boxed f64.
-    // STRING_TAG (0x7FFF) carries a 48-bit pointer in the lower bits.
+    // Helper: extract a StringHeader pointer from a NaN-boxed f64. Inline SSO
+    // SQL strings such as `BEGIN` and `END` have no heap header; materialize
+    // them in the native-call scratch ring before passing them to SQLite.
     let arg_str_ptr = |idx: usize| -> *const perry_runtime::StringHeader {
         if idx >= args.len() {
             return std::ptr::null();
         }
-        let bits = args[idx].to_bits();
-        let tag = bits >> 48;
-        if tag == 0x7FFF {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::StringHeader
-        } else {
-            std::ptr::null()
+        let value = perry_runtime::JSValue::from_bits(args[idx].to_bits());
+        if !value.is_any_string() {
+            return std::ptr::null();
         }
+        perry_runtime::value::js_ffi_arg_ptr(args[idx]) as *const perry_runtime::StringHeader
     };
 
     match method {
@@ -162,5 +161,65 @@ pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64])
             f64::from_bits(perry_runtime::JSValue::undefined().bits())
         }
         _ => f64::from_bits(perry_runtime::JSValue::undefined().bits()),
+    }
+}
+
+#[cfg(all(test, feature = "database-sqlite"))]
+mod tests {
+    use super::dispatch_sqlite_db;
+    use perry_runtime::{js_nanbox_pointer, js_string_from_bytes, value::js_ffi_arg_ptr, JSValue};
+
+    fn short(text: &'static [u8]) -> f64 {
+        assert!(text.len() <= perry_runtime::value::SHORT_STRING_MAX_LEN);
+        f64::from_bits(JSValue::short_string_unchecked(text).bits())
+    }
+
+    #[test]
+    fn dynamic_sqlite_dispatch_accepts_sso_begin_end_and_prepare_sql() {
+        extern "C" {
+            fn js_sqlite_open(filename: *const perry_runtime::StringHeader) -> i64;
+            fn js_sqlite_exec(db: i64, sql: *const perry_runtime::StringHeader) -> i32;
+            fn js_sqlite_close(db: i64) -> i32;
+        }
+
+        let filename = js_string_from_bytes(b":memory:".as_ptr(), 8);
+        let db = unsafe { js_sqlite_open(filename) };
+        assert!(db >= 0, "in-memory database must open");
+
+        let begin = short(b"BEGIN");
+        let end = short(b"END");
+        let expected_db = js_nanbox_pointer(db);
+        assert_eq!(
+            unsafe { dispatch_sqlite_db(db, "exec", &[begin]) }.to_bits(),
+            expected_db.to_bits(),
+            "exec keeps its database chaining result"
+        );
+
+        // A second BEGIN through the heap-string native entry fails only when
+        // the first SSO BEGIN actually reached SQLite.
+        let heap_begin = js_string_from_bytes(b"BEGIN".as_ptr(), 5);
+        let heap_begin_value = perry_runtime::js_nanbox_string(heap_begin as i64);
+        let heap_begin_ptr = js_ffi_arg_ptr(heap_begin_value) as *const perry_runtime::StringHeader;
+        assert_eq!(unsafe { js_sqlite_exec(db, heap_begin_ptr) }, 0);
+
+        let prepared = unsafe { dispatch_sqlite_db(db, "prepare", &[begin]) };
+        assert_ne!(
+            prepared.to_bits(),
+            JSValue::undefined().bits(),
+            "a prepared BEGIN from an SSO SQL string returns a statement handle"
+        );
+
+        assert_eq!(
+            unsafe { dispatch_sqlite_db(db, "exec", &[end]) }.to_bits(),
+            expected_db.to_bits(),
+            "SSO END commits and preserves the chaining result"
+        );
+        assert_eq!(
+            unsafe { js_sqlite_exec(db, heap_begin_ptr) },
+            1,
+            "a heap-string BEGIN succeeds after the SSO END closed the transaction"
+        );
+        unsafe { dispatch_sqlite_db(db, "exec", &[end]) };
+        unsafe { js_sqlite_close(db) };
     }
 }
