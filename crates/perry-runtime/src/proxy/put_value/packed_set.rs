@@ -62,6 +62,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 
 mod setter_site;
+#[path = "packed_set/rmw.rs"]
+mod rmw;
 pub(crate) use setter_site::scan_roots as scan_setter_site_roots_mut;
 
 /// The value `@perry_ic_N_packed_set` holds before its first prime.

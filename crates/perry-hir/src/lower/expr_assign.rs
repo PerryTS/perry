@@ -1318,6 +1318,11 @@ pub(crate) fn hoist_compound_member_assign(
             // a `number[]` annotation did not help because this erasure
             // happens before codegen ever sees it.
             let ty = match &init {
+                Expr::This => ctx
+                    .current_class
+                    .clone()
+                    .map(Type::Named)
+                    .unwrap_or(Type::Any),
                 Expr::LocalGet(src) => ctx
                     .lookup_local_type_by_id(*src)
                     .cloned()

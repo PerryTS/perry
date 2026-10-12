@@ -805,7 +805,7 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
 /// |v| >= 2^63, so ToInt32(1e20) came out as -1 instead of 1661992960 (#6079).
 /// The range test below is what keeps the cast inside its exact domain.
 #[inline]
-fn dyn_to_int32(v: f64) -> i32 {
+pub(crate) fn dyn_to_int32(v: f64) -> i32 {
     const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
     if v.abs() < TWO_POW_63 {
         // SAFETY: a NaN fails the comparison, and |v| < 2^63 truncates to a

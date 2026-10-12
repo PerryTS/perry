@@ -195,19 +195,19 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
         })),
     );
     // The generic arm was reached — without this the rest is vacuous.
-    require_call_line(&ir, "js_dyn_index_get");
+    require_call_line(&ir, "js_to_numeric");
     assert_operand_reread_below(
         &ir,
-        "js_put_value_set",
-        0,
-        "js_dyn_index_get",
+        "js_put_value_set_dyn_ic",
+        1,
+        "js_to_numeric",
         "the IndexUpdate receiver",
     );
     assert_operand_reread_below(
         &ir,
-        "js_put_value_set",
-        1,
-        "js_dyn_index_get",
+        "js_put_value_set_dyn_ic",
+        2,
+        "js_to_numeric",
         "the IndexUpdate index",
     );
 }
@@ -223,7 +223,7 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
 /// `load` → `ptrtoint` → `and` chain at the use. Verified by dropping the
 /// receiver's root entirely: still green.
 #[test]
-fn the_emitted_ir_rederives_the_raw_handles_below_the_read() {
+fn property_update_delegates_the_complete_collection_window_to_one_helper() {
     let ir = compile_body(
         "issue7628_property_update",
         with_object_local(Stmt::Expr(Expr::PropertyUpdate {
@@ -234,21 +234,12 @@ fn the_emitted_ir_rederives_the_raw_handles_below_the_read() {
             strict: true,
         })),
     );
-    require_call_line(&ir, "js_object_get_field_by_name_f64");
-    assert_operand_reread_below(
-        &ir,
-        "js_put_value_set",
-        0,
-        "js_object_get_field_by_name_f64",
-        "the PropertyUpdate receiver",
-    );
-    assert_operand_reread_below(
-        &ir,
-        "js_put_value_set",
-        1,
-        "js_object_get_field_by_name_f64",
-        "the PropertyUpdate key",
-    );
+    require_call_line(&ir, "js_property_rmw_fast");
+    require_call_line(&ir, "js_property_rmw");
+    assert!(!ir.contains("call double @js_numeric_step("));
+    assert!(!ir.contains("call double @js_object_get_field_by_name_f64("));
+    assert!(!ir.contains("call double @js_put_value_set("));
+    assert!(ir.contains("_packed_set = private global [5 x i64]"));
 }
 
 /// The RESULT of `a[i]++` is live across `js_put_value_set`, which runs a user
@@ -273,7 +264,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             strict: true,
         }))),
     );
-    let write = require_call_line(&unproven, "js_put_value_set");
+    let write = require_call_line(&unproven, "js_put_value_set_dyn_ic");
     let produced = producer_line(&unproven, &returned_register(&unproven));
     assert!(
         produced > write,
@@ -301,7 +292,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             })),
         ],
     );
-    let typed_write = require_call_line(&typed, "js_put_value_set");
+    let typed_write = require_call_line(&typed, "js_put_value_set_dyn_ic");
     let typed_produced = producer_line(&typed, &returned_register(&typed));
     assert!(
         typed_produced < typed_write,

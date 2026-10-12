@@ -167,3 +167,5 @@ pub use dynamic_object::{
     js_value_length_property_ic_f64, js_value_length_property_key_ic_f64, LengthPicCache,
     LengthPicCacheSlot, LENGTH_PIC_WORDS,
 };
+
+pub(crate) use dynamic_arith::dyn_to_int32 as number_to_int32;

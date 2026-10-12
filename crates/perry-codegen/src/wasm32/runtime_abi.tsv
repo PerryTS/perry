@@ -3085,6 +3085,8 @@ js_promise_try_spec	f64	f64,f64,f64
 js_promise_value	f64	ptr
 js_promise_with_resolvers	ptr	
 js_promise_with_resolvers_spec	f64	f64
+js_property_rmw	f64	f64,ptr,f64,i32s,ptr,ptr
+js_property_rmw_fast	f64	f64,f64,i32s,ptr
 js_proxy_apply	f64	f64,f64,f64
 js_proxy_construct	f64	f64,f64,f64
 js_proxy_delete	f64	f64,f64

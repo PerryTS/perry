@@ -287,6 +287,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
+            // Public properties share the store site's own-slot proof.
+            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none() {
+                return super::property_rmw::lower_update(
+                    ctx, object, property, *op, *prefix, *strict,
+                );
+            }
             // #7628's scope note: the same read-modify-write skeleton as
             // `Expr::IndexUpdate`, and the same repair — with one extra shape
             // on top. The read derives a RAW `i64` handle before
@@ -409,6 +415,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             prefix,
             strict,
         } => {
+            if !matches!(index.as_ref(), Expr::Number(_) | Expr::Integer(_)) {
+                if let Some(property) = super::proxy_reflect::static_write_key(ctx, index) {
+                    return super::property_rmw::lower_update(
+                        ctx, object, &property, *op, *prefix, *strict,
+                    );
+                }
+            }
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:
             //
@@ -462,44 +475,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let idx = group.lower(ctx, index, true)?;
                 let old = {
                     let (obj_box, idx_box) = (group.reread(ctx, obj)?, group.reread(ctx, idx)?);
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_dyn_index_get",
-                        &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-                    )
+                    if !crate::type_analysis::is_array_expr(ctx, object)
+                        || !crate::type_analysis::is_numeric_expr(ctx, index)
+                    {
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_dyn_index_get",
+                            &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
+                        )
+                    } else {
+                        let Expr::IndexGet {
+                            object: read_object,
+                            index: read_index,
+                        } = &element_read
+                        else {
+                            unreachable!()
+                        };
+                        rooting::with_materialized_receiver(
+                            ctx,
+                            read_object.as_ref() as *const Expr as usize,
+                            &obj_box,
+                            |ctx| {
+                                rooting::with_materialized_receiver(
+                                    ctx,
+                                    read_index.as_ref() as *const Expr as usize,
+                                    &idx_box,
+                                    |ctx| super::index_get::lower(ctx, &element_read),
+                                )
+                            },
+                        )?
+                    }
                 };
-                // ToNumeric + numeric step so a BigInt element stays BigInt
-                // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
-                // PropertyUpdate paths. #4918 prefix/postfix bigint.
-                let old_num = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
-                let old_num_root =
-                    group.adopt_emitted(ctx, Repr::Boxed, &old_num, result_may_be_heap && !*prefix);
-                let step_arg = match op {
-                    BinaryOp::Sub => "0",
-                    _ => "1",
+                let plain = crate::codegen::emit_plain_number_test(ctx.block(), &old);
+                let fast = ctx.new_block("index_update.number");
+                let slow = ctx.new_block("index_update.numeric");
+                let join = ctx.new_block("index_update.join");
+                let fast_label = ctx.block_label(fast);
+                let slow_label = ctx.block_label(slow);
+                let join_label = ctx.block_label(join);
+                ctx.block().cond_br(&plain, &fast_label, &slow_label);
+                ctx.current_block = fast;
+                let fast_new = if *op == BinaryOp::Sub {
+                    ctx.block().fsub(&old, "1.0")
+                } else {
+                    ctx.block().fadd(&old, "1.0")
                 };
-                let new = ctx.block().call(
+                let fast_pred = ctx.block().label.clone();
+                ctx.block().br(&join_label);
+                ctx.current_block = slow;
+                let slow_old = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+                let slow_root = group.adopt_emitted(
+                    ctx,
+                    Repr::Boxed,
+                    &slow_old,
+                    result_may_be_heap && !*prefix,
+                );
+                let step_arg = if *op == BinaryOp::Sub { "0" } else { "1" };
+                let slow_new = ctx.block().call(
                     DOUBLE,
                     "js_numeric_step",
-                    &[(DOUBLE, &old_num), (I32, step_arg)],
+                    &[(DOUBLE, &slow_old), (I32, step_arg)],
                 );
+                let slow_old = group.reread_emitted(ctx, slow_root);
+                let slow_pred = ctx.block().label.clone();
+                ctx.block().br(&join_label);
+                ctx.current_block = join;
+                let old_num = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&old, &fast_pred), (&slow_old, &slow_pred)]);
+                let new = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&fast_new, &fast_pred), (&slow_new, &slow_pred)]);
+                let old_num_root =
+                    group.adopt_emitted(ctx, Repr::Boxed, &old_num, result_may_be_heap && !*prefix);
                 let new_root =
                     group.adopt_emitted(ctx, Repr::Boxed, &new, result_may_be_heap && *prefix);
-                {
-                    let (obj_box, idx_box) = (group.reread(ctx, obj)?, group.reread(ctx, idx)?);
-                    let new_arg = group.reread_emitted(ctx, new_root);
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_put_value_set",
-                        &[
-                            (DOUBLE, &obj_box),
-                            (DOUBLE, &idx_box),
-                            (DOUBLE, &new_arg),
-                            (DOUBLE, &obj_box),
-                            (I32, strict_i32),
-                        ],
-                    );
-                }
+                let (obj_box, idx_box) = (group.reread(ctx, obj)?, group.reread(ctx, idx)?);
+                let new_arg = group.reread_emitted(ctx, new_root);
+                super::property_rmw::lower_dynamic_store(
+                    ctx, &obj_box, &idx_box, &new_arg, strict_i32,
+                )?;
                 Ok(if *prefix {
                     group.reread_emitted(ctx, new_root)
                 } else {

@@ -186,6 +186,18 @@ fn straight_line_site_outlined(ctx: &FnCtx<'_>) -> bool {
             .any(|(continue_label, _, _)| !continue_label.is_empty())
 }
 
+/// The ordinary store memo shared by plain stores and read/modify/write.
+pub(super) fn allocate_packed_store_memo(ctx: &mut FnCtx<'_>) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!("{}_packed_set", super::inline_cache_global_name(ctx, site));
+    ctx.typed_parse_rodata.push(format!(
+        "@{name} = private global [{PACKED_SET_SITE_WORDS} x i64] \
+         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0, i64 0], align 8"
+    ));
+    format!("@{name}")
+}
+
 /// Emit the static-key store. `obj_box` is the receiver RE-READ after the
 /// RHS; `value_double` is the stored value and `value_bits` the same value as
 /// the caller lowered it to i64 (used only to recognise an SSA constant).
@@ -251,17 +263,7 @@ pub(crate) fn emit_static_store_ic(
         );
     }
 
-    let packed_site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let packed_name = format!(
-        "{}_packed_set",
-        super::inline_cache_global_name(ctx, packed_site)
-    );
-    ctx.typed_parse_rodata.push(format!(
-        "@{packed_name} = private global [{PACKED_SET_SITE_WORDS} x i64] \
-         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0, i64 0], align 8"
-    ));
-    let packed_ref = format!("@{packed_name}");
+    let packed_ref = allocate_packed_store_memo(ctx);
 
     let tok_idx = ctx.new_block(&format!("{STORE_IC_STEM}.token"));
     let kind_idx = ctx.new_block(&format!("{STORE_IC_STEM}.kind"));

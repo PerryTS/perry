@@ -442,6 +442,7 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
         | "js_object_get_field_ic_fast"
         | "js_class_field_get_ic_fast"
         | "js_class_field_set_ic_fast"
+        | "js_property_rmw_fast"
         | "js_put_value_set_packed_fast" => HelperDeclContract::NoUnwind,
         _ => HelperDeclContract::Conservative,
     }

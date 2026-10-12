@@ -480,6 +480,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             property,
             value,
         } => {
+            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none() {
+                if let Some(result) = super::property_rmw::try_lower_compound(ctx, object, property, value, assignment_strict)? {
+                    return Ok(result);
+                }
+            }
             // #11791: an instance private field write is a shape compare and
             // a slot store.
             if let Some(site) =

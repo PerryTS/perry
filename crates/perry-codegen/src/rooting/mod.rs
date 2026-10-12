@@ -687,8 +687,8 @@ pub(crate) use group::{
 thread_local! {
     /// The receiver the innermost call-site guard materialised, keyed by the
     /// identity of the receiver's HIR node.
-    static MATERIALIZED_RECEIVER: std::cell::RefCell<Option<(usize, RootedSlot)>> =
-        const { std::cell::RefCell::new(None) };
+    static MATERIALIZED_RECEIVER: std::cell::RefCell<Vec<(usize, RootedSlot)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Materialise a call's receiver ONCE, run `body` with it available, release.
@@ -720,10 +720,11 @@ pub(crate) fn with_materialized_receiver<R>(
         idx: temp_root::temp_root_push_double(ctx, value),
         repr: Repr::Boxed,
     };
-    let previous =
-        MATERIALIZED_RECEIVER.with(|cell| cell.borrow_mut().replace((key, slot.clone())));
+    MATERIALIZED_RECEIVER.with(|cell| cell.borrow_mut().push((key, slot.clone())));
     let out = body(ctx);
-    MATERIALIZED_RECEIVER.with(|cell| *cell.borrow_mut() = previous);
+    MATERIALIZED_RECEIVER.with(|cell| {
+        cell.borrow_mut().pop();
+    });
     slot.release(ctx);
     out
 }
@@ -736,9 +737,12 @@ pub(crate) fn with_materialized_receiver<R>(
 /// the arms' direct calls all do), so consulting it there covers every way a
 /// lowering below the guard can ask for the receiver.
 pub(crate) fn materialized_receiver_reread(ctx: &mut FnCtx<'_>, key: usize) -> Option<String> {
-    let slot = MATERIALIZED_RECEIVER.with(|cell| match &*cell.borrow() {
-        Some((installed, slot)) if *installed == key => Some(slot.clone()),
-        _ => None,
+    let slot = MATERIALIZED_RECEIVER.with(|cell| {
+        cell.borrow()
+            .iter()
+            .rev()
+            .find(|(installed, _)| *installed == key)
+            .map(|(_, slot)| slot.clone())
     })?;
     Some(read_slot(ctx, &slot))
 }

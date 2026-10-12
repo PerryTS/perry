@@ -2565,6 +2565,8 @@ js_promise_try_spec	Reenters
 js_promise_value	Leaf
 js_promise_with_resolvers	Reenters
 js_promise_with_resolvers_spec	Reenters
+js_property_rmw	Reenters
+js_property_rmw_fast	Leaf
 js_proxy_apply	Reenters
 js_proxy_construct	Reenters
 js_proxy_delete	Reenters
