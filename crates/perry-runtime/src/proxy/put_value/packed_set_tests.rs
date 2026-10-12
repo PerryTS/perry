@@ -816,3 +816,56 @@ fn an_f64_lane_publishes_the_store_check_flag() {
     );
     assert_eq!(any_word >> 32, 0);
 }
+
+/// #12484: a key that lives in spill storage enters a runtime way with the
+/// spill flip, which no emitted compare can match. A warm miss must take that
+/// learned answer — a function of the receiver's ShapeId alone — before any
+/// own-key lookup or re-publication. The planted index below names a
+/// DIFFERENT spill slot than the key's, so the store landing there shows the
+/// way was served and the slot was not re-derived from the key.
+#[test]
+fn a_learned_spill_way_is_served_before_the_own_key_lookup() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let obj = crate::object::js_object_alloc(0, 0);
+    unsafe { crate::object::alloc_plain::mark_object_plain_ordinary(obj) };
+    let names = [b"pos".as_slice(), b"end", b"spillA", b"spillB"];
+    for name in names {
+        crate::object::js_object_set_field_by_name(obj, interned(name), 1.0);
+    }
+    let target = crate::value::js_nanbox_pointer(obj as i64);
+    let key = interned(b"spillA");
+    let other = interned(b"spillB");
+    let packed_site: &'static PackedSetSite = Box::leak(Box::new(PackedSetSite::empty()));
+    let packed = &packed_site.set;
+    let mut cache: PackedSetWays = packed_set_cache_empty();
+    let mut cache_slot: PackedSetWaysSlot = &mut cache;
+    assert_eq!(
+        js_put_value_set_packed_miss(target, key, 2.0, 0, &mut cache_slot, packed),
+        2.0
+    );
+    assert_eq!(
+        packed.load(Ordering::Relaxed),
+        PACKED_SET_EMPTY,
+        "a spill slot never enters the emitted word"
+    );
+    assert_eq!(
+        cache[0] as u32 ^ super::SPILL_FLIP,
+        stamp(target),
+        "the spill key's way"
+    );
+    let slot = (cache[0] & !PACKED_SET_FLAGS) >> 32;
+    assert_eq!(slot, 2, "`spillA` is the third key");
+    assert_eq!(cache[1], PACKED_SET_EMPTY);
+
+    // The learned answer, not a key lookup, decides the slot.
+    cache[0] = (3u64 << 32) | (cache[0] & 0xFFFF_FFFF);
+    assert_eq!(
+        js_put_value_set_packed_miss(target, key, 9.0, 0, &mut cache_slot, packed),
+        9.0
+    );
+    let read = |k| f64::from_bits(crate::object::js_object_get_field_by_name(obj, k).bits());
+    assert_eq!(read(other), 9.0, "the way's slot was written");
+    assert_eq!(read(key), 2.0, "the key's own slot was not re-derived");
+    assert_eq!(cache[1], PACKED_SET_EMPTY, "a way hit publishes nothing");
+}

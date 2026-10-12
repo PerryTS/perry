@@ -3159,7 +3159,7 @@ mod index_get_claim_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
-mod string_length;
+pub(crate) mod string_length;
 pub(crate) mod string_window;
 pub(crate) mod suffix_cursor;
 

@@ -85,8 +85,8 @@ pub(crate) use self::numeric_expression::{
     box_numeric_predicate, numeric_predicate, try_lower_numeric_compare,
 };
 use self::plan::{
-    accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,
-    Recheck,
+    accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible,
+    string_length_leaf_read, Plan, Recheck,
 };
 use self::verify::{successors, verify, verify_exit_effects};
 

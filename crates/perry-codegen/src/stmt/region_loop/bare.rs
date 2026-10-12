@@ -324,6 +324,94 @@ pub(crate) fn try_lower_bare_put(
     Ok(Some(val_double))
 }
 
+/// A fact-tree `.length` leaf over an already-loaded value: a string's UTF-16
+/// length (the same two inline arms as `expr::string_length`) or a live plain
+/// Array's length word (the compact header guard of the record length read),
+/// both data that reading runs no JS for. Any other value yields NaN, which
+/// fails the tree's fold check so the generic arm reads `.length` with
+/// ordinary property semantics. No calls, so no JS has run when the fold is
+/// rejected.
+pub(super) fn length_or_nan(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let is_sso = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let sso_i = ctx.new_block("rloop.len.sso");
+    let chk_i = ctx.new_block("rloop.len.chk");
+    let heap_i = ctx.new_block("rloop.len.heap");
+    let arr_chk_i = ctx.new_block("rloop.len.arr_chk");
+    let arr_i = ctx.new_block("rloop.len.arr");
+    let merge_i = ctx.new_block("rloop.len.merge");
+    let (sso_l, chk_l, heap_l, arr_chk_l, arr_l, merge_l) = (
+        ctx.block_label(sso_i),
+        ctx.block_label(chk_i),
+        ctx.block_label(heap_i),
+        ctx.block_label(arr_chk_i),
+        ctx.block_label(arr_i),
+        ctx.block_label(merge_i),
+    );
+    ctx.block().cond_br(&is_sso, &sso_l, &chk_l);
+    ctx.current_block = sso_i;
+    let sso_len = crate::expr::string_length::lower_sso_length(ctx, &bits);
+    let sso_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = chk_i;
+    let is_heap = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
+    // POINTER tag with a payload above the handle band, as one range compare.
+    let offset = ctx.block().sub(
+        I64,
+        &bits,
+        crate::expr::receiver_range::RECEIVER_BIAS_LITERAL,
+    );
+    let is_object = ctx.block().icmp_ult(
+        I64,
+        &offset,
+        crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
+    );
+    let other_i = ctx.new_block("rloop.len.other");
+    let other_l = ctx.block_label(other_i);
+    ctx.block().cond_br(&is_heap, &heap_l, &other_l);
+    ctx.current_block = other_i;
+    ctx.block().cond_br(&is_object, &arr_chk_l, &merge_l);
+    ctx.current_block = heap_i;
+    let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let len_i32 = ctx.block().safe_load_i32_from_ptr(&handle);
+    let heap_len = ctx.block().uitofp(I32, &len_i32, DOUBLE);
+    let heap_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    // GC_TYPE_ARRAY with the FORWARDED flag clear: `(obj_type | gc_flags << 8)
+    // & 0x80FF == 1`, the record length read's guard. A forwarding stub,
+    // an object or any other cell yields NaN.
+    ctx.current_block = arr_chk_i;
+    let arr_handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let header = ctx.block().sub(I64, &arr_handle, "8");
+    let header = ctx.block().inttoptr(I64, &header);
+    let word = ctx.block().load(I16, &header);
+    let kind = ctx.block().and(I16, &word, "33023");
+    let live_array = ctx.block().icmp_eq(I16, &kind, "1");
+    ctx.block().cond_br(&live_array, &arr_l, &merge_l);
+    ctx.current_block = arr_i;
+    let arr_ptr = ctx.block().inttoptr(I64, &arr_handle);
+    let arr_len_i32 = ctx.block().load(I32, &arr_ptr);
+    let arr_len = ctx.block().uitofp(I32, &arr_len_i32, DOUBLE);
+    let arr_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge_i;
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (&sso_len, &sso_end),
+            (&heap_len, &heap_end),
+            (&arr_len, &arr_end),
+            ("0x7FF8000000000000", &other_l),
+            ("0x7FF8000000000000", &arr_chk_l),
+        ],
+    )
+}
+
 /// `region_read_run`'s hook inside an F-body: a planned fact tree.
 pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
     let Some(a) = ctx.region_loop_facts.last() else {
@@ -368,15 +456,29 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         }
     }
     let h = region_handle(ctx, r)?;
+    let mut lengths = Vec::new();
     for (i, l) in all.iter().enumerate() {
-        if let Expr::PropertyGet { property, .. } = l {
-            let slot = active_slot(ctx, l, r, property).expect("planned with its tree");
+        let (read, is_length) = match string_length_leaf_read(l) {
+            Some(inner) => (inner, true),
+            None => (*l, false),
+        };
+        if let Expr::PropertyGet { property, .. } = read {
+            let slot = active_slot(ctx, read, r, property).expect("planned with its tree");
             let p = bare_read_ptr(ctx, &h, &slot);
             note_emitted(ctx);
             values[i] = Some(ctx.block().load(DOUBLE, &p));
             note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
             stat(2, 1);
+            if is_length {
+                lengths.push(i);
+            }
         }
+    }
+    // After every load: the length arms add blocks, not calls, so nothing
+    // between the handle and its loads changes.
+    for i in lengths {
+        let v = values[i].take().expect("loaded");
+        values[i] = Some(length_or_nan(ctx, &v));
     }
     let values: Vec<String> = values.into_iter().map(|v| v.expect("lowered")).collect();
     let gen_i = ctx.new_block("rloop.tree.generic");
@@ -444,3 +546,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]),
     ))
 }
+
+#[cfg(test)]
+#[path = "string_length_tree_tests.rs"]
+mod string_length_tree_tests;

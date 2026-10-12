@@ -102,7 +102,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, object: &Expr) -> Result<Option<Str
 /// runtime's bounded WTF-8 counter over the five inline payload bytes. Tracking
 /// the next sequence boundary also preserves its malformed-byte convention.
 /// Call-free lowering is required by the element-shape loop clone (#10191).
-pub(super) fn lower_sso_length(ctx: &mut FnCtx<'_>, bits: &str) -> String {
+pub(crate) fn lower_sso_length(ctx: &mut FnCtx<'_>, bits: &str) -> String {
     let shifted = ctx.block().lshr(I64, bits, "40");
     let byte_len = ctx.block().and(I64, &shifted, "255");
     let ascii_len = ctx.block().uitofp(I64, &byte_len, DOUBLE);

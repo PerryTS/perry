@@ -174,10 +174,31 @@ fn packed_set_miss_body(
     packed: *const AtomicU64,
 ) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
+    let target_bits = target.to_bits();
+    // The site's learned answer for this ShapeId first: a way the emitted
+    // code does not compare, or a spill-located key's way, which no emitted
+    // compare can match. Both are functions of the ShapeId alone, so a hit
+    // needs no key lookup and no re-publication. Nothing here allocates or
+    // runs user code.
+    unsafe {
+        let cache = crate::object::pic_slot_peek(cache_slot);
+        if !cache.is_null() {
+            // A full-outline site (null `packed`) emits no compare at all, so
+            // every way is this entry's to serve.
+            let first_way = if packed.is_null() {
+                0
+            } else {
+                PACKED_SET_INLINE_WAYS
+            };
+            let ways = &*(cache as *const [AtomicU64; PACKED_SET_WAYS]);
+            if let Some(stored) = packed_ways_store(ways, first_way, target, value) {
+                return stored;
+            }
+        }
+    }
     // The receiver shape answers an own writable binding before any site
     // admission or migration. A saturated site needs no further lookup or
     // publication to perform this checked store.
-    let target_bits = target.to_bits();
     if target_bits & !POINTER_MASK == POINTER_TAG && !key.is_null() {
         let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
         if unsafe { crate::object::shape_store::try_own_store(obj, key, value) } {
@@ -256,25 +277,6 @@ fn packed_set_miss_body(
         })
     };
     let target_bits = target.to_bits();
-    // The ways the emitted code does not compare. Nothing here allocates or
-    // runs user code, so `target` and `value` are still the caller's values
-    // when the full walk below needs them.
-    unsafe {
-        let cache = crate::object::pic_slot_peek(cache_slot);
-        if !cache.is_null() {
-            // A full-outline site (null `packed`) emits no compare at all, so
-            // every way is this entry's to serve.
-            let first_way = if packed.is_null() {
-                0
-            } else {
-                PACKED_SET_INLINE_WAYS
-            };
-            let ways = &*(cache as *const [AtomicU64; PACKED_SET_WAYS]);
-            if let Some(stored) = packed_ways_store(ways, first_way, target, value) {
-                return stored;
-            }
-        }
-    }
 
     // Charter step 5: migrate a receiver whose shape the lineage generalized
     // before the key-add memo or a way is keyed by it.

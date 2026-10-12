@@ -33,8 +33,9 @@ pub(super) fn dirty(st: &mut St) {
     }
 }
 
-/// A `+` tree over reads of ONE receiver's region keys, locals and numeric
-/// literals (at least one read): lowered as a FACT TREE — the reads are bare
+/// A `+` tree over reads of ONE receiver's region keys (or their `.length`),
+/// locals and numeric literals (at least one read): lowered as a
+/// FACT TREE — the reads are bare
 /// loads, every leaf is verified a Number, the tree folds to `fadd`s, and a
 /// failed check runs the tree through today's lowering in source order (with
 /// the facts masked) and sets the dirty flag. Slice 1's rule (§L7.3) with the
@@ -70,6 +71,24 @@ pub(super) fn fact_tree_leaves<'e>(
     let mut recv: Option<Recv> = None;
     let mut reads = Vec::new();
     for l in all {
+        // `o.k.length`: the bare read is `o.k`; the leaf is its string or
+        // Array length (`bare::length_or_nan`), and any other value fails
+        // the fold.
+        if let Some(inner) = string_length_leaf_read(l) {
+            let Expr::PropertyGet {
+                object, property, ..
+            } = inner
+            else {
+                return None;
+            };
+            let r = Recv::of(object)?;
+            if recv.is_some_and(|x| x != r) || !covered(r, property) {
+                return None;
+            }
+            recv = Some(r);
+            reads.push(inner);
+            continue;
+        }
         match l {
             Expr::PropertyGet {
                 object, property, ..
@@ -86,6 +105,22 @@ pub(super) fn fact_tree_leaves<'e>(
         }
     }
     Some((recv?, reads))
+}
+
+/// A fact-tree leaf `o.k.length`: the inner `o.k` read, which the tree loads
+/// bare. Reading a string's or a plain Array's `length` runs no JS, so the
+/// fast fold may take it from such a value; every other value yields NaN
+/// there and the tree's generic arm reads `.length` with ordinary property
+/// semantics.
+pub(super) fn string_length_leaf_read(l: &Expr) -> Option<&Expr> {
+    match l {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" && matches!(object.as_ref(), Expr::PropertyGet { .. }) => {
+            Some(object.as_ref())
+        }
+        _ => None,
+    }
 }
 
 /// Candidate reads inside a Number-consuming expression. The planner's

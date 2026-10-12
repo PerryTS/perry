@@ -487,25 +487,101 @@ fn born_wide_closure_factory_uses_the_same_return_facts() {
     assert_literal_width(&module, 3);
 }
 
-#[test]
-fn born_wide_parameter_evidence_is_deferred() {
-    let mut module = fixture(1, 2);
+fn consumer_fixture(module: &mut Module, body: Vec<Stmt>) {
     let mut consumer = module.classes[0].constructor.as_ref().unwrap().clone();
     consumer.id = 2004;
     consumer.name = "consume".into();
     consumer.params.truncate(1);
     consumer.params[0].id = 3001;
     consumer.params[0].ty = Type::Any;
-    consumer.body = vec![added_store(Expr::LocalGet(3001), "z")];
+    consumer.body = body;
     module.functions.push(consumer);
+}
+
+fn consume_call(arg: Expr) -> Stmt {
+    Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(2004)),
+        args: vec![arg],
+        type_args: vec![],
+        byte_offset: 0,
+    })
+}
+
+/// #12484 (phase 2): a key the callee adds to its parameter reserves room in
+/// every literal the module passes there, through a binding or directly.
+#[test]
+fn born_wide_parameter_evidence() {
+    let mut module = fixture(1, 2);
+    consumer_fixture(&mut module, vec![added_store(Expr::LocalGet(3001), "z")]);
     module.init = vec![
         literal_binding(literal_new()),
-        Stmt::Expr(Expr::Call {
-            callee: Box::new(Expr::FuncRef(2004)),
-            args: vec![Expr::LocalGet(1001)],
-            type_args: vec![],
-            byte_offset: 0,
-        }),
+        consume_call(Expr::LocalGet(1001)),
     ];
+    assert_literal_width(&module, 3);
+
+    let mut module = fixture(1, 2);
+    consumer_fixture(&mut module, vec![added_store(Expr::LocalGet(3001), "z")]);
+    module.init = vec![consume_call(literal_new())];
+    assert_literal_width(&module, 3);
+}
+
+/// A reassigned parameter names no single argument and fails closed.
+#[test]
+fn born_wide_reassigned_parameter_fails_closed() {
+    let mut module = fixture(1, 2);
+    consumer_fixture(
+        &mut module,
+        vec![
+            Stmt::Expr(Expr::LocalSet(3001, Box::new(Expr::Undefined))),
+            added_store(Expr::LocalGet(3001), "z"),
+        ],
+    );
+    module.init = vec![consume_call(literal_new())];
     assert_literal_width(&module, 2);
+}
+
+/// #12484 (phase 2): an element read of an array the module fills with
+/// literals carries their classes, so a key added through it reserves room.
+#[test]
+fn born_wide_array_element_evidence() {
+    let mut module = fixture(1, 2);
+    module.init = vec![
+        Stmt::Let {
+            id: 1002,
+            name: "objs".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![])),
+        },
+        Stmt::Expr(Expr::ArrayPush {
+            array_id: 1002,
+            value: Box::new(literal_new()),
+            field_writeback: None,
+        }),
+        literal_binding(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1002)),
+            index: Box::new(Expr::Number(0.0)),
+        }),
+        added_store(Expr::LocalGet(1001), "z"),
+    ];
+    assert_literal_width(&module, 3);
+
+    let mut module = fixture(1, 2);
+    module.init = vec![
+        Stmt::Let {
+            id: 1002,
+            name: "objs".into(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Array(vec![literal_new()])),
+        },
+        added_store(
+            Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1002)),
+                index: Box::new(Expr::Number(0.0)),
+            },
+            "z",
+        ),
+    ];
+    assert_literal_width(&module, 3);
 }
