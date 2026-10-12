@@ -102,6 +102,7 @@ mod ic_fast_split;
 mod inline_birth;
 mod mechanics;
 mod specialized_calls;
+mod string_method_coercion;
 
 /// The two targets native roots ship on, one per object format and
 /// architecture. Pinned rather than host-derived — see the module docs.
