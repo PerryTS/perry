@@ -1,5 +1,6 @@
 """Exercise incident lifecycle without posting to GitHub."""
 import copy
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -145,13 +146,28 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(regression_rows(log), {"01_probe.copied_bytes": valid})
 
     def test_workflow_keeps_writes_out_of_measurement_job(self):
-        path = Path(__file__).resolve().parents[1] / ".github/workflows/gc-ratchet.yml"
+        path = Path(__file__).resolve().parents[1] / ".github/workflows/gc.yml"
         workflow = path.read_text(encoding="utf-8")
-        measurement, reporting = workflow.split("  report-main-result:", 1)
+
+        def job_block(job_id):
+            match = re.search(
+                rf"^  {re.escape(job_id)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
+                workflow,
+                re.MULTILINE | re.DOTALL,
+            )
+            self.assertIsNotNone(match, f"workflow is missing job {job_id}")
+            return match.group(1)
+
+        measurement = job_block("gc-ratchet__gc-ratchet")
+        reporting = job_block("gc-ratchet__report-main-result")
         self.assertNotIn("issues: write", measurement)
-        self.assertIn("needs: gc-ratchet", reporting)
+        needs = re.search(
+            r"(?m)^    needs:\n((?:^      - [^\n]+\n)+)", reporting
+        )
+        self.assertIsNotNone(needs, "reporting job must declare its dependencies")
+        self.assertIn("- gc-ratchet__gc-ratchet", needs.group(1))
         self.assertIn("issues: write", reporting)
         self.assertIn("always()", reporting)
         self.assertIn("refs/heads/main", reporting)
         self.assertIn("github.event_name == 'schedule'", reporting)
-        self.assertIn("-p 'test*gc_ratchet.py'", measurement)
+        self.assertIn("github.event_name == 'workflow_dispatch'", reporting)

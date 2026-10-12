@@ -1,0 +1,1 @@
+Update the GC ratchet incident-reporting test to inspect the measurement and reporting jobs in `.github/workflows/gc.yml`, preserving its checks for write permission isolation and main-branch scheduled reporting safeguards.
