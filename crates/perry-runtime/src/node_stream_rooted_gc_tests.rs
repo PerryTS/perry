@@ -47,6 +47,14 @@ fn moving_gc() -> MovingGc {
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    // Stream construction reads the minted `events.EventEmitter` export (the
+    // capture-rejections default consults its prototype). Production roots
+    // and rewrites that cache through this `gc_init` scanner; without it a
+    // collection here frees or moves the export unseen and the next stream
+    // birth reads poisoned from-space.
+    crate::gc::gc_register_mutable_root_scanner(
+        crate::object::scan_native_callable_export_roots_mut,
+    );
 
     CALLS.with(|count| count.set(0));
     COLLECTIONS.with(|count| count.set(0));
