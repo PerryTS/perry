@@ -1089,18 +1089,7 @@ fn warn_listener_limit(target: f64, event: f64, list: f64, len: f64, max: f64) {
     );
     let type_name = value_text(event.get_nanbox_f64());
     // node: `inspect(target, { depth: -1 })`, e.g. `[EventEmitter]`.
-    let options = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::object::js_object_alloc(0, 1) as i64,
-    ));
-    set_named(
-        options.get_nanbox_f64(),
-        crate::runtime_state_key!(b"depth"),
-        -1.0,
-    );
-    let shown = value_text(crate::builtins::js_util_inspect(
-        target.get_nanbox_f64(),
-        options.get_nanbox_f64(),
-    ));
+    let shown = emitter_inspect_label(target.get_nanbox_f64());
     let text = format!(
         "Possible EventEmitter memory leak detected. {} {type_name} listeners added to {shown}. MaxListeners is {}. Use emitter.setMaxListeners() to increase limit",
         len as u64,
@@ -1140,13 +1129,64 @@ fn warn_listener_limit(target: f64, event: f64, list: f64, len: f64, max: f64) {
     );
     // node: `process.emitWarning(w)` with the Error itself, which the
     // 'warning' listeners receive as is.
-    crate::process::schedule_warning(
-        warning.get_nanbox_f64(),
-        "MaxListenersExceededWarning",
-        "",
-        &text,
-        "",
-    );
+    emit_process_warning(warning.get_nanbox_f64(), &text, &scope);
+}
+
+/// node's `inspect(target, { depth: -1 })`, which is the constructor name in
+/// brackets and nothing else. Perry's `util.inspect` has no negative-depth
+/// mode (`builtins/console.rs`'s `decode_dir_depth_option` clamps any negative
+/// `depth` to 0, so it renders the object instead), so the value node's
+/// `getConstructorName` would find is read here directly.
+fn emitter_inspect_label(target: f64) -> String {
+    let constructor = get_key(target, name_key(b"constructor"));
+    if !is_callable_value(constructor) {
+        return "[Object]".to_string();
+    }
+    let name = value_text(get_key(constructor, name_key(b"name")));
+    if name.is_empty() {
+        "[Object]".to_string()
+    } else {
+        format!("[{name}]")
+    }
+}
+
+/// node's `_addListener` warns through the JS-visible `process.emitWarning(w)`,
+/// so a program that replaces that property intercepts the leak warning (and
+/// the builtin one does the reporting itself). An override that is not callable
+/// falls back to the runtime's own warning queue rather than dereferencing it.
+fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHandleScope) {
+    let process = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
+        b"process".as_ptr(),
+        7,
+    ));
+    let name = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"emitWarning".as_ptr(),
+        11,
+    ));
+    // SAFETY: the namespace is a live object (rooted above).
+    let callback = unsafe {
+        crate::object::js_object_get_field_by_name_f64(
+            crate::value::js_nanbox_get_pointer(process.get_nanbox_f64())
+                as *const crate::object::ObjectHeader,
+            name.get_raw_const_ptr::<crate::string::StringHeader>(),
+        )
+    };
+    let callback = scope.root_nanbox_f64(callback);
+    if !is_callable_value(callback.get_nanbox_f64()) {
+        crate::process::schedule_warning(warning, "MaxListenersExceededWarning", "", text, "");
+        return;
+    }
+    let warning = scope.root_nanbox_f64(warning);
+    // SAFETY: the property resolved to a callable value; node calls it with the
+    // process object as `this`.
+    unsafe {
+        crate::closure::native_call_value_this(
+            callback.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(process.get_nanbox_f64()),
+            [warning.get_nanbox_f64()].as_ptr(),
+            1,
+        );
+    }
 }
 
 /// `String(value)` as Rust text (a symbol renders as `Symbol(desc)`).

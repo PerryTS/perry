@@ -738,6 +738,11 @@ pub(crate) fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str,
 /// runtime parses the modern options-object overload, creates an Error-like
 /// warning object, and queues the warning job so stderr/event delivery happens
 /// after the current synchronous frame.
+///
+/// An `Error` warning is not re-built: node's `emitWarning` validates `type`
+/// and `code` and then ignores both, and the default reporter titles the
+/// warning from the error's own `name`, adds `[code]` / `detail` from the
+/// error's own fields, and emits the very same object to `warning` listeners.
 #[no_mangle]
 pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f64) {
     // #3662 — Node validates the optional `type` (when supplied as a non-object
@@ -747,14 +752,35 @@ pub extern "C" fn js_process_emit_warning(warning: f64, type_name: f64, code: f6
     // function (custom ctor) form — both are valid Node usages.
     validate_emit_warning_type(type_name);
     let warning_jv = JSValue::from_bits(warning.to_bits());
-    let warning_is_valid = warning_jv.is_any_string()
-        || crate::error::js_error_is_error(warning).to_bits() == crate::value::TAG_TRUE;
+    let warning_is_error =
+        crate::error::js_error_is_error(warning).to_bits() == crate::value::TAG_TRUE;
+    let warning_is_valid = warning_jv.is_any_string() || warning_is_error;
     if !warning_is_valid {
         let received = crate::fs::validate::describe_received(warning);
         let message = format!(
             "The \"warning\" argument must be of type string or an instance of Error. Received {received}"
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    if warning_is_error {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        // SAFETY: the validity test above proved this is the pointer of a live
+        // error object; rooting it keeps it live across the reads below.
+        let warning_handle =
+            scope
+                .root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(warning)
+                    as *mut crate::object::ObjectHeader);
+        let label = object_string_field(&warning_handle, "name")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Warning".to_string());
+        let raw_code = object_string_field(&warning_handle, "code").unwrap_or_default();
+        let detail = object_string_field(&warning_handle, "detail").unwrap_or_default();
+        let msg = object_string_field(&warning_handle, "message")
+            .filter(|message| !message.is_empty())
+            .unwrap_or_else(|| warning_value_to_string(warning));
+        schedule_warning(warning, &label, &raw_code, &msg, &detail);
+        return;
     }
 
     let msg = warning_value_to_string(warning);
@@ -1687,3 +1713,7 @@ mod process_ref_unref_tests {
         crate::timer::clearTimeout(id);
     }
 }
+
+#[cfg(test)]
+#[path = "warning_tests.rs"]
+mod warning_tests;
