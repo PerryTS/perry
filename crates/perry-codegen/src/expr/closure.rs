@@ -131,6 +131,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // indices.
             let auto_captures = compute_auto_captures(ctx, params, body, captures);
             for cap_id in &auto_captures {
+                crate::codegen::arguments::ensure_arguments_object(ctx, *cap_id);
+            }
+            for cap_id in &auto_captures {
                 super::downgrade_buffer_alias(
                     ctx,
                     *cap_id,

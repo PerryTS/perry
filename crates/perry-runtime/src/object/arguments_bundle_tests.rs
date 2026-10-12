@@ -55,6 +55,57 @@ fn own_elements_read_from_the_bundle() {
 }
 
 #[test]
+fn a_shifted_bundle_reads_its_logical_elements() {
+    let raw = bundle(&[10.0, 20.0, 30.0]);
+    let arr = crate::value::js_nanbox_get_pointer(raw) as *mut crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_shift_f64(arr), 10.0);
+    assert_eq!(js_arguments_bundle_index_get(raw, 0.0), 20.0);
+    assert_eq!(js_arguments_bundle_index_get(raw, 1.0), 30.0);
+    assert!(is_hole(js_arguments_bundle_index_get(raw, 2.0)));
+}
+
+#[test]
+fn a_forwarded_bundle_uses_the_live_header() {
+    let _stable = crate::gc::GcSuppressScope::new();
+    let raw = bundle(&[10.0, 20.0]);
+    let arr = crate::value::js_nanbox_get_pointer(raw) as *mut crate::array::ArrayHeader;
+    crate::array::js_array_set_length(arr, 40.0);
+    let live = crate::array::clean_arr_ptr(arr);
+    assert_ne!(
+        arr as usize, live as usize,
+        "the fixture must really forward"
+    );
+    assert_eq!(js_arguments_bundle_index_get(raw, 0.0), 10.0);
+    assert_eq!(js_arguments_bundle_index_get(raw, 1.0), 20.0);
+    assert_eq!(
+        js_arguments_bundle_index_get(raw, 39.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+    assert!(is_hole(js_arguments_bundle_index_get(raw, 40.0)));
+}
+
+extern "C" fn bundle_getter(
+    _callee: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    42.0
+}
+
+#[test]
+fn a_descriptor_bearing_bundle_uses_its_getter() {
+    let _stable = crate::gc::GcSuppressScope::new();
+    let raw = bundle(&[10.0]);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(bundle_getter, 0), 0);
+    crate::object::js_object_define_accessor(
+        raw,
+        string("0"),
+        crate::value::js_nanbox_pointer(getter as i64),
+        undefined(),
+    );
+    assert_eq!(js_arguments_bundle_index_get(raw, 0.0), 42.0);
+}
+
+#[test]
 fn every_non_element_key_declines() {
     let raw = bundle(&[10.0, 20.0]);
     for key in [

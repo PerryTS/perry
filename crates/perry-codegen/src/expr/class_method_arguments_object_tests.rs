@@ -248,6 +248,58 @@ fn emit(m: &Module) -> String {
     String::from_utf8(compile_module(m, ir_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 
+#[test]
+fn an_entry_observation_needs_no_readiness_state() {
+    let mut module = module_with_tail(synthetic_arguments_param());
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))];
+    let ir = emit(&module);
+    let method = ir
+        .split("define ")
+        .find(|body| {
+            body.lines()
+                .next()
+                .is_some_and(|line| line.contains("__T__m("))
+        })
+        .expect("the public method must be emitted");
+    let method = method.split("\n}").next().unwrap();
+    assert!(method.contains("call i64 @js_arguments_object_alloc"));
+    assert!(!method.contains("arguments.birth"));
+    assert!(!method.contains("arguments.ready"));
+}
+
+#[test]
+fn an_unexecuted_arguments_branch_does_not_birth_an_object() {
+    let mut module = module_with_tail(synthetic_arguments_param());
+    module.classes[0].methods[0].body = vec![Stmt::If {
+        condition: Expr::Compare {
+            op: perry_hir::CompareOp::Lt,
+            left: Box::new(Expr::LocalGet(A_ID)),
+            right: Box::new(Expr::Number(0.0)),
+        },
+        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))],
+        else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(B_ID)))]),
+    }];
+    let ir = emit(&module);
+    let method = ir
+        .split("define ")
+        .find(|body| {
+            body.lines()
+                .next()
+                .is_some_and(|line| line.contains("__T__m("))
+        })
+        .expect("the public class method must be emitted");
+    let method = method.split("\n}").next().unwrap();
+    let allocation = method
+        .find("call i64 @js_arguments_object_alloc")
+        .expect("the taken branch must still create an arguments object");
+    let first_branch = method.find("br i1").expect("the cold branch must be live");
+    assert!(
+        first_branch < allocation,
+        "arguments birth must not dominate the source branch:\n{method}"
+    );
+    assert!(!method[..first_branch].contains("@js_arguments_object_alloc"));
+}
+
 /// Count the `js_array_push_f64` calls that carry each of the three argument
 /// literals, in the module-init function where the call site lives.
 fn pushes_of(ir: &str, literal: &str) -> usize {
@@ -273,9 +325,7 @@ fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
 
     assert!(
         ir.contains(MARK),
-        "the class-method call site never marked its synthesized `arguments` \
-         array — the callee receives a plain Array, so `arguments` fails every \
-         arguments-object predicate:\n{ir}"
+        "the managed arguments snapshot must keep its identity:\n{ir}"
     );
 
     // The discriminating quantity. Bundling from `declared - 1` pushes ONLY the
@@ -294,7 +344,7 @@ fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
              `arguments.length` is {n} rather than 3:\n{ir}",
             n = ["double 1.0", "double 2.0", "double 3.0"]
                 .iter()
-                .filter(|l| pushes_of(&ir, l) >= 1)
+                .filter(|literal| pushes_of(&ir, literal) >= 1)
                 .count(),
         );
     }

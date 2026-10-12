@@ -344,8 +344,10 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         | Expr::Bool(_)
         | Expr::Number(_)
         | Expr::Integer(_)
-        | Expr::LocalGet(_)
         | Expr::GlobalGet(_) => false,
+        // Reading a deferred arguments binding is its object birth point.
+        // This fact belongs to the binding, so every operand window agrees.
+        Expr::LocalGet(id) => crate::codegen::arguments::arguments_read_may_collect(ctx, *id),
         // A string literal is materialized once into a module-global handle by
         // `__perry_init_strings_*` and registered as a GC root there; the use
         // site is a load.

@@ -581,25 +581,29 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
     if index as f64 != key {
         return not_own_element;
     }
-    let arr = crate::array::clean_arr_ptr(
-        crate::value::js_nanbox_get_pointer(raw_args) as *const ArrayHeader
-    );
+    let raw = crate::value::js_nanbox_get_pointer(raw_args) as *const ArrayHeader;
+    // Admit the snapshot once. Re-entering clean_arr_ptr and then
+    // array_receiver_gc_tag repeated ownership classification for every
+    // read, even though both establish the same live Array header fact.
+    // Forwarded or descriptor-bearing inputs keep the complete getter below.
+    unsafe {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(raw as usize) {
+            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && (*raw).length <= (*raw).capacity
+                && (*raw).capacity as usize <= crate::array::array_physical_capacity(raw)
+            {
+                if index >= (*raw).length {
+                    return not_own_element;
+                }
+                return *(crate::array::array_elements_ptr(raw) as *const f64).add(index as usize);
+            }
+        }
+    }
+    let arr = crate::array::clean_arr_ptr(raw);
     if arr.is_null() {
         return not_own_element;
-    }
-    // A plain array without per-index descriptors holds each own element in
-    // its slot, which is what `js_array_get` returns for it. Anything else
-    // takes the accessors alloc itself uses.
-    let (obj_type, flags) = crate::array::array_receiver_gc_tag(arr);
-    if obj_type == crate::gc::GC_TYPE_ARRAY && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
-        // SAFETY: `clean_arr_ptr` resolved a live, non-forwarded array whose
-        // length it validated against its capacity.
-        unsafe {
-            if index >= (*arr).length {
-                return not_own_element;
-            }
-            return *(crate::array::array_elements_ptr(arr) as *const f64).add(index as usize);
-        }
     }
     if index >= crate::array::js_array_length(arr) {
         return not_own_element;

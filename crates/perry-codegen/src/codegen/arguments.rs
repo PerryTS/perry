@@ -5,7 +5,7 @@ use perry_hir::{Expr, Param, Stmt};
 use crate::block::LlBlock;
 use crate::expr::{nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Internal-only declared type used by the direct-call clone whose trailing
 /// synthetic `arguments` slot carries the already boxed argument count.
@@ -60,16 +60,22 @@ pub(crate) fn lower_arguments_length(
 /// Body metadata selects the synthetic object ABI. The ordinary Array ABI
 /// remains for elided reads and for bodies with an explicit user rest Array.
 pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
-    let Some(meta) = params.iter().find_map(|p| p.arguments_object.as_ref()) else {
+    let Some(param) = params.iter().find(|p| p.arguments_object.is_some()) else {
         return 0;
     };
+    let meta = param.arguments_object.as_ref().unwrap();
     if params
         .iter()
         .any(|p| p.is_rest && p.arguments_object.is_none())
         || arguments_elision(params, body).is_some()
+        || !arguments_observed_on_every_path(body, param.id)
     {
         return 0;
     }
+    // Every successful body path necessarily observes the binding. Runtime
+    // dispatch may therefore birth the final object straight from its rooted
+    // values, avoiding an intermediate Array and its snapshot copy. Bodies
+    // with a path avoiding observation retain lazy snapshot admission.
     crate::runtime_abi::FN_ARGUMENTS_OBJECT
         | if meta.restricted_callee {
             crate::runtime_abi::FN_ARGUMENTS_RESTRICTED
@@ -81,6 +87,110 @@ pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
         } else {
             0
         }
+}
+
+fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
+    fn observes(expr: &Expr, id: u32) -> bool {
+        match expr {
+            Expr::LocalGet(local) => *local == id,
+            Expr::PropertyGet { object, .. } => observes(object, id),
+            Expr::IndexGet { object, index } => observes(object, id) || observes(index, id),
+            Expr::Unary { operand, .. } => observes(operand, id),
+            Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+                observes(left, id) || observes(right, id)
+            }
+            Expr::Logical { left, .. } => observes(left, id),
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => observes(condition, id) || (observes(then_expr, id) && observes(else_expr, id)),
+            Expr::Sequence(exprs) => exprs.iter().any(|expr| observes(expr, id)),
+            Expr::Call { callee, args, .. } => {
+                observes(callee, id) || args.iter().any(|arg| observes(arg, id))
+            }
+            Expr::CallSpread { callee, args, .. } => {
+                observes(callee, id)
+                    || args.iter().any(|arg| match arg {
+                        perry_hir::CallArg::Expr(expr) | perry_hir::CallArg::Spread(expr) => {
+                            observes(expr, id)
+                        }
+                    })
+            }
+            Expr::NativeMethodCall { object, args, .. } => {
+                object.as_deref().is_some_and(|object| observes(object, id))
+                    || args.iter().any(|arg| observes(arg, id))
+            }
+            Expr::StaticMethodCall { args, .. } | Expr::SuperMethodCall { args, .. } => {
+                args.iter().any(|arg| observes(arg, id))
+            }
+            Expr::Closure { captures, .. } => captures.contains(&id),
+            _ => false,
+        }
+    }
+
+    // Track only paths which have not observed the binding: a fallthrough
+    // can reach a later observation, while an exit cannot. Observed paths
+    // need no further analysis. Unknown control flow fails closed.
+    const FALLTHROUGH: u8 = 1;
+    const EXIT: u8 = 2;
+    fn unobserved_paths(body: &[Stmt], id: u32) -> u8 {
+        let mut paths = FALLTHROUGH;
+        for stmt in body {
+            if paths & FALLTHROUGH == 0 {
+                break;
+            }
+            let next = match stmt {
+                Stmt::Expr(expr) => {
+                    if observes(expr, id) {
+                        0
+                    } else {
+                        FALLTHROUGH
+                    }
+                }
+                Stmt::Let { init, .. } => {
+                    if init.as_ref().is_some_and(|expr| observes(expr, id)) {
+                        0
+                    } else {
+                        FALLTHROUGH
+                    }
+                }
+                Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => FALLTHROUGH,
+                Stmt::Return(expr) => {
+                    if expr.as_ref().is_some_and(|expr| observes(expr, id)) {
+                        0
+                    } else {
+                        EXIT
+                    }
+                }
+                Stmt::Throw(expr) => {
+                    if observes(expr, id) {
+                        0
+                    } else {
+                        EXIT
+                    }
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    if observes(condition, id) {
+                        0
+                    } else {
+                        unobserved_paths(then_branch, id)
+                            | else_branch
+                                .as_ref()
+                                .map_or(FALLTHROUGH, |body| unobserved_paths(body, id))
+                    }
+                }
+                _ => FALLTHROUGH | EXIT,
+            };
+            paths = (paths & EXIT) | next;
+        }
+        paths
+    }
+    unobserved_paths(body, id) == 0
 }
 
 /// A mapped parameter is boxed so the sloppy-mode object and the parameter
@@ -194,10 +304,103 @@ pub(crate) fn materialize_arguments_object(
                 restricted_callee: meta.restricted_callee,
                 callee,
                 length_slot,
+                deferred: None,
             },
         );
         return;
     }
+    if body.is_some_and(|body| arguments_observed_on_every_path(body, synth_param.id)) {
+        // The same proof selects direct object birth in JsFunctionInfo.
+        // No readiness state or collecting LocalGet is needed once entry
+        // materialization has established the binding's final identity.
+        emit_arguments_object(ctx, params, callee);
+        return;
+    }
+    let ready = ctx.func.alloca_entry(I8);
+    // An inline constructor shares its caller's native frame, so reset at
+    // this dynamic entry too (a constructor site may execute in a loop).
+    ctx.block().store(I8, "0", &ready);
+    let callee = match callee {
+        ArgumentsCallee::Undefined => ElidedArgumentsCallee::Undefined,
+        ArgumentsCallee::FunctionWrapper(wrapper) => {
+            ElidedArgumentsCallee::FunctionWrapper(wrapper.to_string())
+        }
+        ArgumentsCallee::CurrentClosure => ElidedArgumentsCallee::CurrentClosure,
+    };
+    ctx.elided_arguments.insert(
+        synth_param.id,
+        ElidedArguments {
+            restricted_callee: meta.restricted_callee,
+            callee,
+            length_slot: String::new(),
+            deferred: Some(DeferredArguments {
+                params: params.to_vec(),
+                ready,
+            }),
+        },
+    );
+    if body.is_some_and(crate::codegen::helpers::body_has_fixed_generator_state) {
+        // Iterator state retains the incoming parameter binding beyond this
+        // call. Materialize at that escape even before a resumed body reads it.
+        ensure_arguments_object(ctx, synth_param.id);
+    }
+}
+
+pub(crate) fn arguments_read_may_collect(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.elided_arguments
+        .get(&id)
+        .is_some_and(|binding| binding.deferred.is_some())
+}
+
+/// Read/escape is the only birth point. The caller's snapshot and mapped
+/// parameter cells already occupy ordinary statepoint roots. A closure birth
+/// calls this before capturing the binding, so no deferred frame can escape.
+pub(crate) fn ensure_arguments_object(ctx: &mut FnCtx<'_>, id: u32) {
+    let Some(binding) = ctx.elided_arguments.get(&id).cloned() else {
+        return;
+    };
+    let Some(deferred) = binding.deferred else {
+        return;
+    };
+    let birth_idx = ctx.new_block("arguments.birth");
+    let ready_idx = ctx.new_block("arguments.ready");
+    let birth_label = ctx.block_label(birth_idx);
+    let ready_label = ctx.block_label(ready_idx);
+    let ready = ctx.block().load(I8, &deferred.ready);
+    let ready = ctx.block().icmp_ne(I8, &ready, "0");
+    ctx.block().cond_br(&ready, &ready_label, &birth_label);
+    ctx.current_block = birth_idx;
+    let callee = match &binding.callee {
+        ElidedArgumentsCallee::Undefined => ArgumentsCallee::Undefined,
+        ElidedArgumentsCallee::FunctionWrapper(wrapper) => {
+            ArgumentsCallee::FunctionWrapper(wrapper)
+        }
+        ElidedArgumentsCallee::CurrentClosure => ArgumentsCallee::CurrentClosure,
+    };
+    emit_arguments_object(ctx, &deferred.params, callee);
+    ctx.block().store(I8, "1", &deferred.ready);
+    ctx.block().br(&ready_label);
+    ctx.current_block = ready_idx;
+}
+
+/// Assignment replaces the binding without needing its previous value.
+pub(crate) fn note_arguments_assignment(ctx: &mut FnCtx<'_>, id: u32) {
+    let ready = ctx
+        .elided_arguments
+        .get(&id)
+        .and_then(|binding| binding.deferred.as_ref())
+        .map(|deferred| deferred.ready.clone());
+    if let Some(ready) = ready {
+        ctx.block().store(I8, "1", &ready);
+    }
+}
+
+fn emit_arguments_object(ctx: &mut FnCtx<'_>, params: &[Param], callee: ArgumentsCallee<'_>) {
+    let synth_param = params
+        .iter()
+        .find(|p| p.arguments_object.is_some())
+        .unwrap();
+    let meta = synth_param.arguments_object.as_ref().unwrap();
     let Some(arguments_slot) = ctx.locals.get(&synth_param.id).cloned() else {
         return;
     };
@@ -300,6 +503,13 @@ pub(crate) struct ElidedArguments {
     /// Entry-block `double` slot holding the bundle's length, stored once by
     /// the prologue.
     pub(crate) length_slot: String,
+    pub(crate) deferred: Option<DeferredArguments>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredArguments {
+    params: Vec<Param>,
+    ready: String,
 }
 
 /// Prove that replacing the synthesized Arguments object with its raw argument
@@ -321,6 +531,9 @@ pub(crate) struct ElidedArguments {
 /// Parameter defaults are scanned with the body: they evaluate in the
 /// function's scope and see the same binding.
 pub(crate) fn arguments_elision(params: &[Param], body: &[Stmt]) -> Option<ArgumentsElision> {
+    if crate::codegen::helpers::body_has_fixed_generator_state(body) {
+        return None;
+    }
     let synth_param = params.iter().find(|p| p.arguments_object.is_some())?;
     let meta = synth_param.arguments_object.as_ref()?;
     let uses = LocalUses::scan(body, params, synth_param.id);
@@ -431,7 +644,11 @@ fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
 /// `arguments.length` on an elided binding: the bundle length the prologue
 /// stored, instead of the property-IC miss a dynamic `.length` would take.
 pub(crate) fn lower_elided_arguments_length(ctx: &mut FnCtx<'_>, id: u32) -> Option<String> {
-    let slot = ctx.elided_arguments.get(&id)?.length_slot.clone();
+    let binding = ctx.elided_arguments.get(&id)?;
+    if binding.deferred.is_some() {
+        return None;
+    }
+    let slot = binding.length_slot.clone();
     Some(ctx.block().load(DOUBLE, &slot))
 }
 
@@ -442,7 +659,7 @@ pub(crate) fn is_elided_arguments_index_get(ctx: &FnCtx<'_>, expr: &Expr) -> boo
     matches!(
         expr,
         Expr::IndexGet { object, .. }
-            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.elided_arguments.contains_key(id))
+            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.elided_arguments.get(id).is_some_and(|binding| binding.deferred.is_none()))
     )
 }
 
@@ -464,6 +681,9 @@ pub(crate) fn try_lower_elided_arguments_index_get(
     let Some(elided) = ctx.elided_arguments.get(id).cloned() else {
         return Ok(None);
     };
+    if elided.deferred.is_some() {
+        return Ok(None);
+    }
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
         let (raw_args, key) = (vals[0].clone(), vals[1].clone());
         let own = ctx.block().call(
@@ -532,6 +752,9 @@ pub(crate) fn try_lower_elided_arguments_index_get(
 /// outlive the direct call, so both shapes remain on the public ABI even when
 /// every syntactic use happens to be a `.length` read.
 pub(crate) fn method_supports_arguments_length_direct_abi(method: &perry_hir::Function) -> bool {
+    if crate::codegen::helpers::body_has_fixed_generator_state(&method.body) {
+        return false;
+    }
     let Some(synth_param) = method
         .params
         .last()
@@ -691,22 +914,56 @@ mod elision_tests {
     #[test]
     fn birth_abi_follows_materialization_and_parameter_mapping() {
         use super::arguments_object_flags;
-        use crate::runtime_abi::{
-            FN_ARGUMENTS_MAPPED, FN_ARGUMENTS_OBJECT, FN_ARGUMENTS_RESTRICTED,
-        };
         let escape = vec![Stmt::Return(Some(*args()))];
         assert_eq!(arguments_object_flags(&params(false), &reads()), 0);
         assert_eq!(
             arguments_object_flags(&params(false), &escape),
-            FN_ARGUMENTS_OBJECT | FN_ARGUMENTS_RESTRICTED
+            crate::runtime_abi::FN_ARGUMENTS_OBJECT | crate::runtime_abi::FN_ARGUMENTS_RESTRICTED
         );
         assert_eq!(
             arguments_object_flags(&params(true), &escape),
-            FN_ARGUMENTS_OBJECT | FN_ARGUMENTS_MAPPED
+            crate::runtime_abi::FN_ARGUMENTS_OBJECT | crate::runtime_abi::FN_ARGUMENTS_MAPPED
         );
+        let cold = vec![Stmt::If {
+            condition: Expr::Bool(false),
+            then_branch: escape.clone(),
+            else_branch: Some(vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+        }];
+        assert_eq!(arguments_object_flags(&params(false), &cold), 0);
         let mut rest = params(false);
         rest[0].is_rest = true;
         assert_eq!(arguments_object_flags(&rest, &escape), 0);
+    }
+
+    #[test]
+    fn guaranteed_observation_crosses_setup_and_both_branches() {
+        use super::arguments_object_flags;
+        let object =
+            crate::runtime_abi::FN_ARGUMENTS_OBJECT | crate::runtime_abi::FN_ARGUMENTS_RESTRICTED;
+        let observe = Stmt::Return(Some(*args()));
+        let setup = vec![Stmt::Expr(Expr::Number(1.0)), observe.clone()];
+        assert_eq!(arguments_object_flags(&params(false), &setup), object);
+        let branches = vec![Stmt::If {
+            condition: Expr::LocalGet(A),
+            then_branch: vec![observe.clone()],
+            else_branch: Some(vec![observe.clone()]),
+        }];
+        assert_eq!(arguments_object_flags(&params(false), &branches), object);
+        let early_exit = vec![
+            Stmt::If {
+                condition: Expr::LocalGet(A),
+                then_branch: vec![Stmt::Return(Some(Expr::Number(0.0)))],
+                else_branch: None,
+            },
+            observe,
+        ];
+        assert_eq!(arguments_object_flags(&params(false), &early_exit), 0);
+        let conditional = vec![Stmt::Return(Some(Expr::Logical {
+            op: perry_hir::LogicalOp::And,
+            left: Box::new(Expr::Bool(false)),
+            right: args(),
+        }))];
+        assert_eq!(arguments_object_flags(&params(false), &conditional), 0);
     }
 
     #[test]

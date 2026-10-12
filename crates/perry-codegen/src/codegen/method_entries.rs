@@ -153,11 +153,17 @@ pub(super) fn emit_class_method_entry(
         } else {
             None
         };
-        let depth = b.call(
-            I64,
-            "js_class_method_entry_enter_home",
-            &[(I32, &e.cid.to_string()), (I64, "%this"), (I64, "%callee")],
-        );
+        // A declaration's function object has no evaluation capture. Its
+        // instance shapes already carry the private brand, and its body reads
+        // the explicit receiver. Only a per-evaluation method needs to select
+        // the lexical home independently of that receiver.
+        let depth = e.home.then(|| {
+            b.call(
+                I64,
+                "js_class_method_entry_enter_home",
+                &[(I32, &e.cid.to_string()), (I64, "%this"), (I64, "%callee")],
+            )
+        });
         let this_box = if let Some((_, recv)) = &roots {
             b.load(DOUBLE, recv)
         } else {
@@ -177,7 +183,9 @@ pub(super) fn emit_class_method_entry(
             e.llvm_name.clone()
         };
         let r = b.call(DOUBLE, &target, &call_args);
-        b.call_void("js_class_method_entry_leave", &[(I64, &depth)]);
+        if let Some(depth) = depth {
+            b.call_void("js_class_method_entry_leave", &[(I64, &depth)]);
+        }
         b.ret(DOUBLE, &r);
     }
     let (rest, rest_kind) = match (e.has_user_rest, e.has_synth_args) {
@@ -227,6 +235,49 @@ pub(super) fn source_is_fixed_generator(
                     f.id == id && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
                 })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(home: bool) -> String {
+        let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+        module.declare_function("method_body", DOUBLE, &[DOUBLE, DOUBLE]);
+        let mut chunker = InitChunker::new(&mut module, "init".into(), 100);
+        chunker.roll_if_full();
+        emit_class_method_entry(
+            &mut chunker,
+            &StaticMethodEntry {
+                cid: 801,
+                llvm_name: "method_body".into(),
+                param_count: 1,
+                spec_length: 1,
+                has_user_rest: false,
+                has_synth_args: false,
+                home,
+                generator_owner: false,
+            },
+        );
+        chunker.finish();
+        module.to_ir()
+    }
+
+    #[test]
+    fn declaration_entries_forward_the_receiver_without_a_home_scope() {
+        let ir = entry(false);
+        assert!(ir.contains("define double @method_body__eclo"));
+        assert!(ir.contains("call double @method_body("));
+        assert!(!ir.contains("@js_class_method_entry_enter_home"));
+        assert!(!ir.contains("@js_class_method_entry_leave"));
+    }
+
+    #[test]
+    fn evaluation_entries_keep_their_lexical_home() {
+        let ir = entry(true);
+        assert!(ir.contains("call i64 @js_class_method_entry_enter_home"));
+        assert!(ir.contains("call void @js_class_method_entry_leave"));
+    }
 }
 
 /// Computed instance generators need a callable entry as named ones do.

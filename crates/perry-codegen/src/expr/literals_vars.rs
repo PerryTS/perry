@@ -265,7 +265,11 @@ mod target_os_tests {
 
     #[test]
     fn lchmod_availability_uses_the_classified_target_os() {
-        for target in ["aarch64-apple-darwin", "arm64-apple-macosx15.0.0", "x86_64-unknown-freebsd"] {
+        for target in [
+            "aarch64-apple-darwin",
+            "arm64-apple-macosx15.0.0",
+            "x86_64-unknown-freebsd",
+        ] {
             assert!(fs_lchmod_callable_on_target(target), "{target}");
         }
         for target in ["aarch64-unknown-linux-android", "x86_64-pc-windows-msvc"] {
@@ -392,6 +396,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             crate::rooting::lower_scoped_binding(ctx, *id, value, body)
         }
         Expr::LocalGet(id) => {
+            crate::codegen::arguments::ensure_arguments_object(ctx, *id);
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }
@@ -1274,6 +1279,7 @@ pub(crate) fn bind_lowered_value_to_local(
     v: &str,
     value: &Expr,
 ) -> Result<()> {
+    crate::codegen::arguments::note_arguments_assignment(ctx, id);
     // `target = source` creates the same string-buffer alias as a
     // `let target = source` initializer. The declaration path has
     // demoted this shape since #5552, but assignment aliases were
