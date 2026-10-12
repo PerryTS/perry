@@ -575,6 +575,14 @@ pub unsafe fn dispatch_buffer_method(
             let s = crate::string::js_string_from_bytes(b"[object KeyObject]".as_ptr(), 18);
             f64::from_bits(JSValue::string_ptr(s).bits())
         }
+        // ArrayBuffer, SharedArrayBuffer, and DataView inherit
+        // Object.prototype.toString. They share BufferHeader storage and
+        // reach this dispatcher, but their `toString` ignores every argument;
+        // interpreting the first argument as a Buffer encoding leaks their
+        // backing bytes instead of returning the object brand.
+        "toString" if crate::buffer::is_non_indexed_buffer_view(addr) => {
+            crate::object::js_object_to_string(buf_f64)
+        }
         "toString" => {
             let enc = if !args.is_empty() {
                 crate::buffer::js_encoding_tag_from_value(args[0])
