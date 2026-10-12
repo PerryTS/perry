@@ -41,10 +41,100 @@ fn assert_rewritten(before: i64, after: i64) {
     assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
 }
 
+static FIRST_MESSAGE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SECOND_MESSAGE_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SECOND_MESSAGE_CALLBACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+unsafe extern "C" fn collect_from_message_listener(
+    _: *const perry_runtime::closure::ClosureHeader,
+    _: perry_runtime::closure::JsThis,
+    message: f64,
+) -> f64 {
+    FIRST_MESSAGE_BITS.store(message.to_bits(), Ordering::SeqCst);
+    let _ = perry_runtime::gc::gc_collect_minor();
+    f64::from_bits(JsValue::UNDEFINED.bits())
+}
+
+unsafe extern "C" fn observe_message_after_collection(
+    callback: *const perry_runtime::closure::ClosureHeader,
+    _: perry_runtime::closure::JsThis,
+    message: f64,
+) -> f64 {
+    SECOND_MESSAGE_CALLBACK.store(callback as u64, Ordering::SeqCst);
+    SECOND_MESSAGE_BITS.store(message.to_bits(), Ordering::SeqCst);
+    f64::from_bits(JsValue::UNDEFINED.bits())
+}
+
 #[test]
 fn gc_scanner_registration_idempotent() {
     ensure_runtime_hooks_registered();
     ensure_runtime_hooks_registered();
+}
+
+#[test]
+fn pending_message_reloads_relocated_listener_and_payload() {
+    perry_runtime::gc::gc_init();
+    let guard = GcTestGuard::new();
+    perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
+
+    let first = guard
+        .scope
+        .root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(collect_from_message_listener, 1),
+            0,
+        ));
+    let second = guard
+        .scope
+        .root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(observe_message_after_collection, 1),
+            0,
+        ));
+    let first_before = first.get_raw_mut_ptr::<perry_ffi::RawClosureHeader>() as i64;
+    let second_before = second.get_raw_mut_ptr::<perry_ffi::RawClosureHeader>() as i64;
+    let client_id = usize::MAX - 10_027;
+    WS_CLIENT_LISTENERS.lock().unwrap().insert(
+        client_id,
+        WsClientListeners {
+            listeners: HashMap::from([("message".to_string(), vec![first_before, second_before])]),
+        },
+    );
+    FIRST_MESSAGE_BITS.store(0, Ordering::SeqCst);
+    SECOND_MESSAGE_BITS.store(0, Ordering::SeqCst);
+    SECOND_MESSAGE_CALLBACK.store(0, Ordering::SeqCst);
+    push_ws_event(PendingWsEvent::Message(
+        client_id,
+        WsPayload::Text("subscription survives collection".to_string()),
+    ));
+
+    assert_eq!(js_ws_process_pending(), 2);
+    let listeners = WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .remove(&client_id)
+        .expect("test listeners should remain registered");
+    let second_after = listeners.listeners["message"][1];
+    assert_rewritten(second_before, second_after);
+    assert_eq!(
+        SECOND_MESSAGE_CALLBACK.load(Ordering::SeqCst),
+        second_after as u64,
+        "the second dispatch must load the relocated callback address"
+    );
+
+    let message_before = FIRST_MESSAGE_BITS.load(Ordering::SeqCst);
+    let message_after = SECOND_MESSAGE_BITS.load(Ordering::SeqCst);
+    assert_ne!(
+        message_before, 0,
+        "the first listener must receive a payload"
+    );
+    assert_ne!(
+        message_after, 0,
+        "the second listener must receive a payload"
+    );
+    assert_ne!(message_before, message_after, "the payload must relocate");
+    let message_ptr = (message_after & POINTER_MASK) as usize;
+    assert!(perry_runtime::arena::pointer_in_nursery(message_ptr));
+    let text = unsafe { read_str(message_ptr as *const StringHeader) };
+    assert_eq!(text.as_deref(), Some("subscription survives collection"));
 }
 
 #[test]

@@ -73,7 +73,7 @@ use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
     iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
     set_delete, take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader,
-    StringHeader,
+    StringHeader, TransientRootScope,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -1433,27 +1433,37 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
         let _dispatching = Dispatching::enter(&ev);
         match ev {
             PendingWsEvent::Connection(server_handle, client_id) => {
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_server(server_handle, "connection"));
                 // Match `ws`: clients is current before the user-visible
                 // `connection` callback fires.
                 track_server_client(server_handle, client_id);
-                let listeners = listeners_on_server(server_handle, "connection");
+                let client = scope.root_nanbox(f64::from_bits(client_js_value(client_id).bits()));
                 for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                         // Use the same handle value as the clients Set and
                         // manual-upgrade callback, including dynamic dispatch.
-                        let _ = unsafe {
-                            closure.call1(
-                                perry_ffi::JsThis::UNDEFINED,
-                                f64::from_bits(client_js_value(client_id).bits()),
-                            )
-                        };
+                        let _ =
+                            unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, client.get()) };
                         fired += 1;
                     }
                 }
             }
             PendingWsEvent::Message(ws_id, payload) => {
-                let listeners = listeners_on_client(ws_id, "message");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "message"));
+                let server_dispatch = if listeners.is_empty() {
+                    WS_CLIENT_PARENT_SERVER
+                        .lock()
+                        .unwrap()
+                        .get(&ws_id)
+                        .copied()
+                        .map(|handle| scope.root_addrs(&listeners_on_server(handle, "message")))
+                } else {
+                    None
+                };
                 // `ws` hands a text frame to JS as a string and a binary frame
                 // as a Buffer, and passes `isBinary` as the second argument.
                 // Perry used to deliver every frame as a string, with a binary
@@ -1461,15 +1471,19 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 // a representation choice but data loss: every non-UTF-8 byte
                 // became U+FFFD and could not be recovered.
                 let is_binary = matches!(payload, WsPayload::Binary(_));
-                let msg_f64 = payload_value(&payload);
+                let message = scope.root_nanbox(payload_value(&payload));
                 let binary_f64 = f64::from_bits(JsValue::from_bool(is_binary).bits());
                 if !listeners.is_empty() {
                     for cb in listeners {
-                        if cb != 0 {
+                        if cb.get() != 0 {
                             let closure =
-                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                                unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                             let _ = unsafe {
-                                closure.call2(perry_ffi::JsThis::UNDEFINED, msg_f64, binary_f64)
+                                closure.call2(
+                                    perry_ffi::JsThis::UNDEFINED,
+                                    message.get(),
+                                    binary_f64,
+                                )
                             };
                             fired += 1;
                         }
@@ -1477,17 +1491,19 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 } else {
                     // #746 follow-up: server-level `wss.on('message',
                     // (ws, data) => ...)` parity with perry-stdlib::ws.
-                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
-                    if let Some(server_handle) = parent {
-                        for cb in listeners_on_server(server_handle, "message") {
-                            if cb != 0 {
-                                let closure =
-                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                    if let Some(listeners) = server_dispatch {
+                        let client =
+                            scope.root_nanbox(f64::from_bits(client_js_value(ws_id).bits()));
+                        for cb in listeners {
+                            if cb.get() != 0 {
+                                let closure = unsafe {
+                                    JsClosure::from_raw(cb.get() as *const RawClosureHeader)
+                                };
                                 let _ = unsafe {
                                     closure.call2(
                                         perry_ffi::JsThis::UNDEFINED,
-                                        f64::from_bits(client_js_value(ws_id).bits()),
-                                        msg_f64,
+                                        client.get(),
+                                        message.get(),
                                     )
                                 };
                                 fired += 1;
@@ -1497,39 +1513,49 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 }
             }
             PendingWsEvent::Ping(ws_id, data) => {
-                let listeners = listeners_on_client(ws_id, "ping");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "ping"));
                 if !listeners.is_empty() {
-                    let value = buffer_value(&data);
+                    let value = scope.root_nanbox(buffer_value(&data));
                     for cb in listeners {
-                        if cb != 0 {
+                        if cb.get() != 0 {
                             let closure =
-                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value) };
+                                unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
+                            let _ =
+                                unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value.get()) };
                             fired += 1;
                         }
                     }
                 }
             }
             PendingWsEvent::Pong(ws_id, data) => {
-                let listeners = listeners_on_client(ws_id, "pong");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "pong"));
                 if !listeners.is_empty() {
-                    let value = buffer_value(&data);
+                    let value = scope.root_nanbox(buffer_value(&data));
                     for cb in listeners {
-                        if cb != 0 {
+                        if cb.get() != 0 {
                             let closure =
-                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                            let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value) };
+                                unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
+                            let _ =
+                                unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, value.get()) };
                             fired += 1;
                         }
                     }
                 }
             }
             PendingWsEvent::Close(ws_id, code, reason) => {
+                let scope = TransientRootScope::enter();
                 // The upstream `ws` package installs its tracking listener
                 // before handing the socket to user code, so user close
                 // callbacks observe the client as already removed.
                 let parent = untrack_server_client(ws_id);
-                let listeners = listeners_on_client(ws_id, "close");
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "close"));
+                let server_listeners = if listeners.is_empty() {
+                    parent.map(|handle| scope.root_addrs(&listeners_on_server(handle, "close")))
+                } else {
+                    None
+                };
                 if !listeners.is_empty() {
                     // `ws.on('close', (code, reason) => ...)`. Both arguments
                     // used to be `undefined`: the queue carried them and the
@@ -1537,14 +1563,19 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                     // the listener with no arguments at all.
                     let code_f64 = f64::from_bits(JsValue::from_number(code as f64).bits());
                     let reason_string = alloc_string(&reason);
-                    let reason_f64 =
-                        f64::from_bits(JsValue::from_string_ptr(reason_string.as_raw()).bits());
+                    let reason_value = scope.root_nanbox(f64::from_bits(
+                        JsValue::from_string_ptr(reason_string.as_raw()).bits(),
+                    ));
                     for cb in listeners {
-                        if cb != 0 {
+                        if cb.get() != 0 {
                             let closure =
-                                unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                                unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                             let _ = unsafe {
-                                closure.call2(perry_ffi::JsThis::UNDEFINED, code_f64, reason_f64)
+                                closure.call2(
+                                    perry_ffi::JsThis::UNDEFINED,
+                                    code_f64,
+                                    reason_value.get(),
+                                )
                             };
                             fired += 1;
                         }
@@ -1552,16 +1583,16 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 } else {
                     // #746 follow-up: server-level `wss.on('close',
                     // (ws) => ...)` parity with perry-stdlib::ws.
-                    if let Some(server_handle) = parent {
-                        for cb in listeners_on_server(server_handle, "close") {
-                            if cb != 0 {
-                                let closure =
-                                    unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                    if let Some(listeners) = server_listeners {
+                        let client =
+                            scope.root_nanbox(f64::from_bits(client_js_value(ws_id).bits()));
+                        for cb in listeners {
+                            if cb.get() != 0 {
+                                let closure = unsafe {
+                                    JsClosure::from_raw(cb.get() as *const RawClosureHeader)
+                                };
                                 let _ = unsafe {
-                                    closure.call1(
-                                        perry_ffi::JsThis::UNDEFINED,
-                                        f64::from_bits(client_js_value(ws_id).bits()),
-                                    )
+                                    closure.call1(perry_ffi::JsThis::UNDEFINED, client.get())
                                 };
                                 fired += 1;
                             }
@@ -1572,51 +1603,54 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 WS_CLIENT_LISTENERS.lock().unwrap().remove(&ws_id);
             }
             PendingWsEvent::Error(ws_id, err) => {
-                let listeners = listeners_on_client(ws_id, "error");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "error"));
+                let s = alloc_string(&err);
+                let error =
+                    scope.root_nanbox(f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()));
                 for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let s = alloc_string(&err);
-                        let _ = unsafe {
-                            closure.call1(
-                                perry_ffi::JsThis::UNDEFINED,
-                                f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()),
-                            )
-                        };
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
+                        let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, error.get()) };
                         fired += 1;
                     }
                 }
             }
             PendingWsEvent::ServerError(server_handle, err) => {
-                let listeners = listeners_on_server(server_handle, "error");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_server(server_handle, "error"));
+                let s = alloc_string(&err);
+                let error =
+                    scope.root_nanbox(f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()));
                 for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        let s = alloc_string(&err);
-                        let _ = unsafe {
-                            closure.call1(
-                                perry_ffi::JsThis::UNDEFINED,
-                                f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits()),
-                            )
-                        };
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
+                        let _ = unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, error.get()) };
                         fired += 1;
                     }
                 }
             }
             PendingWsEvent::Listening(server_handle) => {
-                let listeners = listeners_on_server(server_handle, "listening");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_server(server_handle, "listening"));
                 for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                         let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }
                 }
             }
             PendingWsEvent::ServerClose(server_handle) => {
-                for cb in listeners_on_server(server_handle, "close") {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_server(server_handle, "close"));
+                for cb in listeners {
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                         let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }
@@ -1625,10 +1659,12 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 let _ = take_handle::<WsServerHandle>(server_handle);
             }
             PendingWsEvent::Open(ws_id) => {
-                let listeners = listeners_on_client(ws_id, "open");
+                let scope = TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners_on_client(ws_id, "open"));
                 for cb in listeners {
-                    if cb != 0 {
-                        let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
+                    if cb.get() != 0 {
+                        let closure =
+                            unsafe { JsClosure::from_raw(cb.get() as *const RawClosureHeader) };
                         let _ = unsafe { closure.call0(perry_ffi::JsThis::UNDEFINED) };
                         fired += 1;
                     }

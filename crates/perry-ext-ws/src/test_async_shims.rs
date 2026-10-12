@@ -17,7 +17,50 @@
 // second, untested implementation of the runtime's token. A test that does
 // need settlement belongs in an integration suite that links the real runtime.
 
+use perry_ffi::Promise;
 use std::ffi::c_void;
+
+// The unit-test binary does not link perry-stdlib's async bridge. These
+// synchronous shims match the ext-net/ext-http test setup; the GC regression
+// itself does not create or settle promises.
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_new() -> *mut Promise {
+    perry_runtime::promise::js_promise_new() as *mut Promise
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_resolve_bits(promise: *mut Promise, bits: u64) {
+    perry_runtime::promise::js_promise_resolve(
+        promise as *mut perry_runtime::Promise,
+        f64::from_bits(bits),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_reject_bits(promise: *mut Promise, bits: u64) {
+    perry_runtime::promise::js_promise_reject(
+        promise as *mut perry_runtime::Promise,
+        f64::from_bits(bits),
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_resolve_deferred(
+    promise: *mut Promise,
+    ctx: *mut c_void,
+    invoke: extern "C" fn(*mut c_void) -> u64,
+) {
+    perry_ffi_promise_resolve_bits(promise, invoke(ctx));
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_reject_deferred(
+    promise: *mut Promise,
+    ctx: *mut c_void,
+    invoke: extern "C" fn(*mut c_void) -> u64,
+) {
+    perry_ffi_promise_reject_bits(promise, invoke(ctx));
+}
 
 #[no_mangle]
 pub extern "C" fn perry_ffi_native_async_new(_flags: u32) -> *mut c_void {
