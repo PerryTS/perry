@@ -66,6 +66,8 @@ pub use host_upgrade::{accept_http_upgrade, drive_http_upgraded, Refusal, HTTP_S
 
 #[cfg(test)]
 mod test_async_shims;
+#[cfg(test)]
+mod upgrade_tests;
 
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,

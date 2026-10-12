@@ -4831,7 +4831,7 @@ checksum = "cce9fa3a84ee8c8c49873b937167a284f5446a67ace8eeac986bf9a97592f01e"
 
 [[package]]
 name = "perry"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "clap",
@@ -4888,11 +4888,11 @@ dependencies = [
 
 [[package]]
 name = "perry-abi"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-api-manifest"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-dispatch",
  "serde",
@@ -4900,7 +4900,7 @@ dependencies = [
 
 [[package]]
 name = "perry-audio-miniaudio"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "cc",
  "libc",
@@ -4909,14 +4909,14 @@ dependencies = [
 
 [[package]]
 name = "perry-base64"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "base64 0.23.1",
 ]
 
 [[package]]
 name = "perry-cli-support"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "console 0.16.6",
@@ -4930,7 +4930,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4951,7 +4951,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-arkts"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-glance"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -4967,7 +4967,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-js"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-dispatch",
@@ -4976,7 +4976,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-swiftui"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -4984,7 +4984,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wasm"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-base64",
@@ -4997,7 +4997,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wear-tiles"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -5005,7 +5005,7 @@ dependencies = [
 
 [[package]]
 name = "perry-container-compose"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -5029,14 +5029,14 @@ dependencies = [
 
 [[package]]
 name = "perry-container-e2e"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "perry-db-turnloop"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "perry-tls-turnloop",
@@ -5044,7 +5044,7 @@ dependencies = [
 
 [[package]]
 name = "perry-diagnostics"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "serde",
  "serde_json",
@@ -5052,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "perry-dispatch"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-doc-fixture-my-bindings"
@@ -5063,7 +5063,7 @@ dependencies = [
 
 [[package]]
 name = "perry-doc-tests"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "clap",
@@ -5078,7 +5078,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ads"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "objc2",
@@ -5088,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-argon2"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "argon2",
  "perry-ffi",
@@ -5097,7 +5097,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-bcrypt"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "bcrypt",
  "perry-ffi",
@@ -5105,7 +5105,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-better-sqlite3"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "rusqlite",
@@ -5113,7 +5113,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cheerio"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "scraper",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ethers"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "rand 0.10.3",
@@ -5129,7 +5129,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "bytes",
  "http",
@@ -5155,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-net"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5169,7 +5169,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nodemailer"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "perry-uuid",
@@ -5178,7 +5178,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-parcel-watcher"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "notify",
  "perry-ffi",
@@ -5190,7 +5190,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pdf"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "printpdf",
@@ -5198,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-sharp"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "fast_image_resize",
  "image",
@@ -5209,7 +5209,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-typescript"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-ffi",
@@ -5229,7 +5229,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-undici"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -5238,7 +5238,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ws"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ext-net",
  "perry-ffi",
@@ -5253,7 +5253,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-zlib"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "adler2",
  "brotli 9.0.0",
@@ -5277,11 +5277,11 @@ dependencies = [
 
 [[package]]
 name = "perry-hex"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-hir"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-api-manifest",
@@ -5301,7 +5301,7 @@ dependencies = [
 
 [[package]]
 name = "perry-http-client"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-base64",
  "perry-tls-session",
@@ -5314,7 +5314,7 @@ dependencies = [
 
 [[package]]
 name = "perry-http-server"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "http",
  "httpdate",
@@ -5324,11 +5324,11 @@ dependencies = [
 
 [[package]]
 name = "perry-native-registration"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-parser"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "perry-diagnostics",
@@ -5341,7 +5341,7 @@ dependencies = [
 
 [[package]]
 name = "perry-perex"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perex",
  "regex",
@@ -5349,7 +5349,7 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "ahash",
  "cc",
@@ -5410,7 +5410,7 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime-static"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ext-net",
  "perry-runtime",
@@ -5418,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
@@ -5494,21 +5494,21 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib-static"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-stdlib",
 ]
 
 [[package]]
 name = "perry-tls-session"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "turnloop-tls",
 ]
 
 [[package]]
 name = "perry-tls-turnloop"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-ffi",
  "perry-tls-session",
@@ -5517,14 +5517,14 @@ dependencies = [
 
 [[package]]
 name = "perry-transform"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "perry-hir",
 ]
 
 [[package]]
 name = "perry-ui"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "dirs",
  "perry-ffi",
@@ -5534,7 +5534,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-android"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "jni",
  "libc",
@@ -5549,7 +5549,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-geisterhand"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "rand 0.10.3",
  "serde",
@@ -5559,7 +5559,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-gtk4"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "async-channel",
  "async-executor",
@@ -5584,7 +5584,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-ios"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "libc",
@@ -5601,7 +5601,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-macos"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "libc",
@@ -5618,7 +5618,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-model"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-ui-test"
@@ -5629,11 +5629,11 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-testkit"
-version = "0.5.1659"
+version = "0.5.1660"
 
 [[package]]
 name = "perry-ui-tvos"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "libc",
@@ -5650,7 +5650,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-visionos"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "libc",
@@ -5667,7 +5667,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-watchos"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "block2",
  "libc",
@@ -5681,7 +5681,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "libc",
  "perry-audio-miniaudio",
@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows-winui"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "libc",
  "perry-base64",
@@ -5713,7 +5713,7 @@ dependencies = [
 
 [[package]]
 name = "perry-updater"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -5728,14 +5728,14 @@ dependencies = [
 
 [[package]]
 name = "perry-uuid"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "getrandom 0.4.3",
 ]
 
 [[package]]
 name = "perry-wasm-host"
-version = "0.5.1659"
+version = "0.5.1660"
 dependencies = [
  "wasmi",
 ]

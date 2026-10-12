@@ -14,7 +14,9 @@ fn closure(info: &'static perry_ffi::JsFunctionInfo, holder: f64) -> i64 {
     let scope = TransientRootScope::enter();
     let holder = scope.root_nanbox(holder);
     let callback = perry_ffi::alloc_closure(info, 1);
-    unsafe { perry_ffi::set_closure_capture_f64(callback, 0, holder.get()) };
+    unsafe {
+        perry_ffi::set_closure_capture_f64(callback as *mut RawClosureHeader, 0, holder.get())
+    };
     callback as i64
 }
 unsafe extern "C" fn upgrade(
@@ -115,11 +117,11 @@ fn run(valid: bool) {
         });
         // A separate event-loop turn after the upgrade callback simulates a
         // delayed auth lookup; request/socket/head live in ordinary JS edges.
-        let req = net::own_get(boxed(holder.get()), "req");
-        let socket = net::own_get(boxed(holder.get()), "socket");
-        let head = net::own_get(boxed(holder.get()), "head");
+        let req = scope.root_nanbox(net::own_get(boxed(holder.get()), "req"));
+        let socket = scope.root_nanbox(net::own_get(boxed(holder.get()), "socket"));
+        let head = scope.root_nanbox(net::own_get(boxed(holder.get()), "head"));
         let cb = scope.root_addr(closure(perry_ffi::js_function_info!(accepted, 2; with_flags(perry_ffi::FN_BUILTIN)), boxed(holder.get())));
-        unsafe { perry_ext_ws::js_ws_handle_upgrade(wss, req, socket, head, cb.get()) };
+        unsafe { perry_ext_ws::js_ws_handle_upgrade(wss, req.get(), socket.get(), head.get(), cb.get()) };
         if valid { assert!(net::own_get(boxed(holder.get()), "ws") > 0.0); }
         else { assert!(JsValue::from_bits(net::own_get(boxed(holder.get()), "ws").to_bits()).is_undefined()); }
         turn_until(|| done_rx.try_recv().is_ok());
