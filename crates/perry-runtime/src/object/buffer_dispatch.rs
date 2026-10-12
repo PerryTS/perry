@@ -651,7 +651,7 @@ pub unsafe fn dispatch_buffer_method(
             let scope = crate::gc::RuntimeHandleScope::new();
             let buffer = scope.root_raw_mut_ptr(buf_ptr);
             let len = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                crate::buffer::store::raw_length(buf as usize) as i32
+                crate::buffer::store::length(buf as usize) as i32
             });
             let (start, end) = if source_is_any_array_buffer {
                 // Instance-call lowering reaches this fused dispatch directly,
