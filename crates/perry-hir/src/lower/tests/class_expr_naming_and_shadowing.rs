@@ -42,6 +42,100 @@ fn test_named_class_expression_var_decl_reports_explicit_name() {
     );
 }
 
+/// #12007: module lexical class-expression bindings share the pre-registered
+/// local with their initializer, allowing the module TDZ pass to guard earlier
+/// reads. `var` remains outside lexical TDZ rewriting.
+#[test]
+fn module_lexical_class_expression_binding_is_tdz_checked() {
+    let source = r#"
+        const readBefore = C;
+        const typeofBefore = typeof C;
+        const newBefore = new C();
+        function early() { return C; }
+        early();
+        function shadow(C: any) { return C; }
+        shadow(1);
+        const C = class Named { static own = Named; static outer = C; };
+        const Self = class { static outer = Self; };
+        function late() { return new C(); }
+        var V = class {};
+        function readVar() { return V; }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+
+    let c_binding = hir
+        .init
+        .iter()
+        .find_map(|stmt| match stmt {
+            crate::ir::Stmt::Let { id, name, .. } if name == "C" => Some(*id),
+            _ => None,
+        })
+        .expect("const C has a module local");
+    let init_body = format!("{:#?}", hir.init);
+    assert!(
+        init_body.matches(crate::tdz_check::TDZ_THROW).count() >= 5,
+        "direct read, typeof, new, named-expression outer read, and anonymous self-read must each remain in the TDZ: {init_body}"
+    );
+    let early = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "early")
+        .expect("early function lowers");
+    let early_body = format!("{:#?}", early.body);
+    assert!(
+        early_body.contains(crate::tdz_check::TDZ_CHECK),
+        "an earlier reachable function read of C must be TDZ guarded: {early_body}"
+    );
+    assert!(
+        early_body.contains(&format!("LocalGet(\n                                {c_binding},")),
+        "the earlier read must use the same local as the class-expression binding: {early_body}"
+    );
+    let shadow = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "shadow")
+        .expect("shadowing function lowers");
+    let shadow_body = format!("{:#?}", shadow.body);
+    assert!(
+        !shadow_body.contains(crate::tdz_check::TDZ_CHECK),
+        "a parameter with the same name must shadow the module binding: {shadow_body}"
+    );
+
+    let named = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "C")
+        .expect("class C lowers");
+    assert_eq!(
+        hir.class_display_names.get(&named.id).map(String::as_str),
+        Some("Named"),
+        "adding the outer lexical slot must preserve the named expression's display name"
+    );
+
+    let late = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "late")
+        .expect("late function lowers");
+    let late_body = format!("{:#?}", late.body);
+    assert!(
+        late_body.contains("New {") && late_body.contains("class_name: \"C\""),
+        "post-declaration construction must retain the static class path: {late_body}"
+    );
+
+    let read_var = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "readVar")
+        .expect("readVar function lowers");
+    let var_body = format!("{:#?}", read_var.body);
+    assert!(
+        !var_body.contains(crate::tdz_check::TDZ_CHECK),
+        "var class-expression bindings remain outside module lexical TDZ rewriting: {var_body}"
+    );
+}
+
 /// #8040: a `class A` declared inside a nested factory, referenced by `new A()`
 /// from one of its OWN method bodies, while a same-named binding (`var A`)
 /// exists in an enclosing scope.

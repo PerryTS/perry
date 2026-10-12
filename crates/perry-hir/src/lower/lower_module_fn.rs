@@ -1170,20 +1170,24 @@ pub fn lower_module_full_with_platform_globals(
                     super::ambient::note_ambient_globals(&mut ctx, decl);
                     continue;
                 }
-                // #4461: `var X = class { ... }` is lowered as a class
-                // expression bound to the name `X` (see stmt.rs) — the class
-                // itself takes the role of the value referenced by name, and
-                // no `Stmt::Let` is ever emitted for `X`. Pre-registering `X`
-                // as a module-level local here would shadow that class with a
-                // never-assigned local, so a value read of `X` (`typeof X`,
-                // `X.staticMethod`, passing `X` around) resolved to the
-                // undefined local instead of the class ref. Skip the local so
-                // `Ident("X")` lowers to `Expr::ClassRef("X")`.
+                // #4461: `var X = class { ... }` must not be pre-registered:
+                // that would shadow the class with a never-assigned local.
+                // Lexical declarations use the same source-position lowering,
+                // but need a slot for pre-declaration references so module
+                // TDZ rewriting can check them (#12007).
                 if decl_init_is_class_expr(decl) {
-                    // A class-expression binding is not represented by a
-                    // pre-registered LocalId (the source-position lowering
-                    // below binds its ClassRef directly), but it still has to
-                    // participate in the module's forward-name pre-scan.
+                    if var_decl.kind != ast::VarDeclKind::Var {
+                        if let ast::Pat::Ident(ident) = &decl.name {
+                            let name = ident.id.sym.to_string();
+                            if ctx.lookup_local(&name).is_none() {
+                                let id = ctx.define_local(name.clone(), Type::Any);
+                                ctx.module_lexical_ids.insert(id);
+                                ctx.pre_registered_module_vars.insert(name);
+                            }
+                        }
+                    }
+                    // Class-expression bindings also participate in the
+                    // module's forward-name pre-scan.
                     //
                     // Published ESM commonly emits adjacent declarations such
                     // as:
