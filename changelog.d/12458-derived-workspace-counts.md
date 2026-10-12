@@ -1,0 +1,1 @@
+Derive workspace member and decision totals from Cargo metadata and crate classifications instead of storing redundant absolute counts. Migrate the architecture policy to schema 2 while preserving exact dependency closures, crate classifications, and structural protections, so independent leaf removals compose without conflicting aggregate edits.
