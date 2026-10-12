@@ -13,6 +13,108 @@ use crate::closure::ClosureHeader;
 // The callback receives `(element, index)` — same 2-arg convention the rest of
 // this file and the generic array helpers use.
 
+/// The GC custody every callback loop in this file needs, held in ONE place.
+///
+/// A loop here runs user code once per element, and a user callback can
+/// collect. Three values cross those calls: the receiver, the callback closure
+/// and — for `map` — the freshly created result. Each used to live in a bare
+/// Rust local, on the argument that `typed_array_alloc` places TypedArrays in
+/// the old arena as TENURED and so they do not MOVE. That argument is about
+/// relocation only. A full mark-sweep still RECLAIMS an old-arena object that
+/// nothing marks, and a closure both moves and dies: `map`'s result has no
+/// referent at all until it is returned, and on the reflective entry
+/// (`Uint8Array.prototype.map.call(u, cb)`) the callback is reachable only
+/// through the thunk's argument array on the native stack. A full collection
+/// during a callback freed `map`'s result and the caller received a swept cell
+/// (`test_gap_gc_uint8_buffer_callback_rooting`: `protoMap 1`, on every arm
+/// that runs the non-generational full collector).
+///
+/// So the receiver is rooted here for liveness (its raw address stays valid:
+/// it does not move), the callback is rooted AND re-read before every call
+/// (it does move), and [`CallbackLoop::keep`] roots a result for the rest of
+/// the loop. A helper cannot obtain a callback to call except through this
+/// type.
+pub(super) struct CallbackLoop<'s> {
+    scope: &'s crate::gc::RuntimeHandleScope,
+    recv: f64,
+    /// `None` only under the `typed_loop_root` sabotage, which leaves every
+    /// value of the loop unrooted so its witness can tell the difference.
+    callback: Option<crate::gc::RuntimeHandle<'s>>,
+    unrooted_callback: *const ClosureHeader,
+}
+
+#[cfg(test)]
+fn loop_roots_sabotaged() -> bool {
+    crate::buffer::bytes::b4_sabotage("typed_loop_root")
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn loop_roots_sabotaged() -> bool {
+    false
+}
+
+impl<'s> CallbackLoop<'s> {
+    pub(super) fn new(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        ta: *const TypedArrayHeader,
+        callback: *const ClosureHeader,
+    ) -> Self {
+        let rooted = !loop_roots_sabotaged();
+        if rooted {
+            scope.root_raw_const_ptr(ta);
+        }
+        Self {
+            scope,
+            recv: ta_receiver_value(ta),
+            callback: rooted.then(|| scope.root_raw_const_ptr(callback)),
+            unrooted_callback: callback,
+        }
+    }
+
+    fn current(&self) -> *const ClosureHeader {
+        self.callback
+            .as_ref()
+            .map_or(self.unrooted_callback, |root| root.get_raw_const_ptr())
+    }
+
+    /// Root `value` until the loop ends.
+    pub(super) fn keep(&self, value: f64) {
+        if self.callback.is_some() {
+            self.scope.root_nanbox_f64(value);
+        }
+    }
+
+    /// `cb(v, i, receiver)` with the callback's CURRENT address.
+    pub(super) fn call3(&self, site: &crate::closure::DirectCall3, v: f64, i: usize) -> f64 {
+        site.call(
+            self.current(),
+            crate::closure::plain_call_receiver(),
+            v,
+            i as f64,
+            self.recv,
+        )
+    }
+
+    /// `cb(acc, v, i, receiver)` with the callback's CURRENT address.
+    pub(super) fn call4(
+        &self,
+        site: &crate::closure::DirectCall4,
+        acc: f64,
+        v: f64,
+        i: usize,
+    ) -> f64 {
+        site.call(
+            self.current(),
+            crate::closure::plain_call_receiver(),
+            acc,
+            v,
+            i as f64,
+            self.recv,
+        )
+    }
+}
+
 /// `ta.map(cb)` — returns a NEW TypedArray of the SAME kind (per spec, not a
 /// plain Array). Each result is coerced back to the element type via the same
 /// `jsvalue_to_f64` path `ta[i] = v` uses.
@@ -28,7 +130,8 @@ pub extern "C" fn js_typed_array_map(
     unsafe {
         let kind = crate::typedarray::element_kind(ta);
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -41,15 +144,11 @@ pub extern "C" fn js_typed_array_map(
         let Some(result_addr) = crate::typedarray_props::typed_array_addr_from_value(result) else {
             return species::result_as_ptr(result);
         };
+        // The result is referenced by nothing but this frame until it returns.
+        calls.keep(result);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             crate::typedarray_props::species_result_store(result_addr, i, r);
         }
         species::result_as_ptr(result)
@@ -70,7 +169,8 @@ pub extern "C" fn js_typed_array_filter(
     unsafe {
         let kind = crate::typedarray::element_kind(ta);
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -81,13 +181,7 @@ pub extern "C" fn js_typed_array_filter(
         let mut kept: Vec<f64> = Vec::new();
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             if crate::value::js_is_truthy(r) != 0 {
                 kept.push(v);
             }
@@ -116,20 +210,15 @@ pub extern "C" fn js_typed_array_every(
     }
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             if crate::value::js_is_truthy(r) == 0 {
                 return f64::from_bits(crate::value::TAG_FALSE);
             }
@@ -150,20 +239,15 @@ pub extern "C" fn js_typed_array_some(
     }
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             if crate::value::js_is_truthy(r) != 0 {
                 return f64::from_bits(crate::value::TAG_TRUE);
             }
@@ -182,20 +266,15 @@ pub extern "C" fn js_typed_array_for_each(
     if !ta.is_null() {
         unsafe {
             let len = crate::typedarray::element_length(ta) as usize;
-            let recv = ta_receiver_value(ta);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let calls = CallbackLoop::new(&scope, ta, callback);
             // #8180: resolve the callback's dispatch ONCE. It is invariant for a
             // fixed closure (see closure/dispatch/direct.rs), and this loop calls
             // exactly one.
             let cb_site = crate::closure::DirectCall3::resolve(callback);
             for i in 0..len {
                 let v = load_at(ta, i);
-                let _ = cb_site.call(
-                    callback,
-                    crate::closure::plain_call_receiver(),
-                    v,
-                    i as f64,
-                    recv,
-                );
+                let _ = calls.call3(&cb_site, v, i);
             }
         }
     }
@@ -214,20 +293,15 @@ pub extern "C" fn js_typed_array_find(
     }
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -248,20 +322,15 @@ pub extern "C" fn js_typed_array_find_index(
     }
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                v,
-                i as f64,
-                recv,
-            );
+            let r = calls.call3(&cb_site, v, i);
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }
@@ -299,7 +368,8 @@ pub extern "C" fn js_typed_array_reduce(
             }
             crate::array::throw_reduce_of_empty();
         }
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -316,22 +386,10 @@ pub extern "C" fn js_typed_array_reduce(
         // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
         // accumulator since the 2026-07-02 audit; the TypedArray siblings and
         // the Buffer-receiver dispatcher never did.
-        //
-        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
-        // places every TypedArray in the old arena as TENURED, documented
-        // there as non-movable because raw data pointers are handed out.
-        let scope = crate::gc::RuntimeHandleScope::new();
         let acc = scope.root_nanbox_f64(accumulator);
         for i in start_idx..len {
             let v = load_at(ta, i);
-            let next = cb_site.call(
-                callback,
-                crate::closure::plain_call_receiver(),
-                acc.get_nanbox_f64(),
-                v,
-                i as f64,
-                recv,
-            );
+            let next = calls.call4(&cb_site, acc.get_nanbox_f64(), v, i);
             acc.set_nanbox_f64(next);
         }
         acc.get_nanbox_f64()
@@ -364,7 +422,8 @@ pub extern "C" fn js_typed_array_reduce_right(
             }
             crate::array::throw_reduce_of_empty();
         }
-        let recv = ta_receiver_value(ta);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let calls = CallbackLoop::new(&scope, ta, callback);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -381,23 +440,11 @@ pub extern "C" fn js_typed_array_reduce_right(
         // see. `js_array_reduce` (array/iter_methods.rs) has rooted its
         // accumulator since the 2026-07-02 audit; the TypedArray siblings and
         // the Buffer-receiver dispatcher never did.
-        //
-        // The receiver (`ta` / `recv`) needs no equivalent: `typed_array_alloc`
-        // places every TypedArray in the old arena as TENURED, documented
-        // there as non-movable because raw data pointers are handed out.
-        let scope = crate::gc::RuntimeHandleScope::new();
         let acc = scope.root_nanbox_f64(accumulator);
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
                 let v = load_at(ta, i);
-                let next = cb_site.call(
-                    callback,
-                    crate::closure::plain_call_receiver(),
-                    acc.get_nanbox_f64(),
-                    v,
-                    i as f64,
-                    recv,
-                );
+                let next = calls.call4(&cb_site, acc.get_nanbox_f64(), v, i);
                 acc.set_nanbox_f64(next);
             }
         }

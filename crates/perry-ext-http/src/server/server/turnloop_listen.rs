@@ -228,11 +228,10 @@ mod tests {
         type Observed = (bool, u16, bool, Option<String>, Option<f64>);
         /// `listen()` on 127.0.0.1:0, and what the server reports right after.
         fn listen_and_observe(handle: i64) -> Observed {
-            let args = crate::server::types::ListenArgs {
-                opts: 0.0,
-                host: Some("127.0.0.1".to_string()),
-                callback: 0,
-            };
+            let args = crate::server::types::ListenArgs::without_callback(
+                0.0,
+                Some("127.0.0.1".to_string()),
+            );
             unsafe { super::super::listen_http_server(handle, args) };
             let s = get_handle::<HttpServer>(handle).expect("server handle");
             (

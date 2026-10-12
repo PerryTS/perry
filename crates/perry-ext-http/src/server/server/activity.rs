@@ -77,7 +77,7 @@ mod tests {
         assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
         server.set_refed(false);
         assert_eq!(count.load(Ordering::Relaxed), baseline);
-        queue_deferred_listening_emit(&mut server, 0);
+        queue_deferred_listening_emit(&mut server);
         assert_eq!(count.load(Ordering::Relaxed), baseline + 1);
         server.set_listening(false);
         queue_deferred_close_emit(&mut server, 0);

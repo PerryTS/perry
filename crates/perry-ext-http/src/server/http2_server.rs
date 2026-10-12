@@ -33,8 +33,8 @@ use crate::server::tls::{
     parse_private_key,
 };
 use crate::server::types::{
-    extract_host, extract_port, js_value_is_closure, jsvalue_to_owned_string, POINTER_TAG,
-    PTR_MASK, STRING_TAG, TAG_NULL, TAG_UNDEFINED,
+    js_value_is_closure, jsvalue_to_owned_string, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_NULL,
+    TAG_UNDEFINED,
 };
 
 extern "C" {
@@ -528,27 +528,32 @@ pub(super) unsafe fn listen_http2_server(
     parsed: crate::server::types::ListenArgs,
 ) -> i64 {
     // Returns `server_handle` for chainability (#2129).
-    let opts_f64 = parsed.opts;
-    let port = extract_port(opts_f64, 443);
-    let host = parsed
-        .host
-        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
-    let callback = parsed.callback;
+    let crate::server::types::ListenTarget { port, host } = parsed.settle(
+        |callback| {
+            if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
+                crate::server::server::register_listen_callback(&mut s.base, callback);
+            }
+        },
+        443,
+    );
 
     // The bind runs on the agent's turnloop loop, synchronously, so
     // `server.address().port` is correct inside the `listen(0, cb)` callback.
     // A thread acting for an agent another thread owns posts the bind to the
     // owner, exactly as `http.Server.listen` does.
     if crate::server::turnloop_h2::enabled() {
-        match turnloop_listen::try_listen_on_turnloop(server_handle, &host, port) {
-            turnloop_listen::H2Listen::Bound => {
-                if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-                    crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
-                }
+        let outcome = turnloop_listen::try_listen_on_turnloop(server_handle, &host, port);
+        if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
+            if outcome.is_bound() {
+                crate::server::server::queue_deferred_listening_emit(&mut s.base);
+            } else {
+                crate::server::server::withdraw_listen_callbacks(&mut s.base);
             }
-            // The bind failed and its `'error'` is queued: no `'listening'`,
+        }
+        match outcome {
+            // A failed bind already queued its `'error'`: no `'listening'`,
             // and the `listen(cb)` callback never runs (Node).
-            turnloop_listen::H2Listen::Failed => {}
+            turnloop_listen::H2Listen::Bound | turnloop_listen::H2Listen::Failed => {}
             // A `createSecureServer` whose TLS material did not load: the
             // create call already said why, and the listen refuses.
             turnloop_listen::H2Listen::NoTls => {
@@ -566,16 +571,13 @@ pub(super) unsafe fn listen_http2_server(
         }
         return server_handle;
     }
-    if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-        crate::server::server::register_listen_callback(&mut s.base, callback);
-    }
     let job_host = host.clone();
     let posted = crate::server::turnloop_serve::post_to_owner(Box::new(move || {
         let listening = crate::server::turnloop_h2::enabled()
             && turnloop_listen::try_listen_on_turnloop(server_handle, &job_host, port).is_bound();
         if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
             if listening {
-                crate::server::server::queue_deferred_listening_emit(&mut s.base, 0);
+                crate::server::server::queue_deferred_listening_emit(&mut s.base);
             } else {
                 crate::server::server::withdraw_listen_callbacks(&mut s.base);
             }

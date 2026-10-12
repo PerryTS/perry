@@ -117,10 +117,7 @@ unsafe fn raw_closure_field(options: f64, field: &str) -> i64 {
     let value = perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), field);
     crate::client_outgoing::callback_from_bits(value.bits() as i64)
 }
-use crate::server::types::{
-    extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
-    PTR_MASK,
-};
+use crate::server::types::{js_promise_run_microtasks, read_string_header, POINTER_TAG, PTR_MASK};
 
 /// `https.createServer(opts, handler)` — opts carries `{ key, cert }`
 /// (PEM strings) plus optional `passphrase`/`ca`. `handler` is the
@@ -281,12 +278,14 @@ pub(super) unsafe fn listen_https_server(
     parsed: crate::server::types::ListenArgs,
 ) -> i64 {
     // Returns `server_handle` for chainability (#2129).
-    let opts_f64 = parsed.opts;
-    let port = extract_port(opts_f64, 443);
-    let host = parsed
-        .host
-        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
-    let callback = parsed.callback;
+    let crate::server::types::ListenTarget { port, host } = parsed.settle(
+        |callback| {
+            if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+                crate::server::server::register_listen_callback(&mut s.base, callback);
+            }
+        },
+        443,
+    );
 
     // P5: bind and accept on the agent's turnloop loop, with the server's
     // rustls configuration driven through perry-ext-net's unbuffered session
@@ -294,19 +293,18 @@ pub(super) unsafe fn listen_https_server(
     // posts the bind to the owner, exactly as `http.Server.listen` does.
     if crate::server::turnloop_serve::enabled() {
         if turnloop_https_listen(server_handle, &host, port) {
-            finish_https_listen(server_handle, callback);
+            finish_https_listen(server_handle);
+        } else if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+            crate::server::server::withdraw_listen_callbacks(&mut s.base);
         }
         return server_handle;
-    }
-    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
-        crate::server::server::register_listen_callback(&mut s.base, callback);
     }
     let job_host = host.clone();
     let posted = crate::server::turnloop_serve::post_to_owner(Box::new(move || {
         if crate::server::turnloop_serve::enabled()
             && turnloop_https_listen(server_handle, &job_host, port)
         {
-            finish_https_listen(server_handle, 0);
+            finish_https_listen(server_handle);
         } else if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
             crate::server::server::withdraw_listen_callbacks(&mut s.base);
         }
@@ -332,17 +330,18 @@ pub(super) unsafe fn listen_https_server(
 }
 
 /// A listen that succeeded: create the server's async resource and queue the
-/// deferred `'listening'` emit + the optional `cb` for the main-thread pump.
+/// deferred `'listening'` emit (whose listeners include the optional `cb`)
+/// for the main-thread pump.
 /// Node emits `'listening'` on a later tick, after `const server = ...` has
 /// been assigned (#4903); the pump binds `this` to the server when it fires
 /// them (#2132). See `server::drain_deferred_listen_for`.
-fn finish_https_listen(server_handle: i64, callback: i64) {
+fn finish_https_listen(server_handle: i64) {
     let server_async_id = unsafe {
         crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len())
     };
     if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
         s.base.async_id = server_async_id;
-        crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+        crate::server::server::queue_deferred_listening_emit(&mut s.base);
     } else {
         unsafe { crate::js_async_hooks_provider_destroy(server_async_id) };
     }

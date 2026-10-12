@@ -17,9 +17,9 @@ use crate::server::ensure_gc_scanner_registered;
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::{ResponseShape, ServerResponse};
 use crate::server::types::{
-    extract_host, extract_port, js_handle_clear_side_tables, js_promise_run_microtasks,
-    js_promise_state, js_value_is_closure, jsvalue_to_owned_string, read_string_header, Promise,
-    POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED,
+    js_handle_clear_side_tables, js_promise_run_microtasks, js_promise_state, js_value_is_closure,
+    jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
+    TAG_UNDEFINED,
 };
 
 // #4728 — in-flight (async-handler) request tracking + the reaper that
@@ -386,7 +386,7 @@ pub(crate) fn sanitize_request_timeout(ms: f64) -> f64 {
 /// default in place; non-numeric values silently no-op (matches
 /// Node, which coerces or ignores most invalid types).
 ///
-/// Uses the same JSON-round-trip pattern as `extract_port`/`extract_host`
+/// Uses the same JSON-round-trip pattern as `extract_port`/`ListenArgs::settle`
 /// in `types.rs` so we don't introduce a second runtime-object-read API
 /// surface — keeps the crate independent of perry-runtime's internal
 /// ObjectHeader layout.
@@ -594,12 +594,14 @@ pub(super) unsafe fn listen_http_server(
     // Returns `server_handle` so `createServer(...).listen(...).on(...)` chains
     // correctly. Pre-#2129 this was `-> ()` and chained sites broke at runtime
     // with `undefined.on is not a function`.
-    let opts_f64 = parsed.opts;
-    let port = extract_port(opts_f64, 3000);
-    let host = parsed
-        .host
-        .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
-    let callback = parsed.callback;
+    let crate::server::types::ListenTarget { port, host } = parsed.settle(
+        |callback| {
+            if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
+                register_listen_callback(s, callback);
+            }
+        },
+        3000,
+    );
 
     // #4962 — cluster workers coordinate the bind with the primary. Under
     // SCHED_RR the primary owns the socket and passes accepted fds to this
@@ -630,22 +632,21 @@ pub(super) unsafe fn listen_http_server(
     // transport of its own; see `turnloop_serve::post_to_owner`.
     if crate::server::turnloop_serve::enabled() {
         if plan.bind() {
-            finish_listen(server_handle, callback);
+            finish_listen(server_handle);
+        } else if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
+            withdraw_listen_callbacks(s);
         }
         return server_handle;
     }
 
-    // Posted: the `listen(cb)` callback is registered now, where the closure
-    // is rooted by this crate's scanner, and only the `'listening'` emit waits
-    // for the bind to land on the owner's turn.
-    if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        register_listen_callback(s, callback);
-    }
+    // Posted: the `listen(cb)` callback is already on the server, rooted by
+    // this crate's scanner; only the `'listening'` emit waits for the bind to
+    // land on the owner's turn.
     let (host, port) = (plan.host.clone(), plan.port);
     let posted = crate::server::turnloop_serve::post_to_owner(Box::new(move || {
         let server_handle = plan.server_handle;
         if crate::server::turnloop_serve::enabled() && plan.bind() {
-            finish_listen(server_handle, 0);
+            finish_listen(server_handle);
         } else {
             if !crate::server::turnloop_serve::enabled() {
                 queue_listen_error_parts(
@@ -783,8 +784,9 @@ static RR_INJECT_CLOSED: std::sync::LazyLock<Mutex<HashMap<i64, Arc<AtomicBool>>
 /// A listen that succeeded: create the server's async resource and queue the
 /// deferred `'listening'` emit.
 ///
-/// #4903 — queue the `'listening'` emit + the optional `cb` argument for the
-/// main-thread pump instead of firing them synchronously. Node emits
+/// #4903 — queue the `'listening'` emit (the optional `cb` argument is already
+/// one of its listeners) for the main-thread pump instead of firing it
+/// synchronously. Node emits
 /// `'listening'` on a later event-loop tick, after the current synchronous
 /// script segment finishes; firing inline ran the callback before
 /// `const server = http.createServer().listen(0, cb)` had assigned `server`,
@@ -793,13 +795,13 @@ static RR_INJECT_CLOSED: std::sync::LazyLock<Mutex<HashMap<i64, Arc<AtomicBool>>
 /// `drain_deferred_listen_for`. The provider is initialized only after the
 /// bind succeeded, so a failed listen cannot leak a resource with no matching
 /// destroy edge.
-fn finish_listen(server_handle: i64, callback: i64) {
+fn finish_listen(server_handle: i64) {
     let server_async_id = unsafe {
         crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len())
     };
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.async_id = server_async_id;
-        queue_deferred_listening_emit(s, callback);
+        queue_deferred_listening_emit(s);
     } else {
         unsafe { crate::js_async_hooks_provider_destroy(server_async_id) };
     }

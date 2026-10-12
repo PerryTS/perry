@@ -609,10 +609,11 @@ fn validate_comparator(args: &[f64]) -> *const crate::closure::ClosureHeader {
 /// exception: `buffer_alloc` allocates it with `arena_alloc_gc_old` and sets
 /// `GC_FLAG_TENURED` (`buffer/header.rs`) — the same old-arena space
 /// `typed_array_alloc` describes as "non-movable space: raw data pointers are
-/// handed out". Every `%TypedArray%` sibling in `typedarray/iterate.rs` and
-/// `typedarray/transform.rs` relies on exactly that invariant and holds its
-/// `ta` / `recv` in a plain local across callbacks; doing something different
-/// here would be inconsistent without being safer.
+/// handed out". Non-moving is not the same as LIVE, though — a full
+/// mark-sweep reclaims an unmarked old-arena object — which is why the
+/// receiver is still rooted here, and why the `%TypedArray%` siblings in
+/// `typedarray/iterate.rs` root theirs (`CallbackLoop`) while keeping the raw
+/// address for element access.
 ///
 /// The one collector arm that relocates an old-arena page is old-page defrag,
 /// and it is opt-in (`PERRY_GC_OLD_DEFRAG=1`, `gc/oldgen_defrag.rs`,

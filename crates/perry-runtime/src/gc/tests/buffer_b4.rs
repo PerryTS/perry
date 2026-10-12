@@ -252,6 +252,80 @@ fn shared_typed_copies_keep_atomic_lane_width_and_raw_bits() {
     }
 }
 
+extern "C" fn collect_in_typed_loop(
+    callback: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+    _index: f64,
+    receiver: f64,
+) -> f64 {
+    clear_marks();
+    clear_mark_seeds();
+    let valid = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid);
+    let owner = JSValue::from_bits(receiver.to_bits()).as_pointer::<u8>() as usize;
+    assert_marked_user_ptr(owner, "typed callback-loop receiver across its callback");
+    assert_marked_user_ptr(
+        callback as usize,
+        "typed callback-loop callback across its body",
+    );
+    clear_marks();
+    clear_mark_seeds();
+    let before = gc_total_collection_count();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(gc_total_collection_count() > before);
+    // Recycle whatever the sweep freed, so a reclaimed result is overwritten
+    // rather than read back intact by luck.
+    for _ in 0..8 {
+        let _ = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT32, 2);
+        let _ = crate::object::js_object_alloc(0, 2);
+    }
+    value + 1.0
+}
+
+/// `test_gap_gc_uint8_buffer_callback_rooting`'s `protoMap 1`: a full
+/// mark-sweep inside a `%TypedArray%` callback loop reclaimed `map`'s fresh
+/// result, which only that native frame referenced. Each loop's receiver and
+/// callback must be marked inside the callback, and `map`'s result must come
+/// back as the same live TypedArray.
+#[test]
+fn typed_callback_loops_retain_receiver_callback_and_result() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    register_runtime_handle_root_scanner_for_tests();
+    let (source, callback) = {
+        let scope = RuntimeHandleScope::new();
+        let source = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
+            crate::typedarray::KIND_INT32,
+            3,
+        ));
+        for (i, v) in [3.0, 1.0, 4.0].into_iter().enumerate() {
+            crate::typedarray::js_typed_array_set(source.get_raw_mut_ptr(), i as i32, v);
+        }
+        let callback =
+            crate::closure::js_closure_alloc(crate::fn_info!(collect_in_typed_loop, 3), 0);
+        (source.get_raw_mut_ptr(), callback)
+    };
+    let before = gc_total_collection_count();
+    let mapped = crate::typedarray::js_typed_array_map(source, callback);
+    assert!(
+        gc_total_collection_count() >= before + 3,
+        "three collecting calls"
+    );
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(mapped as usize),
+        Some(crate::typedarray::KIND_INT32),
+        "map's result must survive collections inside its own callback"
+    );
+    let values: Vec<f64> = (0..3)
+        .map(|i| crate::typedarray::js_typed_array_get(mapped, i))
+        .collect();
+    assert_eq!(values, [4.0, 2.0, 5.0]);
+    let before = gc_total_collection_count();
+    let _ = crate::typedarray::js_typed_array_for_each(source, callback);
+    assert!(gc_total_collection_count() >= before + 3);
+}
+
 #[test]
 fn typed_find_last_retains_receiver_callback_and_bigint_candidate() {
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -524,6 +598,10 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
         (
             "find_receiver_root",
             "gc::tests::buffer_b4::typed_find_last_retains_receiver_callback_and_bigint_candidate",
+        ),
+        (
+            "typed_loop_root",
+            "gc::tests::buffer_b4::typed_callback_loops_retain_receiver_callback_and_result",
         ),
         (
             "typed_copy_root",

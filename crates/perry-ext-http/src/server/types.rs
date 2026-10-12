@@ -71,18 +71,10 @@ pub struct Promise {
 pub unsafe fn extract_port(opts: f64, default_port: u16) -> u16 {
     let v = JsValue::from_bits(opts.to_bits());
     if v.is_pointer() {
-        if let Some(json) = perry_ffi::json_stringify(v) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
-                if let Some(p) = parsed.get("port").and_then(|p| {
-                    p.as_u64()
-                        .or_else(|| p.as_i64().map(|n| n.max(0) as u64))
-                        .or_else(|| p.as_f64().map(|n| n.max(0.0) as u64))
-                }) {
-                    return p as u16;
-                }
-            }
-        }
-        return default_port;
+        return options_json(v)
+            .as_ref()
+            .and_then(json_port)
+            .unwrap_or(default_port);
     }
     if v.is_number() {
         let n = v.to_number();
@@ -93,47 +85,105 @@ pub unsafe fn extract_port(opts: f64, default_port: u16) -> u16 {
     default_port
 }
 
-/// Extract a hostname from `{ host }` object literal, falling back
-/// to "0.0.0.0". Standalone hostname-as-string is also accepted (for
-/// the `listen(port, hostname, cb)` overload).
-pub unsafe fn extract_host(opts: f64, default_host: &str) -> String {
-    let v = JsValue::from_bits(opts.to_bits());
-    if v.is_string() || v.is_short_string() {
-        if let Some(s) = jsvalue_to_owned_string(opts) {
-            return s;
-        }
-    }
-    if v.is_pointer() {
-        if let Some(json) = perry_ffi::json_stringify(v) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
-                // Node accepts both `host` and `hostname`.
-                if let Some(h) = parsed
-                    .get("hostname")
-                    .or_else(|| parsed.get("host"))
-                    .and_then(|h| h.as_str())
-                {
-                    return h.to_string();
-                }
-            }
-        }
-    }
-    default_host.to_string()
+/// `JSON.stringify(opts)` parsed back. The stringify ALLOCATES (it can
+/// collect), which is why `ListenArgs::settle` reads port and host out of one
+/// call rather than two: after the first, the second would be handed a
+/// pre-collection copy of `opts`.
+unsafe fn options_json(v: JsValue) -> Option<serde_json::Value> {
+    let json = perry_ffi::json_stringify(v)?;
+    serde_json::from_str::<serde_json::Value>(&json).ok()
+}
+
+fn json_port(parsed: &serde_json::Value) -> Option<u16> {
+    parsed
+        .get("port")
+        .and_then(|p| {
+            p.as_u64()
+                .or_else(|| p.as_i64().map(|n| n.max(0) as u64))
+                .or_else(|| p.as_f64().map(|n| n.max(0.0) as u64))
+        })
+        .map(|p| p as u16)
+}
+
+fn json_host(parsed: &serde_json::Value) -> Option<String> {
+    // Node accepts both `host` and `hostname`.
+    parsed
+        .get("hostname")
+        .or_else(|| parsed.get("host"))
+        .and_then(|h| h.as_str())
+        .map(str::to_string)
 }
 
 /// Parsed shape of Node's variadic `server.listen(...)` overloads, shared by
 /// the http / https / http2 bind paths. Issue #2041.
+///
+/// It holds two heap references — `opts` and the callback — and is consumed
+/// exactly once, by [`ListenArgs::settle`], before anything on the bind path
+/// can allocate. The callback has no public accessor on purpose: the only way
+/// out is onto the server, the scanned holder (`deferred_listen_cbs`). Before
+/// that, every bind path carried it in a Rust local across the bind (which
+/// allocates the listener's JS objects) and only then stored it, so a moving
+/// minor in the bind left the server holding a from-space closure and the
+/// `'listening'` drain called through it.
 pub struct ListenArgs {
     /// First positional argument — a bare port number, an options object
-    /// (`{ port, host, backlog }`), or `undefined`. Fed to `extract_port`
-    /// and `extract_host`.
-    pub opts: f64,
+    /// (`{ port, host, backlog }`), or `undefined`.
+    opts: f64,
     /// A standalone host string argument (the `listen(port, host, ...)`
     /// overload). Takes precedence over a `host` field inside an options
     /// object when both are present.
-    pub host: Option<String>,
+    host: Option<String>,
     /// Raw `*const ClosureHeader` pointer for the completion callback, or `0`
     /// when no function argument was supplied.
-    pub callback: i64,
+    callback: i64,
+}
+
+/// Where a `listen()` binds. Owned data only: nothing in it can go stale
+/// across a collection.
+pub struct ListenTarget {
+    pub port: u16,
+    pub host: String,
+}
+
+impl ListenArgs {
+    /// A callback-less `listen(opts, host)`.
+    #[cfg(test)]
+    pub fn without_callback(opts: f64, host: Option<String>) -> Self {
+        Self {
+            opts,
+            host,
+            callback: 0,
+        }
+    }
+
+    /// Consume the arguments: hand the callback to `park_callback` FIRST — it
+    /// must move it onto a scanned holder, which does not allocate — and only
+    /// then resolve `opts`, whose stringify can collect.
+    pub unsafe fn settle(self, park_callback: impl FnOnce(i64), default_port: u16) -> ListenTarget {
+        if self.callback != 0 {
+            park_callback(self.callback);
+        }
+        let v = JsValue::from_bits(self.opts.to_bits());
+        let (port, opts_host) = if v.is_pointer() {
+            let parsed = options_json(v);
+            (
+                parsed.as_ref().and_then(json_port).unwrap_or(default_port),
+                parsed.as_ref().and_then(json_host),
+            )
+        } else {
+            let host = (v.is_string() || v.is_short_string())
+                .then(|| jsvalue_to_owned_string(self.opts))
+                .flatten();
+            (extract_port(self.opts, default_port), host)
+        };
+        ListenTarget {
+            port,
+            host: self
+                .host
+                .or(opts_host)
+                .unwrap_or_else(|| "0.0.0.0".to_string()),
+        }
+    }
 }
 
 /// Normalize the JS-side `server.listen(...)` argument array into the
