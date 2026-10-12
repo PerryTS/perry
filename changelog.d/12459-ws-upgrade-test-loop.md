@@ -1,0 +1,1 @@
+Initialize the HTTP completion sink in the low-level noServer WebSocket test fixture, and retain the accepted Socket through a traced JS edge before sending the upgrade request. This makes the deferred-authentication and malformed-handshake tests exercise the intended socket path rather than time out before admission. Both real TCP tests pass locally.
