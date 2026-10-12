@@ -580,7 +580,11 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0,
         for k in range(upto - 1, st - 1, -1):
             ins = insns[k]
             if reg in writes(ins):
-                g = (symbol_of or _got_symbol)(ins)
+                # A call may itself carry a GOT relocation for its *callee*,
+                # but the caller-saved register it defines contains the
+                # callee's return value. That value is not pinned to the GOT
+                # symbol (e.g. `call *dlsym@GOTPCREL; call *%rax`).
+                g = None if _flow(ins, arch)[0] == "call" else (symbol_of or _got_symbol)(ins)
                 if g is None and depth < 6 and symbol_of is None:
                     src = _copy_source(ins, arch)
                     if src is not None and src != reg:

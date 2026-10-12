@@ -4093,7 +4093,7 @@ perry_plugin_register_service	Reenters
 perry_plugin_register_tool	Reenters
 perry_plugin_set_config	Reenters
 perry_plugin_set_metadata	Reenters
-perry_plugin_unload	Leaf
+perry_plugin_unload	Reenters
 perry_plugin_unregister_hook	Reenters
 perry_plugin_unregister_route	Reenters
 perry_plugin_unregister_service	Reenters

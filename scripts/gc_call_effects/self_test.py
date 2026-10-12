@@ -189,6 +189,34 @@ def io_error_drop_cases() -> list[str]:
     return failures
 
 
+def got_pinning_cases() -> list[str]:
+    """A GOT relocation on a call names its callee, not the call's return value."""
+    failures = []
+
+    def cfg(insns):
+        return cg._Cfg(insns, "x86", set())
+
+    # Linux PIC can call dlsym through its GOT entry. The return in %rax is
+    # the looked-up function pointer, so a later indirect call must stay a
+    # seed rather than becoming a direct edge to dlsym.
+    dlsym_call = cg.Insn(0, "callq", "*0x0(%rip)", "*0x0(%rip)")
+    dlsym_call.relocs = [("R_X86_64_GOTPCREL", "dlsym")]
+    later_call = cg.Insn(1, "callq", "*%rax", "*%rax")
+    resolved = cg._got_pinned(cfg([dlsym_call, later_call]), 1, "rax", "x86")
+    if resolved is not None:
+        failures.append(f"call through a GOT-pinned dlsym result resolved as {resolved}")
+
+    # A genuine load of a function address from the GOT remains a resolved
+    # direct edge; this is the negative control for the call-clobber check.
+    got_load = cg.Insn(0, "movq", "0x0(%rip), %rax", "0x0(%rip), %rax")
+    got_load.relocs = [("R_X86_64_GOTPCREL", "plugin_deactivate")]
+    direct_call = cg.Insn(1, "callq", "*%rax", "*%rax")
+    resolved = cg._got_pinned(cfg([got_load, direct_call]), 1, "rax", "x86")
+    if resolved != "plugin_deactivate":
+        failures.append(f"genuine GOT-pinned call resolved as {resolved!r}")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gc-call-effects-selftest-") as tmp:
@@ -226,6 +254,7 @@ def main() -> int:
         if cg._match_indirect(alias_rule, graph, 0) is not None:
             failures.append("a $u20$ Rust alias was dropped instead of blocking the exemption")
         failures += io_error_drop_cases()
+        failures += got_pinning_cases()
         per_format = {}
         for tag, triple in TARGETS.items():
             if classify_native_hot_text(tmp, triple, tag) != "Leaf":
