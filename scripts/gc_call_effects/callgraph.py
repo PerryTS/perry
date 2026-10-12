@@ -196,9 +196,16 @@ TARGET_ADDEND = re.compile(r"^(.*?)(?:[+-]0x[0-9a-f]+)?$")
 X86_PREFIXES = {"notrack", "lock", "rep", "repe", "repne", "repz", "repnz", "bnd", "data16", "cs", "ds"}
 
 
+# COFF section symbols (`.text`, `.text$unlikely`, `.rdata$zzz`): a leading-dot section
+# name with an optional `$group` suffix; not callable aliases. Names that merely
+# contain `$` (Rust legacy `_ZN..$u20$..`) do not start with "." and never match.
+COFF_SECTION_SYM = re.compile(r"^\.[A-Za-z_]+(\$[A-Za-z0-9_.]*)?$")
+
+
 def temp_label(name: str) -> bool:
-    """Assembler-temporary labels: not function boundaries."""
-    return name.startswith(("ltmp", "Ltmp", ".L", "L_", "l_", "lCPI", "LCPI", "$"))
+    """Assembler-temporary labels and COFF section symbols: not function boundaries."""
+    return (name.startswith(("ltmp", "Ltmp", ".L", "L_", "l_", "lCPI", "LCPI", "$"))
+            or COFF_SECTION_SYM.match(name) is not None)
 
 
 LLVM_SUFFIX = re.compile(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")

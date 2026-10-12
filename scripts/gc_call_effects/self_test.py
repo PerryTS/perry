@@ -161,6 +161,27 @@ def main() -> int:
         node.names.append("unrelated_initializer")
         if cg._match_indirect(alias_rule, graph, 0) is not None:
             failures.append("a folded unrelated alias inherited an audited exemption")
+        # COFF section-symbol aliases are not callable aliases: they must not
+        # defeat an exemption, nor grant one, nor drop Rust `$u20$` names.
+        audited = "audited_initializer"
+        for sec in (".text$unlikely", ".text", ".rdata$zzz", ".xdata$x"):
+            node.names = [audited, sec]
+            if cg._match_indirect(alias_rule, graph, 0) is None:
+                failures.append(f"section alias {sec} defeated an audited exemption")
+            if not cg.temp_label(sec):
+                failures.append(f"{sec} was not treated as a section symbol")
+        node.names = [".text$unlikely"]
+        if cg._match_indirect(alias_rule, graph, 0) is not None:
+            failures.append("a bare section symbol was admitted as an audited alias")
+        node.names = ["unrelated_initializer", ".text$unlikely"]
+        if cg._match_indirect(alias_rule, graph, 0) is not None:
+            failures.append("non-exempt indirect call became exempt via a section alias")
+        for keep in ("_ZN4core3ptr$u20$drop$LT$T$GT$17h0123456789abcdefE", "foo$bar", "text$unlikely"):
+            if cg.temp_label(keep):
+                failures.append(f"{keep} was wrongly dropped as a section symbol")
+        node.names = [audited, "_ZN4core3ptr$u20$x17h0123456789abcdefE"]
+        if cg._match_indirect(alias_rule, graph, 0) is not None:
+            failures.append("a $u20$ Rust alias was dropped instead of blocking the exemption")
         per_format = {}
         for tag, triple in TARGETS.items():
             if classify_native_hot_text(tmp, triple, tag) != "Leaf":
