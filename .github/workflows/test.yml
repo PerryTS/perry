@@ -3775,6 +3775,11 @@ jobs:
           echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
           echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
           rustup target add x86_64-pc-windows-msvc
+      - name: Install Perl for the vendored OpenSSL cross-build
+        if: matrix.target == 'windows-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends perl
       - name: Restore cargo-xwin MSVC sysroot
         if: matrix.target == 'windows-x86_64'
         uses: ./.github/actions/perry/actions/cache/restore # v6
