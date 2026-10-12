@@ -1,6 +1,6 @@
-// Importing this module must reject with ReferenceError during class
-// evaluation because the anonymous expression's initializer reads its outer
-// binding before that binding is initialized.
+// Standalone subprocess witness for the direct anonymous class-expression
+// initializer read. Evaluation must terminate with a ReferenceError because
+// the outer binding remains uninitialized until class evaluation completes.
 console.log("anonymous-evaluating");
 const Anonymous = class {
   static self = Anonymous;

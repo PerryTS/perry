@@ -53,14 +53,22 @@ var V = class {};
 function readVar() { return V; }
 console.log("var-control", typeof readVar(), V.name, new V() instanceof V);
 
-// The anonymous class's static initializer reads the enclosing lexical
-// binding while it is still in its TDZ. Isolate it in a module so the expected
-// ReferenceError does not terminate these other controls.
+// Keep the anonymous class initializer as a top-level class-expression
+// binding. The helper catches the read so the rest of this fixture can run;
+// the standalone helper module remains the direct-throwing subprocess case.
+function readAnonymousDuringInit(): unknown {
+  try {
+    return Anonymous;
+  } catch (error: any) {
+    return error && error.name;
+  }
+}
+
 console.log("anonymous-start");
-import("./_helpers/issue_12007_anonymous_self_tdz.ts").then(
-  () => console.log("anonymous-self", "no throw"),
-  (error: any) => console.log("anonymous-self", error && error.name),
-);
+const Anonymous = class {
+  static self = readAnonymousDuringInit();
+};
+console.log("anonymous-self", Anonymous.self);
 
 // The imported function is callable while its exported class-expression
 // binding is still uninitialized in the cyclic module.
