@@ -115,3 +115,18 @@ pub(crate) fn attached_address(handle: i64) -> Option<(String, u16)> {
             )
         })
 }
+
+/// Copy the upgrade request while keeping the ws → HTTP dependency one-way.
+pub(crate) fn upgrade_request(value: f64) -> Option<turnloop_http::http1::Head> {
+    if value.to_bits() & !PTR_MASK != POINTER_TAG {
+        return None;
+    }
+    let handle = (value.to_bits() & PTR_MASK) as i64;
+    let request = perry_ffi::get_handle::<crate::server::request::IncomingMessage>(handle)?;
+    Some(perry_ext_ws::turnloop_link::request_head(
+        &request.method,
+        &request.url,
+        u8::from(request.http_version != "1.0"),
+        &request.raw_headers,
+    ))
+}

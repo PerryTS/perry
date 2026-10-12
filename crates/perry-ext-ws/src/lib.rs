@@ -58,6 +58,8 @@ mod server;
 pub use server::*;
 mod host_upgrade;
 pub mod native_socket;
+mod raw_upgrade;
+pub use raw_upgrade::register_http_upgrade_reader;
 mod turnloop_io;
 pub mod turnloop_link;
 pub use host_upgrade::{accept_http_upgrade, drive_http_upgraded, Refusal, HTTP_SERVER_TRANSPORT};
@@ -1339,47 +1341,40 @@ pub fn accept_headers(
         .collect())
 }
 
-/// #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
-/// `new WebSocketServer({ noServer: true })`.
-///
-/// The handshake + per-client IO loop already happened: the host
-/// server's accept task (fastify's `handle_fastify_websocket_upgrade`
-/// or perry-ext-http's `handle_websocket_upgrade`) drove
-/// `hyper::upgrade::on`, completed the tungstenite server handshake,
-/// and called `register_external_ws_stream` (which spawned
-/// `drive_server_client_io`). By the time the user's `'upgrade'`
-/// handler runs and calls `wss.handleUpgrade(...)`, `ws_id` is already
-/// a live connection. This function is purely the JS-visible
-/// re-dispatch shim — it does NOT register another stream or perform
-/// another handshake.
-///
-/// Adopt the client into the server's tracked Set before invoking
-/// `cb(socket, request)`. The callback decides whether to emit `connection`;
-/// `handleUpgrade` itself never emits that event and returns `undefined`.
-/// The HTTP transport has already consumed the head bytes.
+/// `wss.handleUpgrade(req, socket, head, cb)` completes a raw HTTP upgrade.
+/// Legacy hosts may instead supply a connection whose 101 is already sent.
+/// Track the client before invoking the callback; connection emission belongs
+/// to the callback, as in ws. Pipelined head bytes use the normal event queue.
 ///
 /// # Safety
-/// `cb`, when non-zero, must be a valid NaN-boxed / raw closure
-/// pointer. `ws_id_f64` must be a POINTER_TAG-boxed ws id produced by
-/// the host server's upgrade path.
+/// `cb`, when non-zero, must be a valid NaN-boxed / raw closure pointer.
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_handle_upgrade(
     server_handle: i64,
     req_f64: f64,
     ws_id_f64: f64,
-    _head_f64: f64,
+    head_f64: f64,
     cb: i64,
 ) {
     ensure_runtime_hooks_registered();
     let scope = perry_ffi::TransientRootScope::enter();
     let cb = scope.root_addr((cb as u64 & POINTER_MASK) as i64);
     let req = scope.root_nanbox(req_f64);
-    let ws_id = decode_client_id(ws_id_f64);
-    if get_handle_mut::<WsServerHandle>(server_handle).is_none()
-        || !WS_CONNECTIONS.lock().unwrap().contains_key(&ws_id)
-    {
+    if get_handle_mut::<WsServerHandle>(server_handle).is_none() {
         return;
     }
+    let ws_id = if perry_ext_net::native_transport::socket_link(ws_id_f64).is_ok() {
+        let Some(id) = raw_upgrade::accept(req.get(), ws_id_f64, head_f64) else {
+            return;
+        };
+        id
+    } else {
+        let id = decode_client_id(ws_id_f64);
+        if !WS_CONNECTIONS.lock().unwrap().contains_key(&id) {
+            return;
+        }
+        id
+    };
     WS_CLIENT_PARENT_SERVER
         .lock()
         .unwrap()

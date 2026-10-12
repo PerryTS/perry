@@ -1336,3 +1336,7 @@ fn on_upgrade(id: &RootedSocket, building: Building) {
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod native_tests;
+
+#[cfg(test)]
+#[path = "ws_upgrade_tests.rs"]
+mod ws_upgrade_tests;
