@@ -1,0 +1,1 @@
+Bounded gate-freshness search now partitions workflow events and evaluates configured job completion timestamps under explicit request caps, avoiding false missing-run alerts from mixed-event page crowding.
