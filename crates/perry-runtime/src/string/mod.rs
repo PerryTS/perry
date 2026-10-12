@@ -293,7 +293,7 @@ pub(crate) use format::{
 
 /// Reserved-header spelling for immutable executable strings. Heap strings
 /// use these bits only for survival age and never acquire this marker.
-const STRING_IMAGE_MARKER: u16 = 0x494d;
+pub(crate) const STRING_IMAGE_MARKER: u16 = 0x494d;
 
 /// A string image owns its address for the life of the executable. This is
 /// separate from the intern bit, which also controls speculative own reads.
@@ -465,25 +465,16 @@ pub fn perry_string_ref_from_dispatch_id(
         });
     }
 
-    let addr = id as usize;
-    let hdr = addr as *const StringHeader;
-    if !is_valid_string_ptr(hdr) || (addr & 0x7) != 0 {
-        return None;
-    }
-    if matches!(
-        crate::arena::classify_heap_space(addr),
-        crate::arena::HeapSpace::Unknown
-    ) {
-        return None;
-    }
+    let hdr = id as usize as *const StringHeader;
     unsafe {
+        let header = crate::value::addr_class::try_read_string_header(hdr)?;
         Some(PerryStringRef {
-            ptr: (hdr as *const u8).add(std::mem::size_of::<StringHeader>()),
-            len: (*hdr).byte_len as usize,
+            ptr: string_data(hdr),
+            len: header.byte_len as usize,
             heap: hdr,
             static_id: 0,
             hash: 0,
-            is_wtf8: (*hdr).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+            is_wtf8: header.flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
         })
     }
 }

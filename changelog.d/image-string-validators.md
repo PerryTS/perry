@@ -1,0 +1,3 @@
+Native string validators now share the tracked-header classifier, which admits immutable executable strings through linker-owned section bounds before reading their headers. This restores literal and mixed-string arguments to path operations without registering individual strings or changing their identity. JSON, URL, MIME, event-emitter object probes, legacy dispatch keys and raw receiver admission use the shared ownership proof.
+
+Regression coverage exercises literal/runtime/mixed strings on the main thread and a worker, and rejects null, forged, counterfeit and non-string addresses. A whole-module source inventory gates direct arena/malloc checks in native validators; remaining collector and non-string uses have justified exceptions.

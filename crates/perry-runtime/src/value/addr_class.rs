@@ -380,7 +380,7 @@ pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
 }
 
 /// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
-/// is a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use
+/// is a Perry GC allocation or an immutable executable image string. Unlike [`try_read_gc_header`], this does not use
 /// an address-magnitude window as evidence of ownership: arena page membership
 /// or an exact malloc-registry hit is required before the first header byte is
 /// touched. The header's type, size, and arena flag are then validated.
@@ -395,6 +395,8 @@ pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
 /// allocation or collection safepoint. Returning a raw pointer is deliberate:
 /// some checked callers install forwarding metadata, so this gate must not
 /// manufacture a shared reference and then write through a cast of it.
+/// Image headers are read-only: a caller must honor their pinned/marked image
+/// representation and never mutate them or treat them as an arena allocation.
 ///
 /// Out of line, with the allocator lookup folded into its one body: the
 /// probe sits on generic receiver paths (`has_cell_type`, own-key and
@@ -427,11 +429,14 @@ unsafe fn tracked_gc_header_admitting(
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     #[cfg(test)]
     TRACKED_HEADER_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let (header_addr, storage) = classify_tracked_gc_header_with(
+    let Some((header_addr, storage)) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
         crate::gc::gc_malloc_header_is_tracked,
-    )?;
+    ) else {
+        let header = image::header(addr)?;
+        return admit((*header.as_ptr()).obj_type).then_some(header);
+    };
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {
         return None;
     }
@@ -746,4 +751,63 @@ mod known_plausible_alignment_tests {
         // SAFETY: as above.
         assert!(unsafe { try_read_gc_header(addr) }.is_none());
     }
+}
+
+#[cfg(test)]
+#[path = "addr_class/image_tests.rs"]
+mod image_tests;
+
+#[path = "addr_class/image.rs"]
+mod image;
+
+/// Validate the string layout after the canonical ownership/type admission.
+/// The empty singleton has no GC header and is admitted by exact identity.
+/// No allocation or collection may occur while the returned header is used.
+#[inline(never)]
+pub(crate) unsafe fn try_read_string_header<'a>(
+    ptr: *const crate::string::StringHeader,
+) -> Option<&'a crate::string::StringHeader> {
+    if ptr == crate::string::js_get_empty_string() {
+        return Some(&*ptr);
+    }
+    let gc = try_read_tracked_gc_header_of_type(ptr as usize, crate::gc::GC_TYPE_STRING)?;
+    let size = gc.as_ref().size as usize;
+    if size < GC_HEADER_SIZE + std::mem::size_of::<crate::string::StringHeader>() {
+        return None;
+    }
+    // Arena membership proves the GC header readable, but a forged interior
+    // address must not let the larger StringHeader or its bytes cross a block
+    // boundary. Image admission already checks its complete section extent;
+    // malloc admission is exact and its size is allocator-authored.
+    let arena_base = if gc.as_ref().gc_flags & crate::gc::GC_FLAG_ARENA != 0 {
+        let (_, base, _) = crate::arena::classify_heap_space_in_range(ptr as usize)?;
+        let last =
+            (ptr as usize).checked_add(std::mem::size_of::<crate::string::StringHeader>() - 1)?;
+        if crate::arena::classify_heap_space_in_range(last).map(|(_, base, _)| base) != Some(base) {
+            return None;
+        }
+        Some(base)
+    } else {
+        None
+    };
+    let string = &*ptr;
+    let storage = GC_HEADER_SIZE + std::mem::size_of::<crate::string::StringHeader>();
+    if string.byte_len > string.capacity || string.capacity as usize > size - storage {
+        return None;
+    }
+    if let Some(base) = arena_base {
+        let last = (ptr as usize)
+            .checked_add(std::mem::size_of::<crate::string::StringHeader>())?
+            .checked_add(string.capacity as usize)?
+            .checked_sub(1)?;
+        if crate::arena::classify_heap_space_in_range(last).map(|(_, base, _)| base) != Some(base) {
+            return None;
+        }
+    }
+    Some(string)
+}
+
+#[cfg(test)]
+pub(crate) fn image_string_for_tests() -> *const crate::string::StringHeader {
+    image_tests::image_string()
 }

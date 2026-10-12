@@ -14,48 +14,11 @@ use crate::string::{js_string_from_bytes, js_string_materialize_to_heap, StringH
 
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
-    if !is_string_header_ptr(ptr) {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
+    let header = crate::value::addr_class::try_read_string_header(ptr)?;
+    let len = header.byte_len as usize;
     let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
-}
-
-fn is_string_header_ptr(ptr: *const StringHeader) -> bool {
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
-    }
-    if ptr == crate::string::js_get_empty_string() {
-        return true;
-    }
-    let gc_header =
-        (ptr as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    // A string outside the managed arenas (generation `Unknown`) is still a
-    // real string when the GC malloc registry tracks its header — e.g. a
-    // string grown through the append realloc path (`gc_malloc_realloc` →
-    // `gc_malloc(_, GC_TYPE_STRING)`) or a Symbol description. Rejecting those
-    // made every `path.*` builtin throw `The "path" argument must be of type
-    // string.` on a perfectly valid argument. The registry lookup is
-    // dereference-free, so forged pointers are still rejected before the
-    // header reads below (mirrors the empty-string singleton special case
-    // above and `current_heap_header_for_user_ptr`'s Unknown→malloc rule).
-    if matches!(
-        crate::arena::classify_heap_generation(ptr as usize),
-        crate::arena::HeapGeneration::Unknown
-    ) && !crate::gc::gc_malloc_header_is_tracked(gc_header)
-    {
-        return false;
-    }
-    unsafe {
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_STRING {
-            return false;
-        }
-        let byte_len = (*ptr).byte_len;
-        let capacity = (*ptr).capacity;
-        byte_len <= capacity && capacity < 1_073_741_824
-    }
 }
 
 /// Helper to create a JS string from a Rust string
@@ -1351,7 +1314,9 @@ fn perex_path_matches_glob(
     let scope = crate::gc::RuntimeHandleScope::new();
     let path = scope.root_string_ptr(path);
     let pattern = scope.root_string_ptr(pattern);
-    if !path.with_const_ptr(|p| crate::string::is_valid_string_ptr(p)) {
+    if !path.with_const_ptr(|p| {
+        unsafe { crate::value::addr_class::try_read_string_header(p) }.is_some()
+    }) {
         path.set_raw_const_ptr(api::caught(|| {
             crate::string::js_string_from_bytes(b"".as_ptr(), 0)
         })?);

@@ -48,7 +48,7 @@ fn string_value(value: &str) -> f64 {
 }
 
 unsafe fn string_from_header(ptr: *mut StringHeader) -> String {
-    if ptr.is_null() {
+    if crate::value::addr_class::try_read_string_header(ptr).is_none() {
         return String::new();
     }
     let len = (*ptr).byte_len as usize;

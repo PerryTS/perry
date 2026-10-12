@@ -825,7 +825,11 @@ def main(argv: list[str] | None = None) -> int:
                     f"{entry.path_prefix} | {entry.substring}"
                 )
 
-    failed = False
+    from string_validator_inventory import check as check_string_validators
+    validator_failures = check_string_validators(REPO_ROOT)
+    for failure in validator_failures:
+        print(failure)
+    failed = bool(validator_failures)
 
     if regressions:
         failed = True

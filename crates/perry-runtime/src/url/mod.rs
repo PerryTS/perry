@@ -81,7 +81,7 @@ pub(crate) fn get_string_content(ptr_f64: f64) -> String {
     // this arm is exactly the pre-#11519 body.
     if jsval.is_string() {
         let ptr = jsval.as_string_ptr();
-        if ptr.is_null() {
+        if unsafe { crate::value::addr_class::try_read_string_header(ptr) }.is_none() {
             return String::new();
         }
         unsafe {
@@ -109,7 +109,7 @@ fn short_string_content(jsval: crate::value::JSValue) -> String {
 }
 
 pub(crate) fn string_from_header(ptr: *mut crate::StringHeader) -> String {
-    if ptr.is_null() {
+    if unsafe { crate::value::addr_class::try_read_string_header(ptr) }.is_none() {
         return String::new();
     }
     unsafe {

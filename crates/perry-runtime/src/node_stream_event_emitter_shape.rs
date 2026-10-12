@@ -13,13 +13,10 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
         return None;
     }
     let addr = jsval.as_pointer::<u8>() as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(addr)
-        || crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown
-    {
-        return None;
-    }
-    // SAFETY: plausible and arena-owned, so the header is readable.
-    let header = unsafe { crate::value::addr_class::try_read_gc_header_known_plausible(addr) }?;
+
+    // SAFETY: canonical ownership admission precedes all header reads.
+    let tracked = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    let header = unsafe { tracked.as_ref() };
     (header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((addr as *mut crate::object::ObjectHeader, header._reserved))

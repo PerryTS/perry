@@ -569,13 +569,9 @@ fn own_data_slot(
         return None;
     }
     let addr = jsval.as_pointer::<u8>() as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(addr)
-        || crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown
-    {
-        return None;
-    }
+
     unsafe {
-        let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
+        let header = crate::value::addr_class::try_read_tracked_gc_header(addr)?.as_ref();
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
@@ -622,16 +618,14 @@ fn is_object_value(value: f64) -> bool {
         return false;
     }
     let addr = jsval.as_pointer::<u8>() as usize;
-    // An arena cell carries its GC header; anything else (a headerless
-    // buffer, a handle) takes the classifying probe.
-    if crate::value::addr_class::is_plausible_heap_addr(addr)
-        && crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown
-    {
-        // SAFETY: plausible and arena-owned, so the header is readable.
-        return unsafe { crate::value::addr_class::try_read_gc_header_known_plausible(addr) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_OBJECT,
+        )
     }
-    super::object_ptr_from_value(value).is_some()
+    .is_some()
+        || super::object_ptr_from_value(value).is_some()
 }
 
 fn is_array_value(value: f64) -> bool {

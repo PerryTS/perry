@@ -73,16 +73,7 @@ fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
 /// aligned address in the platform heap range, including unmapped addresses.
 #[inline(always)]
 fn raw_i64_receiver_is_managed(addr: usize) -> bool {
-    if !matches!(
-        crate::arena::classify_heap_space(addr),
-        crate::arena::HeapSpace::Unknown
-    ) {
-        return true;
-    }
-    addr.checked_sub(crate::gc::GC_HEADER_SIZE)
-        .is_some_and(|header| {
-            crate::gc::gc_malloc_header_is_tracked(header as *const crate::gc::GcHeader)
-        })
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()
 }
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {

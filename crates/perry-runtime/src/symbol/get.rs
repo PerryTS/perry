@@ -410,24 +410,8 @@ unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     } else {
         return None;
     };
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let header_addr = raw - crate::gc::GC_HEADER_SIZE;
-    let gc_header = header_addr as *const crate::gc::GcHeader;
-    let tracked_malloc = crate::gc::gc_malloc_header_is_tracked(gc_header);
-    let arena_payload = !matches!(
-        crate::arena::classify_heap_space(raw),
-        crate::arena::HeapSpace::Unknown
-    );
-    let arena_header = !matches!(
-        crate::arena::classify_heap_space(header_addr),
-        crate::arena::HeapSpace::Unknown
-    );
-    if !tracked_malloc && !(arena_payload && arena_header) {
-        return None;
-    }
-    Some((raw, (*gc_header).obj_type))
+    let header = crate::value::addr_class::try_read_tracked_gc_header(raw)?;
+    Some((raw, header.as_ref().obj_type))
 }
 
 /// Walk the prototype chains to find an inherited symbol property. Used by

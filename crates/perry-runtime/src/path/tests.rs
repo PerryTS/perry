@@ -359,7 +359,7 @@ mod malloc_backed_string_arg_tests {
     #[test]
     fn path_builtins_accept_malloc_backed_strings() {
         let path = malloc_backed_string(b"/a/b/c.txt");
-        assert!(is_string_header_ptr(path));
+        assert!(unsafe { crate::value::addr_class::try_read_string_header(path) }.is_some());
 
         let dir = js_path_dirname(path);
         let dir_str = unsafe { string_from_header(dir) }.expect("dirname returns a string");
@@ -375,7 +375,7 @@ mod malloc_backed_string_arg_tests {
     #[test]
     fn forged_unknown_pointer_is_still_rejected() {
         let bogus = 0x0000_7777_0000_1000usize as *const StringHeader;
-        assert!(!is_string_header_ptr(bogus));
+        assert!(unsafe { crate::value::addr_class::try_read_string_header(bogus) }.is_none());
     }
 }
 

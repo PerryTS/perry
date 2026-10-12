@@ -64,8 +64,15 @@ pub(super) fn emit(llmod: &mut LlModule, entry: &StringEntry) -> String {
     let n = entry.byte_len + 1;
     let ty = format!("{{ i8, i8, i16, i32, i32, i32, i32, i32, i32, [{n} x i8] }}");
     let gc_flags = IMAGE_GC_FLAGS;
+    let section = if llmod.target_triple.contains("apple") {
+        "__TEXT,__perry_strings"
+    } else if llmod.target_triple.contains("windows") {
+        ".perrystr$m"
+    } else {
+        "perry_strings"
+    };
     llmod.add_raw_global(format!(
-        "@{name} = weak_odr constant {ty} {{ i8 {GC_TYPE_STRING}, i8 {gc_flags}, i16 {STRING_IMAGE_MARKER}, i32 {}, i32 {units}, i32 {}, i32 {}, i32 0, i32 {flags}, [{n} x i8] {} }}, align 8",
+        "@{name} = weak_odr constant {ty} {{ i8 {GC_TYPE_STRING}, i8 {gc_flags}, i16 {STRING_IMAGE_MARKER}, i32 {}, i32 {units}, i32 {}, i32 {}, i32 0, i32 {flags}, [{n} x i8] {} }}, section \"{section}\", align 8",
         28 + n, entry.byte_len, entry.byte_len, entry.escaped_ir
     ));
     pointer(entry)
@@ -105,6 +112,21 @@ mod tests {
                     .count(),
                 1
             );
+        }
+    }
+
+    #[test]
+    fn literals_have_linker_owned_bounds_on_native_targets() {
+        for (target, section) in [
+            ("x86_64-unknown-linux-gnu", "perry_strings"),
+            ("aarch64-apple-darwin", "__TEXT,__perry_strings"),
+            ("x86_64-pc-windows-msvc", ".perrystr$m"),
+        ] {
+            let mut pool = StringPool::with_prefix("bounds".into());
+            let id = pool.intern("literal");
+            let mut module = LlModule::new(target);
+            emit(&mut module, pool.entry(id));
+            assert!(module.to_ir().contains(&format!("section \"{section}\"")));
         }
     }
 

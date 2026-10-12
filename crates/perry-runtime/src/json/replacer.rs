@@ -996,7 +996,12 @@ pub(crate) unsafe fn stringify_object_pretty(
     // in-range-but-unmapped garbage address (a denormal double that survived the
     // tag probes) SIGSEGVs here. Require a genuinely GC-tracked allocation first
     // and emit `null` otherwise, rather than faulting inside JSON.stringify.
-    if !super::stringify::ptr_is_tracked_heap_object(ptr) {
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc::GC_TYPE_OBJECT,
+    )
+    .is_none()
+    {
         buf.push_str("null");
         return;
     }
@@ -1167,7 +1172,12 @@ pub(crate) unsafe fn stringify_array_pretty(
     // Same gate as `stringify_object_pretty`: this is the fall-through branch for
     // a pointer that failed the object probes, so a corrupted pointer lands here
     // and the `(*arr).length` read below would fault.
-    if !super::stringify::ptr_is_tracked_heap_object(ptr) {
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc::GC_TYPE_ARRAY,
+    )
+    .is_none()
+    {
         buf.push_str("null");
         return;
     }

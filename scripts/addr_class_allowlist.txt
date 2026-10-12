@@ -1,4 +1,8 @@
 # Address-classification audit allowlist (scripts/addr_class_inventory.py).
+# Canonical image classifier: bounds precede every header read.
+crates/perry-runtime/src/value/addr_class/image.rs | as *const GcHeader | Canonical image admission: linker section bounds prove the complete header and StringHeader readable before this cast.
+crates/perry-runtime/src/value/addr_class/image.rs | as *mut GcHeader | Canonical image admission returns a raw address only after validating section bounds, immutable marker and complete payload; callers must not write image headers.
+
 #
 # Format: path-prefix | line-substring-or-* | justification
 # Matched findings are suppressed. Every entry MUST have a justification;

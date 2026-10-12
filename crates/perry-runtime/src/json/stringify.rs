@@ -33,41 +33,11 @@ pub(crate) fn check_stringify_nesting_depth(depth: usize) {
     }
 }
 
+/// Canonical ownership gate, shared with native string validators. Immutable
+/// image strings are valid GC-header addresses even though GC never owns them.
 #[inline]
-/// True only when `ptr` is an address the GC actually tracks — an arena
-/// allocation (nursery/old/longlived per the page-map) or a registered malloc
-/// object. Both checks are dereference-FREE (page-metadata / registry lookups),
-/// so this rejects a forged pointer before any field read.
-///
-/// A magnitude check alone is not enough here: a type-erased `JSON.stringify`
-/// walk can reach `is_object_pointer` with a primitive `number` whose f64 bits
-/// land INSIDE the heap magnitude window (~2–5 TB, e.g. `0x0000_0347_0000_0000`)
-/// yet point at an UNMAPPED page — `is_valid_obj_ptr` accepts it and the
-/// subsequent `crate::object::object_keys_array(obj)` read then SIGSEGVs. Mirrors the `path.rs` /
-/// `current_heap_header_for_user_ptr` Unknown→malloc rule.
 pub unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
-    let addr = ptr as usize;
-    if crate::value::addr_class::is_handle_band(addr) {
-        return false;
-    }
-    // Arena-resident (nursery/old/longlived) is decided by the page map alone —
-    // no header read at all.
-    if !matches!(
-        crate::arena::classify_heap_generation(addr),
-        crate::arena::HeapGeneration::Unknown
-    ) {
-        return true;
-    }
-    // Otherwise the only way to be tracked is a registered malloc object, which
-    // requires a real GcHeader at `addr - GC_HEADER_SIZE`. Route through
-    // `addr_class::try_read_gc_header` rather than re-casting: it layers the
-    // magnitude guard AND the small-buffer-slab guard on top of the handle-band
-    // check. A slab address is heap-plausible but carries NO header, so a raw
-    // cast would read the previous slab entry's data bytes as a fake header.
-    match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(header) => crate::gc::gc_malloc_header_is_tracked(header),
-        None => false,
-    }
+    crate::value::addr_class::try_read_tracked_gc_header(ptr as usize).is_some()
 }
 
 /// Decode an object keys-array slot without assuming heap-string storage.
@@ -96,7 +66,12 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // (a primitive number whose f64 bits land in the heap window) would likewise
     // SIGSEGV on the `keys_array` read below — require a genuinely GC-tracked
     // allocation before dereferencing anything.
-    if !ptr_is_tracked_heap_object(ptr) {
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc::GC_TYPE_OBJECT,
+    )
+    .is_none()
+    {
         return false;
     }
     let obj = ptr as *const crate::ObjectHeader;
@@ -110,7 +85,11 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // Require the *keys array itself* to be a tracked allocation before loading it.
     let looks_like_valid_pointer = potential_keys_ptr > 0x10000
         && (potential_keys_ptr & 0x7) == 0
-        && ptr_is_tracked_heap_object(potential_keys_ptr as *const u8);
+        && crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            potential_keys_ptr as usize,
+            crate::gc::GC_TYPE_ARRAY,
+        )
+        .is_some();
 
     if looks_like_valid_pointer {
         let keys_arr_view = crate::object::object_keys(obj);
@@ -149,7 +128,12 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // value right after that probe returns false (to tell an empty object apart
     // from a corrupted pointer), so an unmapped in-range garbage address must be
     // rejected here too before the `keys_array` field read.
-    if !ptr_is_tracked_heap_object(ptr) {
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc::GC_TYPE_OBJECT,
+    )
+    .is_none()
+    {
         return false;
     }
     let keys_view = crate::object::object_keys(ptr as *const crate::ObjectHeader);
@@ -160,7 +144,12 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // Same reasoning as `is_object_pointer`: a tracked `ptr` does not prove an
     // `ObjectHeader` layout, so this slot may be an unrelated field. Require the
     // keys array itself to be a tracked allocation before loading its length.
-    if !ptr_is_tracked_heap_object(keys as *const u8) {
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        keys as usize,
+        crate::gc::GC_TYPE_ARRAY,
+    )
+    .is_none()
+    {
         return false;
     }
     keys_view.count() == 0
@@ -182,7 +171,13 @@ pub(super) unsafe fn tracked_keys(
     view: crate::object::ObjectKeys,
 ) -> Option<crate::object::ObjectKeys> {
     let keys = view.arr() as *const crate::ArrayHeader;
-    if keys.is_null() || !ptr_is_tracked_heap_object(keys as *const u8) {
+    if keys.is_null()
+        || crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            keys as usize,
+            crate::gc::GC_TYPE_ARRAY,
+        )
+        .is_none()
+    {
         return None;
     }
     Some(view)
@@ -1342,24 +1337,46 @@ unsafe fn stringify_exotic_array(
 }
 
 #[inline]
-pub(crate) unsafe fn estimate_json_size(value: f64, type_hint: u32) -> usize {
-    let bits = value.to_bits();
-    if let Some(ptr) = extract_pointer(bits) {
-        // A small-handle-band id is not a heap object; reading its ArrayHeader
-        // length would deref unmapped memory. Use the scalar estimate.
-        if crate::value::addr_class::is_handle_band(ptr as usize) {
+pub(crate) unsafe fn estimate_json_size(value: f64, _type_hint: u32) -> usize {
+    if let Some(ptr) = extract_pointer(value.to_bits()) {
+        let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)
+        else {
             return 4096;
-        }
-        if type_hint == TYPE_ARRAY || (!is_object_pointer(ptr) && type_hint != TYPE_OBJECT) {
-            let arr = ptr as *const crate::ArrayHeader;
-            let len = (*arr).length as usize;
-            return (len * 300).max(256);
-        }
-        if type_hint == TYPE_OBJECT || is_object_pointer(ptr) {
-            let obj = ptr as *const crate::ObjectHeader;
-            let fields = crate::object::object_live_slot_count(obj) as usize;
-            return (fields * 200).max(256);
+        };
+        // A compiler hint is not permission to read a different layout. In
+        // particular, an image string is a readable GC header, not an array.
+        match header.as_ref().obj_type {
+            crate::gc::GC_TYPE_ARRAY => {
+                let len = (*(ptr as *const crate::ArrayHeader)).length as usize;
+                return len.saturating_mul(300).max(256);
+            }
+            crate::gc::GC_TYPE_OBJECT => {
+                let fields = crate::object::object_live_slot_count(ptr.cast()) as usize;
+                return fields.saturating_mul(200).max(256);
+            }
+            _ => {}
         }
     }
     4096
+}
+
+#[cfg(test)]
+mod image_layout_tests {
+    use super::*;
+
+    #[test]
+    fn image_headers_do_not_authorize_object_or_array_reads() {
+        let string = crate::value::addr_class::image_string_for_tests();
+        unsafe {
+            assert!(ptr_is_tracked_heap_object(string.cast()));
+            assert!(!is_object_pointer(string.cast()));
+            assert!(!object_has_no_own_keys(string.cast()));
+            for hint in [TYPE_UNKNOWN, TYPE_OBJECT, TYPE_ARRAY] {
+                assert_eq!(
+                    estimate_json_size(f64::from_bits(string as u64), hint),
+                    4096
+                );
+            }
+        }
+    }
 }
