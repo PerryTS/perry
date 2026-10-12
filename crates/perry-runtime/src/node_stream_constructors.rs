@@ -132,6 +132,7 @@ pub(super) fn init_lifecycle_state(stream: &RuntimeHandle<'_>, _: &RuntimeHandle
             (Slot::Destroyed, f64::from_bits(TAG_FALSE)),
             (Slot::Closed, f64::from_bits(TAG_FALSE)),
         ],
+        &[],
     );
 }
 
@@ -268,17 +269,19 @@ pub(super) fn init_readable_state(
             (Slot::ReadableFlag, bool_value(true)),
             (Slot::ReadableLivePush, bool_value(true)),
             (Slot::ReadableAborted, bool_value(false)),
-            (Slot::ReadableBuffered, 0.0),
             (Slot::ReadableObjectMode, bool_value(mode)),
-            (Slot::ReadableHwm, hwm),
             (Slot::ReadableFlowing, f64::from_bits(TAG_NULL)),
-            (Slot::Pipes, pipes.get_nanbox_f64()),
             (Slot::Readable, bool_value(true)),
             (Slot::ReadableEnded, bool_value(false)),
             (Slot::Disturbed, bool_value(false)),
             (Slot::ReadableEncoding, encoding.get_nanbox_f64()),
             (Slot::EmitClose, bool_value(emit_close)),
             (Slot::AutoDestroy, bool_value(auto_destroy)),
+        ],
+        &[
+            (StateData::ReadableBuffered, 0.0),
+            (StateData::ReadableHwm, hwm),
+            (StateData::Pipes, pipes.get_nanbox_f64()),
         ],
     );
     install_readable_state_view(stream.get_nanbox_f64());
@@ -322,12 +325,9 @@ pub(super) fn init_writable_state(
         &[
             (Slot::WritableFlag, bool_value(true)),
             (Slot::WritableObjectMode, bool_value(mode)),
-            (Slot::WritableHwm, hwm),
             (Slot::WritableDecodeStrings, bool_value(decode)),
             (Slot::WritableDefaultEncoding, encoding.get_nanbox_f64()),
-            (Slot::WritableLength, 0.0),
             (Slot::WritableNeedDrain, bool_value(false)),
-            (Slot::WritableCorked, 0.0),
             (Slot::Writable, bool_value(true)),
             (Slot::WritableEnded, bool_value(false)),
             (Slot::WritableFinished, bool_value(false)),
@@ -337,6 +337,11 @@ pub(super) fn init_writable_state(
                 Slot::WritablePendingFinishCallback,
                 f64::from_bits(TAG_UNDEFINED),
             ),
+        ],
+        &[
+            (StateData::WritableHwm, hwm),
+            (StateData::WritableLength, 0.0),
+            (StateData::WritableCorked, 0.0),
         ],
     );
     install_writable_state_view(stream.get_nanbox_f64());
@@ -379,6 +384,7 @@ pub(super) fn init_duplex_state(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle
                 (Slot::ReadableEnded, f64::from_bits(TAG_TRUE)),
                 (Slot::EndEmitted, f64::from_bits(TAG_TRUE)),
             ],
+            &[],
         );
     }
     if crate::runtime_state_key!(b"writable")
@@ -395,6 +401,7 @@ pub(super) fn init_duplex_state(stream: &RuntimeHandle<'_>, opts: &RuntimeHandle
                 (Slot::WritableFinished, f64::from_bits(TAG_TRUE)),
                 (Slot::FinishEmitted, f64::from_bits(TAG_TRUE)),
             ],
+            &[],
         );
     }
 }

@@ -365,7 +365,7 @@ fn default_high_water_mark_uses_the_resolved_mode() {
         "mode option must be read once"
     );
     assert_eq!(
-        read_slot(stream.get_nanbox_f64(), Slot::ReadableHwm),
+        read_state_data(stream.get_nanbox_f64(), StateData::ReadableHwm),
         Some(16.0)
     );
 }
@@ -391,17 +391,17 @@ fn birth_state_reads_follow_value_descriptor_and_replacement_changes() {
     let key = crate::runtime_state_key!(b"_readableState");
     let state = scope.root_nanbox_f64(key.read_value(stream.get_nanbox_f64()));
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        get_hidden_value(stream.get_nanbox_f64(), StateData::ReadableBuffered),
         Some(0.0)
     );
     crate::runtime_state_key!(b"length").write_value(state.get_nanbox_f64(), 17.0);
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        get_hidden_value(stream.get_nanbox_f64(), StateData::ReadableBuffered),
         Some(17.0)
     );
     crate::runtime_state_key!(b"extra").write_value(state.get_nanbox_f64(), 1.0);
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        get_hidden_value(stream.get_nanbox_f64(), StateData::ReadableBuffered),
         Some(17.0)
     );
     let replacement = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(1));
@@ -411,7 +411,7 @@ fn birth_state_reads_follow_value_descriptor_and_replacement_changes() {
     crate::runtime_state_key!(b"length").write_value(replacement.get_nanbox_f64(), 23.0);
     key.write_value(stream.get_nanbox_f64(), replacement.get_nanbox_f64());
     assert_eq!(
-        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        get_hidden_value(stream.get_nanbox_f64(), StateData::ReadableBuffered),
         Some(23.0)
     );
 }

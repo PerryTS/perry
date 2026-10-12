@@ -89,7 +89,7 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 // `Readable/Writable/Duplex.toWeb`. Placed above the Duplex band so it
 // can't collide as method sets grow.
 const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
-const READABLE_CHUNKS_KEY: Slot = Slot::ReadableChunks;
+const READABLE_CHUNKS_KEY: StateData = StateData::ReadableChunks;
 const READABLE_SOURCE_ITERATOR_KEY: Slot = Slot::ReadableSourceIterator;
 const READABLE_ERROR_KEY: Slot = Slot::ReadableError;
 const READABLE_SIGNAL_KEY: Slot = Slot::ReadableSignal;
@@ -108,9 +108,9 @@ const EVENT_EMITTER_ASYNC_RESOURCE_KEY: &[u8] = b"__perryEventEmitterAsyncResour
 const WRITABLE_WRITE_KEY: Slot = Slot::WritableWrite;
 const WRITABLE_FINISH_SCHEDULED_KEY: Slot = Slot::FinishScheduled;
 const WRITABLE_FINISH_EMITTED_KEY: Slot = Slot::FinishEmitted;
-const WRITABLE_CORKED_KEY: Slot = Slot::WritableCorked;
+const WRITABLE_CORKED_KEY: StateData = StateData::WritableCorked;
 const WRITABLE_BUFFERED_KEY: Slot = Slot::WritableBuffered;
-const WRITABLE_LENGTH_KEY: Slot = Slot::WritableLength;
+const WRITABLE_LENGTH_KEY: StateData = StateData::WritableLength;
 const WRITABLE_NEED_DRAIN_KEY: Slot = Slot::WritableNeedDrain;
 const WRITABLE_OBJECT_MODE_KEY: Slot = Slot::WritableObjectMode;
 const WRITABLE_DECODE_STRINGS_KEY: Slot = Slot::WritableDecodeStrings;
@@ -138,11 +138,11 @@ const WRITABLE_FLAG_KEY: Slot = Slot::WritableFlag;
 const STREAM_DISTURBED_KEY: Slot = Slot::Disturbed;
 // #1539: bytes currently buffered (for `push()`'s highWaterMark return) and
 // the effective readable highWaterMark.
-const READABLE_BUFFERED_KEY: Slot = Slot::ReadableBuffered;
-const READABLE_HWM_KEY: Slot = Slot::ReadableHwm;
+const READABLE_BUFFERED_KEY: StateData = StateData::ReadableBuffered;
+const READABLE_HWM_KEY: StateData = StateData::ReadableHwm;
 const READABLE_PENDING_KEY: Slot = Slot::ReadablePending;
 const READABLE_RESUME_SCHEDULED_KEY: Slot = Slot::ReadableResumeScheduled;
-const STREAM_PIPES_KEY: Slot = Slot::Pipes;
+const STREAM_PIPES_KEY: StateData = StateData::Pipes;
 const READABLE_BASE64_REMAINDER_KEY: Slot = Slot::ReadableBase64Remainder;
 /// #9490: the incomplete trailing UTF-8 sequence held between `push()` calls
 /// on a `setEncoding("utf8")` readable, mirroring the base64 remainder above.
@@ -696,7 +696,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
-    set_hidden_value(stream, Slot::ReadableBuffered, total);
+    set_hidden_value(stream, StateData::ReadableBuffered, total);
     if added > 0.0 {
         push_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
@@ -925,7 +925,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
     let prev = get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0);
     let total = prev + added;
     set_hidden_value(stream, hidden_buffered_key(), total);
-    set_hidden_value(stream, Slot::ReadableBuffered, total);
+    set_hidden_value(stream, StateData::ReadableBuffered, total);
     if added > 0.0 {
         unshift_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
@@ -1218,7 +1218,7 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
     if !is_callable_value(write.get_nanbox_f64()) {
         throw_missing_stream_method("The _write() method is not implemented");
     }
-    set_hidden_value(stream.get_nanbox_f64(), Slot::WritableWriteLen, len);
+    set_hidden_value(stream.get_nanbox_f64(), StateData::WritableWriteLen, len);
     set_hidden_value(
         stream.get_nanbox_f64(),
         Slot::WritableWriteCallback,
@@ -1358,7 +1358,7 @@ fn writable_default_encoding(stream: f64) -> f64 {
 
 fn writable_backpressure_return(stream: f64) -> f64 {
     let len = writable_length(stream);
-    let hwm = get_hidden_value(stream, Slot::WritableHwm).unwrap_or(16384.0);
+    let hwm = get_hidden_value(stream, StateData::WritableHwm).unwrap_or(16384.0);
     let ok = len < hwm || len == 0.0;
     set_writable_need_drain(stream, !ok);
     f64::from_bits(if ok { TAG_TRUE } else { TAG_FALSE })
@@ -1526,7 +1526,7 @@ pub extern "C" fn js_node_stream_method_unshift(stream_handle: i64, chunk: f64) 
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, Slot::ReadableHwm).unwrap_or(16384.0)
+    get_hidden_value(stream, StateData::ReadableHwm).unwrap_or(16384.0)
 }
 
 /// `stream.readableLength` property getter on a typed instance.
@@ -1576,7 +1576,7 @@ pub extern "C" fn js_node_stream_method_readable_encoding(stream_handle: i64) ->
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_writable_hwm(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, Slot::WritableHwm).unwrap_or(16384.0)
+    get_hidden_value(stream, StateData::WritableHwm).unwrap_or(16384.0)
 }
 
 /// `stream.writableLength` property getter on a typed instance.

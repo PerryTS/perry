@@ -146,6 +146,18 @@ impl StateKeyWrite for *mut crate::string::StringHeader {
     }
 }
 
+/// A public datum lives on its side's state object (`state_record.rs`).
+impl StateKey for StateData {
+    #[inline]
+    fn read(self, value: f64) -> Option<f64> {
+        read_state_data(value, self)
+    }
+    #[inline]
+    fn write(self, value: f64, field_value: f64) {
+        write_state_data(value, self, field_value)
+    }
+}
+
 impl StateKey for Slot {
     #[inline]
     fn read(self, value: f64) -> Option<f64> {
@@ -894,7 +906,7 @@ pub(super) fn clear_readable_buffer(stream: f64) {
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
     set_hidden_value(stream, hidden_buffered_key(), 0.0);
-    set_hidden_value(stream, Slot::ReadableBuffered, 0.0);
+    set_hidden_value(stream, StateData::ReadableBuffered, 0.0);
 }
 
 pub(super) fn clear_pending_readable_chunks(stream: f64) {
@@ -1719,7 +1731,7 @@ pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f6
         bytes.len() as f64
     };
     set_hidden_value(readable, hidden_buffered_key(), length);
-    set_hidden_value(readable, Slot::ReadableBuffered, length);
+    set_hidden_value(readable, StateData::ReadableBuffered, length);
 }
 
 pub(super) fn readable_from_options(opts: f64) -> f64 {

@@ -43,10 +43,14 @@ pub(in crate::node_stream) fn unpipe_all_destinations(stream: f64) {
     let scope = RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let dests = pipe_destinations_snapshot(&scope, &stream);
-    for key in [hidden_stream_pipes_key(), hidden_stream_pipe_no_end_key()] {
-        let empty = box_pointer(crate::array::js_array_alloc(0) as *const u8);
-        set_hidden_value(stream.get_nanbox_f64(), key, empty);
-    }
+    let empty = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    set_hidden_value(stream.get_nanbox_f64(), hidden_stream_pipes_key(), empty);
+    let empty = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        hidden_stream_pipe_no_end_key(),
+        empty,
+    );
     let _ = pause_readable_stream_after_unpipe(stream.get_nanbox_f64());
     for i in 0..snapshot_len(&dests) {
         let dest = snapshot_at(&dests, i);

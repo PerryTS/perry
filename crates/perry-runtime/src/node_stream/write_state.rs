@@ -156,7 +156,7 @@ pub(super) fn complete_writable_write(stream: f64, len: f64, callback: f64, err:
     let sync = writable_sync(s.get_nanbox_f64());
     set_flag(s.get_nanbox_f64(), WRITABLE_WRITING_KEY, false);
     subtract_writable_length(s.get_nanbox_f64(), len);
-    set_hidden_value(s.get_nanbox_f64(), Slot::WritableWriteLen, 0.0);
+    set_hidden_value(s.get_nanbox_f64(), StateData::WritableWriteLen, 0.0);
     set_hidden_value(
         s.get_nanbox_f64(),
         Slot::WritableWriteCallback,

@@ -224,31 +224,37 @@ extern "C" fn ns_transform3(
 }
 
 // Stream flags are inherited getters, as in Node. Their backing slots are
-// runtime-owned record fields, never extra string keys on the instance.
-const READABLE_PROPERTIES: &[(&str, Slot)] = &[
-    ("destroyed", Slot::Destroyed),
-    ("closed", Slot::Closed),
-    ("readableAborted", Slot::ReadableAborted),
-    ("readableLength", Slot::ReadableBuffered),
-    ("readableHighWaterMark", Slot::ReadableHwm),
-    ("readableObjectMode", Slot::ReadableObjectMode),
-    ("readableFlowing", Slot::ReadableFlowing),
-    ("readable", Slot::Readable),
-    ("readableEnded", Slot::ReadableEnded),
-    ("readableDidRead", Slot::Disturbed),
-    ("readableEncoding", Slot::ReadableEncoding),
+// runtime-owned record fields, never extra string keys on the instance; the
+// public data (`readableLength`, …) read their state object's own property.
+#[derive(Clone, Copy)]
+enum Word {
+    Slot(Slot),
+    Data(StateData),
+}
+const READABLE_PROPERTIES: &[(&str, Word)] = &[
+    ("destroyed", Word::Slot(Slot::Destroyed)),
+    ("closed", Word::Slot(Slot::Closed)),
+    ("readableAborted", Word::Slot(Slot::ReadableAborted)),
+    ("readableLength", Word::Data(StateData::ReadableBuffered)),
+    ("readableHighWaterMark", Word::Data(StateData::ReadableHwm)),
+    ("readableObjectMode", Word::Slot(Slot::ReadableObjectMode)),
+    ("readableFlowing", Word::Slot(Slot::ReadableFlowing)),
+    ("readable", Word::Slot(Slot::Readable)),
+    ("readableEnded", Word::Slot(Slot::ReadableEnded)),
+    ("readableDidRead", Word::Slot(Slot::Disturbed)),
+    ("readableEncoding", Word::Slot(Slot::ReadableEncoding)),
 ];
-const WRITABLE_PROPERTIES: &[(&str, Slot)] = &[
-    ("destroyed", Slot::Destroyed),
-    ("closed", Slot::Closed),
-    ("writableObjectMode", Slot::WritableObjectMode),
-    ("writableHighWaterMark", Slot::WritableHwm),
-    ("writableLength", Slot::WritableLength),
-    ("writableNeedDrain", Slot::WritableNeedDrain),
-    ("writableCorked", Slot::WritableCorked),
-    ("writable", Slot::Writable),
-    ("writableEnded", Slot::WritableEnded),
-    ("writableFinished", Slot::WritableFinished),
+const WRITABLE_PROPERTIES: &[(&str, Word)] = &[
+    ("destroyed", Word::Slot(Slot::Destroyed)),
+    ("closed", Word::Slot(Slot::Closed)),
+    ("writableObjectMode", Word::Slot(Slot::WritableObjectMode)),
+    ("writableHighWaterMark", Word::Data(StateData::WritableHwm)),
+    ("writableLength", Word::Data(StateData::WritableLength)),
+    ("writableNeedDrain", Word::Slot(Slot::WritableNeedDrain)),
+    ("writableCorked", Word::Data(StateData::WritableCorked)),
+    ("writable", Word::Slot(Slot::Writable)),
+    ("writableEnded", Word::Slot(Slot::WritableEnded)),
+    ("writableFinished", Word::Slot(Slot::WritableFinished)),
 ];
 
 extern "C" fn stream_property_get(c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
@@ -261,7 +267,11 @@ extern "C" fn stream_property_get(c: *const ClosureHeader, this: crate::closure:
     let Some((_, slot)) = properties.get(index % 64) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    read_slot(this.as_f64(), *slot).unwrap_or(f64::from_bits(TAG_UNDEFINED))
+    match *slot {
+        Word::Data(data) => read_state_data(this.as_f64(), data),
+        Word::Slot(slot) => read_slot(this.as_f64(), slot),
+    }
+    .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 extern "C" fn stream_property_set(
     c: *const ClosureHeader,
@@ -274,15 +284,16 @@ extern "C" fn stream_property_set(
     } else {
         WRITABLE_PROPERTIES
     };
-    if let Some((_, slot)) = properties.get(index % 64) {
-        write_slot(this.as_f64(), *slot, v);
+    // Only record flags get a setter (see install_stream_property_accessors).
+    if let Some(&(_, Word::Slot(slot))) = properties.get(index % 64) {
+        write_slot(this.as_f64(), slot, v);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 fn install_stream_property_accessors(proto: *mut ObjectHeader, kind: StreamProto) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let sets: &[(&[(&str, Slot)], usize)] = match kind {
+    let sets: &[(&[(&str, Word)], usize)] = match kind {
         StreamProto::Readable => &[(READABLE_PROPERTIES, 0)],
         StreamProto::Writable => &[(WRITABLE_PROPERTIES, 64)],
         StreamProto::Duplex => &[(WRITABLE_PROPERTIES, 64)],
@@ -297,7 +308,9 @@ fn install_stream_property_accessors(proto: *mut ObjectHeader, kind: StreamProto
             });
             let set_bits = if matches!(
                 properties[i].1,
-                Slot::Destroyed | Slot::Readable | Slot::ReadableFlowing | Slot::Writable
+                Word::Slot(
+                    Slot::Destroyed | Slot::Readable | Slot::ReadableFlowing | Slot::Writable
+                )
             ) {
                 let set = scope
                     .root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_set, 1), 1));

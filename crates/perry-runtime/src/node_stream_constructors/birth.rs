@@ -300,7 +300,7 @@ mod tests {
         let stream =
             scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
         assert_eq!(
-            read_slot(stream.get_nanbox_f64(), Slot::ReadableHwm),
+            read_state_data(stream.get_nanbox_f64(), StateData::ReadableHwm),
             Some(default_hwm(false))
         );
         let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();

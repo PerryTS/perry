@@ -74,7 +74,7 @@ pub(super) fn consume_readable_buffered_front(stream: f64, chunk: f64) {
     let remaining =
         (get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) - consumed).max(0.0);
     set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, Slot::ReadableBuffered, remaining);
+    set_hidden_value(stream, StateData::ReadableBuffered, remaining);
 }
 
 fn settle_readable_from_promise_fulfilled(stream: f64, chunk: f64, value: f64) {

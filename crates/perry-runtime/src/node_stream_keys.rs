@@ -4,7 +4,7 @@
 use super::*;
 
 #[inline]
-pub(super) fn hidden_chunks_key() -> Slot {
+pub(super) fn hidden_chunks_key() -> StateData {
     READABLE_CHUNKS_KEY
 }
 
@@ -74,7 +74,7 @@ pub(super) fn hidden_finish_emitted_key() -> Slot {
 }
 
 #[inline]
-pub(super) fn hidden_writable_corked_key() -> Slot {
+pub(super) fn hidden_writable_corked_key() -> StateData {
     WRITABLE_CORKED_KEY
 }
 
@@ -84,7 +84,7 @@ pub(super) fn hidden_writable_buffered_key() -> Slot {
 }
 
 #[inline]
-pub(super) fn hidden_writable_length_key() -> Slot {
+pub(super) fn hidden_writable_length_key() -> StateData {
     WRITABLE_LENGTH_KEY
 }
 
@@ -179,12 +179,12 @@ pub(super) fn hidden_disturbed_key() -> Slot {
 }
 
 #[inline]
-pub(super) fn hidden_buffered_key() -> Slot {
+pub(super) fn hidden_buffered_key() -> StateData {
     READABLE_BUFFERED_KEY
 }
 
 #[inline]
-pub(super) fn hidden_hwm_key() -> Slot {
+pub(super) fn hidden_hwm_key() -> StateData {
     READABLE_HWM_KEY
 }
 
@@ -199,7 +199,7 @@ pub(super) fn hidden_readable_resume_scheduled_key() -> Slot {
 }
 
 #[inline]
-pub(super) fn hidden_stream_pipes_key() -> Slot {
+pub(super) fn hidden_stream_pipes_key() -> StateData {
     STREAM_PIPES_KEY
 }
 

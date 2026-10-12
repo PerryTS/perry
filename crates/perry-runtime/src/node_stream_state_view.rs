@@ -151,7 +151,7 @@ fn writable_field(stream: f64, field: &str) -> f64 {
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
         "objectMode" => bool_bits(has_truthy_hidden(stream, hidden_writable_object_mode_key())),
         "highWaterMark" => {
-            get_hidden_value(stream, Slot::WritableHwm).unwrap_or_else(|| default_hwm(false))
+            get_hidden_value(stream, StateData::WritableHwm).unwrap_or_else(|| default_hwm(false))
         }
         "length" => writable_length(stream),
         "corked" => writable_corked_count(stream),
@@ -319,20 +319,24 @@ thread_local! {
 /// Internal reads use the very shape that birthed the public state. A changed
 /// descriptor, deletion, key addition or replacement stops this proof; the
 /// caller then performs the same ordinary Get through its existing read site.
+/// Each side reads its own birth word directly (a GC leaf: no call).
 #[inline]
-pub(super) fn read_birth_data(obj: *const ObjectHeader, slot: Slot) -> Option<f64> {
-    let (birth, index) = match slot {
-        Slot::ReadableHwm => (&READABLE_BIRTH, 0),
-        Slot::ReadableChunks => (&READABLE_BIRTH, 1),
-        Slot::ReadableBuffered => (&READABLE_BIRTH, 3),
-        Slot::Pipes => (&READABLE_BIRTH, 4),
-        Slot::WritableHwm => (&WRITABLE_BIRTH, 0),
-        Slot::WritableLength => (&WRITABLE_BIRTH, 1),
-        Slot::WritableCorked => (&WRITABLE_BIRTH, 2),
-        Slot::WritableWriteLen => (&WRITABLE_BIRTH, 4),
-        _ => return None,
+pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Option<f64> {
+    let index = match data {
+        StateData::ReadableHwm => 0,
+        StateData::ReadableChunks => 1,
+        StateData::ReadableBuffered => 3,
+        StateData::Pipes => 4,
+        StateData::WritableHwm => 0,
+        StateData::WritableLength => 1,
+        StateData::WritableCorked => 2,
+        StateData::WritableWriteLen => 4,
     };
-    let shape = birth.with(Cell::get);
+    let shape = if data.readable() {
+        READABLE_BIRTH.with(Cell::get)
+    } else {
+        WRITABLE_BIRTH.with(Cell::get)
+    };
     // SAFETY: the caller validated this live ordinary state receiver.
     if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
         return None;
@@ -431,16 +435,16 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
         let buffer = scope.root_nanbox_f64(box_pointer(crate::array::js_array_alloc(0).cast()));
         set_hidden_value(
             stream.get_nanbox_f64(),
-            Slot::ReadableChunks,
+            StateData::ReadableChunks,
             buffer.get_nanbox_f64(),
         );
         values.extend([
-            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::ReadableHwm)
+            super::state_record::constructor_data(stream.get_nanbox_f64(), StateData::ReadableHwm)
                 .unwrap_or(default_hwm(false)),
             buffer.get_nanbox_f64(),
             0.0,
             0.0,
-            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::Pipes)
+            super::state_record::constructor_data(stream.get_nanbox_f64(), StateData::Pipes)
                 .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
             f64::from_bits(TAG_NULL),
         ]);
@@ -451,7 +455,7 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
             js_closure_set_capture_f64(c, 0, stream.get_nanbox_f64())
         });
         values.extend([
-            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::WritableHwm)
+            super::state_record::constructor_data(stream.get_nanbox_f64(), StateData::WritableHwm)
                 .unwrap_or(default_hwm(false)),
             0.0,
             0.0,
@@ -481,7 +485,7 @@ extern "C" fn state_onwrite(c: *const ClosureHeader, _: crate::closure::JsThis, 
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let err = scope.root_nanbox_f64(err);
-    let len = get_hidden_value(stream.get_nanbox_f64(), Slot::WritableWriteLen).unwrap_or(0.0);
+    let len = get_hidden_value(stream.get_nanbox_f64(), StateData::WritableWriteLen).unwrap_or(0.0);
     let callback = get_hidden_value(stream.get_nanbox_f64(), Slot::WritableWriteCallback)
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
     super::write_state::complete_writable_write(
