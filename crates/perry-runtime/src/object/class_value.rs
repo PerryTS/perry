@@ -903,9 +903,15 @@ fn install_declared_static_method(class_id: u32, name: &str) {
         }
     }
     let _no_collect = crate::gc::GcSuppressScope::new();
-    let f = crate::closure::js_closure_alloc(code as *const crate::closure::JsFunctionInfo, 0);
+    let f = crate::closure::js_closure_alloc(code as *const crate::closure::JsFunctionInfo, 1);
     if f.is_null() {
         return;
+    }
+    unsafe {
+        crate::closure::closure_install_boxed_captures(
+            f,
+            &[crate::value::js_nanbox_pointer(ptr as i64).to_bits()],
+        );
     }
     class_static_set(class_id, name, crate::value::js_nanbox_pointer(f as i64));
     super::class_registry::class_static_set_defined_attrs(class_id, name, true, false, true);

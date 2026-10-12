@@ -18,6 +18,7 @@ pub(super) struct StaticMethodEntry {
     /// object for this method is at home in that evaluation's class object.
     pub(super) home: bool,
     pub(super) generator_owner: bool,
+    pub(super) is_generator: bool,
 }
 
 /// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
@@ -106,7 +107,7 @@ pub(super) fn emit_static_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.generator_owner {
+        if e.is_generator {
             f.set_generator();
         }
     });
@@ -207,7 +208,7 @@ pub(super) fn emit_class_method_entry(
         }
         f.set_length(e.spec_length);
         f.set_strict();
-        if e.generator_owner {
+        if e.is_generator {
             f.set_generator();
         }
         f.set_non_constructor();
@@ -222,6 +223,20 @@ pub(super) fn source_is_fixed_generator(
     cid: u32,
     id: u32,
 ) -> bool {
+    classes
+        .iter()
+        .find(|(c, _)| *c == cid)
+        .is_some_and(|(_, class)| {
+            class
+                .methods
+                .iter()
+                .chain(class.static_methods.iter())
+                .chain(class.computed_members.iter().map(|m| &m.function))
+                .any(|f| f.id == id && crate::codegen::helpers::body_needs_method_owner(&f.body))
+        })
+}
+
+pub(super) fn source_is_generator(classes: &[(u32, &perry_hir::Class)], cid: u32, id: u32) -> bool {
     classes
         .iter()
         .find(|(c, _)| *c == cid)
@@ -257,6 +272,7 @@ mod tests {
                 has_synth_args: false,
                 home,
                 generator_owner: false,
+                is_generator: false,
             },
         );
         chunker.finish();
@@ -289,8 +305,7 @@ pub(super) fn emit_computed_generator_entries(
 ) {
     for &(cid, class) in classes {
         for m in class.computed_members.iter().filter(|m| {
-            !m.is_static
-                && crate::codegen::helpers::body_has_fixed_generator_state(&m.function.body)
+            !m.is_static && crate::codegen::helpers::body_needs_method_owner(&m.function.body)
         }) {
             let f = &m.function;
             let llvm_name = format!(
@@ -313,6 +328,7 @@ pub(super) fn emit_computed_generator_entries(
                     has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                     home: fresh.contains(&cid),
                     generator_owner: true,
+                    is_generator: crate::codegen::helpers::body_has_fixed_generator_state(&f.body),
                 },
             );
         }

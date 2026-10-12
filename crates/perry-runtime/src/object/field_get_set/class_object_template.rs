@@ -892,7 +892,21 @@ enum ProtoFill {
 /// template `class_id`: it runs the method's closure-convention entry, and its
 /// home capture names class object `class`. `None` when the template
 /// registered no entry for `name`.
-pub(crate) unsafe fn evaluation_method_value(class_id: u32, name: &str, class: f64) -> Option<f64> {
+#[inline]
+pub(crate) unsafe fn evaluation_method_value(
+    class_id: u32,
+    name: impl AsRef<[u8]>,
+    class: f64,
+) -> Option<f64> {
+    evaluation_method_value_bytes(class_id, name.as_ref(), class)
+}
+
+#[inline(never)]
+pub(crate) unsafe fn evaluation_method_value_bytes(
+    class_id: u32,
+    name: &[u8],
+    class: f64,
+) -> Option<f64> {
     let Some(code) = super::super::class_registry::class_method_entry(class_id, name) else {
         // A computed member is its body: the function object captures it
         // (at home in, and branded by, this evaluation), never a name to
@@ -908,6 +922,7 @@ pub(crate) unsafe fn evaluation_method_value(class_id: u32, name: &str, class: f
                 decl.has_synthetic_arguments(),
                 decl.has_rest(),
                 0,
+                true,
             ),
         );
     };
@@ -1046,7 +1061,8 @@ pub(crate) unsafe fn record_prototype_template(
         let is = |name: &[u8]| crate::string::js_string_key_matches_bytes(key, name);
         let fill = if slot == 0 && is(b"constructor") && bits == owner {
             ProtoFill::Constructor
-        } else if let Some((name, false)) = members.iter().find(|(name, _)| is(name.as_bytes())) {
+        } else if let Some((name, false)) = members.iter().find(|(name, _)| is(name)) {
+            let name = name.as_slice();
             let Some(code) = super::super::class_registry::class_method_entry(class_id, name)
             else {
                 return;

@@ -609,18 +609,24 @@ mod repeated_evaluation_tests {
             object.with_mut_ptr::<ObjectHeader, _>(|object| {
                 stamp_private_evaluation_brand(object, b.get_nanbox_f64())
             });
-            private_lexical_brand_push(b.get_nanbox_f64());
+            // The method retains B's actual home independently of `this`.
+            let owner =
+                JSValue::from_bits(b.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>();
+            let home = scope.root_nanbox_f64(f64::from_bits(
+                super::super::class_object_props::class_object_prototype_value(owner).bits(),
+            ));
+            let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"owner".as_ptr(), 5) as i64,
+            ));
             let result = object.with_mut_ptr::<ObjectHeader, _>(|object| {
-                crate::object::js_super_method_call_dynamic(
-                    CID,
-                    b"owner".as_ptr(),
-                    5,
+                crate::object::js_object_super_call(
+                    home.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
                     crate::value::js_nanbox_pointer(object as i64),
                     std::ptr::null(),
                     0,
                 )
             });
-            private_lexical_brand_pop();
             assert_eq!(
                 result.to_bits(),
                 a.get_nanbox_f64().to_bits(),

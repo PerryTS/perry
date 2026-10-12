@@ -1532,6 +1532,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | "RegExp"
                 | "URL"
                 | "Function"
+                | "WeakMap"
+                | "WeakSet"
         ) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let nt = scope.root_nanbox_f64(nt);
@@ -1539,8 +1541,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
                 .map(|bits| scope.root_nanbox_u64(bits));
             let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
-            if ta_name == "RegExp" {
-                return native_receiver::finish_regexp(&scope, result, &nt, proto);
+            if matches!(ta_name, "RegExp" | "WeakMap" | "WeakSet") {
+                return native_receiver::finish_native_object(&scope, result, &nt, proto);
             }
             native_receiver::apply_prototype(result, proto);
             return result;

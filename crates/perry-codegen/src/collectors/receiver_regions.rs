@@ -1002,6 +1002,7 @@ fn expr_region_ender_with_trusted_operation(
         | Expr::LocalGet(_)
         | Expr::GlobalGet(_)
         | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::EnumMember { .. } => None,
 

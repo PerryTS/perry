@@ -522,6 +522,7 @@ pub fn lower_class_method_with_name(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let method_home = super::class_home::begin(ctx, &method.function);
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
@@ -709,6 +710,7 @@ pub fn lower_class_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.current_strict = saved_current_strict;
+    super::class_home::finish(ctx, &mut body, method_home, method.is_static);
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -724,7 +726,8 @@ pub fn lower_class_method_with_name(
     // binding inside the lazy state-machine body, so a throwing default
     // initializer never fires at call time (test262 class/dstr async-gen-meth-*).
     if method.function.is_generator {
-        let prologue_len = default_prologue_len + destructuring_prologue_len;
+        let prologue_len =
+            default_prologue_len + destructuring_prologue_len + usize::from(method_home.is_some());
         if prologue_len > 0 {
             ctx.gen_param_prologue_len.insert(func_id, prologue_len);
         }
@@ -781,6 +784,7 @@ pub fn lower_getter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let method_home = super::class_home::begin(ctx, &method.function);
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
@@ -843,6 +847,7 @@ pub fn lower_getter_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.current_strict = saved_current_strict;
+    super::class_home::finish(ctx, &mut body, method_home, method.is_static);
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -889,6 +894,7 @@ pub fn lower_setter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let method_home = super::class_home::begin(ctx, &method.function);
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
@@ -1014,6 +1020,7 @@ pub fn lower_setter_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.current_strict = saved_current_strict;
+    super::class_home::finish(ctx, &mut body, method_home, method.is_static);
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 

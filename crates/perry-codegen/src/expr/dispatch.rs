@@ -211,7 +211,8 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ObjectAssign { .. }
         | Expr::SetNewFromArray(..) => super::logical_collections::lower(ctx, expr),
         Expr::StaticMethodCall { .. } => super::static_method::lower(ctx, expr),
-        Expr::SuperMethodCall { .. }
+        Expr::ClassMethodHome { .. }
+        | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertyGet { .. }
         | Expr::SuperPropertySet { .. }

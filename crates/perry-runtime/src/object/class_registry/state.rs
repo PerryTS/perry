@@ -362,9 +362,11 @@ fn method_values(holder: usize) -> Option<*mut crate::ArrayHeader> {
 fn declared_method_index(
     class_id: u32,
     kind: ClassDeclarationValueKind,
-    name: &str,
+    name: impl AsRef<[u8]>,
 ) -> Option<(usize, usize)> {
-    let non_property = proto_member_has_no_string_key(class_id, name);
+    let name = name.as_ref();
+    let non_property =
+        std::str::from_utf8(name).is_ok_and(|name| proto_member_has_no_string_key(class_id, name));
     if non_property != (kind == ClassDeclarationValueKind::NonPropertyMethod) {
         return None;
     }
@@ -373,20 +375,26 @@ fn declared_method_index(
 
 /// Class `class_id`'s declaration value (`kind`, `name`), if its holder
 /// keeps one. Reads only: a class whose holder was never minted has none.
+#[inline]
 pub(crate) fn class_declaration_value(
     class_id: u32,
     kind: ClassDeclarationValueKind,
-    name: &str,
+    name: impl AsRef<[u8]>,
+) -> Option<u64> {
+    class_declaration_value_bytes(class_id, kind, name.as_ref())
+}
+
+#[inline(never)]
+pub(crate) fn class_declaration_value_bytes(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &[u8],
 ) -> Option<u64> {
     let holder = crate::object::class_value::class_value_if_minted(class_id)? as usize;
     if kind == ClassDeclarationValueKind::PrivateStaticMethod {
         // SAFETY: this agent's live class function object.
         return unsafe {
-            crate::closure::props::state_internal_get_joined(
-                holder,
-                kind.key_head(),
-                name.as_bytes(),
-            )
+            crate::closure::props::state_internal_get_joined(holder, kind.key_head(), name)
         }
         .map(f64::to_bits);
     }
@@ -402,10 +410,21 @@ pub(crate) fn class_declaration_value(
 /// value read must not cause (a per-evaluation template's evaluation reads
 /// its methods without ever building the template's own prototype). Minting
 /// itself materializes and keeps every method its prototype holds.
+#[inline]
 pub(crate) fn class_declaration_value_store(
     class_id: u32,
     kind: ClassDeclarationValueKind,
-    name: &str,
+    name: impl AsRef<[u8]>,
+    value_bits: u64,
+) {
+    class_declaration_value_store_bytes(class_id, kind, name.as_ref(), value_bits)
+}
+
+#[inline(never)]
+pub(crate) fn class_declaration_value_store_bytes(
+    class_id: u32,
+    kind: ClassDeclarationValueKind,
+    name: &[u8],
     value_bits: u64,
 ) {
     let Some(holder) = crate::object::class_value::class_value_if_minted(class_id) else {
@@ -413,7 +432,10 @@ pub(crate) fn class_declaration_value_store(
     };
     let holder = holder as usize;
     if kind == ClassDeclarationValueKind::PrivateStaticMethod {
-        let key = class_declaration_value_key(kind, name);
+        let key = class_declaration_value_key(
+            kind,
+            std::str::from_utf8(name).expect("private identifier"),
+        );
         // SAFETY: this agent's live, pinned class function object; the
         // internal write allocates under its own GcSuppressScope and stores
         // through the state record's barriered slot.
@@ -546,7 +568,7 @@ pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, Str
 
 /// The closure-convention entry declared for method `name` of class
 /// `class_id`, if any.
-pub(crate) fn class_method_entry(class_id: u32, name: &str) -> Option<usize> {
+pub(crate) fn class_method_entry(class_id: u32, name: impl AsRef<[u8]>) -> Option<usize> {
     let entry = super::declarations::class_method_decl(class_id, name)?.entry as usize;
     (entry != 0).then_some(entry)
 }
@@ -1075,31 +1097,44 @@ fn internal_symbol_dispatch_alias(name: &str) -> bool {
     )
 }
 
-fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut Vec<String>) {
-    names.sort();
-    names.dedup();
+fn order_class_string_member_names<K: AsRef<[u8]> + Ord>(
+    class_id: u32,
+    is_static: bool,
+    names: &mut Vec<K>,
+) {
     let orders = CLASS_STRING_MEMBER_ORDERS.read().ok();
-    let order_for = |name: &str| {
-        orders
-            .as_ref()
-            .and_then(|guard| guard.as_ref())
-            .and_then(|map| map.get(&(class_id, is_static, name.to_string())).copied())
+    let order_for = |name: &[u8]| {
+        std::str::from_utf8(name)
+            .ok()
+            .and_then(|name| {
+                orders
+                    .as_ref()
+                    .and_then(|guard| guard.as_ref())
+                    .and_then(|map| map.get(&(class_id, is_static, name.to_string())).copied())
+            })
+            .or_else(|| {
+                super::declarations::class_method_decl(class_id, name).map(|m| m.definition_order)
+            })
     };
-    // Synthetic names exist solely to keep Perry's string-based dispatch fast.
-    // A source method literally named "@@iterator" has an order registration
-    // and remains visible; an alias created for a Symbol method does not.
     names.retain(|name| {
-        let order = order_for(name);
-        order != Some(u32::MAX) && (order.is_some() || !internal_symbol_dispatch_alias(name))
+        let key = name.as_ref();
+        let order = order_for(key);
+        order != Some(u32::MAX)
+            && (order.is_some()
+                || !std::str::from_utf8(key).is_ok_and(internal_symbol_dispatch_alias))
     });
     crate::cold_sort::sort_by(names, |left, right| {
-        match (order_for(left), order_for(right)) {
+        match (order_for(left.as_ref()), order_for(right.as_ref())) {
             (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => left.cmp(right),
         }
     });
+    // Equal keys have equal definition order and compare adjacent here.
+    // Deduplicate after the one shared sort, rather than instantiating a
+    // second full sort for each key representation before this one.
+    names.dedup();
 }
 
 /// Own string-keyed methods and accessors in ClassBody definition order.
@@ -1154,7 +1189,7 @@ pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> V
 pub(super) fn install_class_decl_prototype_method_field(
     proto: *mut ObjectHeader,
     class_id: u32,
-    name: &str,
+    name: &[u8],
 ) {
     if proto.is_null() {
         return;
@@ -1165,8 +1200,9 @@ pub(super) fn install_class_decl_prototype_method_field(
     // `constructor` data property would shadow a computed method with that
     // name and make the installation write the class constructor straight
     // back. The canonical vtable value is the property value we need.
-    let method_handle =
-        scope.root_nanbox_f64(class_prototype_method_value_for_name(class_id, name));
+    let method_handle = scope.root_nanbox_f64(
+        crate::object::native_module::class_prototype_method_value_for_bytes(class_id, name),
+    );
     let key_handle = scope.root_string_ptr(crate::string::js_string_from_bytes(
         name.as_ptr(),
         name.len() as u32,
@@ -1181,11 +1217,10 @@ pub(super) fn install_class_decl_prototype_method_field(
             }
         })
     });
-    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        set_builtin_property_attrs(
-            proto as usize,
-            name.to_string(),
-            PropertyAttrs::new(true, false, true),
+    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
+        crate::object::key_attrs::apply_edits(
+            proto,
+            &[crate::object::key_attrs::AttrsEdit::Data(name, 5)],
         )
     });
 }
@@ -1265,6 +1300,7 @@ pub(super) fn install_class_decl_prototype_symbol_member(
                 false,
                 has_rest,
                 entry,
+                true,
             )
         } else {
             crate::object::build_symbol_bound_method_closure(
@@ -1305,14 +1341,14 @@ fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_i
 
 /// The class's own string-keyed prototype members in ClassBody order, each
 /// with whether it is an accessor (else a method).
-pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
+pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(Vec<u8>, bool)> {
     let (mut names, accessors) = super::declarations::class_declared_member_names(class_id);
     names.extend(accessors.iter().cloned());
     order_class_string_member_names(class_id, false, &mut names);
     names
         .into_iter()
         // A private `#x` member is never a property of the prototype.
-        .filter(|name| !name.starts_with('#'))
+        .filter(|name| !name.starts_with(b"#"))
         .map(|name| {
             let is_accessor = accessors.contains(&name);
             (name, is_accessor)
@@ -1330,7 +1366,11 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
         // Both installers root the prototype across their own allocations.
         proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
             if is_accessor {
-                super::decl_accessors::install_decl_prototype_accessor(proto, class_id, &name);
+                super::decl_accessors::install_decl_prototype_accessor(
+                    proto,
+                    class_id,
+                    std::str::from_utf8(&name).expect("accessor name"),
+                );
             } else {
                 install_class_decl_prototype_method_field(proto, class_id, &name);
             }

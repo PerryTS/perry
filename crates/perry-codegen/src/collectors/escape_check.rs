@@ -1162,6 +1162,7 @@ pub fn check_escapes_in_expr(
         | Expr::Null
         | Expr::This
         | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::ExternFuncRef { .. }
         | Expr::GlobalGet(_)

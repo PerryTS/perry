@@ -399,7 +399,22 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         // comparing `class_id`, matching the `is_registered_map`/
         // `is_registered_set` safety bar above.
         let receiver = crate::value::js_nanbox_pointer(addr as i64);
-        if let Some(class_id) = crate::object::weak_class_id_from_receiver(receiver) {
+        let class_id = crate::object::weak_class_id_from_receiver(receiver)?;
+        // A weak brand is independent of [[Prototype]]. A subclass or a
+        // relinked intrinsic uses its own shape edge before the intrinsic.
+        if let Some(proto) = super::super::prototype_chain::object_static_prototype(addr) {
+            return Some(f64::from_bits(proto));
+        }
+        let object = addr as *const ObjectHeader;
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                let cid = unsafe { (*object).class_id };
+                if super::super::is_class_id_registered(cid) {
+                    return Some(super::class_decl_prototype_value(cid));
+                }
+            }
+        }
+        {
             let name = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
                 "WeakMap"
             } else {

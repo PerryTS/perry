@@ -56,6 +56,7 @@ pub(crate) unsafe fn install_evaluation_generator_symbols(proto: f64, owner: f64
                 member.has_synthetic_arguments(),
                 member.has_rest(),
                 member.entry as usize,
+                true,
             ),
         );
         crate::object::native_module::set_bound_native_closure_name(

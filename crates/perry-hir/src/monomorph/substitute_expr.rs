@@ -288,6 +288,13 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Class/Enum references
+        Expr::ClassMethodHome {
+            class_name,
+            is_static,
+        } => Expr::ClassMethodHome {
+            class_name: class_name.clone(),
+            is_static: *is_static,
+        },
         Expr::ClassRef(name) => Expr::ClassRef(name.clone()),
         Expr::EnumMember {
             enum_name,

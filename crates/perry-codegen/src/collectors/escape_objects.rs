@@ -668,6 +668,7 @@ pub fn check_object_literal_escapes_in_expr(
         // Known leaf variants — no sub-expressions, can't hide a LocalGet.
         Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) | Expr::String(_)
         | Expr::Undefined | Expr::Null | Expr::This | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_) | Expr::ExternFuncRef { .. } | Expr::GlobalGet(_)
         | Expr::BigInt(_)
         // Time / perf leaf intrinsics

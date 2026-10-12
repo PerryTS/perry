@@ -23,6 +23,7 @@ use super::*;
 /// The inline bump allocator now handles most object allocation directly;
 /// `js_object_alloc(0, N)` is the fallback for dynamic cases.
 pub fn declare_phase_b_objects(module: &mut LlModule) {
+    module.declare_function("js_class_method_home", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("perry_class_value_dir_cell", PTR, &[]);
     // A class's instance members: its image declaration constant.
     module.declare_function(

@@ -68,7 +68,7 @@ fn computed_member_keeps_classbody_order_across_an_early_birth() {
     let proto = crate::object::class_decl_prototype_value(cid);
     assert_eq!(own_names(proto), ["constructor", "a"]);
     super::super::registration::record_class_string_member_order(cid, "k".to_string(), false, 11);
-    name_computed_member(cid, 11, MemberName::Str("k".to_string()));
+    name_computed_member(cid, 11, MemberName::Str("k".as_bytes().to_vec()));
     assert_eq!(own_names(proto), ["constructor", "a", "k", "b"]);
     assert!(crate::object::class_method_slot_target(cid, "b").is_some());
     assert!(crate::object::class_method_slot_target(cid, "k").is_some());
@@ -100,13 +100,13 @@ fn reevaluated_computed_member_keeps_the_holder_bounded() {
     let cid = 0x6F03;
     register(cid, b"Renamed");
     test_declare_computed_member(cid, 30, method());
-    name_computed_member(cid, 30, MemberName::Str("k0".to_string()));
+    name_computed_member(cid, 30, MemberName::Str("k0".as_bytes().to_vec()));
     let holder = crate::object::class_value::class_value_ptr(cid) as usize;
     let mut previous = crate::object::class_prototype_method_value_for_name(cid, "k0").to_bits();
     let baseline = unsafe { crate::closure::props::state_key_count(holder) };
     for i in 1..2000 {
         let name = format!("k{i}");
-        name_computed_member(cid, 30, MemberName::Str(name.clone()));
+        name_computed_member(cid, 30, MemberName::Str(name.as_bytes().to_vec()));
         let value = crate::object::class_prototype_method_value_for_name(cid, &name);
         assert_ne!(value.to_bits(), crate::value::TAG_UNDEFINED);
         assert_ne!(
@@ -145,7 +145,7 @@ fn holder_namespace_separates_names_values_and_private_statics() {
     // a private static key.
     literal(cid, "\u{1}k:40", 41);
     literal(cid, "#x", 42);
-    name_computed_member(cid, 40, MemberName::Str("real".to_string()));
+    name_computed_member(cid, 40, MemberName::Str("real".as_bytes().to_vec()));
     let is_function = |v: f64| {
         let js = crate::JSValue::from_bits(v.to_bits());
         js.is_pointer() && crate::closure::is_closure_ptr(js.as_pointer::<u8>() as usize)
@@ -165,7 +165,7 @@ fn holder_namespace_separates_names_values_and_private_statics() {
     let computed = decl.members().iter().find(|m| m.name.is_null()).unwrap();
     assert_eq!(
         class_member_name(cid, computed),
-        MemberName::Str("real".to_string())
+        MemberName::Str("real".as_bytes().to_vec())
     );
     // Each value answers again with the same object.
     assert_eq!(
@@ -231,7 +231,7 @@ fn class_expression_evaluations_keep_their_own_computed_names() {
                 value,
                 cid,
                 61,
-                MemberName::Str(key.to_string()),
+                MemberName::Str(key.as_bytes().to_vec()),
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
         }
@@ -248,5 +248,25 @@ fn class_expression_evaluations_keep_their_own_computed_names() {
         });
         let names = own_names(f64::from_bits(proto.bits()));
         assert_eq!(names, ["constructor", "x", *key], "evaluation {key}");
+    }
+}
+
+/// Property keys retain WTF-8 bytes through naming and lazy prototype birth.
+#[test]
+fn computed_method_names_preserve_surrogate_bytes() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let cid = 0x6F20;
+    register(cid, b"RawKeys");
+    test_declare_computed_member(cid, 90, method());
+    let bytes = vec![0xED, 0xA0, 0x80];
+    name_computed_member(cid, 90, MemberName::Str(bytes.clone()));
+    assert!(class_method_decl(cid, &bytes).is_some());
+    assert!(class_method_decl(cid, b"").is_none());
+    assert!(class_method_decl(cid, "\u{FFFD}").is_none());
+    let prototype = crate::object::class_decl_prototype_value(cid);
+    let object = crate::JSValue::from_bits(prototype.to_bits()).as_pointer::<crate::ObjectHeader>();
+    unsafe {
+        assert!(crate::object::own_property_get_by_bytes(object, &bytes, prototype).is_some());
+        assert!(crate::object::own_property_get_by_bytes(object, b"", prototype).is_none());
     }
 }

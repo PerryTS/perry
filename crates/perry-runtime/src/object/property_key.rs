@@ -386,10 +386,8 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_u64(receiver.to_bits());
     let key_handle = scope.root_nanbox_f64(js_to_property_key(key));
-    let base = super::class_super_chain::class_super_base(
-        home_class_id,
-        f64::from_bits(receiver_handle.get_nanbox_u64()),
-    );
+    let home = super::class_registry::class_decl_prototype_value(home_class_id);
+    let base = super::js_object_get_prototype_of(home);
     let base_value = crate::value::JSValue::from_bits(base.to_bits());
     if base_value.is_null() || base_value.is_undefined() {
         let key_hdr = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());

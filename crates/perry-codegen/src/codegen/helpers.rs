@@ -1153,7 +1153,7 @@ fn has_numeric_version_suffix(component: &str, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod target_os_tests {
-    use super::{TARGET_NAMES, default_target_triple, resolve_target_triple, target_os_of};
+    use super::{default_target_triple, resolve_target_triple, target_os_of, TARGET_NAMES};
 
     #[test]
     fn target_aliases_resolve_and_classify_to_the_rust_target_os() {
@@ -1830,4 +1830,18 @@ pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
             }))
         )
     })
+}
+
+/// Whether the body needs the selected method's lexical function object.
+pub(crate) fn body_needs_method_owner(body: &[perry_hir::Stmt]) -> bool {
+    body_has_fixed_generator_state(body)
+        || body.iter().any(|s| {
+            matches!(
+                s,
+                perry_hir::Stmt::Let {
+                    init: Some(perry_hir::Expr::ClassMethodHome { .. }),
+                    ..
+                }
+            )
+        })
 }

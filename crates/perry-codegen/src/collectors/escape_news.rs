@@ -907,6 +907,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::GlobalGet(_)
         | Expr::This
         | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::ExternFuncRef { .. }
         | Expr::DateNow

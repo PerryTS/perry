@@ -79,3 +79,5 @@ pub(crate) use static_init::{
     computed_field_key_initializers_with_order,
 };
 pub(crate) use type_alias::lower_type_alias_decl;
+
+mod class_home;

@@ -737,20 +737,20 @@ fn name_computed_instance_member(
     }
 }
 
-fn property_key_string(key: f64) -> Option<String> {
+fn property_key_string(key: f64) -> Option<Vec<u8>> {
     let property_key = unsafe { crate::object::js_to_property_key(key) };
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         return None;
     }
     let str_ptr = crate::value::js_jsvalue_to_string(property_key);
     if str_ptr.is_null() {
-        return Some(String::new());
+        return Some(Vec::new());
     }
     unsafe {
         let len = (*str_ptr).byte_len as usize;
         let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
-        Some(std::str::from_utf8(bytes).unwrap_or("").to_string())
+        Some(bytes.to_vec())
     }
 }
 
@@ -843,52 +843,63 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         Some(name) => name,
         None => return,
     };
-    super::registration::record_class_string_member_order(
-        class_id,
-        name.clone(),
-        is_static != 0,
-        definition_order as u32,
-    );
-    if is_static != 0 && name == "prototype" {
+    if let Ok(utf8) = std::str::from_utf8(&name) {
+        super::registration::record_class_string_member_order(
+            class_id,
+            utf8.to_owned(),
+            is_static != 0,
+            definition_order as u32,
+        );
+    }
+    if is_static != 0 && name == b"prototype" {
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
     if is_static != 0 {
-        {
-            let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(crate::fast_hash::new_ptr_hash_map());
-            }
-            guard
-                .as_mut()
-                .unwrap()
-                .entry(class_id)
-                .or_default()
-                .entry(name.clone())
-                .and_modify(|e| {
-                    (e.0, e.1, e.2, e.3) = (
-                        func_ptr as usize,
-                        param_count as u32,
-                        has_rest != 0,
-                        entry as usize,
-                    )
-                })
-                .or_insert((
-                    func_ptr as usize,
-                    param_count as u32,
-                    has_rest != 0,
-                    entry as usize,
-                ));
-        }
-        if entry != 0 {
-            // SetFunctionName(F, key): the key is known only now.
-            // The name is keyed by the body's code; `entry` is its info.
-            crate::builtins::js_register_function_name(
-                (*(entry as *const crate::closure::JsFunctionInfo)).code,
-                name.as_ptr(),
-                name.len() as u32,
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let home = if is_class_object_value(owner) {
+            owner
+        } else {
+            super::super::class_value::class_value(class_id)
+        };
+        let home = scope.root_nanbox_f64(home);
+        let function = super::super::native_module::class_method_declaration_value(
+            home.get_nanbox_f64(),
+            &name,
+            func_ptr as usize,
+            param_count as u32,
+            false,
+            has_rest != 0,
+            entry as usize,
+            true,
+        );
+        let function = scope.root_nanbox_f64(function);
+        let key = scope.root_nanbox_f64(property_key);
+        // A computed method is an ordinary own property. Its exact key lives
+        // on the holder's shape, without a string-keyed dispatch registration.
+        let target = home.get_nanbox_f64();
+        let addr = crate::value::js_nanbox_get_pointer(target) as usize;
+        let object = if crate::closure::is_closure_ptr(addr) {
+            crate::closure::props::bag_ensure(addr)
+        } else {
+            addr as *mut ObjectHeader
+        };
+        let object = scope.root_raw_mut_ptr(object);
+        let key_header = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
+            as *const crate::StringHeader;
+        object.with_mut_ptr::<ObjectHeader, _>(|object| {
+            crate::object::object_ops::define_property_force_store_value(
+                object,
+                key_header,
+                function.get_nanbox_f64(),
             );
+            crate::object::key_attrs::apply_edits(
+                object,
+                &[crate::object::key_attrs::AttrsEdit::Data(&name, 5)],
+            );
+        });
+        if crate::closure::is_closure_ptr(addr) {
+            crate::closure::shape::refresh_closure_shape(addr);
         }
-        crate::object::class_value::note_intrinsic_registration(class_id, &name);
     } else {
         // The member's declaration carries its body; this evaluation names
         // it, which also installs it when the decl prototype is waiting for
@@ -963,7 +974,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         }
         return;
     }
-    if let Some(name) = property_key_string(property_key) {
+    if let Some(bytes) = property_key_string(property_key) {
+        let Ok(name) = String::from_utf8(bytes) else {
+            return;
+        };
         super::registration::record_class_string_member_order(
             class_id,
             name.clone(),
@@ -980,7 +994,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 owner,
                 class_id,
                 definition_order,
-                super::declarations::MemberName::Str(name),
+                super::declarations::MemberName::Str(name.into_bytes()),
                 property_key,
             );
         } else {

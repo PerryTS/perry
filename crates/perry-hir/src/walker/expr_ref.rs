@@ -37,6 +37,7 @@ where
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
         | Expr::NewTarget
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::This
         | Expr::SuperPropertyGet { .. }

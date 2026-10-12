@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I8, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::{sanitize_member, scoped_static_method_name};
@@ -1127,7 +1127,8 @@ pub(super) fn emit_string_pool(
                     .any(|p| p.is_rest && p.arguments_object.is_none()),
                 has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                 home: fresh_class_templates.contains(class_name),
-                generator_owner: super::helpers::body_has_fixed_generator_state(&f.body),
+                generator_owner: super::helpers::body_needs_method_owner(&f.body),
+                is_generator: super::helpers::body_has_fixed_generator_state(&f.body),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1275,16 +1276,8 @@ pub(super) fn emit_string_pool(
         };
         let bytes_global = format!("@{}", entry.bytes_global);
         let len_str = entry.byte_len.to_string();
-        // Every class prototype holds a function object of each method's own
-        // body, running this closure-convention entry: its JsFunctionInfo is the
-        // ConstFn fact the prototype's shape records for the method's slot. A
-        // per-evaluation template's evaluations each hold their own object, at
-        // home in that evaluation (`class_method_entry_enter_home`); a declared
-        // class's one object has no home and runs in its receiver's evaluation,
-        // exactly as a vtable call does.
-        // The entries are defined after every init chunk (below), so the
-        // init code module init runs stays contiguous: an entry runs only
-        // when its method value is called.
+        // Each method's callable entry is the prototype shape's ConstFn fact.
+        // Its selected function object retains the lexical class evaluation.
         let home = fresh_cids.contains(&cid);
         let entry_name = format!("{}__eclo", llvm_name);
         let entry_ref = format!("@{}", entry_name);
@@ -1296,6 +1289,11 @@ pub(super) fn emit_string_pool(
             has_user_rest: has_rest,
             has_synth_args,
             home,
+            is_generator: method_entries::source_is_generator(
+                &local_classes,
+                cid,
+                definition_order,
+            ),
             generator_owner: method_entries::source_is_fixed_generator(
                 &local_classes,
                 cid,
@@ -1402,6 +1400,11 @@ pub(super) fn emit_string_pool(
                 has_user_rest,
                 has_synth_args,
                 home: fresh_cids.contains(&cid),
+                is_generator: method_entries::source_is_generator(
+                    &local_classes,
+                    cid,
+                    definition_order,
+                ),
                 generator_owner: method_entries::source_is_fixed_generator(
                     &local_classes,
                     cid,
@@ -1980,7 +1983,7 @@ pub(super) fn emit_string_pool(
 
 #[path = "fn_info_facts.rs"]
 mod fn_info_facts;
-use fn_info_facts::{FnInfoFactSources, record_fn_info_facts};
+use fn_info_facts::{record_fn_info_facts, FnInfoFactSources};
 
 #[cfg(test)]
 #[path = "class_name_registration_tests.rs"]
@@ -1988,4 +1991,4 @@ mod class_name_registration_tests;
 
 #[path = "method_entries.rs"]
 mod method_entries;
-use method_entries::{StaticMethodEntry, emit_class_method_entry, emit_static_method_entry};
+use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};

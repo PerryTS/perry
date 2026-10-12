@@ -725,3 +725,29 @@ fn constructs_only_through_own_evaluation(body: &[crate::ir::Stmt], class_name: 
     }
     ok
 }
+
+#[test]
+fn class_expression_forward_reads_use_the_lexical_tdz() {
+    let ast =
+        perry_parser::parse_typescript("new C(); typeof C; const C = class {};", "tdz.ts").unwrap();
+    let hir = super::lower_module(&ast, "tdz", "tdz.ts").unwrap();
+    let early = format!("{:?}", &hir.init[..2]);
+    assert!(early.contains(crate::tdz_check::TDZ_THROW), "{early}");
+    assert!(
+        !early.contains("New { class_name"),
+        "construction must read the lexical value: {early}"
+    );
+}
+
+#[test]
+fn class_super_home_is_a_lexical_binding_captured_by_arrows() {
+    let ast = perry_parser::parse_typescript("class B {} class C extends B { m() { return () => super.x; } static m() { return super.x; } }", "home.ts").unwrap();
+    let hir = super::lower_module(&ast, "home", "home.ts").unwrap();
+    let class = hir.classes.iter().find(|c| c.name == "C").unwrap();
+    for method in class.methods.iter().chain(&class.static_methods) {
+        let text = format!("{:?}", method.body);
+        assert!(text.contains("ClassMethodHome"), "{text}");
+        assert!(text.contains("ObjectSuperPropertyGet"), "{text}");
+        assert!(!text.contains("SuperPropertyGet { property"), "{text}");
+    }
+}

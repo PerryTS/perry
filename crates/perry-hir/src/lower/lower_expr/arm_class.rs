@@ -242,7 +242,6 @@ pub(crate) fn lower_class_expr(
             || computed_statics.iter().any(|(_, value)| uses_self(value))
             || computed_name_evaluations.iter().any(uses_self)
     });
-    let has_static_methods = !class.static_methods.is_empty();
     let native_parent = class.native_extends.is_some();
     ctx.pending_classes.push(class);
     // #1772/#5893: a class EXPRESSION that carries per-evaluation static
@@ -274,7 +273,7 @@ pub(crate) fn lower_class_expr(
             // value on a fresh child class. The shared path remains for class
             // expressions with static methods until those methods can be
             // installed on fresh class objects.
-            || (parent_expr.is_some() && !has_static_methods));
+            || parent_expr.is_some());
     // #11298: every evaluation of a class expression creates a distinct
     // constructor and prototype (ClassDefinitionEvaluation), even when the
     // class has none of the per-evaluation state above. A capture-free,

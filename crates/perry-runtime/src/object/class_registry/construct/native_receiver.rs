@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) unsafe fn finish_regexp(
+pub(super) unsafe fn finish_native_object(
     scope: &crate::gc::RuntimeHandleScope,
     result: f64,
     nt: &crate::gc::RuntimeHandle<'_>,

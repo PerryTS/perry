@@ -384,7 +384,7 @@ const RESUME_KEY: &str = "\u{1}r";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemberName {
     /// A string-keyed member.
-    Str(String),
+    Str(Vec<u8>),
     /// A computed member whose key evaluated to a symbol: not a string
     /// member (its own tables hold it).
     NotAString,
@@ -477,7 +477,7 @@ pub(crate) fn member_name_of_symbol(sym_key: usize) -> MemberName {
             .then_some("__perry_inspect_custom__")
     });
     match alias {
-        Some(name) => MemberName::Str(name.to_string()),
+        Some(name) => MemberName::Str(name.as_bytes().to_vec()),
         None => MemberName::NotAString,
     }
 }
@@ -507,7 +507,7 @@ fn member_name_of_value(value: f64, method: bool) -> MemberName {
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     // SAFETY: a string value read from a traced slot.
     match unsafe { crate::string::js_string_key_bytes(js, &mut buf) } {
-        Some(bytes) => MemberName::Str(String::from_utf8_lossy(bytes).into_owned()),
+        Some(bytes) => MemberName::Str(bytes.to_vec()),
         None => MemberName::NotAString,
     }
 }
@@ -584,26 +584,32 @@ pub(super) fn computed_key_value(class_id: u32, definition_order: u32) -> Option
 /// The name of `member` of class `class_id`.
 pub(crate) fn class_member_name(class_id: u32, member: &ClassMemberDecl) -> MemberName {
     match member.name_bytes() {
-        Some(bytes) => match std::str::from_utf8(bytes) {
-            Ok(name) => MemberName::Str(name.to_string()),
-            Err(_) => MemberName::NotAString,
-        },
+        Some(bytes) => MemberName::Str(bytes.to_vec()),
         None => computed_member_name(class_id, member),
     }
 }
 
 /// Does `member` of `class_id` have the name `name`?
 #[inline]
-fn member_is_named(class_id: u32, member: &ClassMemberDecl, name: &str) -> bool {
+fn member_is_named(class_id: u32, member: &ClassMemberDecl, name: &[u8]) -> bool {
     match member.name_bytes() {
-        Some(literal) => literal == name.as_bytes(),
+        Some(literal) => literal == name,
         None => matches!(computed_member_name(class_id, member), MemberName::Str(s) if s == name),
     }
 }
 
 /// The index (in declaration order) of the method `name` of class
 /// `class_id` as last declared, and the declaration's member count.
-pub(crate) fn class_method_decl_index(class_id: u32, name: &str) -> Option<(usize, usize)> {
+#[inline]
+pub(crate) fn class_method_decl_index(
+    class_id: u32,
+    name: impl AsRef<[u8]>,
+) -> Option<(usize, usize)> {
+    class_method_decl_index_bytes(class_id, name.as_ref())
+}
+
+#[inline(never)]
+pub(crate) fn class_method_decl_index_bytes(class_id: u32, name: &[u8]) -> Option<(usize, usize)> {
     let decl = class_declaration(class_id)?;
     let members = decl.members();
     members
@@ -613,7 +619,19 @@ pub(crate) fn class_method_decl_index(class_id: u32, name: &str) -> Option<(usiz
 }
 
 /// The method `name` of class `class_id` as last declared.
-pub(crate) fn class_method_decl(class_id: u32, name: &str) -> Option<&'static ClassMemberDecl> {
+#[inline]
+pub(crate) fn class_method_decl(
+    class_id: u32,
+    name: impl AsRef<[u8]>,
+) -> Option<&'static ClassMemberDecl> {
+    class_method_decl_bytes(class_id, name.as_ref())
+}
+
+#[inline(never)]
+pub(crate) fn class_method_decl_bytes(
+    class_id: u32,
+    name: &[u8],
+) -> Option<&'static ClassMemberDecl> {
     let decl = class_declaration(class_id)?;
     decl.members()
         .iter()
@@ -623,7 +641,13 @@ pub(crate) fn class_method_decl(class_id: u32, name: &str) -> Option<&'static Cl
 
 /// The accessor `name` of class `class_id` as declared: each half from the
 /// last member declaring it, and the setter's spec `.length`.
-pub(crate) fn class_accessor_decl(class_id: u32, name: &str) -> Option<AccessorDecl> {
+#[inline]
+pub(crate) fn class_accessor_decl(class_id: u32, name: impl AsRef<[u8]>) -> Option<AccessorDecl> {
+    class_accessor_decl_bytes(class_id, name.as_ref())
+}
+
+#[inline(never)]
+pub(crate) fn class_accessor_decl_bytes(class_id: u32, name: &[u8]) -> Option<AccessorDecl> {
     let decl = class_declaration(class_id)?;
     if !decl.has_accessors() {
         return None;
@@ -662,9 +686,9 @@ fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
 /// (or would hold if born now), each once per kind in declaration order:
 /// `(methods, accessors)`. Members from the first one whose computed key the
 /// definition has not evaluated onward are left out.
-pub(crate) fn class_declared_member_names(class_id: u32) -> (Vec<String>, Vec<String>) {
-    let mut methods: Vec<String> = Vec::new();
-    let mut accessors: Vec<String> = Vec::new();
+pub(crate) fn class_declared_member_names(class_id: u32) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let mut methods: Vec<Vec<u8>> = Vec::new();
+    let mut accessors: Vec<Vec<u8>> = Vec::new();
     let Some(decl) = class_declaration(class_id) else {
         return (methods, accessors);
     };
@@ -690,7 +714,7 @@ pub(crate) fn class_declared_member_names(class_id: u32) -> (Vec<String>, Vec<St
 pub(crate) fn class_method_decl_by_entry(
     class_id: u32,
     entry: usize,
-) -> Option<(String, &'static ClassMemberDecl)> {
+) -> Option<(Vec<u8>, &'static ClassMemberDecl)> {
     let decl = class_declaration(class_id)?;
     decl.members().iter().rev().find_map(|m| {
         if !m.is_method() || m.entry as usize != entry {
@@ -819,13 +843,13 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
     let end = next.unwrap_or(decl.members().len());
     // The string members the prototype holds (a symbol method's dispatch
     // alias and a re-added deleted key are not among them).
-    let members: Vec<String> = super::state::class_prototype_member_names(class_id)
+    let members: Vec<Vec<u8>> = super::state::class_prototype_member_names(class_id)
         .into_iter()
         .map(|(name, _)| name)
         .collect();
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
-    let mut installed: Vec<String> = Vec::new();
+    let mut installed: Vec<Vec<u8>> = Vec::new();
     for member in &decl.members()[index..end] {
         let MemberName::Str(name) = class_member_name(class_id, member) else {
             continue;
@@ -836,7 +860,11 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
         let accessor = member.is_accessor();
         proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
             if accessor {
-                super::decl_accessors::install_decl_prototype_accessor(proto, class_id, &name);
+                super::decl_accessors::install_decl_prototype_accessor(
+                    proto,
+                    class_id,
+                    std::str::from_utf8(&name).expect("accessor name"),
+                );
             } else {
                 super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
             }

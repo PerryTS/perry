@@ -515,6 +515,25 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         ast::Callee::Expr(expr) => {
             // Check for super.method() call
             if let ast::Expr::SuperProp(super_prop) = expr.as_ref() {
+                if let (Some(home_id), Some(spread_args)) = (
+                    ctx.object_super_home_stack.last().copied(),
+                    spread_args.as_ref(),
+                ) {
+                    let key = match &super_prop.prop {
+                        ast::SuperProp::Ident(i) => Expr::String(i.sym.to_string()),
+                        ast::SuperProp::Computed(c) => lower_expr(ctx, &c.expr)?,
+                    };
+                    return Ok(Expr::CallSpread {
+                        callee: Box::new(Expr::ObjectSuperPropertyGet {
+                            home: Box::new(Expr::LocalGet(home_id)),
+                            key: Box::new(key),
+                            receiver: Box::new(Expr::This),
+                        }),
+                        args: spread_args.clone(),
+                        type_args: Vec::new(),
+                    });
+                }
+
                 match &super_prop.prop {
                     ast::SuperProp::Ident(ident) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {

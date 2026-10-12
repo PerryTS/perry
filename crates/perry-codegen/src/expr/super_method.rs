@@ -7,542 +7,93 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
-use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::SuperMethodCall { method, args } => {
-            super::this_super_call::check_derived_this_initialized(ctx);
-            // Find the current class from the class_stack.
-            let Some(current_class_name) = ctx.class_stack.last().cloned() else {
-                // No enclosing class — fall back to stub.
-                for a in args {
-                    let _ = lower_expr(ctx, a)?;
-                }
-                return Ok(double_literal(0.0));
-            };
-            // Walk parent chain starting from extends_name. The method tables
-            // hold INSTANCE methods only: in a static member `super` is the
-            // parent constructor, which the runtime path resolves.
-            let mut parent = if ctx.in_static_member {
-                None
-            } else {
-                ctx.classes
-                    .get(&current_class_name)
-                    .and_then(|c| c.extends_name.clone())
-            };
-            let mut resolved_fn: Option<String> = None;
-            // #8040: the class the body actually lives on, so the trailing
-            // parameter shape below is read off the callee we are calling.
-            let mut resolved_owner: Option<String> = None;
-            while let Some(p) = parent {
-                let key = (p.clone(), method.clone());
-                if let Some(fname) = ctx.methods.get(&key).cloned() {
-                    resolved_fn = Some(fname);
-                    resolved_owner = Some(p.clone());
-                    break;
-                }
-                parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
-            }
-            let Some(fn_name) = resolved_fn else {
-                // Compile-time resolution failed (the parent has no INSTANCE
-                // method of this name). This happens for (1) a DYNAMIC parent
-                // (`class X extends _mod.default` — the interop ESM default base,
-                // wall 38/42) whose `extends_name` never resolves to a known
-                // class, and (2) a `super.m()` inside a `static` method, where
-                // the target is the parent's STATIC method (not in the instance
-                // tables walked above). Both are handled by the runtime helper,
-                // which walks the registered parent edge and — when `this` is a
-                // ClassRef — resolves the parent's static method. Routing here
-                // beats the bogus numeric `0.0` ("value is not a function").
-                let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-                if cid != 0 && crate::expr::method_site::args_may_observe_lookup(ctx, args) {
-                    // #11910: `super.m` is read (a getter runs) before
-                    // arguments that can observe it; the value is called with
-                    // `this` after them.
-                    return lower_super_lookup_first(ctx, cid, method, args);
-                }
-                if cid != 0 {
-                    let this_box = match ctx.this_stack.last().cloned() {
-                        Some(slot) => ctx.block().load(DOUBLE, &slot),
-                        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                    };
-                    let (lowered_args, args_group) =
-                        crate::lower_call::lower_call_args_rooted(ctx, args)?;
-                    let (args_ptr, args_len) = if lowered_args.is_empty() {
-                        ("null".to_string(), "0".to_string())
-                    } else {
-                        let n = lowered_args.len();
-                        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                        for (i, v) in lowered_args.iter().enumerate() {
-                            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                            ctx.block().store(DOUBLE, v, &slot);
-                        }
-                        let ptr_reg = ctx.block().next_reg();
-                        ctx.block().emit_raw(format!(
-                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                            ptr_reg, n, buf
-                        ));
-                        (ptr_reg, n.to_string())
-                    };
-                    let key_box = emit_interned_super_key(ctx, method);
-                    let rooted_result = ctx.block().call(
-                        DOUBLE,
-                        "js_super_method_call_key",
-                        &[
-                            (I32, &cid.to_string()),
-                            (DOUBLE, &key_box),
-                            (DOUBLE, &this_box),
-                            (PTR, &args_ptr),
-                            (I64, &args_len),
-                        ],
-                    );
-                    args_group.release(ctx);
-                    return Ok(rooted_result);
-                }
-                for a in args {
-                    let _ = lower_expr(ctx, a)?;
-                }
-                return Ok(double_literal(0.0));
-            };
-            if resolved_owner.as_ref().is_some_and(|owner| {
-                ctx.classes.get(owner).is_some_and(|class| {
-                    class.methods.iter().any(|f| {
-                        &f.name == method
-                            && crate::codegen::helpers::body_has_fixed_generator_state(&f.body)
-                    })
-                })
-            }) {
-                // A generator birth must receive the selected function object,
-                // including a fresh evaluation's super method and prototype.
-                let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-                return lower_super_lookup_first(ctx, cid, method, args);
-            }
-            // Lower `this` (from this_stack) + args.
-            let this_slot = ctx
-                .this_stack
-                .last()
-                .cloned()
-                .ok_or_else(|| anyhow!("super.{}() outside any method body", method))?;
-            let this_box = ctx.block().load(DOUBLE, &this_slot);
-            let mut lowered: Vec<String> = Vec::with_capacity(args.len() + 1);
-            lowered.push(this_box.clone());
-            let (user_vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
-            // The body above was resolved along the declared `extends` chain.
-            // `super` is the home object's CURRENT `[[Prototype]]`, so a
-            // relinked class prototype (or other prototype surgery on this
-            // name) sends the call to the runtime, which reads that chain.
-            let home_cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-            let guarded_merge = if home_cid != 0 {
-                let direct_idx = ctx.new_block("super_m.direct");
-                let dynamic_idx = ctx.new_block("super_m.dynamic");
-                let merge_idx = ctx.new_block("super_m.merge");
-                let direct_label = ctx.block_label(direct_idx);
-                let dynamic_label = ctx.block_label(dynamic_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                let ok = crate::lower_call::holder_shape_guard::super_guard(
-                    ctx,
-                    &current_class_name,
-                    method,
-                );
-                ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
-                ctx.current_block = dynamic_idx;
-                let (args_ptr, args_len) = if user_vals.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let n = user_vals.len();
-                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                    for (i, v) in user_vals.iter().enumerate() {
-                        let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                        ctx.block().store(DOUBLE, v, &slot);
-                    }
-                    let ptr_reg = ctx.block().next_reg();
-                    ctx.block().emit_raw(format!(
-                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                        ptr_reg, n, buf
-                    ));
-                    (ptr_reg, n.to_string())
-                };
-                let key_box = emit_interned_super_key(ctx, method);
-                let dynamic_value = ctx.block().call(
-                    DOUBLE,
-                    "js_super_method_call_key",
-                    &[
-                        (I32, &home_cid.to_string()),
-                        (DOUBLE, &key_box),
-                        (DOUBLE, &this_box),
-                        (PTR, &args_ptr),
-                        (I64, &args_len),
-                    ],
-                );
-                let dynamic_end = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-                ctx.current_block = direct_idx;
-                Some((merge_idx, merge_label, dynamic_value, dynamic_end))
-            } else {
-                None
-            };
-            // #8040: this arm passed every argument POSITIONALLY, which is wrong
-            // whenever the resolved parent method ends in an array-shaped slot.
-            // A body reading `arguments` gets one synthesized trailing parameter
-            // (#677) and a `...rest` gets its own; either way the callee expects
-            // an array there, and a raw positional scalar landed in it instead —
-            // `super.m(1, 2, 3)` into `m(a, b) { arguments }` bound `arguments`
-            // to the number 3.
-            // The synth bit comes off the metadata maps, which also cover a
-            // parent this module has no HIR for (an imported class). The
-            // user-rest bit is read off the class HIR where available
-            // (`method_has_user_rest`); for the HIR-less parent, a rest-shaped
-            // param that is NOT the synthesized slot can only be a user rest.
-            let owner_key = resolved_owner
-                .as_deref()
-                .map(|owner| (owner.to_string(), method.clone()));
-            let synth = owner_key
-                .as_ref()
-                .map(|key| {
-                    ctx.method_has_synthetic_arguments
-                        .get(key)
-                        .copied()
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            let has_rest = owner_key
-                .as_ref()
-                .map(|key| ctx.method_has_rest.get(key).copied().unwrap_or(false))
-                .unwrap_or(false);
-            let user_rest = resolved_owner
-                .as_deref()
-                .map(|owner| crate::codegen::arguments::method_has_user_rest(ctx, owner, method))
-                .unwrap_or(false)
-                || (has_rest && !synth);
-            if synth || user_rest {
-                let declared = resolved_owner
-                    .as_deref()
-                    .and_then(|owner| {
-                        ctx.method_param_counts
-                            .get(&(owner.to_string(), method.clone()))
-                            .copied()
-                    })
-                    .unwrap_or(0);
-                let trailing_slots = if synth && user_rest { 2 } else { 1 };
-                let fixed = declared.saturating_sub(trailing_slots);
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                for i in 0..fixed {
-                    lowered.push(user_vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
-                }
-                // (from, to, mark_as_arguments_object), in callee param order.
-                let mut bundles: Vec<(usize, usize, bool)> = Vec::new();
-                if user_rest {
-                    bundles.push((fixed, user_vals.len(), false));
-                }
-                if synth {
-                    bundles.push((0, user_vals.len(), true));
-                }
-                for (from, to, mark) in bundles {
-                    let cap = (to.saturating_sub(from) as u32).to_string();
-                    let mut arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
-                    for v in user_vals.iter().take(to).skip(from) {
-                        let blk = ctx.block();
-                        arr = blk.call(I64, "js_array_push_f64", &[(I64, &arr), (DOUBLE, v)]);
-                    }
-                    if mark {
-                        let blk = ctx.block();
-                        arr = blk.call(I64, "js_array_mark_arguments_object", &[(I64, &arr)]);
-                    }
-                    lowered.push(nanbox_pointer_inline(ctx.block(), &arr));
-                }
-            } else {
-                lowered.extend(user_vals);
-            }
-            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-            let direct_value = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
-            let Some((merge_idx, merge_label, dynamic_value, dynamic_end)) = guarded_merge else {
-                let rooted_result = direct_value;
-                args_group.release(ctx);
-                return Ok(rooted_result);
-            };
-            let direct_end = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-            ctx.current_block = merge_idx;
-            let rooted_result = ctx.block().phi(
-                DOUBLE,
-                &[(&direct_value, &direct_end), (&dynamic_value, &dynamic_end)],
-            );
-            args_group.release(ctx);
-            Ok(rooted_result)
-        }
-
-        // -------- super.method(...spread) --------
-        // The plain `SuperMethodCall` arm passes each argument positionally, so
-        // a `...rest` spread would be delivered as ONE array argument. When the
-        // resolved super target is a NATIVE base (EventEmitter.prototype.emit
-        // and friends) forwarding a rest param via `super.emit(event, ...args)`
-        // delivered `[payload]` to the listener instead of `payload`. Flatten
-        // every argument (regular + spread-expanded) into a single JS array,
-        // then dispatch through `js_super_method_call_dynamic_apply` — the
-        // runtime helper materialises the array into a flat f64 buffer and
-        // forwards to the same parent-chain resolution used by the non-spread
-        // dynamic path (which handles both native-prototype and user-class
-        // JS parents).
-        Expr::SuperMethodCallSpread { method, args } => {
-            super::this_super_call::check_derived_this_initialized(ctx);
-            use perry_hir::CallArg;
-            let Some(current_class_name) = ctx.class_stack.last().cloned() else {
-                for a in args {
-                    match a {
-                        CallArg::Expr(e) | CallArg::Spread(e) => {
-                            let _ = lower_expr(ctx, e)?;
-                        }
-                    }
-                }
-                return Ok(double_literal(0.0));
-            };
-            let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-            if cid == 0 {
-                for a in args {
-                    match a {
-                        CallArg::Expr(e) | CallArg::Spread(e) => {
-                            let _ = lower_expr(ctx, e)?;
-                        }
-                    }
-                }
-                return Ok(double_literal(0.0));
-            }
-            // Build a single args array containing every argument in source
-            // order, expanding spreads via array-like-to-array + concat — the
-            // SAME rooted machinery as the CallSpread method-apply path.
-            //
-            // #7803: this arm was a private copy of that loop with the
-            // accumulator in a bare i64 register, the exact defect that
-            // corrupted the heap through `NewDynamicSpread` (see
-            // new_dynamic.rs). The `this` load moves BELOW the bundling for
-            // the same reason: the register read above it is a copy the
-            // collector cannot rewrite, and `this` is immutable so the
-            // re-ordered slot read observes the same binding.
-            if crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args) {
-                // #11910: `super.m` is read before the spread runs.
-                let this_value = |ctx: &mut FnCtx<'_>| match ctx.this_stack.last().cloned() {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                };
-                let this_box = this_value(ctx);
-                let value = emit_super_get(ctx, cid, method, &this_box);
-                let mut group = crate::rooting::open_rooted_group(1);
-                let root = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &value, true);
-                let r =
-                    crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, acc| {
-                        let value = group.reread_emitted(ctx, root);
-                        let this_box = this_value(ctx);
-                        Ok(ctx.block().call(
-                            DOUBLE,
-                            "js_method_site_call_value_apply",
-                            &[(DOUBLE, &value), (DOUBLE, &this_box), (I64, acc)],
-                        ))
-                    });
-                group.release(ctx);
-                return r;
-            }
-            crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, current| {
-                let args_array = nanbox_pointer_inline(ctx.block(), current);
-                let this_box = match ctx.this_stack.last().cloned() {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                };
-                let key_box = emit_interned_super_key(ctx, method);
-                Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_super_method_call_key_apply",
-                    &[
-                        (I32, &cid.to_string()),
-                        (DOUBLE, &key_box),
-                        (DOUBLE, &this_box),
-                        (DOUBLE, &args_array),
-                    ],
-                ))
-            })
-        }
-
-        // -------- super.<prop> as a value (issue #774) --------
-        // Walk the parent-class chain. If a parent declares a method
-        // with the requested name, materialize it as a closure value
-        // via the singleton wrapper (mirroring `Expr::FuncRef`).
-        // Otherwise return `undefined` — which is the strict-JS
-        // result for instance-field shadows like:
-        //
-        //     class A { foo = "A"; }
-        //     class B extends A { foo = "B"; m() { return super.foo; } }
-        //
-        // The previous lowering rewrote `super.foo` to `this.foo`, so
-        // it silently returned the child override ("B") instead of
-        // `undefined`. See issue #774 / PR #774 follow-up.
-        //
-        // Call-form `super.method(...)` never reaches this arm — it
-        // is lowered to `Expr::SuperMethodCall` in lower_call.rs.
-        Expr::SuperPropertyGet { property } => {
-            super::this_super_call::check_derived_this_initialized(ctx);
-            let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let Some(current_class_name) = ctx.class_stack.last().cloned() else {
-                return Ok(undef);
-            };
-            // As for the call form: in a static member the instance method
-            // tables do not describe `super`.
-            let mut parent = if ctx.in_static_member {
-                None
-            } else {
-                ctx.classes
-                    .get(&current_class_name)
-                    .and_then(|c| c.extends_name.clone())
-            };
-            let mut resolved_fn: Option<String> = None;
-            while let Some(p) = parent {
-                let key = (p.clone(), property.clone());
-                if let Some(fname) = ctx.methods.get(&key).cloned() {
-                    resolved_fn = Some(fname);
-                    break;
-                }
-                parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
-            }
-            // `super.prop` reads the property off the home object's current
-            // `[[Prototype]]` with `this` as receiver: an accessor (getter) is
-            // INVOKED, a data property (`B.prototype.x = 42`) is returned. The
-            // runtime reads that chain from the home class id. Refs
-            // class/super/in-{constructor,getter,methods,setter}.
-            let home_cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-            let runtime_get = |ctx: &mut FnCtx<'_>| -> String {
-                let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
-                    ctx.block().load(DOUBLE, &this_slot)
-                } else {
-                    crate::expr::body_call::unbound_this_value(ctx)
-                };
-                let key_idx = ctx.strings.intern(property);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-                let home_cid_s = home_cid.to_string();
+        Expr::ClassMethodHome {
+            class_name,
+            is_static,
+        } => {
+            let owner = if let Some(slot) = ctx.current_closure_slot.clone() {
+                let callee = ctx.block().load(I64, &slot);
                 ctx.block().call(
                     DOUBLE,
-                    "js_super_accessor_get",
-                    &[(I32, &home_cid_s), (DOUBLE, &key_box), (DOUBLE, &recv_v)],
+                    "js_closure_get_capture_f64",
+                    &[(I64, &callee), (I32, "0")],
                 )
-            };
-            let Some(fn_name) = resolved_fn else {
-                return Ok(runtime_get(ctx));
-            };
-            // The method above was resolved along the declared `extends`
-            // chain, which holds while the home and intermediate holders
-            // retain their complete candidate shapes, as for `super.m()`.
-            let guarded = if home_cid != 0 {
-                let direct_idx = ctx.new_block("super_get.direct");
-                let dynamic_idx = ctx.new_block("super_get.dynamic");
-                let merge_idx = ctx.new_block("super_get.merge");
-                let direct_label = ctx.block_label(direct_idx);
-                let dynamic_label = ctx.block_label(dynamic_idx);
-                let merge_label = ctx.block_label(merge_idx);
-                let ok = crate::lower_call::holder_shape_guard::super_guard(
-                    ctx,
-                    &current_class_name,
-                    property,
-                );
-                ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
-                ctx.current_block = dynamic_idx;
-                let dynamic_value = runtime_get(ctx);
-                let dynamic_end = ctx.block().label.clone();
-                ctx.block().br(&merge_label);
-                ctx.current_block = direct_idx;
-                Some((merge_idx, merge_label, dynamic_value, dynamic_end))
+            } else if let Some(callee) = ctx.current_closure_ptr.clone() {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_closure_get_capture_f64",
+                    &[(I64, &callee), (I32, "0")],
+                )
             } else {
-                None
+                let cid =
+                    ctx.class_ids.get(class_name).copied().ok_or_else(|| {
+                        anyhow!("missing lexical class identity for {class_name}")
+                    })?;
+                // A direct declaration body has one lexical constructor.
+                // Read it through the shared holder operation; no site cache.
+                super::emit_class_value(ctx.block(), cid)
             };
-            // Mirror Expr::FuncRef: route through the singleton wrapper
-            // so callers can invoke via the closure-call ABI. The
-            // `__perry_wrap_<fn>` symbol is emitted by compile_module
-            // for every user function.
-            //
-            // #1126: when the resolved parent method lives in a DIFFERENT
-            // module (typical with cross-module class inheritance —
-            // rxjs's `OperatorSubscriber extends Subscriber` where
-            // `super.complete` / `super._complete` refer to Subscriber.ts's
-            // methods), the wrapper's `define` lives in the source TU but
-            // is referenced from this consumer TU. LLVM per-TU IR
-            // validation rejects the reference unless we forward-declare
-            // the symbol. Push into `pending_declares` — `declare_function`
-            // dedupes against any later same-TU `define` (`module.rs:67-69`
-            // comment) so this is safe for the same-module case too. The
-            // signature is informational only (the runtime dispatches by the
-            // body's `JsFunctionInfo`); use the JS body ABI with 0 doubles,
-            // the shape the imported-function-ref sites use for
-            // unknown-arity imports.
-            let wrap_name = format!("__perry_wrap_{}", fn_name);
-            ctx.pending_declares.push((
-                wrap_name.clone(),
+            Ok(ctx.block().call(
                 DOUBLE,
-                crate::expr::body_call::js_body_param_types(0),
-            ));
-            let blk = ctx.block();
-            let wrap_info = blk.fn_info_ref(&wrap_name);
-            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
-            let direct_value = nanbox_pointer_inline(blk, &closure_handle);
-            let Some((merge_idx, merge_label, dynamic_value, dynamic_end)) = guarded else {
-                return Ok(direct_value);
-            };
-            let direct_end = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-            ctx.current_block = merge_idx;
-            Ok(ctx.block().phi(
-                DOUBLE,
-                &[(&direct_value, &direct_end), (&dynamic_value, &dynamic_end)],
+                "js_class_method_home",
+                &[(DOUBLE, &owner), (I32, &(*is_static as u32).to_string())],
             ))
         }
-
-        Expr::SuperPropertySet {
-            parent_class_id,
-            parent_class_name,
-            key,
-            value,
-        } => {
-            super::this_super_call::check_derived_this_initialized(ctx);
-            let parent_cid = if *parent_class_id != 0 {
-                *parent_class_id
-            } else if let Some(parent_name) = parent_class_name {
-                ctx.class_ids.get(parent_name).copied().unwrap_or(0)
-            } else {
-                let Some(current_class_name) = ctx.class_stack.last().cloned() else {
-                    return Err(anyhow!("super property assignment outside any method body"));
-                };
-                ctx.classes
-                    .get(&current_class_name)
-                    .and_then(|c| c.extends_name.as_ref())
-                    .and_then(|parent| ctx.class_ids.get(parent))
-                    .copied()
-                    .unwrap_or(0)
-            };
-            let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
-                ctx.block().load(DOUBLE, &this_slot)
-            } else {
-                crate::expr::body_call::unbound_this_value(ctx)
-            };
-            let rooted_operands: [&perry_hir::Expr; 2] = [key, value];
-            let (rooted_values, rooted_group) =
-                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
-            let key_v = rooted_values[0].clone();
-            let value_v = rooted_values[1].clone();
-            let parent_cid_s = parent_cid.to_string();
-            let rooted_result = ctx.block().call(
-                DOUBLE,
-                "js_super_put_value_set",
-                &[
-                    (I32, &parent_cid_s),
-                    (DOUBLE, &key_v),
-                    (DOUBLE, &value_v),
-                    (DOUBLE, &recv_v),
-                    (I32, "1"),
-                ],
-            );
-            rooted_group.release(ctx);
-            Ok(rooted_result)
+        Expr::SuperPropertyGet { property } => {
+            let home = lexical_class_home(ctx)?;
+            lower(
+                ctx,
+                &Expr::ObjectSuperPropertyGet {
+                    home: Box::new(home),
+                    key: Box::new(Expr::String(property.clone())),
+                    receiver: Box::new(Expr::This),
+                },
+            )
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            let home = lexical_class_home(ctx)?;
+            lower(
+                ctx,
+                &Expr::ObjectSuperPropertySet {
+                    home: Box::new(home),
+                    key: key.clone(),
+                    value: value.clone(),
+                    receiver: Box::new(Expr::This),
+                },
+            )
+        }
+        Expr::SuperMethodCall { method, args } => {
+            let home = lexical_class_home(ctx)?;
+            lower(
+                ctx,
+                &Expr::ObjectSuperMethodCall {
+                    home: Box::new(home),
+                    key: Box::new(Expr::String(method.clone())),
+                    receiver: Box::new(Expr::This),
+                    args: args.clone(),
+                },
+            )
+        }
+        Expr::SuperMethodCallSpread { method, args } => {
+            let home = lexical_class_home(ctx)?;
+            super::call_spread::lower(
+                ctx,
+                &Expr::CallSpread {
+                    callee: Box::new(Expr::ObjectSuperPropertyGet {
+                        home: Box::new(home),
+                        key: Box::new(Expr::String(method.clone())),
+                        receiver: Box::new(Expr::This),
+                    }),
+                    args: args.clone(),
+                    type_args: Vec::new(),
+                },
+            )
         }
 
         Expr::ObjectSuperPropertyGet {
@@ -571,26 +122,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
         } => {
-            let rooted_operands: [&perry_hir::Expr; 4] = [home, key, value, receiver];
-            let (rooted_values, rooted_group) =
-                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
-            let home_v = rooted_values[0].clone();
-            let key_v = rooted_values[1].clone();
-            let value_v = rooted_values[2].clone();
-            let recv_v = rooted_values[3].clone();
-            let rooted_result = ctx.block().call(
-                DOUBLE,
-                "js_object_super_put_value_set",
-                &[
-                    (DOUBLE, &home_v),
-                    (DOUBLE, &key_v),
-                    (DOUBLE, &value_v),
-                    (DOUBLE, &recv_v),
-                    (I32, "1"),
-                ],
-            );
-            rooted_group.release(ctx);
-            Ok(rooted_result)
+            crate::rooting::with_rooted_group(ctx, 6, |ctx, group| {
+                let h = group.lower(ctx, home, true)?;
+                let k = group.lower(ctx, key, true)?;
+                let key_value = group.reread(ctx, k)?;
+                let key_value =
+                    ctx.block()
+                        .call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_value)]);
+                let k = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &key_value, true);
+                let r = group.lower(ctx, receiver, true)?;
+                // The reference retains home/key/receiver across the RHS.
+                // Resolve its live home parent when PutValue executes.
+                let v = group.lower(ctx, value, true)?;
+                let home_value = group.reread(ctx, h)?;
+                let base = ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_prototype_of",
+                    &[(DOUBLE, &home_value)],
+                );
+                let b = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &base, true);
+                let base = group.reread_emitted(ctx, b);
+                let key_value = group.reread_emitted(ctx, k);
+                let receiver = group.reread(ctx, r)?;
+                let value = group.reread(ctx, v)?;
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_put_value_set",
+                    &[
+                        (DOUBLE, &base),
+                        (DOUBLE, &key_value),
+                        (DOUBLE, &value),
+                        (DOUBLE, &receiver),
+                        (I32, "1"),
+                    ],
+                ))
+            })
         }
 
         Expr::ObjectSuperMethodCall {
@@ -599,45 +165,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             receiver,
             args,
         } => {
-            let rooted_operands: [&perry_hir::Expr; 3] = [home, key, receiver];
-            let (rooted_values, rooted_group) =
-                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
-            let home_v = rooted_values[0].clone();
-            let key_v = rooted_values[1].clone();
-            let recv_v = rooted_values[2].clone();
-            let (lowered_args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
-            let (args_ptr, args_len) = if lowered_args.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
-                for (i, val) in lowered_args.iter().enumerate() {
-                    let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                    ctx.block().store(DOUBLE, val, &slot);
+            crate::rooting::with_rooted_group(ctx, args.len() + 4, |ctx, group| {
+                let h = group.lower(ctx, home, true)?;
+                let k = group.lower(ctx, key, true)?;
+                let r = group.lower(ctx, receiver, true)?;
+                let home_value = group.reread(ctx, h)?;
+                let key_value = group.reread(ctx, k)?;
+                let recv = group.reread(ctx, r)?;
+                // Get the callable before argument expressions can observe it.
+                let callable = ctx.block().call(
+                    DOUBLE,
+                    "js_object_super_get",
+                    &[(DOUBLE, &home_value), (DOUBLE, &key_value), (DOUBLE, &recv)],
+                );
+                let f = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &callable, true);
+                let mut ids = Vec::new();
+                for arg in args {
+                    ids.push(group.lower(ctx, arg, true)?);
                 }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg,
-                    lowered_args.len(),
-                    buf
-                ));
-                (ptr_reg, lowered_args.len().to_string())
-            };
-            let rooted_result = ctx.block().call(
-                DOUBLE,
-                "js_object_super_call",
-                &[
-                    (DOUBLE, &home_v),
-                    (DOUBLE, &key_v),
-                    (DOUBLE, &recv_v),
-                    (PTR, &args_ptr),
-                    (I64, &args_len),
-                ],
-            );
-            rooted_group.release(ctx);
-            let rooted_result = rooted_result;
-            args_group.release(ctx);
-            Ok(rooted_result)
+                let mut values = Vec::new();
+                for id in ids {
+                    values.push(group.reread(ctx, id)?);
+                }
+                let (ptr, len) = crate::lower_call::emit_method_args_buffer(ctx, &values);
+                let callable = group.reread_emitted(ctx, f);
+                let recv = group.reread(ctx, r)?;
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_method_site_call_value",
+                    &[
+                        (DOUBLE, &callable),
+                        (DOUBLE, &recv),
+                        (PTR, &ptr),
+                        (I64, &len),
+                    ],
+                ))
+            })
         }
 
         // -------- fs.readFileSync(path) -> Buffer (no encoding) --------
@@ -663,76 +226,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 }
 
-/// `super.m(args)` resolved at run time, with arguments that can observe the
-/// read: `super.m` (the home object's current prototype, `this` as receiver)
-/// is read first and the value called with `this` after the arguments.
-fn lower_super_lookup_first(
-    ctx: &mut FnCtx<'_>,
-    home_cid: u32,
-    method: &str,
-    args: &[Expr],
-) -> Result<String> {
-    let this_value = |ctx: &mut FnCtx<'_>| match ctx.this_stack.last().cloned() {
-        Some(slot) => ctx.block().load(DOUBLE, &slot),
-        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-    };
-    crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, group| {
-        let this_box = this_value(ctx);
-        let value = emit_super_get(ctx, home_cid, method, &this_box);
-        let collects: Vec<bool> = args
-            .iter()
-            .map(|a| crate::rooting::operand_may_collect(ctx, a))
-            .collect();
-        let value_root = group.adopt_emitted(
-            ctx,
-            crate::rooting::Repr::Boxed,
-            &value,
-            collects.iter().any(|&c| c),
-        );
-        let mut idx = Vec::with_capacity(args.len());
-        for (i, a) in args.iter().enumerate() {
-            idx.push(group.lower(ctx, a, collects[i + 1..].iter().any(|&c| c))?);
-        }
-        let value = group.reread_emitted(ctx, value_root);
-        let mut vals = Vec::with_capacity(idx.len());
-        for i in idx {
-            vals.push(group.reread(ctx, i)?);
-        }
-        let this_box = this_value(ctx);
-        let (args_ptr, argc) = crate::lower_call::emit_method_args_buffer(ctx, &vals);
-        Ok(ctx.block().call(
-            DOUBLE,
-            "js_method_site_call_value",
-            &[
-                (DOUBLE, &value),
-                (DOUBLE, &this_box),
-                (PTR, &args_ptr),
-                (I64, &argc),
-            ],
-        ))
+/// Constructors and static initialization retain their lexical class context;
+/// ordinary methods bind this once in HIR, where arrows capture it too.
+fn lexical_class_home(ctx: &FnCtx<'_>) -> Result<Expr> {
+    let class_name = ctx
+        .class_stack
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow!("super property outside a class body"))?;
+    Ok(Expr::ClassMethodHome {
+        class_name,
+        is_static: ctx.in_static_member,
     })
-}
-
-/// `super.m` read off the home object's current prototype with `this` as
-/// the receiver: a getter runs, a method is returned.
-fn emit_super_get(ctx: &mut FnCtx<'_>, home_cid: u32, method: &str, this_box: &str) -> String {
-    let key_idx = ctx.strings.intern(method);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-    ctx.block().call(
-        DOUBLE,
-        "js_super_accessor_get",
-        &[
-            (I32, &home_cid.to_string()),
-            (DOUBLE, &key_box),
-            (DOUBLE, this_box),
-        ],
-    )
-}
-
-/// Reload the program's rooted interned key at the call site.
-fn emit_interned_super_key(ctx: &mut FnCtx<'_>, method: &str) -> String {
-    let key_idx = ctx.strings.intern(method);
-    let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    ctx.block().load(DOUBLE, &key_global)
 }

@@ -137,23 +137,6 @@ pub(crate) fn gate_class(
     ctx.block().phi(I32, &refs)
 }
 
-pub(crate) fn super_guard(ctx: &mut FnCtx<'_>, home: &str, method: &str) -> String {
-    let Some(parent) = ctx.classes.get(home).and_then(|c| c.extends_name.clone()) else {
-        return "false".into();
-    };
-    let Some(&cid) = ctx.class_ids.get(home) else {
-        return "false".into();
-    };
-    let Some((p, _)) = crate::codegen::static_shape_ids::static_prototype_shape(cid) else {
-        return "false".into();
-    };
-    let Some(mut chain) = crate::codegen::static_prototype::chain(ctx, &parent, method) else {
-        return "false".into();
-    };
-    chain.insert(0, (cid, p));
-    holders_guard(ctx, &chain)
-}
-
 /// Tower names already carry the class ids registered by this module.
 pub(crate) fn gate_named_classes(
     ctx: &mut FnCtx<'_>,

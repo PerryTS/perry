@@ -122,6 +122,22 @@ pub(crate) fn bundle_args_rooted<'f, R>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::CallSpread { callee, args, .. } => {
+            if let Expr::ObjectSuperPropertyGet { receiver, .. } = callee.as_ref() {
+                return rooting::with_rooted_group(ctx, 2, |ctx, group| {
+                    let recv = group.lower(ctx, receiver, true)?;
+                    let function = group.lower(ctx, callee, true)?;
+                    bundle_args_rooted(ctx, args, false, |ctx, array| {
+                        let function = group.reread(ctx, function)?;
+                        let receiver = group.reread(ctx, recv)?;
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_method_site_call_value_apply",
+                            &[(DOUBLE, &function), (DOUBLE, &receiver), (I64, array)],
+                        ))
+                    })
+                });
+            }
+
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

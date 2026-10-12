@@ -125,6 +125,7 @@ pub(crate) fn may_hold_leaf(
             | Expr::New { .. }
             | Expr::FuncRef(_)
             | Expr::ExternFuncRef { .. }
+            | Expr::ClassMethodHome { .. }
             | Expr::ClassRef(_)
     )
 }

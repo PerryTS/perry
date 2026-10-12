@@ -42,7 +42,24 @@ fn exported_class_declarator_matches_forward_constructor_identity() {
                 .iter()
                 .find(|function| function.name == "make")
                 .unwrap();
-            assert!(format!("{:?}", make.body).contains("class_name: \"Union\""));
+            let binding = hir
+                .init
+                .iter()
+                .find_map(|stmt| match stmt {
+                    crate::Stmt::Let { id, name, .. } if name == "Union" => Some(*id),
+                    _ => None,
+                })
+                .unwrap();
+            let mut refs = Vec::new();
+            let mut visited = std::collections::HashSet::new();
+            for stmt in &make.body {
+                crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+            }
+            assert!(
+                refs.contains(&binding),
+                "forward construction must read the same lexical class value: {:?}",
+                make.body
+            );
         }
     }
 }

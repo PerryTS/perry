@@ -487,6 +487,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         | Expr::LocalGet(_)
         | Expr::GlobalGet(_)
         | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         | Expr::ExternFuncRef { .. }
         | Expr::EnumMember { .. }

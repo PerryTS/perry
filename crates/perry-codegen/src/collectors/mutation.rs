@@ -442,6 +442,7 @@ fn expr_contains_call(e: &perry_hir::Expr) -> bool {
             | Expr::Object(_)
             | Expr::Array(_)
             | Expr::NewTarget
+            | Expr::ClassMethodHome { .. }
             | Expr::ClassRef(_)
             | Expr::EnumMember { .. }
             | Expr::PrivateBrandCheck { .. }

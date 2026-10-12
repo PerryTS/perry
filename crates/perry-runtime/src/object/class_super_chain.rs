@@ -9,46 +9,22 @@
 //! Split out of `class_constructors.rs` to keep that file under the 2,000-line
 //! CI gate.
 
-use super::class_constructors::pinned_class_object_for_ancestor;
-
-/// The class object of the evaluation a `super` reference in class
-/// `home_cid`'s methods belongs to, when one is pinned: repeated evaluations
-/// share a template id, so the template tables cannot name it.
-#[inline]
-pub(crate) fn super_home_owner(home_cid: u32, this_value: f64) -> Option<f64> {
-    super::field_get_set::current_private_lexical_brand_value(home_cid).or_else(|| {
-        super::field_get_set::private_evaluation_brand_value(this_value)
-            .and_then(|owner| pinned_class_object_for_ancestor(owner, home_cid))
-    })
-}
-
-/// Resolve the home object's current parent for instance and static reads.
-/// Repeated evaluations use the method's lexical class owner; the template id
-/// alone cannot name their constructor or prototype property storage.
-///
-/// # Safety
-/// `receiver` must be rooted by the caller across prototype materialization.
-pub(crate) unsafe fn class_super_base(home_cid: u32, receiver: f64) -> f64 {
-    let is_static = super::class_ref_id(receiver).is_some()
-        || super::class_registry::is_class_object_value(receiver);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let home = match super_home_owner(home_cid, receiver)
-        .filter(|owner| super::class_registry::is_class_object_value(*owner))
-    {
-        Some(owner) => {
-            let owner = scope.root_nanbox_f64(owner);
-            if is_static {
-                owner.get_nanbox_f64()
-            } else {
-                let obj = crate::value::JSValue::from_bits(owner.get_nanbox_f64().to_bits())
-                    .as_pointer::<super::ObjectHeader>();
-                f64::from_bits(super::field_get_set::class_object_prototype_value(obj).bits())
-            }
-        }
-        None if is_static => super::class_value::class_value(home_cid),
-        None => super::class_registry::class_decl_prototype_value(home_cid),
-    };
-    super::js_object_get_prototype_of(home)
+/// Convert a method's retained lexical class owner to its home object.
+/// The caller selects instance versus static; the receiver never participates.
+#[no_mangle]
+pub unsafe extern "C" fn js_class_method_home(owner: f64, is_static: i32) -> f64 {
+    if is_static != 0 {
+        return owner;
+    }
+    if let Some(cid) = super::class_prototype_ref_id(owner) {
+        return super::class_registry::class_decl_prototype_value(cid);
+    }
+    if let Some(cid) = super::class_value::class_value_id(owner) {
+        return super::class_registry::class_decl_prototype_value(cid);
+    }
+    let object =
+        crate::value::JSValue::from_bits(owner.to_bits()).as_pointer::<super::ObjectHeader>();
+    f64::from_bits(super::field_get_set::class_object_prototype_value(object).bits())
 }
 
 /// `super.name(...args)` resolved by the shared property lookup: call the value

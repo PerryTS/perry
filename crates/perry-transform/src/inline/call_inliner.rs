@@ -1379,6 +1379,7 @@ fn operand_order(operand: &Expr) -> OperandOrder {
         | Expr::Null
         | Expr::Undefined
         | Expr::FuncRef(_)
+        | Expr::ClassMethodHome { .. }
         | Expr::ClassRef(_)
         // Creating a closure has no effect, and what it captures does not
         // depend on when it is created: a fresh setup local is never captured,

@@ -816,17 +816,17 @@ pub(crate) unsafe fn native_call_method_value_memo(
     // which both finds own-field closures and binds `this`.
     let property_key_jsval = JSValue::from_bits(property_key.to_bits());
     if property_key_jsval.is_any_string() {
-        let str_ptr =
-            crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
-        if !str_ptr.is_null() {
-            let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
-            let bytes_len = (*str_ptr).byte_len as usize;
-            if memo != 0 {
-                return memo_entries::memo_call(
-                    object, bytes_ptr, bytes_len, args_ptr, args_len, memo, false,
-                );
-            }
-            return js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len);
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(bytes) = crate::string::js_string_key_bytes(property_key_jsval, &mut scratch) {
+            return memo_entries::memo_call(
+                object,
+                bytes.as_ptr() as *const i8,
+                bytes.len(),
+                args_ptr,
+                args_len,
+                memo,
+                false,
+            );
         }
     }
 
@@ -1312,13 +1312,40 @@ pub(crate) unsafe fn native_call_method_tower(
     } else {
         let bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
         // #10502: validate with `str::from_utf8` (ASCII word-at-a-time fast
-        // path) and fall back to the lossy decoder only for invalid bytes.
-        // `from_utf8_lossy` answers the same `Cow` but walks `Utf8Chunks`
+        // path); WTF-8 keys use the exact-byte property operation.
+        // A lossy decoder would walk `Utf8Chunks`
         // chunk by chunk even for a valid name: ~1.5% of a prototype-method
         // dispatch profile, on every call.
         match std::str::from_utf8(bytes) {
             Ok(name) => std::borrow::Cow::Borrowed(name),
-            Err(_) => String::from_utf8_lossy(bytes),
+            Err(_) => {
+                // WTF-8 keys have no Rust str representation. Perform the
+                // same property operation on their exact bytes, rather than
+                // selecting a replacement-character property in the name tower.
+                let bytes = bytes.to_vec();
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let receiver = scope.root_nanbox_f64(object);
+                let args = if args_ptr.is_null() {
+                    Vec::new()
+                } else {
+                    scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, args_len))
+                };
+                let key = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+                let function = crate::proxy::js_reflect_get_with_explicit_receiver(
+                    receiver.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                );
+                let function = scope.root_nanbox_f64(function);
+                let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
+                return crate::object::method_site::js_method_site_call_value(
+                    function.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
         }
     };
     let method_name: &str = &method_name_cow;

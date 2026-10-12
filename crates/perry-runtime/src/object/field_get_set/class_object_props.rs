@@ -226,7 +226,9 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
             // S2: an accessor is a real accessor property of this prototype.
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
                 super::super::class_registry::install_decl_prototype_accessor(
-                    proto, class_id, &name,
+                    proto,
+                    class_id,
+                    std::str::from_utf8(&name).expect("accessor name"),
                 )
             });
             continue;
@@ -243,19 +245,17 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 .unwrap_or_else(|| {
                     super::super::native_module::class_evaluation_method_value_for_name(
                         class_id,
-                        &name,
+                        std::str::from_utf8(&name).expect("method without entry"),
                         class_value,
                     )
                 });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                define_builtin_data_property(
+            key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+                crate::object::object_ops::define_property_force_store_value(proto, key, method);
+                crate::object::key_attrs::apply_edits(
                     proto,
-                    key,
-                    method,
-                    name,
-                    PropertyAttrs::new(true, false, true),
-                )
+                    &[crate::object::key_attrs::AttrsEdit::Data(&name, 5)],
+                );
             });
         });
     }

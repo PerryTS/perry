@@ -808,7 +808,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     .iter()
                     .map(|m| (&m.function, m.is_static)),
             )
-            .filter(|(f, _)| super::helpers::body_has_fixed_generator_state(&f.body))
+            .filter(|(f, _)| super::helpers::body_needs_method_owner(&f.body))
         {
             if is_static {
                 compile_static_method(

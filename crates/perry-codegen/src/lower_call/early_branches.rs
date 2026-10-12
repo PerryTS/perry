@@ -293,52 +293,16 @@ pub fn try_lower_index_get_call(
             )
             .map(Some);
         }
-        let is_static_string = matches!(index.as_ref(), Expr::String(_))
-            || crate::type_analysis::is_string_expr(ctx, index)
-            || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, index);
-
-        // #7210 (3): receiver, key and every argument are lowered in strict
-        // sequence — each held as a bare SSA register while the rest lower,
-        // which can allocate — and in the static-string-key arm
-        // `unbox_str_handle` allocates too (an SSO key materializes to a
-        // fresh heap `StringHeader`), sitting between the args buffer's
-        // would-be stores and the consuming call. Root [object, index,
-        // ...args] in one `RootedGroup` for the whole dispatch and build the
-        // args buffer LAST in each branch via `build_dispatch_args_buffer` —
-        // after `unbox_str_handle` in the static-key arm — so nothing can
-        // collect between the buffer's last store and the call that reads it.
+        // Keep the property key boxed through the common computed-call ABI.
+        // A raw image StringHeader is not a legacy arena-owned dispatch id.
+        // The value entry reads heap/image/inline key bytes without materializing
+        // a header, and receives the buffer only after all operands are ready.
         return with_rooted_group(ctx, 2 + args.len(), |ctx, group| {
             let recv_idx = group.lower(ctx, object, true)?;
             let key_idx = group.lower(ctx, index, true)?;
             let mut arg_idxs = Vec::with_capacity(args.len());
             for a in args {
                 arg_idxs.push(group.lower(ctx, a, true)?);
-            }
-
-            if is_static_string {
-                // Statically-known string key: extract the string handle and
-                // use the str-key entry (`this` bound by the dispatch
-                // tower). Re-read the receiver AFTER `unbox_str_handle`,
-                // which allocates, and build the args buffer after that too.
-                let key_box = group.reread(ctx, key_idx)?;
-                let name_handle = {
-                    let blk = ctx.block();
-                    crate::expr::unbox_str_handle(blk, &key_box)
-                };
-                let recv_box = group.reread(ctx, recv_idx)?;
-                let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
-                let memo_slot = super::direct_method_guard::emit_chain_memo_slot(ctx);
-                return Ok(Some(ctx.block().call(
-                    DOUBLE,
-                    "js_native_call_method_str_key_memo",
-                    &[
-                        (DOUBLE, &recv_box),
-                        (I64, &name_handle),
-                        (crate::types::PTR, &args_ptr),
-                        (I64, &args_len),
-                        (crate::types::PTR, &memo_slot),
-                    ],
-                )));
             }
 
             // Dynamic key (`this[(cur)._op](cur)`, `obj[k]()` where `k` is a

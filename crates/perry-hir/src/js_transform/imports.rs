@@ -1292,7 +1292,8 @@ pub fn transform_expr(
         // Expressions that don't need transformation
         Expr::Number(_) | Expr::Integer(_) | Expr::BigInt(_) | Expr::String(_) | Expr::Bool(_) |
         Expr::Null | Expr::Undefined | Expr::This | Expr::LocalGet(_) | Expr::GlobalGet(_) |
-        Expr::FuncRef(_) | Expr::ClassRef(_) | Expr::EnumMember { .. } |
+        Expr::FuncRef(_) | Expr::ClassMethodHome { .. }
+        | Expr::ClassRef(_) | Expr::EnumMember { .. } |
         Expr::RegExp { .. } | Expr::NativeModuleRef(_) | Expr::StaticFieldGet { .. } |
         Expr::EnvGet(_) | Expr::ProcessUptime | Expr::ProcessMemoryUsage | Expr::ProcessEnv | Expr::MathRandom | Expr::CryptoRandomUUID | Expr::CryptoRandomUUIDv7 | Expr::DateNow |
         Expr::MapNew | Expr::SetNew | Expr::Update { .. } |

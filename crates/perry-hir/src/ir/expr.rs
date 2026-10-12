@@ -420,6 +420,11 @@ pub enum Expr {
 
     // Class reference (for new expressions)
     ClassRef(String),
+    /// Lexical home retained by the selected method function object.
+    ClassMethodHome {
+        class_name: String,
+        is_static: bool,
+    },
 
     // Enum member access (e.g., Color.Red)
     EnumMember {

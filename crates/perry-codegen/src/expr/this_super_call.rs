@@ -1252,7 +1252,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // elsewhere; this just makes `err.message` non-undefined.
                     if matches!(
                         parent_name.as_str(),
-                        "ArrayBuffer"
+                        "WeakMap"
+                            | "WeakSet"
+                            | "ArrayBuffer"
                             | "SharedArrayBuffer"
                             | "DataView"
                             | "Boolean"
