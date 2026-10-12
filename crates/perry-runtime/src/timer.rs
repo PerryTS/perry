@@ -401,8 +401,16 @@ pub(crate) use handle_object::{scan_timer_prototype_roots_mut, try_timer_method_
 // an unconditional `pub(crate) use` would be an unused import in a lib build
 // and `-D warnings` would reject it.
 use handle_object::{timer_handle_id, timer_object};
+// #9202: `timer_handle_parts` is the ONE brand-checked decoder from a JS timer
+// handle to its registry id, and `process.ref`/`process.unref`
+// (`process/env_misc.rs`) need it in a lib build too — re-deriving the decode
+// there is what let a stale pre-#340/#341 copy survive in the first place.
+// Unconditional is safe: that consumer exists in every cfg, so this is never an
+// unused import. `TIMEOUT_CLASS_ID` still has no lib-build consumer and stays
+// test-gated.
+pub(crate) use handle_object::timer_handle_parts;
 #[cfg(test)]
-pub(crate) use handle_object::{timer_handle_parts, TIMEOUT_CLASS_ID};
+pub(crate) use handle_object::TIMEOUT_CLASS_ID;
 
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);

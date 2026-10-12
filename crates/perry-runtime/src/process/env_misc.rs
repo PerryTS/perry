@@ -18,13 +18,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static PROCESS_UNCAUGHT_CAPTURE_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
 
+/// `process.ref(t)` / `process.unref(t)` for a `Timeout`/`Immediate` handle.
+///
+/// #340/#341 made the JS-visible timer handle an ordinary object carrying its
+/// registry id in `ObjectMeta.native_state`; the id is no longer a
+/// POINTER_TAG-boxed small integer. This helper kept the pre-#340 decode, so
+/// `value & POINTER_MASK` yielded a raw heap address, `is_known_timer_id`
+/// always answered false, and both entry points silently did nothing —
+/// `process.unref(timeout)` left `timeout.hasRef()` true. `timer_handle_parts`
+/// is the branded accessor that migration left behind.
 fn timer_handle_id(value: f64) -> Option<i64> {
-    let js_value = JSValue::from_bits(value.to_bits());
-    if !js_value.is_pointer() {
-        return None;
-    }
-    let id = (value.to_bits() & crate::value::POINTER_MASK) as i64;
-    crate::timer::is_known_timer_id(id).then_some(id)
+    crate::timer::timer_handle_parts(value).map(|(id, _)| id)
 }
 
 #[no_mangle]
@@ -1629,5 +1633,57 @@ mod env_object_tests {
         assert!(std::env::var_os(TEST_KEY).is_none());
         let got = crate::object::js_object_get_field_by_name(obj, set_key);
         assert!(got.is_undefined());
+    }
+}
+
+#[cfg(test)]
+mod process_ref_unref_tests {
+    use super::*;
+
+    /// #9202: `process.unref(t)` / `process.ref(t)` must reach the timer
+    /// registry through the SAME brand-checked decode the `Timeout.prototype`
+    /// thunks use (`crate::timer::timer_handle_parts`).
+    ///
+    /// The local `timer_handle_id` still decoded the pre-#340/#341 model — a
+    /// `POINTER_TAG`-boxed small integer whose low 48 bits ARE the id. On the
+    /// handle `setTimeout` actually returns (an ordinary `GC_TYPE_OBJECT` with
+    /// the id in `ObjectMeta.native_state`) that mask yields the handle's heap
+    /// address, `is_known_timer_id` always answered false, and both entry points
+    /// were silent no-ops: `process.unref(timeout)` left `timeout.hasRef()` true
+    /// while `process.ref(timeout)` "worked" only because doing nothing also
+    /// leaves it true.
+    #[test]
+    fn ref_and_unref_reach_the_timer_registry() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        crate::gc::ensure_gc_initialized();
+        let handle =
+            crate::value::js_nanbox_pointer(crate::timer::js_set_timeout_callback(0, 50_000.0));
+        let (id, _) = crate::timer::timer_handle_parts(handle).expect("branded handle");
+        assert_eq!(
+            crate::timer::js_timer_has_ref(id),
+            1,
+            "fixture must start proven: a new timer is ref'd"
+        );
+
+        js_process_unref(handle);
+        assert_eq!(
+            crate::timer::js_timer_has_ref(id),
+            0,
+            "process.unref() must clear the registry's ref state"
+        );
+
+        js_process_ref(handle);
+        assert_eq!(
+            crate::timer::js_timer_has_ref(id),
+            1,
+            "process.ref() must set it back"
+        );
+
+        // A non-handle argument stays the documented no-op (node returns
+        // `undefined` and touches nothing).
+        assert!(js_process_unref(1.0).to_bits() == crate::value::TAG_UNDEFINED);
+        assert!(js_process_ref(std::f64::consts::PI).to_bits() == crate::value::TAG_UNDEFINED);
+
+        crate::timer::clearTimeout(id);
     }
 }
