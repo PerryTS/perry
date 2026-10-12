@@ -3220,6 +3220,8 @@ pub(crate) mod static_method;
 pub(crate) mod store_census;
 mod string_regex_proc;
 mod super_method;
+#[cfg(test)]
+mod super_property_set_order_tests;
 pub(crate) mod this_super_call;
 pub(crate) use this_super_call::is_other_builtin_constructor_name;
 mod unary;

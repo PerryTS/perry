@@ -125,14 +125,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             crate::rooting::with_rooted_group(ctx, 6, |ctx, group| {
                 let h = group.lower(ctx, home, true)?;
                 let k = group.lower(ctx, key, true)?;
-                let key_value = group.reread(ctx, k)?;
-                let key_value =
-                    ctx.block()
-                        .call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_value)]);
-                let k = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &key_value, true);
                 let r = group.lower(ctx, receiver, true)?;
-                // The reference retains home/key/receiver across the RHS.
-                // Resolve its live home parent when PutValue executes.
+                // The reference captures its home, raw key, and receiver before
+                // evaluating the RHS. Keep the raw key: PutValue applies
+                // ToPropertyKey only after the RHS and the live home parent
+                // lookup, inside js_put_value_set's rooted runtime path.
                 let v = group.lower(ctx, value, true)?;
                 let home_value = group.reread(ctx, h)?;
                 let base = ctx.block().call(
@@ -142,7 +139,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 let b = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &base, true);
                 let base = group.reread_emitted(ctx, b);
-                let key_value = group.reread_emitted(ctx, k);
+                let key_value = group.reread(ctx, k)?;
                 let receiver = group.reread(ctx, r)?;
                 let value = group.reread(ctx, v)?;
                 Ok(ctx.block().call(
