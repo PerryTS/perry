@@ -170,17 +170,37 @@ pub(crate) fn js_fs_fchown_result(
     gid_value: f64,
 ) -> Result<(), f64> {
     // #2013 order: validate fd type, uid type+range, gid type+range,
-    // THEN bounce on EBADF. Node's `validateInteger(uid)` fires before
+    // THEN bounce on EBADF where fchown reaches an fd check. Node's
+    // `validateInteger(uid)` fires before
     // the syscall, so `fchownSync(1, "", 0)` throws ERR_INVALID_ARG_TYPE
-    // for `uid`, not EBADF for `fd` — preserve that order even though
-    // the missing-fd case still needs EBADF after all args check out.
+    // for `uid`, not EBADF for `fd` — preserve that order. Windows returns
+    // success after argument validation because libuv makes fchown a no-op.
     crate::fs::validate::validate_fd(fd_value);
     crate::fs::validate::validate_int32(uid_value, "uid", -1, u32::MAX as i64);
     crate::fs::validate::validate_int32(gid_value, "gid", -1, u32::MAX as i64);
-    if !crate::fs::fd_is_registered(fd_value as i32) {
-        return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
+    // libuv treats fchown as a successful no-op on Windows because ownership
+    // changes are unsupported there. Match Node by returning success before
+    // checking whether the otherwise-valid descriptor is open.
+    #[cfg(windows)]
+    {
+        let _ = fd_value;
+        Ok(())
     }
-    unsafe { fchown_sync_inner_result(fd_value as i32, uid_value, gid_value) }
+    #[cfg(not(windows))]
+    {
+        if !crate::fs::fd_is_registered(fd_value as i32) {
+            return Err(crate::fs::validate::build_ebadf_error_value("fchown"));
+        }
+        unsafe { fchown_sync_inner_result(fd_value as i32, uid_value, gid_value) }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    #[test]
+    fn fchown_on_unopened_fd_is_a_successful_noop() {
+        assert!(super::js_fs_fchown_result(987_654_321.0, 0.0, 0.0).is_ok());
+    }
 }
 
 /// Core fd-based `fchown` op. Surfaces the syscall failure (e.g. `EPERM` for a

@@ -1,7 +1,8 @@
 // Gap test: node:fs fd-mutator error propagation for ftruncate / fchown /
-// futimes (#2749). Operating on a closed/invalid fd must surface EBADF with
-// Node-compatible `err.code`/`err.syscall` across the sync, callback, and
-// promisified (await) forms instead of silently succeeding.
+// futimes (#2749). Operating on a closed/invalid fd must surface the
+// Node-compatible result across the sync, callback, and promisified (await)
+// forms. On Windows, libuv treats fchown as a successful no-op because
+// ownership changes are unsupported; other fd mutators still report EBADF.
 //
 // We assert only `err.code` and `err.syscall` (plus success markers), never
 // volatile message text. Node names the futimes syscall "futime" (singular).
