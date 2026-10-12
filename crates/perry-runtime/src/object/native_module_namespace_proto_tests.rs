@@ -133,3 +133,44 @@ fn namespace_creation_publishes_brand_and_full_exports() {
         }
     }
 }
+
+/// #9202: recording a `[[Prototype]]` on a namespace must not hide that
+/// namespace's OWN module exports.
+///
+/// `cluster.default` is the only namespace wired with a prototype
+/// (`cluster::cluster_default_value` points it at `EventEmitter.prototype`), and
+/// `shape_inherited::get` admitted every `ShapeObjectKind::NativeNamespace`
+/// receiver because it shares the ordinary LAYOUT. On an admitted receiver it
+/// answered the read with a recorded-prototype chain walk and returned
+/// `undefined` on a chain miss — pre-empting the namespace vtable's
+/// `vt_get_own_field`, which is where the module table lives. So
+/// `process.getBuiltinModule("cluster").isPrimary` read `undefined` while every
+/// prototype-less namespace resolved, including `getBuiltinModule("url")` and
+/// `getBuiltinModule("stream")` in the same fixture.
+#[test]
+fn namespace_with_a_recorded_prototype_still_reads_its_exports() {
+    let ns = namespace("path");
+    let own_before = get(ns, "join");
+    assert!(
+        JSValue::from_bits(own_before.to_bits()).is_pointer(),
+        "fixture must start proven: `path.join` is an own export"
+    );
+
+    let addr = crate::value::js_nanbox_get_pointer(ns) as usize;
+    let proto = crate::object::js_object_alloc(0, 0);
+    crate::object::prototype_chain::object_set_static_prototype(
+        addr,
+        crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+    );
+
+    let own_after = get(ns, "join");
+    assert!(
+        JSValue::from_bits(own_after.to_bits()).is_pointer(),
+        "a recorded [[Prototype]] must not shadow the module's own exports"
+    );
+    assert_eq!(
+        get(ns, "noSuchExport9202").to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "...while an absent name still reads undefined"
+    );
+}

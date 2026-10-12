@@ -26,6 +26,20 @@ pub(super) unsafe fn get(
     if !kind.is_ordinary_layout() {
         return None;
     }
+    // A native-module namespace shares the ORDINARY LAYOUT but not its read
+    // semantics: its surface is the module table keyed off the object's module
+    // name, not the shape's key list (which holds only `__module__`). Admitting
+    // one here lets the recorded-`[[Prototype]]` walk answer the read, which
+    // pre-empts the namespace vtable's `vt_get_own_field` and therefore
+    // `get_native_module_constant`. That only bit the one namespace carrying a
+    // prototype — `cluster.default`, wired to `EventEmitter.prototype` by
+    // `cluster::cluster_default_value` — so
+    // `process.getBuiltinModule('cluster').isPrimary` read `undefined` while
+    // every other namespace (no recorded link, already refused below) resolved.
+    // #9202.
+    if kind == super::super::super::shapes::ShapeObjectKind::NativeNamespace {
+        return None;
+    }
     let pid = record.proto_id();
     // Declared-class reads already have their shape-authorized class route.
     // Only a branded intrinsic needs this pre-fallback CLASS route: the old
