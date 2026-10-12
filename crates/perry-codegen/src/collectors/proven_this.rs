@@ -527,11 +527,52 @@ pub(crate) fn method_proven_this(
     classes: &HashMap<String, &Class>,
     module_dispatch: &ModuleDispatchFacts,
 ) -> Option<PtrShapeLocal> {
+    method_proven_this_impl(class, method, classes, module_dispatch, false, &class.name)
+}
+
+/// Accessors use the same this-flow and mutation proof as ordinary methods.
+/// Their declarations do not themselves invalidate their own receiver fields.
+pub(crate) fn accessor_proven_this(
+    class: &Class,
+    method: &Function,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+) -> Option<PtrShapeLocal> {
+    method_proven_this_impl(class, method, classes, module_dispatch, true, &class.name)
+}
+
+/// Preserve an inherited accessor's lexical home while proving the exact
+/// receiver's full field prefix and its dynamically selected method callees.
+pub(crate) fn inherited_accessor_proven_this(
+    receiver: &Class,
+    owner: &Class,
+    method: &Function,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+) -> Option<PtrShapeLocal> {
+    method_proven_this_impl(
+        receiver,
+        method,
+        classes,
+        module_dispatch,
+        true,
+        &owner.name,
+    )
+}
+
+fn method_proven_this_impl(
+    class: &Class,
+    method: &Function,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    accessor: bool,
+    owner: &str,
+) -> Option<PtrShapeLocal> {
     if !ptr_shape_this_enabled() || !ptr_shape_locals_enabled() {
         return None;
     }
-    // The module-wide §5.2 barrier kill, shared verbatim with Phase 3b.
-    if module_dispatch.has_shape_barrier_sites() {
+    // Ordinary method capabilities retain the module-wide §5.2 barrier kill.
+    if !accessor && module_dispatch.has_shape_barrier_sites() {
         return None;
     }
     // Context restrictions, same as Phase 1/3a/3b: the async-to-generator
@@ -550,10 +591,31 @@ pub(crate) fn method_proven_this(
     }
     // Class-level admission (accessor-free, computed-free, statically-extended,
     // modeled chain) and method-table stability.
-    if !chain_admissible(classes, &class.name) {
+    if accessor {
+        let chain = chain_classes(classes, &class.name);
+        if chain.is_empty()
+            || chain.iter().any(|c| {
+                c.extends_expr.is_some()
+                    || c.heritage_lexically_shadowed
+                    || c.native_extends.is_some()
+                    || !c.computed_members.is_empty()
+                    || c.fields.iter().any(|f| f.key_expr.is_some())
+                    || c.extends.is_some() && c.extends_name.is_none()
+            })
+            || super::this_as_value::class_chain_extends_builtin_error(class, classes)
+            || super::this_as_value::class_chain_has_unmodeled_base(class, classes)
+        {
+            return None;
+        }
+    } else if !chain_admissible(classes, &class.name) {
         return None;
     }
-    if !module_dispatch.prototype_is_stable(classes, &class.name) {
+    // Ordinary method capabilities require module-lifetime dispatch stability.
+    // Accessor capabilities are selected only after live holder ShapeIds and
+    // a body-without-callbacks proof, or an existing closed-receiver proof.
+    // A later prototype replacement is therefore a call-site miss, not a
+    // reason to withhold the compiled receiver body.
+    if !accessor && !module_dispatch.prototype_is_stable(classes, &class.name) {
         return None;
     }
 
@@ -591,7 +653,7 @@ pub(crate) fn method_proven_this(
     // `super.m()` vetted transitively. This is the same walk Phase 3b runs
     // over the methods called on a proven local.
     let mut analysis = ThisFlowAnalysis::new(&chain, &fields, &methods);
-    if !analysis.method_safe_with_terminal_this_return(&class.name, method) {
+    if !analysis.method_safe_with_terminal_this_return(owner, method) {
         return None;
     }
 

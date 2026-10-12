@@ -385,6 +385,10 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::expr::contained_number_get(ctx, object, property) {
+                return true;
+            }
+
             if crate::stmt::region_loop::is_f64_read(ctx, e) {
                 return true;
             }

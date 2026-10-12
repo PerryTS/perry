@@ -56,12 +56,11 @@ mod tests;
 
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
-use helpers::guarded_declared_class_get_candidate;
 pub(crate) use helpers::{
     builtin_prototype_method_read, class_has_computed_runtime_members,
-    is_global_builtin_value_expr, lower_class_method_bind, lower_global_builtin_static_value,
-    lower_raw_f64_class_field_get_for_number_context, lower_runtime_property_get_by_name,
-    promise_static_function_length_expr,
+    guarded_declared_class_get_candidate, is_global_builtin_value_expr, lower_class_method_bind,
+    lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
+    lower_runtime_property_get_by_name, promise_static_function_length_expr,
 };
 
 use super::{
@@ -1338,6 +1337,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_generic_property_get(ctx, object, property, *byte_offset);
                 }
             }
+            if let Some((function, keys, contained)) =
+                super::named_accessor::candidate(ctx, object, property, false)
+            {
+                return super::named_accessor::get(
+                    ctx, object, property, &function, &keys, contained,
+                );
+            }
             // Class metadata nominates specialized property paths below.
             // Public accessors still require live receiver/prototype lookup.
             let proven_receiver_class = receiver_class_name(ctx, object);
@@ -1479,11 +1485,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && !property.starts_with('#')
                 {
                     if ctx.methods.contains_key(&getter_key) {
-                        if let Some((function, keys)) =
+                        if let Some((function, keys, contained)) =
                             super::named_accessor::candidate(ctx, object, property, false)
                         {
                             return super::named_accessor::get(
-                                ctx, object, property, &function, &keys,
+                                ctx, object, property, &function, &keys, contained,
                             );
                         }
                         // The enclosing class is not an exact runtime receiver

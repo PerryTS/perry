@@ -788,6 +788,11 @@ pub(crate) fn collect_type_facts(
     // that relies on one class object's layout.
     let (nbc_shape_members, nbc_shape_numeric_fields) = {
         let mut numeric_inputs = shape_proven_ptr_locals.clone();
+        for fact in numeric_inputs.values_mut() {
+            let getters = crate::codegen::accessor_numeric::numeric_get_properties(fact, classes);
+            // This temporary input describes property results, never raw slots.
+            fact.numeric_fields.extend(getters);
+        }
         numeric_inputs.extend(
             shape_lineage_locals
                 .iter()

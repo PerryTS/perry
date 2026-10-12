@@ -16,6 +16,8 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 #[path = "front_contract_tests.rs"]
 mod front_contract;
+#[path = "named_accessor_tests.rs"]
+mod named_accessor;
 use front_contract::{front_call_block, verify_accessor_arm, verify_front_directory};
 
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {

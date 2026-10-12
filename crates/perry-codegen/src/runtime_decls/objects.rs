@@ -313,6 +313,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I32, PTR, I64, PTR],
     );
+    module.declare_function(
+        "js_class_accessor_shape_guard",
+        I32,
+        &[DOUBLE, I32, PTR, I64],
+    );
     module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I32]);
     module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
     module.declare_function(

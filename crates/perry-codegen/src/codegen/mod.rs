@@ -232,7 +232,9 @@ mod tdz_names;
 pub(crate) mod helpers;
 // #10399: worker entries supplied before any module codegen runs.
 pub use helpers::{set_worker_entries, worker_entries};
+pub(crate) mod accessor_numeric;
 pub(crate) mod global_transfer;
+pub(crate) mod inherited_accessors;
 mod literal_constructor;
 mod method;
 mod method_registry;
@@ -283,11 +285,11 @@ mod unknown_func_tests;
 
 pub(crate) use closure::emit_typed_capture_guard;
 pub(crate) use function::arena_threaded_function_body_name;
-pub use helpers::{resolve_target_triple, target_os_of, TARGET_NAMES};
 pub(crate) use helpers::{
     decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
     module_callable_count, set_full_outline_ic, write_barriers_enabled,
 };
+pub use helpers::{resolve_target_triple, target_os_of, TARGET_NAMES};
 pub use opts::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
     ClassAccessorNames, CompileOptions, ExportedObjectLiteralCapability, FpContractMode,
@@ -2070,6 +2072,23 @@ fn compile_module_impl(
     // link).
     let receiver_class_table = &class_table;
     for class in &hir.classes {
+        for (prefix, accessors) in [("__get_", &class.getters), ("__set_", &class.setters)] {
+            for (property, method) in accessors {
+                if class.static_accessor_fn_ids.contains(&method.id) {
+                    continue;
+                }
+                let mut method = method.clone();
+                method.name = format!("{prefix}{property}");
+                if let Some(fact) = crate::collectors::accessor_proven_this(
+                    class,
+                    &method,
+                    receiver_class_table,
+                    &module_dispatch_facts,
+                ) {
+                    pshape_methods.insert((class.name.clone(), method.name), fact);
+                }
+            }
+        }
         for method in &class.methods {
             let source_function = format!("{}::{}", class.name, method.name);
             // Representation-selection Phase 5a: does this method admit a
@@ -3001,7 +3020,7 @@ fn compile_module_impl(
 
     // Method registry + cross-module method/getter/setter/ctor/static
     // extern declares. See `method_registry::build_method_names`.
-    let method_names = method_registry::build_method_names(
+    let mut method_names = method_registry::build_method_names(
         &mut llmod,
         hir,
         &opts.imported_classes,
@@ -3010,6 +3029,13 @@ fn compile_module_impl(
         &imported_class_prefix,
         &imported_class_source_name,
         &module_prefix,
+    );
+    inherited_accessors::register(
+        hir,
+        &class_table,
+        &class_ids,
+        &mut method_names,
+        &mut cross_module,
     );
     cross_module.class_hierarchy =
         class_hierarchy::ClassHierarchy::new(&class_table, &method_names);
@@ -4008,6 +4034,32 @@ fn compile_module_impl(
             llmod.request_static_seed_body(info.strip_suffix("$info").expect("body info suffix"));
         }
     }
+    // Accessor capabilities are module-local and never registered as JS
+    // functions. Drop unused bodies before codegen units promote internals.
+    let accessor_bodies = cross_module
+        .pshape_methods
+        .keys()
+        .filter(|(_, member)| member.starts_with("__get_") || member.starts_with("__set_"))
+        .filter_map(|(receiver, member)| {
+            let public = method_names.get(&(receiver.clone(), member.clone()))?;
+            let setter = member.starts_with("__set_");
+            let property = &member[6..];
+            let (owner, _) = static_prototype::accessor_owner(
+                &class_table,
+                &class_ids,
+                receiver,
+                property,
+                setter,
+            )?;
+            let body = if owner == *receiver {
+                public.clone()
+            } else {
+                inherited_accessors::receiver_body_name(public, class_ids[receiver])
+            };
+            Some(crate::collectors::pshape_method_name(&body))
+        })
+        .collect();
+    llmod.prune_private_capabilities(&accessor_bodies);
     llmod.emit_fn_infos(constfn_body_metadata);
 
     // Emit the buffer alias-scope metadata once per module, covering every

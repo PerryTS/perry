@@ -90,6 +90,7 @@ mod assert;
 mod async_generator_queue;
 mod bigint_dispatch;
 mod buffer_dispatch;
+mod class_accessor_guard;
 mod class_constructors;
 mod class_env;
 mod class_gc_roots;

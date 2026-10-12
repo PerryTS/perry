@@ -1741,6 +1741,8 @@ fn a_contested_func_id_carries_no_fact() {
 #[test]
 fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
     let mut c = class_c();
+    // Local declarations have nonzero ids; zero denotes an imported stub.
+    c.id = 1;
     c.getters.push((
         "derived".into(),
         function(

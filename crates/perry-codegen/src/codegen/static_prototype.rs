@@ -201,3 +201,82 @@ pub(crate) fn inherited_lane(
         own: false,
     })
 }
+
+/// Complete accessor-holder shapes: the semantic generation changes whenever
+/// an accessor half changes, even when its key and attributes stay the same.
+pub(crate) fn accessor_chain(
+    ctx: &crate::expr::FnCtx<'_>,
+    class: &str,
+    property: &str,
+    setter: bool,
+) -> Option<(String, Vec<(u32, u32)>)> {
+    let (owner, chain) = accessor_owner(ctx.classes, ctx.class_ids, class, property, setter)?;
+    let body = ctx
+        .methods
+        .get(&(
+            owner,
+            format!("__{}_{property}", if setter { "set" } else { "get" }),
+        ))?
+        .clone();
+    Some((body, chain))
+}
+
+pub(crate) fn accessor_owner(
+    classes: &HashMap<String, &perry_hir::Class>,
+    ids: &HashMap<String, u32>,
+    class: &str,
+    property: &str,
+    setter: bool,
+) -> Option<(String, Vec<(u32, u32)>)> {
+    let mut name = class.to_string();
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    for _ in 0..64 {
+        if !seen.insert(name.clone()) {
+            return None;
+        }
+        let c = classes.get(&name)?;
+        if c.static_accessor_names.iter().any(|n| n == property) {
+            return None;
+        }
+        let cid = *ids.get(&name)?;
+        if cid == 0 || cid >= 0x7FFF_FF00 {
+            return None;
+        }
+        let (shape_id, shape) = super::static_shape_ids::static_prototype_shape(cid)?;
+        chain.push((cid, shape_id));
+        if let Some(slot) = shape
+            .keys
+            .split(|&b| b == 0)
+            .take(shape.key_count as usize)
+            .position(|k| k == property.as_bytes())
+        {
+            let half = if setter { 32 } else { 16 };
+            if shape.attrs.get(slot)? & half == 0 {
+                return None;
+            }
+            let f = (if setter { &c.setters } else { &c.getters })
+                .iter()
+                .find(|(n, _)| n == property)?
+                .1
+                .clone();
+            if !f.captures.is_empty()
+                || f.is_async
+                || f.is_generator
+                || f.params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+            {
+                return None;
+            }
+            return Some((name, chain));
+        }
+        name = c.extends_name.clone()?;
+        if !matches!(shape.proto, BirthProto::Prototype(_, parent)
+            if ids.get(&name) == Some(&parent))
+        {
+            return None;
+        }
+    }
+    None
+}

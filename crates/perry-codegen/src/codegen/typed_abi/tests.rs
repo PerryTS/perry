@@ -72,7 +72,7 @@ fn receiver_clone_rejects_name_only_imported_parent_chain() {
     let classes = HashMap::from([("Parent".to_string(), &parent)]);
 
     assert!(matches!(
-        typed_receiver_chain_fields(&classes, &child),
+        typed_receiver_chain_fields(&classes, &child, false),
         Err(TypedCloneRejectionReason::ReceiverClassExtends)
     ));
 }

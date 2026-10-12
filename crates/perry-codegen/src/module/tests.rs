@@ -1,3 +1,39 @@
+#[test]
+fn unused_private_capabilities_disappear_before_unit_promotion() {
+    use crate::module::LlModule;
+    use crate::types::VOID;
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    for (name, target) in [
+        ("entry", "used"),
+        ("used", "nested"),
+        ("nested", "nested"),
+        ("dead", "dead"),
+        ("public", "public"),
+    ] {
+        let f = module.define_function(name, VOID, vec![]);
+        if name != "entry" && name != "public" {
+            f.linkage = "internal".into();
+        }
+        let block = f.create_block("entry");
+        block.call_void(target, &[]);
+        block.ret_void();
+    }
+    module.prune_private_capabilities(
+        &["used", "nested", "dead", "public"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    );
+    assert!(module.has_function("used"));
+    assert!(module.has_function("nested"));
+    assert!(module.has_function("public"));
+    assert!(!module.has_function("dead"));
+    assert!(!module
+        .render_codegen_units(2)
+        .iter()
+        .any(|u| u.contains("define double @dead") || u.contains("define void @dead")));
+}
+
 /// #10399: a `thread_local` global's cross-unit DECLARATION must keep the
 /// TLS specifier. Without it `external_decl_for_global` returned `None`
 /// and `split_units` panicked with "cannot form external declaration"; a

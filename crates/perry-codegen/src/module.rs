@@ -491,6 +491,71 @@ impl LlModule {
         self.functions.iter_mut()
     }
 
+    /// Remove unreachable module-local capabilities before unit splitting
+    /// promotes their linkage. Public bodies and globals are reachability roots.
+    pub(crate) fn prune_private_capabilities(&mut self, candidates: &HashSet<String>) {
+        let candidates: HashSet<_> = self
+            .functions
+            .iter()
+            .filter(|f| f.linkage == "internal" && candidates.contains(&f.name))
+            .map(|f| f.name.clone())
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let mut live = HashSet::new();
+        for line in self.globals.iter().chain(&self.string_constants) {
+            collect_symbol_refs(line, &mut live);
+        }
+        // The IR scanner returns @-prefixed references; definitions store
+        // bare names. Only capability edges matter to this scoped pass.
+        live = live
+            .into_iter()
+            .filter_map(|name| {
+                candidates
+                    .contains(&name[1..])
+                    .then(|| name[1..].to_string())
+            })
+            .collect();
+        let mut edges = HashMap::new();
+        for f in &self.functions {
+            let mut refs = HashSet::new();
+            f.for_each_final_line::<std::convert::Infallible>(&mut |line| {
+                collect_symbol_refs(line, &mut refs);
+                Ok(())
+            })
+            .unwrap();
+            refs = refs
+                .into_iter()
+                .filter_map(|name| {
+                    candidates
+                        .contains(&name[1..])
+                        .then(|| name[1..].to_string())
+                })
+                .collect();
+            refs.remove(&f.name);
+            if candidates.contains(&f.name) {
+                edges.insert(f.name.clone(), refs);
+            } else {
+                live.extend(refs);
+            }
+        }
+        let mut pending: Vec<_> = live.iter().cloned().collect();
+        while let Some(name) = pending.pop() {
+            if let Some(refs) = edges.get(&name) {
+                for target in refs {
+                    if live.insert(target.clone()) {
+                        pending.push(target.clone());
+                    }
+                }
+            }
+        }
+        self.functions
+            .retain(|f| !candidates.contains(&f.name) || live.contains(&f.name));
+        self.defined_names
+            .retain(|name| !candidates.contains(name) || live.contains(name));
+    }
+
     /// Number of functions defined so far. Used to recover the index of a
     /// just-`define_function`ed function (whose `&mut` borrow must be released
     /// before the index can be read) when emitting a sequence of functions —

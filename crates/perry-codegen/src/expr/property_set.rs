@@ -487,10 +487,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             {
                 return super::private_field_site::lower_set(ctx, site, property, value);
             }
-            if let Some((function, keys)) =
+            if let Some((function, keys, contained)) =
                 super::named_accessor::candidate(ctx, object, property, true)
             {
+                let value_i32 = (super::is_known_i32_range(ctx, value)
+                    || matches!(value.as_ref(), Expr::LocalGet(id) if ctx.i32_counter_slots.contains_key(id)))
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                 return with_class_store_operands(ctx, object, value, |ctx, receiver, rhs| {
+                    let value_i32 = value_i32 || ctx.block().widened_i32_source(&rhs).is_some();
                     crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
                         let saved =
                             group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &rhs, true);
@@ -502,6 +506,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                             &keys,
                             Some(&rhs),
                             assignment_strict,
+                            contained,
+                            value_i32,
                         )?;
                         Ok(group.reread_emitted(ctx, saved))
                     })
@@ -1099,6 +1105,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         (obj_bits, obj_handle, field_ptr, val_bits)
                                     };
                                     if requires_raw_f64 {
+                                        // A bounded canonical numeric producer cannot downgrade
+                                        // an F64 lane. Bitwise results with a Number operand
+                                        // are canonical finite doubles on both inline/helper arms.
+                                        let plain = (super::is_known_i32_range(ctx, value)
+                                            || matches!(value.as_ref(), Expr::LocalGet(id) if ctx.i32_counter_slots.contains_key(id)))
+                                            && (crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+                                                || matches!(value.as_ref(), Expr::Binary { op: perry_hir::BinaryOp::BitAnd | perry_hir::BinaryOp::BitOr | perry_hir::BinaryOp::BitXor | perry_hir::BinaryOp::Shl | perry_hir::BinaryOp::Shr, .. }));
+                                        let plain = plain
+                                            || ctx
+                                                .block()
+                                                .widened_i32_source(&val_double)
+                                                .is_some();
                                         let store_idx = ctx.new_block("ptr_shape_set.raw_store");
                                         let cold_idx = ctx.new_block("ptr_shape_set.downgrade");
                                         let merge_idx = ctx.new_block("ptr_shape_set.merge");
@@ -1107,9 +1125,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         let merge_label = ctx.block_label(merge_idx);
                                         {
                                             let blk = ctx.block();
-                                            let finite = crate::expr::class_field_inline_guard::
-                                        emit_plain_finite_number_check(blk, &val_bits);
-                                            blk.cond_br(&finite, &store_label, &cold_label);
+                                            if plain {
+                                                blk.br(&store_label);
+                                            } else {
+                                                let finite = crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &val_bits);
+                                                blk.cond_br(&finite, &store_label, &cold_label);
+                                            }
                                         }
                                         ctx.current_block = store_idx;
                                         {

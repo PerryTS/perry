@@ -526,6 +526,10 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::expr::contained_number_get(ctx, object, property) {
+                return false;
+            }
+
             // R admits this exact fresh bare read only after the shape's F64
             // representation check; there is no boxed fallback in F.
             if crate::stmt::region_loop::is_f64_read(ctx, expr) {

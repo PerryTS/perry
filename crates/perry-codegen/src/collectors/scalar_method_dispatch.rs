@@ -600,8 +600,27 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
                 for_each_expr(init, &mut note_binding);
             }
         }
-        // With one birth site, containment at that site's local covers every
-        // instance. Another birth might expose this same class's prototype.
+        // A derived construction is also an instance of each modeled
+        // ancestor. Expand the existing birth counts once, then consume the
+        // same single-provenance stability rule for accessor containment.
+        let class_by_name: HashMap<_, _> =
+            hir.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+        let direct_births = std::mem::take(&mut births);
+        for (name, count) in direct_births {
+            let mut current = Some(name.as_str());
+            let mut seen = HashSet::new();
+            while let Some(name) = current {
+                if !seen.insert(name) || seen.len() > 64 {
+                    break;
+                }
+                *births.entry(name.to_string()).or_default() += count;
+                current = class_by_name
+                    .get(name)
+                    .and_then(|c| c.extends_name.as_deref());
+            }
+        }
+        // One contained birth covers every instance. Another birth can expose
+        // this class's prototype through an alias outside that proof.
         for class in &hir.classes {
             if (!class.getters.is_empty() || !class.setters.is_empty())
                 && (decorator_exposure || births.get(&class.name) != Some(&1))

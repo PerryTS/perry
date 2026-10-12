@@ -880,7 +880,7 @@ pub(crate) fn typed_f64_receiver_method_rejection_reason(
     method: &Function,
     classes: &HashMap<String, &perry_hir::Class>,
 ) -> Option<TypedCloneRejectionReason> {
-    typed_f64_receiver_method_candidate(class, method, classes).err()
+    typed_f64_receiver_method_candidate(class, method, classes, false).err()
 }
 
 pub(crate) fn typed_f64_receiver_method_info(
@@ -888,7 +888,17 @@ pub(crate) fn typed_f64_receiver_method_info(
     method: &Function,
     classes: &HashMap<String, &perry_hir::Class>,
 ) -> Option<TypedReceiverMethodInfo> {
-    typed_f64_receiver_method_candidate(class, method, classes).ok()
+    typed_f64_receiver_method_candidate(class, method, classes, false).ok()
+}
+
+/// Accessor dispatch has already proved the receiver's own data layout and
+/// its declaration holders. Prototype accessors do not invalidate own slots.
+pub(crate) fn typed_f64_accessor_receiver_method_info(
+    class: &perry_hir::Class,
+    method: &Function,
+    classes: &HashMap<String, &perry_hir::Class>,
+) -> Option<TypedReceiverMethodInfo> {
+    typed_f64_receiver_method_candidate(class, method, classes, true).ok()
 }
 
 pub(crate) fn typed_i1_method_rejection_reason(
@@ -1312,6 +1322,7 @@ pub(crate) struct TypedReceiverChainFields<'a> {
 fn typed_receiver_chain_fields<'a>(
     classes: &HashMap<String, &'a perry_hir::Class>,
     class: &'a perry_hir::Class,
+    accessor: bool,
 ) -> Result<TypedReceiverChainFields<'a>, TypedCloneRejectionReason> {
     // Chain, self first.
     let mut chain: Vec<&perry_hir::Class> = Vec::new();
@@ -1332,7 +1343,7 @@ fn typed_receiver_chain_fields<'a>(
         {
             return Err(TypedCloneRejectionReason::ReceiverClassExtends);
         }
-        if !link.getters.is_empty() || !link.setters.is_empty() {
+        if !accessor && (!link.getters.is_empty() || !link.setters.is_empty()) {
             return Err(TypedCloneRejectionReason::ReceiverClassHasAccessor);
         }
         if !link.computed_members.is_empty() {
@@ -1385,6 +1396,7 @@ fn typed_f64_receiver_method_candidate(
     class: &perry_hir::Class,
     method: &Function,
     classes: &HashMap<String, &perry_hir::Class>,
+    accessor: bool,
 ) -> Result<TypedReceiverMethodInfo, TypedCloneRejectionReason> {
     if method.is_async || method.is_generator || method.was_plain_async {
         return Err(TypedCloneRejectionReason::AsyncOrGenerator);
@@ -1397,7 +1409,7 @@ fn typed_f64_receiver_method_candidate(
     }
     // Phase 3b widening: extends chains are admitted when every link passes
     // the receiver-shape checks; field indexes are chain-global.
-    let chain_fields = typed_receiver_chain_fields(classes, class)?;
+    let chain_fields = typed_receiver_chain_fields(classes, class, accessor)?;
 
     let mut locals = HashMap::new();
     for param in &method.params {

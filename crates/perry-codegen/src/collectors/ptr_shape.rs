@@ -358,23 +358,45 @@ fn collect_shape_proven_ptr_locals_impl(
         match report::admission_cause(classes, class_name, &chain_classes(classes, class_name)) {
             None => true,
             Some(cause)
-                if classes
-                    .get(class_name)
-                    .is_some_and(|c| !c.getters.is_empty() || !c.setters.is_empty()) =>
+                if chain_classes(classes, class_name)
+                    .iter()
+                    .any(|c| !c.getters.is_empty() || !c.setters.is_empty()) =>
             {
                 let chain = chain_classes(classes, class_name);
                 // Widen only contained, direct-new locals. Return/element and
                 // routed-this proofs retain their existing accessor refusal.
                 let admitted = purpose == CollectionPurpose::UnguardedRepresentation
                     && !module_dispatch.has_shape_barrier_sites()
-                    && chain.len() == 1
-                    && chain[0].extends.is_none()
-                    && chain[0].extends_name.is_none()
-                    && chain[0].extends_expr.is_none()
-                    && chain[0].native_extends.is_none()
-                    && chain[0].computed_members.is_empty()
-                    && chain[0].fields.iter().all(|f| f.key_expr.is_none())
-                    && named_accessors_are_disjoint(chain[0]);
+                    && !chain.is_empty()
+                    && !super::this_as_value::class_chain_extends_builtin_error(chain[0], classes)
+                    && !super::this_as_value::class_chain_has_unmodeled_base(chain[0], classes)
+                    && chain.iter().all(|c| {
+                        !c.is_imported_stub()
+                            && c.aliases.is_empty()
+                            && c.extends_expr.is_none()
+                            && c.native_extends.is_none()
+                            && !c.heritage_lexically_shadowed
+                            && c.computed_members.is_empty()
+                            && c.fields.iter().all(|f| f.key_expr.is_none())
+                            && named_accessors_are_disjoint(c)
+                    })
+                    && {
+                        let data: HashSet<_> = chain
+                            .iter()
+                            .flat_map(|c| {
+                                c.fields
+                                    .iter()
+                                    .map(|f| f.name.as_str())
+                                    .chain(c.methods.iter().map(|m| m.name.as_str()))
+                            })
+                            .collect();
+                        chain.iter().all(|c| {
+                            c.getters
+                                .iter()
+                                .chain(&c.setters)
+                                .all(|(p, _)| !data.contains(p.as_str()))
+                        })
+                    };
                 if !admitted {
                     report::deny_local(*id, &names, &depths, Some(class_name), cause);
                 }
@@ -793,7 +815,7 @@ pub(super) fn chain_field_names(chain: &[&Class]) -> HashSet<String> {
 }
 
 /// Named accessors can share the existing containment proof when no own
-/// field/method shadows them. Inherited and static accessors remain excluded.
+/// field/method shadows them. Static accessors remain excluded.
 pub(super) fn named_accessors_are_disjoint(class: &Class) -> bool {
     let mut names: HashSet<&str> = class.fields.iter().map(|f| f.name.as_str()).collect();
     names.extend(class.methods.iter().map(|f| f.name.as_str()));
