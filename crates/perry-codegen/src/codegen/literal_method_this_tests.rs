@@ -253,21 +253,21 @@ fn strict_literal_method_binds_the_raw_receiver() {
 }
 
 #[test]
-fn literal_method_this_field_takes_the_guarded_class_field_path() {
+fn literal_method_this_field_is_a_shape_site_read() {
     let ir = compile_ir(&literal_module(method(METHOD, false, false)));
     let body = closure_body(&ir, METHOD);
-    // The guarded read compares against the literal's shape class and owns a
-    // `js_class_field_get_ic` fallback — the path a local binding of the same
-    // literal already takes. The generic per-site IC is not used for `this.a`.
+    // `this` names the literal's shape class, and that names no read path of
+    // its own (#12483): `this.a` is the shape site, whose word follows the
+    // receiver's ShapeId, never a guard against the literal's birth shape.
     assert!(
-        body.contains("@js_class_field_get_ic("),
-        "`this.a` must use the guarded class-field read:\n{body}"
+        body.contains("_packed_get"),
+        "`this.a` must be served by the shape site's word:\n{body}"
     );
+    // (The method's store keeps its own class write guard, which names the
+    // literal's shape; the READ tower's blocks are what must be gone.)
     assert!(
-        body.contains(&format!(
-            "@perry_class_shape_id_literal_method_this_test__{SHAPE}"
-        )),
-        "the guard must name the literal's shape class:\n{body}"
+        !body.contains("class_field_get.") && !body.contains("@js_class_field_get_ic"),
+        "`this.a` must not guard against the literal's birth shape:\n{body}"
     );
 }
 

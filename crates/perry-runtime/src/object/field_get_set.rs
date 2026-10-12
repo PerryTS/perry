@@ -324,6 +324,8 @@ pub use has_property_ic::js_in_operator_presence_ic;
 pub(crate) use ic_miss::intrinsic_private_add;
 #[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_set;
+#[cfg(test)]
+pub(crate) use ic_miss::pic_outlined_mru_hit;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,
@@ -343,9 +345,6 @@ pub use ic_miss::{
     js_private_field_add, js_private_guard, js_private_guard_site, js_private_method_call,
     js_private_method_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
 };
-// The One Path read, for the class-field read's miss arm
-// (`typed_feedback::guards::js_class_field_get_ic`).
-pub(crate) use ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;

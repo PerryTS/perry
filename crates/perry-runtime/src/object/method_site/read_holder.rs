@@ -389,12 +389,12 @@ pub(crate) unsafe fn class_entry_answer(
 }
 
 /// The site's holder entry asked for `handle`, without priming: what the
-/// emitted tower's holder check answers, for a runtime caller that asks the
-/// site's words itself (`typed_feedback::guards`' class-field miss arm).
+/// emitted tower's holder check answers. The tests' oracle for that check.
 ///
 /// # Safety
 /// `handle` is a pointer above the handle band; `cache_slot` null or the
 /// site's live read cache slot.
+#[cfg(test)]
 #[inline(always)]
 pub(crate) unsafe fn read_holder_hit(
     handle: *const ObjectHeader,

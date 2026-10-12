@@ -751,9 +751,9 @@ fn block_body<'a>(ir: &'a str, label_prefix: &str) -> Option<&'a str> {
 
 #[test]
 fn full_outline_ic_collapses_class_field_set_to_single_call() {
-    // #5334 lever B: when full-outline is enabled (oversized module, or forced
-    // via env), the entire class-field-SET diamond collapses to a single
-    // `js_class_field_set_ic` call — no guard call, no fast/fallback blocks.
+    // #5334 lever B / #12483: a class-field store is the static-key store
+    // site, so the full outline collapses it as it collapses any store: to the
+    // site's GC-leaf hit plus a cold collecting miss. No class guard either way.
     let build = || {
         let point = class(101, "Point", vec![field("x", Type::Number)]);
         module_with_classes(
@@ -774,34 +774,32 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
 
     let _lock = env_lock();
 
-    // Forced ON: one outlined call, no inline diamond.
+    // Forced ON: one outlined split, no inline store diamond.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
         let ir = ir_for(build());
-        // S2: the outlined call is a GC-leaf hit plus a cold collecting miss.
-        assert!(ir.contains("call i32 @js_class_field_set_ic_fast("));
-        assert!(ir.contains("call void @js_class_field_set_ic_fast_miss("));
-        assert!(!ir.contains("call void @js_class_field_set_ic("));
-        assert!(!ir.contains("class_field_set.fast"));
-        assert!(!ir.contains("class_field_set.fallback"));
-        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_set_guard"));
+        assert!(ir.contains("@js_put_value_set_packed_fast("));
+        assert!(!ir.contains("put.pic.hit.store"));
+        assert!(!ir.contains("class_field_set."));
+        assert!(!ir.contains("class_field_inline."));
     }
 
-    // Forced OFF (the default for normal-sized modules): the inline diamond,
-    // and no full-outline call.
+    // Forced OFF (the default for normal-sized modules): the inline store
+    // site, and no class guard.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
         let ir = ir_for(build());
-        assert!(!ir.contains("call void @js_class_field_set_ic"));
-        assert!(ir.contains("class_field_set.fast"));
-        assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
+        assert!(ir.contains("put.pic.hit.store"));
+        assert!(!ir.contains("class_field_set."));
+        assert!(!ir.contains("class_field_inline."));
     }
 }
 
 #[test]
 fn full_outline_ic_collapses_class_field_get_to_single_call() {
-    // #5391 path 2: full-outline collapses the class-field-GET diamond to a
-    // single `js_class_field_get_ic` call returning the field value.
+    // #5391 path 2 / #12483: a class-field read is a shape-site read, so the
+    // full outline collapses it exactly as it collapses any property read: to
+    // the site's GC-leaf hit plus a cold collecting miss.
     let build = || {
         let point = class(101, "Point", vec![field("x", Type::Number)]);
         module_with_classes(
@@ -819,29 +817,27 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // Forced ON: one outlined call and NO tower at all -- not even the #5093
-    // inline pre-check, which is the whole point on an oversized module.
+    // Forced ON: one outlined split and no tower at all.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
         let ir = ir_for(build());
-        // S2: the outlined call is a GC-leaf hit plus a cold collecting miss.
-        assert!(ir.contains("call double @js_class_field_get_ic_fast("));
-        assert!(ir.contains("call double @js_class_field_get_ic_fast_miss("));
-        assert!(!ir.contains("call double @js_class_field_get_ic("));
+        assert!(ir.contains("call double @js_object_get_field_ic_fast("));
+        assert!(ir.contains("call double @js_object_get_field_ic_fast_miss("));
+        assert!(!ir.contains("_packed_get"));
         assert!(!ir.contains("class_field_get.fast"));
         assert!(!ir.contains("class_field_inline.deref"));
         assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
     }
 
-    // Forced OFF: the inline tower. Since the one-exit change, BOTH arms call
-    // `js_class_field_get_ic`, so the discriminator is the TOWER, not the call:
-    // OFF keeps the pre-check and the fast slot load, ON has neither.
+    // Forced OFF: the inline shape site (its word against the receiver's
+    // ShapeId), and still no class guard.
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
         let ir = ir_for(build());
-        assert!(ir.contains("class_field_inline.deref"));
-        assert!(ir.contains("class_field_get.fast"));
-        assert!(ir.contains("call double @js_class_field_get_ic"));
+        assert!(ir.contains("_packed_get"));
+        assert!(!ir.contains("call double @js_object_get_field_ic_fast("));
+        assert!(!ir.contains("class_field_inline.deref"));
+        assert!(!ir.contains("class_field_get.fast"));
         assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));
     }
 }

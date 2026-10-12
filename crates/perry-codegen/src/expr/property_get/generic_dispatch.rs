@@ -301,7 +301,7 @@ fn overridden_cache_name(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Opti
 }
 
 /// A fresh per-site read cache (`PicCacheSlot`), as every generic read site
-/// has; also the class-field read's miss arm (`js_class_field_get_ic`).
+/// has.
 pub(crate) fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
     let cache_site = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
@@ -322,6 +322,130 @@ pub(crate) fn lower_generic_property_get(
     byte_offset: u32,
 ) -> Result<String> {
     lower_property_site(ctx, object, property, byte_offset, None)
+}
+
+/// A declared class field read whose receiver's shape the class layout
+/// predicts (`class_field_predicted_shape`). The site is the property site
+/// with its word replaced by that ShapeId: the receiver test, the receiver's
+/// ShapeId against the class's, one load of the layout's slot. Everything
+/// else, any receiver not on that shape included, is one call of the complete
+/// site operation (`js_object_get_field_ic`, the same helper the outlined
+/// site calls). Inside a class-guard run (`class_guard_memo`) a read of a
+/// receiver whose proof an earlier site of the run set tests the run's flag
+/// first.
+pub(crate) fn lower_class_field_property_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    byte_offset: u32,
+    predicted: crate::expr::class_field_inline_guard::PredictedShape,
+) -> Result<String> {
+    if ctx.fixed_generator_state
+        || crate::codegen::full_outline_ic_enabled()
+        || crate::expr::typed_feedback_emission_enabled()
+        || property == "length"
+    {
+        return lower_generic_property_get(ctx, object, property, byte_offset);
+    }
+    let obj_box = lower_expr(ctx, object)?;
+    // Same location record as the generic site (see `lower_property_site`).
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+
+    let token_idx = ctx.new_block("pget.class.token");
+    let hit_idx = ctx.new_block("pget.class.hit");
+    let miss_idx = ctx.new_block("pget.class.miss");
+    let merge_idx = ctx.new_block("pget.class.merge");
+    let token_label = ctx.block_label(token_idx);
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let memo = crate::expr::class_guard_memo::memo_for(ctx, object);
+    if let Some(crate::expr::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
+        let site_idx = ctx.new_block("pget.class.memo_clear");
+        let site_label = ctx.block_label(site_idx);
+        let flag = ctx.block().load(I8, flag_slot);
+        let proven = ctx.block().icmp_ne(I8, &flag, "0");
+        ctx.block().cond_br(&proven, &hit_label, &site_label);
+        ctx.current_block = site_idx;
+    }
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &token_label, &miss_label);
+
+    ctx.current_block = token_idx;
+    crate::expr::receiver_range::emit_route_note(
+        ctx.block(),
+        crate::expr::receiver_range::Route::ClassRead,
+    );
+    let sid_ptr = crate::expr::receiver_range::emit_field_ptr(ctx.block(), &recv.biased, 4);
+    let sid = ctx.block().load(I32, &sid_ptr);
+    // The static immediate, else a volatile load of the shape global (as
+    // every class guard reads it: LLVM must not forward it into a cold block
+    // and keep it live across the hit path).
+    let expected = crate::typed_shape::class_shape_id_operand_on_block(
+        ctx.block(),
+        &predicted.keys_global,
+        true,
+    );
+    let proven = crate::typed_shape::emit_compatible_shape_eq(ctx.block(), &sid, &expected, &[]);
+    match &memo {
+        Some(crate::expr::class_guard_memo::Memo::Set(slots)) => {
+            let set_idx = ctx.new_block("pget.class.memo_set");
+            let set_label = ctx.block_label(set_idx);
+            ctx.block().cond_br(&proven, &set_label, &miss_label);
+            ctx.current_block = set_idx;
+            for slot in slots {
+                ctx.block().store(I8, "1", slot);
+            }
+            ctx.block().br(&hit_label);
+        }
+        _ => ctx.block().cond_br(&proven, &hit_label, &miss_label),
+    }
+
+    ctx.current_block = hit_idx;
+    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
+        ctx.block(),
+        &recv.biased,
+        header + i64::from(predicted.slot) * 8,
+    );
+    let val_hit = ctx.block().load(DOUBLE, &slot_ptr);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = miss_idx;
+    crate::expr::emit_versioned_loop_callback_deopt(ctx);
+    let feedback_site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::PropertyGet,
+        property,
+        TypedFeedbackContract::object_get_by_name(),
+    );
+    let cache_name = overridden_cache_name(ctx, object, property)
+        .unwrap_or_else(|| allocate_property_cache(ctx));
+    let cache_slot_ref = format!("@{cache_name}");
+    let key_handle = emit_key_handle(ctx, &key_handle_global);
+    let val_miss = ctx.block().call(
+        DOUBLE,
+        "js_object_get_field_ic",
+        &[
+            (I64, &obj_bits),
+            (I64, &key_handle),
+            (I64, &feedback_site_id),
+            (PTR, &cache_slot_ref),
+        ],
+    );
+    let miss_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(ctx
+        .block()
+        .phi(DOUBLE, &[(&val_hit, &hit_end), (&val_miss, &miss_end)]))
 }
 
 /// Global environment references share the ordinary site's shape-validated

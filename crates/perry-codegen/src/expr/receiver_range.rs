@@ -137,7 +137,10 @@ pub(crate) enum Route {
     Region = 3,
     /// A class-field read guard's receiver test passed.
     ClassRead = 4,
-    /// A class-field write guard's receiver test passed.
+    /// A class-field write guard's receiver test passed. No longer emitted:
+    /// a class-field store is the static-key store site (#12483). The number
+    /// stays reserved: it indexes `RECV_ROUTE_NAMES`.
+    #[allow(dead_code)]
     ClassWrite = 5,
     /// Reserved: presence validation now belongs to the shared runtime exit.
     #[allow(dead_code)]

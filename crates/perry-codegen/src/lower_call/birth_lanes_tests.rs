@@ -302,3 +302,43 @@ fn a_non_number_first_write_or_control_flow_keeps_the_field_any() {
     );
     assert!(born_f64(&[c], "C").is_empty());
 }
+
+#[test]
+fn a_defined_field_lane_follows_its_value_not_its_annotation() {
+    // #12483: `class A { a: any = 1; s: any = "s"; n: string = 2 }`. The
+    // runtime learns a defined field's lane from the value its definition
+    // writes, so `a` and `n` complete on `F64` lanes whatever they declare,
+    // and `s` stays `Any`. The class's static ShapeId must name that shape.
+    let a = class(
+        "A",
+        None,
+        vec![
+            field("a", Type::Any, Some(Expr::Number(1.0))),
+            field("s", Type::Any, Some(Expr::String("s".to_string()))),
+            field("n", Type::String, Some(Expr::Number(2.0))),
+        ],
+        None,
+    );
+    assert_eq!(born_f64(&[a], "A"), set(&["a", "n"]));
+}
+
+#[test]
+fn a_reservation_keeps_its_declared_number_requirement() {
+    // A constructor-store reservation is predicted without a deciding write,
+    // so only a declared `number` reservation contributes an `F64` lane.
+    let mut any = field("r", Type::Any, None);
+    any.origin = perry_hir::ClassFieldOrigin::ConstructorStore;
+    let mut num = field("q", Type::Number, None);
+    num.origin = perry_hir::ClassFieldOrigin::ConstructorStore;
+    let c = class(
+        "R",
+        None,
+        vec![any, num],
+        Some(function(
+            "constructor",
+            Vec::new(),
+            vec![store("r", Expr::Number(1.0)), store("q", Expr::Number(2.0))],
+        )),
+    );
+    assert_eq!(born_f64(&[c], "R"), set(&["q"]));
+}

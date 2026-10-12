@@ -786,8 +786,6 @@ mod tests {
     fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
         for name in [
             "js_object_get_field_ic_fast",
-            "js_class_field_get_ic_fast",
-            "js_class_field_set_ic_fast",
             "js_put_value_set_packed_fast",
         ] {
             assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
@@ -795,8 +793,6 @@ mod tests {
         }
         for name in [
             "js_object_get_field_ic_fast_miss",
-            "js_class_field_get_ic_fast_miss",
-            "js_class_field_set_ic_fast_miss",
             "js_put_value_set_packed_miss",
         ] {
             assert_eq!(

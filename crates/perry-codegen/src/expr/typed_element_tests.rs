@@ -362,14 +362,15 @@ fn a_run_reuses_one_guard_and_every_call_clears_it() {
         make.contains("tael.set.store"),
         "make lost its inline stores"
     );
-    assert!(
-        make.contains("class_field_inline.memo_set"),
-        "make's run does not set a receiver proof:\n{make}"
+    assert_eq!(
+        blocks(make, "property_rmw.memo_set") + blocks(make, "pget.class.memo_set"),
+        1,
+        "make's run must set one receiver proof:\n{make}"
     );
     assert_eq!(
-        guard_blocks(make),
-        1,
-        "size++, h.left and h.right must share one inline guard:\n{make}"
+        blocks(make, "pget.class.memo_clear"),
+        2,
+        "size++, h.left and h.right must share one ShapeId proof:\n{make}"
     );
     // The flags the guards set are the ones every call in the run clears.
     let flags: Vec<String> = make
@@ -404,17 +405,29 @@ fn a_run_reuses_one_guard_and_every_call_clears_it() {
     assert!(calls >= 3, "the run's slow exits were not found:\n{make}");
 }
 
-/// The inline receiver guards (`class_field_inline.deref` blocks) of a body.
-fn guard_blocks(body: &str) -> usize {
+/// The blocks of a body whose label starts with `prefix`.
+fn blocks(body: &str, prefix: &str) -> usize {
     body.lines()
-        .filter(|l| l.starts_with("class_field_inline.deref") && l.ends_with(':'))
+        .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
         .count()
 }
 
 #[test]
 fn a_call_between_accesses_ends_the_run() {
     // size++ and h.left share the first run; h.right after the call starts a
-    // run of its own and runs its own guard.
-    assert_eq!(guard_blocks(body(&ir(&arena_module(false)), "make")), 1);
-    assert_eq!(guard_blocks(body(&ir(&arena_module(true)), "make")), 2);
+    // run of its own and proves its receiver again.
+    assert_eq!(
+        blocks(
+            body(&ir(&arena_module(false)), "make"),
+            "pget.class.memo_clear"
+        ),
+        2
+    );
+    assert_eq!(
+        blocks(
+            body(&ir(&arena_module(true)), "make"),
+            "pget.class.memo_clear"
+        ),
+        1
+    );
 }

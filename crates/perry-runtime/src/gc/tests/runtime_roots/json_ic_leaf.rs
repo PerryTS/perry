@@ -84,13 +84,6 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
                 .to_bits(),
                 TAG_HOLE
             );
-            assert_eq!(
-                crate::typed_feedback::js_class_field_get_ic_fast(
-                    0, receiver, 0, 0, k, 0, 0, &mut slot,
-                )
-                .to_bits(),
-                TAG_HOLE
-            );
             assert!((*raw).materialized.is_null());
         }
         assert_eq!(

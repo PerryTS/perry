@@ -372,8 +372,6 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
         // S2 (`expr/ic_fast_split.rs`): the collecting continuations behind
         // a declined GC-leaf hit. Still throwing, still GC-capable.
         | "js_object_get_field_ic_fast_miss"
-        | "js_class_field_get_ic_fast_miss"
-        | "js_class_field_set_ic_fast_miss"
         // The prologue stack check's overflow arm (`expr/stack_guard.rs`).
         // `-> !` in the runtime, but declared without `noreturn` here: the
         // clone-call check rejoins its call after it.
@@ -440,8 +438,6 @@ fn helper_decl_contract(name: &str) -> HelperDeclContract {
         // bounded ones. Being nounwind is also what keeps them a plain `call`
         // inside a `try`, so the leaf marking never depends on the invoke arm.
         | "js_object_get_field_ic_fast"
-        | "js_class_field_get_ic_fast"
-        | "js_class_field_set_ic_fast"
         | "js_property_rmw_fast"
         | "js_put_value_set_packed_fast" => HelperDeclContract::NoUnwind,
         _ => HelperDeclContract::Conservative,

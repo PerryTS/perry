@@ -365,17 +365,16 @@ fn point_class() -> Class {
     }
 }
 
-/// `probe(p: Point) { return p.x }` (a raw-f64 field) — the class-field READ
-/// guard loads the class's own ShapeId global, the (class id, ShapeId) word and
-/// the `_reserved` half-word for the intact bit, and NOTHING else: the GcHeader word the write guard still tests (kind,
-/// forwarded, descriptor and tombstone flags) is carried by the ShapeId on a
-/// read (`emit_class_field_read_precheck`).
+/// `probe(p: Point) { return p.x }` (a raw-f64 field) — a class-field read is
+/// the shape site (#12483): one ShapeId compare (here the class's own, which
+/// every `Point` keeps), then the slot. No class guard, so no (class id, ShapeId) identity load, no
+/// class ShapeId expectation, no `_reserved` half-word.
 ///
 /// Neither the retired `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch nor
 /// the poisonable `@perry_class_guard_shape_*` twin that replaced it may come
-/// back: the expectation is the class ShapeId itself (S6).
+/// back (S6).
 #[test]
-fn class_field_read_guard_loads_identity_and_expectation_only() {
+fn class_field_read_is_the_shape_site_read() {
     let mut m = module(
         "class_field_fused",
         vec![param(1, named("Point"))],
@@ -390,29 +389,21 @@ fn class_field_read_guard_loads_identity_and_expectation_only() {
     point.fields[0].init = Some(Expr::Number(0.0));
     m.classes = vec![point];
     let ir = probe_ir(&m);
-    let deref = block_body(&ir, "class_field_inline.deref")
-        .unwrap_or_else(|| panic!("no inline guard:\n{ir}"));
-    let loads: Vec<&str> = deref.lines().filter(|l| l.contains(" = load ")).collect();
-    assert_eq!(
-        loads.len(),
-        2,
-        "the read guard must load the identity word and the live expectation, \
-         and nothing else (no GcHeader word, no intact half-word):\n{deref}"
+    assert!(
+        block_body(&ir, "class_field_inline.deref").is_none(),
+        "a class-field read must not emit a class guard:\n{ir}"
+    );
+    // `Point` keeps its birth ShapeId and has no subclass, so the site
+    // compares against that id instead of a learned word.
+    let token = block_body(&ir, "pget.class.token")
+        .unwrap_or_else(|| panic!("no shape compare block:\n{ir}"));
+    assert!(
+        token.contains("icmp eq i32") && !token.contains("load i16"),
+        "the hit is ONE ShapeId compare, no intact half-word:\n{token}"
     );
     assert!(
-        !ir.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
-        "the per-access latch must be GONE from the class-field guard — its \
-         authority moved onto the expectation this guard already loads:\n{ir}"
-    );
-    assert!(
-        deref.contains("load volatile i32, ptr @perry_class_shape_id_")
+        !ir.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")
             && !ir.contains("perry_class_guard_shape_"),
-        "the expectation must be the class's own ShapeId global, never a \
-         poisonable twin:\n{deref}"
-    );
-    assert!(
-        loads.iter().any(|l| l.contains("load i64"))
-            && !loads.iter().any(|l| l.contains("load i16")),
-        "one 64-bit (class id, ShapeId) identity word and no intact half-word:\n{deref}"
+        "neither the per-access latch nor a poisonable expectation may come back:\n{ir}"
     );
 }

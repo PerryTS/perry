@@ -14,7 +14,7 @@
 //! dominates the arm; the arm rejoins through a phi.
 
 use super::FnCtx;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I64};
 
 /// `fast(fast_args)`; when it answers `TAG_HOLE`, a cold arm calls
 /// `slow(slow_args)`. Returns the joined DOUBLE.
@@ -58,30 +58,6 @@ pub(crate) fn emit_hole_declining_split(
             (slow_val.as_str(), slow_end.as_str()),
         ],
     )
-}
-
-/// The full-outline class-field SET: `js_class_field_set_ic_fast` answers a
-/// status; anything but DONE (1) calls `js_class_field_set_ic_fast_miss` with
-/// the status prepended to the same operands.
-pub(crate) fn emit_class_field_set_split(ctx: &mut FnCtx<'_>, args: &[(LlvmType, &str)]) {
-    let slow_idx = ctx.new_block("class_field_set.split_slow");
-    let merge_idx = ctx.new_block("class_field_set.split_merge");
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let status = ctx.block().call(I32, "js_class_field_set_ic_fast", args);
-    let done = ctx.block().icmp_eq(I32, &status, "1");
-    ctx.block().cond_br(&done, &merge_label, &slow_label);
-
-    ctx.current_block = slow_idx;
-    let mut slow_args: Vec<(LlvmType, &str)> = Vec::with_capacity(args.len() + 1);
-    slow_args.push((I32, &status));
-    slow_args.extend_from_slice(args);
-    ctx.block()
-        .call_void("js_class_field_set_ic_fast_miss", &slow_args);
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
 }
 
 /// `` `${v}` `` for an operand that is already a string (heap or SSO) is the

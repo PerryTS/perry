@@ -241,6 +241,12 @@ pub(super) fn static_class_name(ctx: &FnCtx<'_>, r: Recv, init: Option<&Expr>) -
             },
             Recv::This => None,
         })
+        // The supplier names the class's static ShapeId as the receiver's
+        // shape. No instance of a class that leaves it carries that id, so its
+        // receiver takes the learned word instead (#12483).
+        .filter(|class| {
+            crate::expr::class_field_inline_guard::class_instances_keep_birth_shape(ctx, class)
+        })
 }
 
 /// Can `keys` (with `boxed_mask`) of a receiver of class `class_name` be

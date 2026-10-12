@@ -228,66 +228,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, DOUBLE],
     );
-    module.declare_function(
-        "js_typed_feedback_class_field_set_guard",
-        I32,
-        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
-    );
-    // #5334 lever A: class-field-SET guard-MISS fallback, outlined. The cold arm
-    // of the default diamond collapses from two calls (record_fallback +
-    // set_field_by_name) to this one. Args: (site_id, obj_bits, key_raw, value).
+    // The class-field store's cold arm (a shape-proven raw-f64 store of a
+    // value that is not a plain finite number): record the fallback, then
+    // store by name. Args: (site_id, obj_bits, key_raw, value).
     module.declare_function(
         "js_class_field_set_fallback",
         VOID,
         &[I64, I64, I64, DOUBLE],
     );
-    // #5334 lever B: class-field-SET inline cache, FULLY outlined. For oversized
-    // modules the whole diamond (guard + fast store + fallback) collapses to one
-    // call. Args: (site_id, recv, expected_class_id, expected_shape_id, key,
-    // field_index, value, require_raw_f64). Same signature as the set guard.
-    module.declare_function(
-        "js_class_field_set_ic",
-        VOID,
-        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
-    );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
         &[I64, DOUBLE, I32, I32, I64, I32, I32],
-    );
-    // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
-    // modules the whole get diamond collapses to one call returning the field
-    // value. Args: (site_id, recv, expected_class_id, expected_shape_id, key,
-    // field_index, require_raw_f64, per-site read cache). The get guard's
-    // operands plus the cache its miss reads from (+ f64 ret).
-    module.declare_function(
-        "js_class_field_get_ic",
-        DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
-    );
-    // S2 (deferred-collection RFC): the two full-outline class-field ICs as a
-    // GC-leaf hit (`_fast`, same operands as the full helper) plus a
-    // collecting miss continuation (`_fast_miss`, the same operands; the SET
-    // miss takes the fast entry's status first).
-    module.declare_function(
-        "js_class_field_get_ic_fast",
-        DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
-    );
-    module.declare_function(
-        "js_class_field_get_ic_fast_miss",
-        DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
-    );
-    module.declare_function(
-        "js_class_field_set_ic_fast",
-        I32,
-        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
-    );
-    module.declare_function(
-        "js_class_field_set_ic_fast_miss",
-        VOID,
-        &[I32, I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
     );
     module.declare_function(
         "js_typed_feedback_native_call_method",

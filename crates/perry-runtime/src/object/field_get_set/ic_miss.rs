@@ -1296,8 +1296,7 @@ pub(super) fn get_field_ic_miss_impl(
 /// runtime entries the inline code calls — so behavior is unchanged. The only
 /// thing dropped is the inline monomorphic fast-load: every read goes through the
 /// cache-priming slow path (`js_object_get_field_ic_miss`), trading a little speed
-/// for a large code-size win, the same trade the class-field GET/SET full-outline
-/// paths (`js_class_field_get_ic` / `js_class_field_set_ic`) already make.
+/// for a large code-size win.
 ///
 /// Argument shapes mirror the inline site operands exactly:
 /// - `obj_bits`: the receiver's full (unmasked) NaN-box bits

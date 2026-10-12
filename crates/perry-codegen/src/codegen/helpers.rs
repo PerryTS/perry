@@ -534,9 +534,9 @@ pub(crate) fn module_callable_count(hir: &perry_hir::Module) -> usize {
 }
 
 /// Decide whether a module is large enough to warrant full-outlining its
-/// class-field IC diamonds (#5334 lever B). Collapsing each inline diamond's
-/// ~15-line-per-site expansion to one `call @js_class_field_set_ic(...)` keeps
-/// large functions tractable for LLVM's `-O3` pipeline. Gated on the module's
+/// property IC diamonds (#5334 lever B). Collapsing each inline diamond's
+/// per-site expansion to one outlined call keeps large functions tractable
+/// for LLVM's `-O3` pipeline. Gated on the module's
 /// total callable count (see
 /// [`module_callable_count`]) — the defining trait of the pathological
 /// minified-bundle case (tens of thousands of callables in one module);

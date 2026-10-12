@@ -1,20 +1,21 @@
-//! One class-field receiver guard per straight-line run of statements.
+//! One ShapeId proof per receiver per straight-line run of statements.
 //!
-//! In `const i = a.size++; a.left[i] = l; a.right[i] = r;` every access to `a`
-//! re-proves `a`'s ShapeId. Nothing between them can change that shape
-//! without a call: their inline paths read slots, write a Number into an
+//! In `const i = a.size++; a.left[i] = l; a.right[i] = r;` every read of `a`'s
+//! fields re-proves `a`'s ShapeId. A read whose site compares against the
+//! class's predicted ShapeId (`class_field_predicted_shape`) proves the same
+//! fact as every other such read of `a`. Nothing between them can change that
+//! shape without a call: their inline paths read slots, write a Number into an
 //! existing raw-f64 lane, or write raw typed-array bytes. So a run of such
 //! statements carries the proof in a flag:
 //!
 //! * the run starts by clearing the flag;
-//! * the receiver's first site in the run runs the full guard and, when it
-//!   passes, sets the flag;
-//! * a later site whose proof an earlier site provides tests only the flag:
-//!   set, it goes straight to its slot access; clear, it takes the unchanged
-//!   guard call (the complete IC), so it emits no inline guard of its own;
+//! * the receiver's first site in the run runs the full site and, when its
+//!   compare passes, sets the flag;
+//! * a later site tests the flag first: set, it goes straight to its slot
+//!   load; clear, it runs its whole site (compare, then the site's miss);
 //! * every call the run emits clears the flag before entering the callee (the
 //!   call-emission choke point, `LlBlock::dirty_revalidations_before_call`),
-//!   so after any slow path, user code or collection later sites take the IC.
+//!   so after any slow path, user code or collection later sites run whole.
 //!
 //! The flag is a stack slot that mem2reg turns into SSA, so on the hit path
 //! the reuse costs one branch. It is not a side table: it lives in one
@@ -24,7 +25,7 @@
 //! (`IndexSet`, or the `PutValueSet` that `index_set::lower` serves); anything
 //! else (a conditional or logical operator, another property store, a call, a
 //! nested statement list, a closure) ends the run. A flag is set only by a
-//! passing guard of its own run and cleared by every call, so a site that
+//! passing compare of its own run and cleared by every call, so a site that
 //! finds it set is proven whatever path reached it.
 use super::FnCtx;
 use perry_hir::{Expr, Stmt};
@@ -34,30 +35,27 @@ pub(crate) struct Window {
     list: usize,
     next: usize,
     active: bool,
-    /// Per receiver local: the (class identity, ShapeId) flag, the
-    /// ShapeId-only flag, and which of the two an earlier site of the run
-    /// already sets. An identity proof implies the ShapeId proof.
+    /// Per receiver local: the predicted-ShapeId flag, and whether an earlier
+    /// site of the run already sets it.
     slots: BTreeMap<u32, Receiver>,
 }
 
 struct Receiver {
-    identity: String,
     shape: String,
-    identity_set: bool,
     shape_set: bool,
 }
 
-/// What a read guard on a run receiver does with the run's flags.
+/// What a predicted read site of a run receiver does with the run's flag.
 pub(crate) enum Memo {
-    /// The first site needing this proof: the full guard, which on a pass
+    /// The first site needing this proof: the full site, whose passing compare
     /// sets these flags.
     Set(Vec<String>),
-    /// An earlier site already sets this flag: test it alone, and take the
-    /// guard call when it is clear.
+    /// An earlier site already sets this flag: test it first, and run the
+    /// whole site when it is clear.
     Reuse(String),
 }
 
-pub(crate) fn memo_for(ctx: &mut FnCtx<'_>, receiver: &Expr, identity: bool) -> Option<Memo> {
+pub(crate) fn memo_for(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Option<Memo> {
     let window = ctx.class_guard_window.as_mut()?;
     if !window.active {
         return None;
@@ -66,15 +64,7 @@ pub(crate) fn memo_for(ctx: &mut FnCtx<'_>, receiver: &Expr, identity: bool) -> 
         return None;
     };
     let r = window.slots.get_mut(id)?;
-    Some(if identity {
-        if r.identity_set {
-            Memo::Reuse(r.identity.clone())
-        } else {
-            r.identity_set = true;
-            r.shape_set = true;
-            Memo::Set(vec![r.identity.clone(), r.shape.clone()])
-        }
-    } else if r.shape_set {
+    Some(if r.shape_set {
         Memo::Reuse(r.shape.clone())
     } else {
         r.shape_set = true;
@@ -193,20 +183,15 @@ pub(crate) fn before_stmt(ctx: &mut FnCtx<'_>, stmts: &[Stmt], i: usize) {
         if count < 2 {
             continue;
         }
-        let identity = ctx.func.alloca_entry(crate::types::I8);
         let shape = ctx.func.alloca_entry(crate::types::I8);
-        for slot in [&identity, &shape] {
-            ctx.func
-                .entry_allocas_push_store(crate::types::I8, "0", slot);
-            ctx.block().store(crate::types::I8, "0", slot);
-            ctx.func.reg_counter().push_guard_memo_slot(slot.clone());
-        }
+        ctx.func
+            .entry_allocas_push_store(crate::types::I8, "0", &shape);
+        ctx.block().store(crate::types::I8, "0", &shape);
+        ctx.func.reg_counter().push_guard_memo_slot(shape.clone());
         slots.insert(
             id,
             Receiver {
-                identity,
                 shape,
-                identity_set: false,
                 shape_set: false,
             },
         );

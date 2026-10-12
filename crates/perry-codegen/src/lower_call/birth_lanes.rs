@@ -66,9 +66,17 @@ pub(crate) fn chain_birth_f64_fields(
     let Some(resolved) = resolve_chain(classes, chain) else {
         return empty();
     };
-    // Candidates: public, named, undecorated `number` fields, declared once on
-    // the chain, with no accessor or method of the same name anywhere on it
-    // (a store would dispatch to the accessor instead of writing the slot).
+    // Candidates: public, named, undecorated fields, declared once on the
+    // chain, with no accessor or method of the same name anywhere on it (a
+    // store would dispatch to the accessor instead of writing the slot).
+    //
+    // A DEFINED field's declared type is not consulted: the runtime learns a
+    // lane from the value its definition writes, whatever the annotation, so
+    // `a: any = 1` completes on an `F64` lane exactly as `a: number = 1` does.
+    // Predicting `Any` for it named a ShapeId no instance carries, which sent
+    // every access through a miss (#12483). A constructor-store reservation
+    // keeps the declared-`number` requirement: its lane is predicted below
+    // without a deciding write.
     let mut declared: HashMap<&str, usize> = HashMap::new();
     for class in &resolved {
         for f in &class.fields {
@@ -85,7 +93,8 @@ pub(crate) fn chain_birth_f64_fields(
     let mut candidate: HashSet<String> = HashSet::new();
     for class in &resolved {
         for f in &class.fields {
-            if crate::typed_shape::type_is_raw_f64_candidate(&f.ty)
+            if (f.origin == perry_hir::ClassFieldOrigin::Definition
+                || crate::typed_shape::type_is_raw_f64_candidate(&f.ty))
                 && f.key_expr.is_none()
                 && !f.is_private
                 && f.decorators.is_empty()

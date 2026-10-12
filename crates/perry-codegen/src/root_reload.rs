@@ -210,8 +210,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_object_get_field_ic_fast",
     // First-read D3: a generic read's miss front, proven `Leaf` likewise.
     "js_object_get_field_ic_front",
-    "js_class_field_get_ic_fast",
-    "js_class_field_set_ic_fast",
     "js_put_value_set_packed_fast",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",

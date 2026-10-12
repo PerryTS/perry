@@ -674,10 +674,11 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
         deref.contains("icmp eq i8 %") && deref.contains(", 2\n"),
         "the gate must require a GC_TYPE_OBJECT receiver:\n{deref}"
     );
-    // The store arm is the ordinary class-field set: the inline IC store
-    // with its barrier, and the descriptor-aware runtime fallback behind it.
+    // The store arm is the ordinary class-field store, i.e. the static-key
+    // store site (#12483): its inline shape-checked store, and the
+    // descriptor-aware `[[Set]]` miss behind it.
     assert!(
-        body.contains("class_field_set.fast") && body.contains("@js_class_field_set_fallback("),
+        body.contains("put.pic.") && body.contains("@js_put_value_set_packed_miss("),
         "the write-back arm must be the class-field store:\n{body}"
     );
     // Between the header gate and the store: `this.items` is re-read and its

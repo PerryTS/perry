@@ -251,7 +251,13 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
         };
     // Native aliases also cache own data and class methods without the
     // accessor bit. Preserve that existing collecting consumer's admission.
-    if !cache.is_null() && crate::value::addr_class::is_above_handle_band(obj as usize) {
+    // A Proxy receiver is a bit-zero-tagged cell address (`is_proxy_id_band`),
+    // not an object header: its GcHeader is not at `obj - 8`, and reading it
+    // there is a misaligned dereference. The ladder below routes it.
+    if !cache.is_null()
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+        && !crate::value::addr_class::is_proxy_id_band(obj as usize)
+    {
         unsafe {
             let header =
                 &*((obj as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
@@ -301,8 +307,11 @@ fn ic_slow_body(
     let addr = obj as usize;
     // Below the handle band the emitted code never dereferenced, and neither
     // does this: the miss handler routes registry ids through
-    // HANDLE_PROPERTY_DISPATCH.
-    if crate::value::addr_class::is_above_handle_band(addr) {
+    // HANDLE_PROPERTY_DISPATCH. A Proxy cell's bit-zero-tagged address has no
+    // GcHeader at `addr - 8` either; the miss handler routes it.
+    if crate::value::addr_class::is_above_handle_band(addr)
+        && !crate::value::addr_class::is_proxy_id_band(addr)
+    {
         // SAFETY: the caller's emitted `(tag & 0xFFFD) == 0x7FFD` test
         // established a POINTER/STRING NaN-box and the address is above the
         // handle band — the same licence under which the emitted tower loaded

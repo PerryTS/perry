@@ -211,6 +211,17 @@ pub(super) fn allocate_packed_store_memo(ctx: &mut FnCtx<'_>) -> String {
 /// never evaluate to a closure ([`value_never_closure`]): a ConstFn lane then
 /// admits nothing it could store, so its admission arms are not emitted and a
 /// flagged lane takes the miss, exactly as a failed admission would.
+///
+/// `existing_key` is `Some` for a store to a declared field of a class whose
+/// instances carry that key from birth (`property_set.rs`): the store is an
+/// overwrite of an own data property, so only the site word's hit is inline.
+/// The existing-key ways, the key-add memos and the setter arm stay behind the
+/// same miss entry, which serves (and publishes) every one of them; the
+/// inline copies of them would only make the site wider. `Some(true)` says
+/// the field is born on an `F64` lane in every ShapeId its class compares
+/// (`class_field_site_raw_f64`): the inline hit is then only the `F64`-lane
+/// store of a plain finite double, which carries no pointer and so no GC
+/// bookkeeping; a lane that generalized takes the miss like any other.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_static_store_ic(
     ctx: &mut FnCtx<'_>,
@@ -221,6 +232,7 @@ pub(crate) fn emit_static_store_ic(
     strict: bool,
     value_may_be_closure: bool,
     value_is_scalar: bool,
+    existing_key: Option<bool>,
 ) -> String {
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -273,12 +285,7 @@ pub(crate) fn emit_static_store_ic(
     let merge_idx = ctx.new_block(&format!("{STORE_IC_STEM}.merge"));
     let tok_label = ctx.block_label(tok_idx);
     let kind_label = ctx.block_label(kind_idx);
-    let rep_label = ctx.block_label(rep_idx);
-    let store_label = ctx.block_label(store_idx);
     let miss_label = ctx.block_label(miss_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    let add_idx = ctx.new_block(&format!("{ADD_STEM}.check"));
-    let add_label = ctx.block_label(add_idx);
 
     // Receiver: POINTER tag AND payload above the handle band, as ONE unsigned
     // range compare. `t = bits - (POINTER_TAG | 0x200000)` is below
@@ -303,6 +310,31 @@ pub(crate) fn emit_static_store_ic(
     let sid = ctx.block().load(I32, &sid_ptr);
     let stamp = ctx.block().trunc(I64, &word, I32);
     let shape_eq = ctx.block().icmp_eq(I32, &sid, &stamp);
+    if let Some(f64_only) = existing_key {
+        ctx.block().cond_br(&shape_eq, &kind_label, &miss_label);
+        let site = StoreSite {
+            obj_box,
+            key_handle_global: &key_handle_global,
+            value_double,
+            value_bits,
+            strict_i32,
+            value_may_be_closure,
+            value_is_scalar,
+            cache_slot_ref: &cache_slot_ref,
+            packed_ref: &packed_ref,
+            handle: &handle,
+            kind_idx,
+            rep_idx,
+            store_idx,
+            miss_idx,
+            merge_idx,
+            f64_only,
+        };
+        let hit_end_label = emit_store_hit(ctx, &site, &[(word, tok_label.clone())]);
+        return emit_store_miss_and_merge(ctx, &site, &hit_end_label, None);
+    }
+    let add_idx = ctx.new_block(&format!("{ADD_STEM}.check"));
+    let add_label = ctx.block_label(add_idx);
     // Setter candidates reuse the one collecting store exit. The shared
     // runtime consumer validates holder, installation and storage facts.
     let setter_entry = (setter_arm_target(ctx.target_triple)
@@ -439,6 +471,106 @@ pub(crate) fn emit_static_store_ic(
         add_way_label = next_label;
     }
 
+    let site = StoreSite {
+        obj_box,
+        key_handle_global: &key_handle_global,
+        value_double,
+        value_bits,
+        strict_i32,
+        value_may_be_closure,
+        value_is_scalar,
+        cache_slot_ref: &cache_slot_ref,
+        packed_ref: &packed_ref,
+        handle: &handle,
+        kind_idx,
+        rep_idx,
+        store_idx,
+        miss_idx,
+        merge_idx,
+        f64_only: false,
+    };
+    let hit_end_label = emit_store_hit(ctx, &site, &word_incoming);
+
+    ctx.current_block = add_hit_idx;
+    let (shapes, pair_ptr) = {
+        let shapes_in: Vec<(&str, &str)> = memo_incoming
+            .iter()
+            .map(|(s, _, l)| (s.as_str(), l.as_str()))
+            .collect();
+        let pairs_in: Vec<(&str, &str)> = memo_incoming
+            .iter()
+            .map(|(_, p, l)| (p.as_str(), l.as_str()))
+            .collect();
+        let shapes = ctx.block().phi(I64, &shapes_in);
+        let pair_ptr = ctx.block().phi(PTR, &pairs_in);
+        (shapes, pair_ptr)
+    };
+    let merge_label = ctx.block_label(merge_idx);
+    let add_end_label = emit_key_add_hit(
+        ctx,
+        &shapes,
+        &pair_ptr,
+        &handle,
+        value_double,
+        value_bits,
+        &miss_label,
+        &merge_label,
+        value_may_be_closure,
+        value_is_scalar,
+    );
+    emit_store_miss_and_merge(ctx, &site, &hit_end_label, Some(&add_end_label))
+}
+
+/// The operands and blocks of one static-key store site, for its shared tail.
+struct StoreSite<'a> {
+    obj_box: &'a str,
+    key_handle_global: &'a str,
+    value_double: &'a str,
+    value_bits: &'a str,
+    strict_i32: &'a str,
+    value_may_be_closure: bool,
+    value_is_scalar: bool,
+    cache_slot_ref: &'a str,
+    packed_ref: &'a str,
+    handle: &'a str,
+    kind_idx: usize,
+    rep_idx: usize,
+    store_idx: usize,
+    miss_idx: usize,
+    merge_idx: usize,
+    /// Only the `F64`-lane hit is inline (see `emit_static_store_ic`).
+    f64_only: bool,
+}
+
+/// The existing-key hit: lane check, store, GC bookkeeping. `word_incoming`
+/// is `(word, block)` for every edge into `kind` (the site word's compare,
+/// and the existing-key ways when they are inline). Returns the label of the
+/// block that branches to the merge.
+fn emit_store_hit(
+    ctx: &mut FnCtx<'_>,
+    site: &StoreSite<'_>,
+    word_incoming: &[(String, String)],
+) -> String {
+    let &StoreSite {
+        value_double,
+        value_bits,
+        value_may_be_closure,
+        value_is_scalar,
+        packed_ref,
+        handle,
+        kind_idx,
+        rep_idx,
+        store_idx,
+        miss_idx,
+        merge_idx,
+        f64_only,
+        ..
+    } = site;
+    let rep_label = ctx.block_label(rep_idx);
+    let store_label = ctx.block_label(store_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
     // A hit. Charter step 3: the matched ShapeId is an `Ordinary` shape (the
     // only kind the runtime publishes), which proves the receiver kind and
     // the absence of a numeric proof — no per-object test. `_reserved` is
@@ -462,6 +594,32 @@ pub(crate) fn emit_static_store_ic(
     // A word with bit 62 set names a ConstFn lane: only a closure of the
     // site's one body is stored inline (`emit_constfn_value_check`).
     ctx.current_block = rep_idx;
+    if f64_only {
+        // The `F64` lane (the word's sign bit) and a plain finite double:
+        // stored as is, no pointer, no bookkeeping. Anything else (an `Any` or
+        // ConstFn lane after a generalization, a box, an infinity, a NaN)
+        // takes the miss, whose checked funnel stores it.
+        let f64_slot = ctx.block().icmp_slt(I64, &word, "0");
+        let exponent = ctx.block().and(I64, value_bits, F64_EXP_MASK);
+        let finite = ctx.block().icmp_ne(I64, &exponent, F64_EXP_MASK);
+        let raw = ctx.block().and(I1, &f64_slot, &finite);
+        ctx.block().cond_br(&raw, &store_label, &miss_label);
+        ctx.current_block = store_idx;
+        let slot_half = ctx.block().lshr(I64, &word, "32");
+        let slot = ctx.block().and(I64, &slot_half, PACKED_SLOT_INDEX_MASK);
+        let header_size =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let fields = ctx.block().add(I64, handle, &header_size);
+        let fields_ptr = ctx.block().inttoptr(I64, &fields);
+        let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
+        // GC_STORE_AUDIT(POINTER_FREE): an `F64` lane receiving a plain finite
+        // double — no pointer edge, and the lane keeps its representation.
+        ctx.block().store(DOUBLE, value_double, &slot_ptr);
+        super::store_census::bump(ctx, super::store_census::PIC_HIT);
+        let hit_end_label = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        return hit_end_label;
+    }
     let flags = ctx.block().lshr(I64, &word, "62");
     let plain = ctx.block().icmp_eq(I64, &flags, "0");
     let lane_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.lane"));
@@ -478,7 +636,7 @@ pub(crate) fn emit_static_store_ic(
         ctx.current_block = constfn_idx;
         let body_ptr = ctx
             .block()
-            .gep(I64, &packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
+            .gep(I64, packed_ref, &[(I64, &CONSTFN_INFO_WORD.to_string())]);
         emit_constfn_value_check(ctx, &body_ptr, value_bits, &store_label, &miss_label);
     } else {
         ctx.block().cond_br(&f64_slot, &f64_label, &miss_label);
@@ -493,7 +651,7 @@ pub(crate) fn emit_static_store_ic(
     let slot_half = ctx.block().lshr(I64, &word, "32");
     let slot = ctx.block().and(I64, &slot_half, PACKED_SLOT_INDEX_MASK);
     let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().add(I64, &handle, &header_size);
+    let fields = ctx.block().add(I64, handle, &header_size);
     let fields_ptr = ctx.block().inttoptr(I64, &fields);
     let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
     // GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the
@@ -504,7 +662,7 @@ pub(crate) fn emit_static_store_ic(
     if !value_is_scalar {
         emit_static_store_ic_bookkeeping(
             ctx,
-            &handle,
+            handle,
             &slot_ptr,
             value_double,
             value_bits,
@@ -513,37 +671,32 @@ pub(crate) fn emit_static_store_ic(
     }
     let hit_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
+    hit_end_label
+}
 
-    ctx.current_block = add_hit_idx;
-    let (shapes, pair_ptr) = {
-        let shapes_in: Vec<(&str, &str)> = memo_incoming
-            .iter()
-            .map(|(s, _, l)| (s.as_str(), l.as_str()))
-            .collect();
-        let pairs_in: Vec<(&str, &str)> = memo_incoming
-            .iter()
-            .map(|(_, p, l)| (p.as_str(), l.as_str()))
-            .collect();
-        let shapes = ctx.block().phi(I64, &shapes_in);
-        let pair_ptr = ctx.block().phi(PTR, &pairs_in);
-        (shapes, pair_ptr)
-    };
-    let add_end_label = emit_key_add_hit(
-        ctx,
-        &shapes,
-        &pair_ptr,
-        &handle,
+/// The site's one miss call and the merge. Leaves the merge block current;
+/// returns its phi.
+fn emit_store_miss_and_merge(
+    ctx: &mut FnCtx<'_>,
+    site: &StoreSite<'_>,
+    hit_end_label: &str,
+    add_end_label: Option<&str>,
+) -> String {
+    let &StoreSite {
+        obj_box,
+        key_handle_global,
         value_double,
-        value_bits,
-        &miss_label,
-        &merge_label,
-        value_may_be_closure,
-        value_is_scalar,
-    );
-
+        strict_i32,
+        cache_slot_ref,
+        packed_ref,
+        miss_idx,
+        merge_idx,
+        ..
+    } = site;
+    let merge_label = ctx.block_label(merge_idx);
     ctx.current_block = miss_idx;
     super::store_census::bump(ctx, super::store_census::PIC_MISS);
-    let key_handle = emit_key_handle(ctx, &key_handle_global);
+    let key_handle = emit_key_handle(ctx, key_handle_global);
     let miss_value = ctx.block().call(
         DOUBLE,
         "js_put_value_set_packed_miss",
@@ -552,19 +705,19 @@ pub(crate) fn emit_static_store_ic(
             (I64, &key_handle),
             (DOUBLE, value_double),
             (I32, strict_i32),
-            (PTR, &cache_slot_ref),
-            (PTR, &packed_ref),
+            (PTR, cache_slot_ref),
+            (PTR, packed_ref),
         ],
     );
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    let incoming: Vec<(&str, &str)> = vec![
-        (value_double, &hit_end_label),
-        (value_double, &add_end_label),
-        (&miss_value, &miss_end_label),
-    ];
+    let mut incoming: Vec<(&str, &str)> = vec![(value_double, hit_end_label)];
+    if let Some(add_end_label) = add_end_label {
+        incoming.push((value_double, add_end_label));
+    }
+    incoming.push((&miss_value, &miss_end_label));
     ctx.block().phi(DOUBLE, &incoming)
 }
 

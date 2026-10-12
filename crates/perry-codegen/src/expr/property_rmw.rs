@@ -1,7 +1,7 @@
 //! A read/modify/write site uses the plain store site's ShapeId/slot memo.
 //! The shared leaf consumes that proof once for both the read and write.
 use super::{lower_expr, FnCtx};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
@@ -122,9 +122,9 @@ pub(super) fn try_lower_logical(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     lower_site(ctx, object, property, value, operation, ctx.is_strict_fn).map(Some)
 }
 
-/// The class a declared type nominates for a guarded field site (the read
-/// path's `guarded_declared_class_get_candidate`). It selects the lowering
-/// only; the inline ShapeId guard decides every access.
+/// The class a declared type nominates (the read path's
+/// `guarded_declared_class_get_candidate`). It selects inline emission only;
+/// the store memo word decides every access.
 fn declared_class_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
     let name = match object {
         Expr::LocalGet(id) => match ctx.local_type_hint(id)? {
@@ -137,17 +137,31 @@ fn declared_class_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
     ctx.classes.contains_key(name).then(|| name.clone())
 }
 
-/// The plain class-field read guard proves the slot is an own writable data
-/// property: descriptor, deletion and integrity changes all mint a different
-/// ShapeId. The numeric operation cannot run JS, so the one guard spans the
-/// read and the write. An `F64` lane holds a Number by its shape; a boxed lane
-/// needs the plain-finite test on the old bits (tags, NaN and Inf decline).
-/// Every decline is the shared `js_property_rmw` continuation.
+/// The read/modify/write's inline hit, proven by the site's store memo word
+/// (the word `js_property_rmw` publishes through the store site's miss): the
+/// receiver test, the receiver's ShapeId against the word, then the slot the
+/// word names. One mechanism for every receiver, class instance or not
+/// (#12483): this used to compare a class-named receiver against its class's
+/// BIRTH ShapeId, which an instance that left it (a plain JavaScript class, a
+/// constructor that adds keys) missed on every update.
+///
+/// The matched ShapeId proves the slot an own writable data property:
+/// descriptor, deletion and integrity changes all mint a different ShapeId. A
+/// ConstFn lane (bit 62) declines. The numeric operation cannot run JS, so the
+/// one compare spans the read and the write. An `F64` lane (the word's sign
+/// bit) holds a Number by its shape; any other lane needs the plain-finite test
+/// on the old bits (tags, NaN and Inf decline). Every decline is the shared
+/// `js_property_rmw` continuation, exactly what `js_property_rmw_fast` proves.
+///
+/// A field of a class whose instances keep its ShapeId
+/// (`class_field_predicted_shape`) compares against that ShapeId instead of
+/// the word, as its reads do, and shares a class-guard run's proof with them
+/// (`class_guard_memo`); its slot and lane are the class layout's.
 #[allow(clippy::too_many_arguments)]
 fn inline_number_site(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
-    property: &str,
+    predicted: Option<(super::class_field_inline_guard::PredictedShape, bool)>,
     receiver: &str,
     rhs: &str,
     safe_number_arithmetic: bool,
@@ -157,64 +171,128 @@ fn inline_number_site(
     packed: &str,
     key: &str,
 ) -> Option<String> {
-    use super::class_field_inline_guard as guard;
     if !safe_number_arithmetic || !matches!(operation, 0..=3 | 16..=19) {
         return None;
     }
-    // Types nominate the class exactly as the plain read does; the shape
-    // guard below is the proof.
-    let class = crate::type_analysis::receiver_class_name(ctx, object)
-        .or_else(|| declared_class_candidate(ctx, object))?;
-    if super::property_set::class_has_computed_runtime_members(ctx, &class)
-        || guard::class_instances_have_constructor_reservations(ctx, &class)
-        || guard::class_instances_grow_past_layout(ctx, &class)
-    {
-        return None;
-    }
-    let index = crate::type_analysis::class_field_global_index(ctx, &class, property)?;
-    let raw_f64 = guard::class_field_site_raw_f64(ctx, &class, property, index);
-    let class_id = ctx.class_ids.get(&class)?.to_string();
-    let keys = ctx.class_keys_globals.get(&class)?.clone();
-    let arms = guard::class_field_subclass_arms(ctx, &class, property, index, raw_f64);
-    if !raw_f64 && !guard::class_field_arms_cover_every_subclass(ctx, &class, &arms) {
-        return None;
-    }
+    let token = ctx.new_block("property_rmw.token");
     let fast = ctx.new_block("property_rmw.slot");
     let number = ctx.new_block("property_rmw.number");
     let slow = ctx.new_block("property_rmw.generic");
     let join = ctx.new_block("property_rmw.join");
+    let token_label = ctx.block_label(token);
     let fast_label = ctx.block_label(fast);
     let number_label = ctx.block_label(number);
     let slow_label = ctx.block_label(slow);
     let join_label = ctx.block_label(join);
     let bits = ctx.block().bitcast_double_to_i64(receiver);
-    let (_, handle) = guard::emit_class_field_read_precheck_for(
-        ctx,
-        Some(object),
-        &bits,
-        &class_id,
-        raw_f64,
-        &fast_label,
-        &arms,
-        &keys,
-    );
-    ctx.block().br(&slow_label);
-    ctx.current_block = fast;
-    let pointer = ctx.block().inttoptr(I64, &handle);
-    let offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        + index as u64 * 8)
-        .to_string();
-    let slot = ctx
-        .block()
-        .gep(crate::types::I8, &pointer, &[(I64, &offset)]);
-    let old = ctx.block().load(DOUBLE, &slot);
-    if raw_f64 {
-        ctx.block().br(&number_label);
-    } else {
-        let old_bits = ctx.block().bitcast_double_to_i64(&old);
-        let plain = guard::emit_plain_finite_number_check(ctx.block(), &old_bits);
-        ctx.block().cond_br(&plain, &number_label, &slow_label);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    let memo = predicted
+        .as_ref()
+        .and_then(|_| super::class_guard_memo::memo_for(ctx, object));
+    if let Some(super::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
+        let site = ctx.new_block("property_rmw.memo_clear");
+        let site_label = ctx.block_label(site);
+        let flag = ctx.block().load(crate::types::I8, flag_slot);
+        let proven = ctx.block().icmp_ne(crate::types::I8, &flag, "0");
+        ctx.block().cond_br(&proven, &fast_label, &site_label);
+        ctx.current_block = site;
     }
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &token_label, &slow_label);
+
+    ctx.current_block = token;
+    let handle = super::receiver_range::emit_handle(ctx.block(), &recv.biased);
+    let sid_addr = ctx.block().add(I64, &handle, "4");
+    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
+    let sid = ctx.block().load(I32, &sid_ptr);
+    let word = match predicted.as_ref() {
+        Some((p, _)) => {
+            // The written slot excludes a completed id whose lane there is
+            // special (`compatible_final_shape_ids`).
+            let expected = crate::typed_shape::class_shape_id_operand_on_block(
+                ctx.block(),
+                &p.keys_global,
+                true,
+            );
+            let proven = crate::typed_shape::emit_compatible_shape_eq(
+                ctx.block(),
+                &sid,
+                &expected,
+                &[p.slot],
+            );
+            match &memo {
+                Some(super::class_guard_memo::Memo::Set(slots)) => {
+                    let set = ctx.new_block("property_rmw.memo_set");
+                    let set_label = ctx.block_label(set);
+                    ctx.block().cond_br(&proven, &set_label, &slow_label);
+                    ctx.current_block = set;
+                    for slot in slots {
+                        ctx.block().store(crate::types::I8, "1", slot);
+                    }
+                    ctx.block().br(&fast_label);
+                }
+                _ => ctx.block().cond_br(&proven, &fast_label, &slow_label),
+            }
+            None
+        }
+        None => {
+            let word = ctx.block().load_atomic_monotonic(I64, packed, 8);
+            let stamp = ctx.block().trunc(I64, &word, I32);
+            let shape_eq = ctx.block().icmp_eq(I32, &sid, &stamp);
+            let constfn = ctx.block().and(I64, &word, CONSTFN_SLOT_BIT);
+            let plain_lane = ctx.block().icmp_eq(I64, &constfn, "0");
+            let proven = ctx.block().and(I1, &shape_eq, &plain_lane);
+            ctx.block().cond_br(&proven, &fast_label, &slow_label);
+            Some(word)
+        }
+    };
+
+    ctx.current_block = fast;
+    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    // The handle again, from the receiver bits: the memo's flag edge reaches
+    // this block without the token block.
+    let fast_handle = super::receiver_range::emit_handle(ctx.block(), &recv.biased);
+    let (slot, numeric) = match (&word, predicted.as_ref()) {
+        (Some(word), _) => {
+            let index = ctx.block().lshr(I64, word, "32");
+            let index = ctx.block().and(I64, &index, SLOT_INDEX_MASK);
+            let offset = ctx.block().shl(I64, &index, "3");
+            let offset = ctx.block().add(I64, &offset, &header.to_string());
+            let addr = ctx.block().add(I64, &fast_handle, &offset);
+            let slot = ctx.block().inttoptr(I64, &addr);
+            let old = ctx.block().load(DOUBLE, &slot);
+            let f64_lane = ctx.block().icmp_slt(I64, word, "0");
+            let old_bits = ctx.block().bitcast_double_to_i64(&old);
+            let plain = super::class_field_inline_guard::emit_plain_finite_number_check(
+                ctx.block(),
+                &old_bits,
+            );
+            let numeric = ctx.block().or(I1, &f64_lane, &plain);
+            ((slot, old), Some(numeric))
+        }
+        (None, Some((p, f64_lane))) => {
+            let offset = (header + u64::from(p.slot) * 8).to_string();
+            let addr = ctx.block().add(I64, &fast_handle, &offset);
+            let slot = ctx.block().inttoptr(I64, &addr);
+            let old = ctx.block().load(DOUBLE, &slot);
+            // An `F64` lane of the compared ShapeId holds a Number.
+            let numeric = (!f64_lane).then(|| {
+                let old_bits = ctx.block().bitcast_double_to_i64(&old);
+                super::class_field_inline_guard::emit_plain_finite_number_check(
+                    ctx.block(),
+                    &old_bits,
+                )
+            });
+            ((slot, old), numeric)
+        }
+        (None, None) => unreachable!(),
+    };
+    let (slot, old) = slot;
+    match numeric {
+        Some(numeric) => ctx.block().cond_br(&numeric, &number_label, &slow_label),
+        None => ctx.block().br(&number_label),
+    }
+
     ctx.current_block = number;
     let new = match operation {
         0 | 2 => ctx.block().fsub(&old, "1.0"),
@@ -254,6 +332,12 @@ fn inline_number_site(
     )
 }
 
+/// The store memo word's ConstFn bit (`perry_abi::PACKED_SET_CONSTFN_SLOT`).
+const CONSTFN_SLOT_BIT: &str = "4611686018427387904";
+const _: () = assert!(crate::runtime_abi::PACKED_SET_CONSTFN_SLOT == 1 << 62);
+/// The word's slot index, below its two flag bits (bits 62 and 63).
+const SLOT_INDEX_MASK: &str = "1073741823";
+
 fn lower_site(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -292,20 +376,41 @@ fn lower_site(
         .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
     let op = operation.to_string();
     let flags = (operation | (i32::from(strict) << 8)).to_string();
-    if let Some(result) = inline_number_site(
-        ctx,
-        object,
-        property,
-        &receiver,
-        &rhs,
-        safe_number_arithmetic,
-        operation,
-        &flags,
-        &cache,
-        &packed,
-        &key,
-    ) {
-        return Ok(result);
+    // The proof is the same for every receiver; which sites carry it INLINE
+    // is a size decision. A receiver whose class the compiler names gets the
+    // inline copy (the sites the class guard used to serve inline); every
+    // other site keeps the outlined `js_property_rmw_fast` below, the same
+    // proof behind a leaf call.
+    let inline_class = crate::type_analysis::receiver_class_name(ctx, object)
+        .or_else(|| declared_class_candidate(ctx, object))
+        .filter(|class| !super::property_set::class_has_computed_runtime_members(ctx, class));
+    if let Some(class) = inline_class {
+        let predicted = crate::type_analysis::class_field_global_index(ctx, &class, property)
+            .and_then(|index| {
+                super::class_field_inline_guard::class_field_predicted_shape(
+                    ctx, object, &class, index,
+                )
+            })
+            .map(|p| {
+                let f64_lane =
+                    super::class_field_inline_guard::class_birth_slot_is_f64(ctx, &class, p.slot);
+                (p, f64_lane)
+            });
+        if let Some(result) = inline_number_site(
+            ctx,
+            object,
+            predicted,
+            &receiver,
+            &rhs,
+            safe_number_arithmetic,
+            operation,
+            &flags,
+            &cache,
+            &packed,
+            &key,
+        ) {
+            return Ok(result);
+        }
     }
     Ok(super::ic_fast_split::emit_hole_declining_split(
         ctx,

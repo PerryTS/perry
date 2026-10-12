@@ -126,6 +126,8 @@ pub(super) fn ir_opts() -> CompileOptions {
 }
 
 const PARAM_ID: u32 = 7;
+const STORED_ID: u32 = 8;
+const BOXED_ID: u32 = 9;
 
 fn field(name: &str, ty: Type) -> ClassField {
     ClassField {
@@ -213,18 +215,44 @@ fn probe_module() -> Module {
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: Vec::new(),
+        params: vec![Param {
+            id: STORED_ID,
+            name: "x".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
         return_type: Type::Named("Boxed".to_string()),
-        body: vec![Stmt::Return(Some(Expr::New {
-            class_name: "Boxed".to_string(),
-            args: vec![Expr::Number(1.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-            cap_args_appended: 0,
-        }))],
+        // `const b = new Boxed(1); b.v = x; return b;` in strict code: `b` is a
+        // shape-proven local (it escapes only by `return`), so `b.v = x` is the
+        // proven class-field store whose barrier tier this file pins. Every
+        // other class-field store is the static-key store site (#12483).
+        body: vec![
+            Stmt::Let {
+                id: BOXED_ID,
+                name: "b".to_string(),
+                ty: Type::Named("Boxed".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Boxed".to_string(),
+                    args: vec![Expr::Number(1.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(BOXED_ID)),
+                property: "v".to_string(),
+                value: Box::new(Expr::LocalGet(STORED_ID)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(BOXED_ID))),
+        ],
         is_async: false,
         is_generator: false,
-        is_strict: false,
+        is_strict: true,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -233,7 +261,7 @@ fn probe_module() -> Module {
     }];
     m.init = vec![Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(1)),
-        args: Vec::new(),
+        args: vec![Expr::Number(2.0)],
         type_args: Vec::new(),
         byte_offset: 0,
     })];
@@ -295,23 +323,26 @@ fn constructor_reservations_use_current_shape_store_ic_in_both_modes() {
     }
 }
 
-/// A numeric-proof Array subclass carries a sibling ShapeId. The class-field
-/// store must compare the exact birth id before entering its inline arm, and
-/// must not read the retired proof bit from the receiver header.
+/// A class-field store is the static-key store site (#12483): the constructor's
+/// `this.v = v` compares the receiver's ShapeId against the site's word, so a
+/// numeric-proof Array subclass (a sibling ShapeId) is refused by that compare,
+/// never by a header bit, and no class guard against the birth ShapeId is
+/// emitted.
 #[test]
-fn class_field_set_precheck_blocks_packed_numeric_proof_receivers() {
+fn class_field_store_is_the_store_site_and_refuses_by_shape() {
     let ir = ir();
-    let deref = block_body(&ir, "class_field_inline.deref")
-        .unwrap_or_else(|| panic!("missing inline dereference guard:\n{ir}"));
     assert!(
-        deref.contains("load i32") && deref.contains("icmp eq i32"),
-        "the live guard must compare the receiver's exact ShapeId:\n{deref}"
+        ir.contains(&format!("{}.", super::put_value_store_ic::STORE_IC_STEM)),
+        "the constructor's class-field store must be the static-key store site:\n{ir}"
     );
     assert!(
-        !deref
-            .lines()
+        block_body(&ir, "class_field_inline.deref").is_none(),
+        "no class guard against the birth ShapeId may be emitted:\n{ir}"
+    );
+    assert!(
+        !ir.lines()
             .any(|line| line.contains("and i16") && line.ends_with(", 128")),
-        "numeric proof must be refused by ShapeId, not a header bit:\n{deref}"
+        "numeric proof must be refused by ShapeId, not a header bit:\n{ir}"
     );
 }
 

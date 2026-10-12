@@ -23,18 +23,14 @@ pub(crate) const ADD_HIT: usize = 2;
 pub(crate) const PIC_MISS: usize = 3;
 /// Class-field store: the shape-proven raw store (no runtime guard).
 pub(crate) const CFIELD_SHAPE_PROVEN: usize = 4;
-/// Class-field store: the inline-guarded fast store.
-pub(crate) const CFIELD_GUARD_STORE: usize = 5;
-/// Class-field store: the guard's fallback call.
-pub(crate) const CFIELD_GUARD_FALLBACK: usize = 6;
-/// Class-field store: a `js_class_field_set_ic` call.
-pub(crate) const CFIELD_IC_CALL: usize = 7;
-// Index 8 remains a zero tombstone for the removed class-loop raw store.
+// Indices 5-7 (the class guard's inline store, its fallback call and the
+// `js_class_field_set_ic` call) and 8 (the class-loop raw store) remain zero
+// tombstones: a class-field store is the static-key store site (#12483). The
+// runtime's diagnostic array keeps its indices stable across the deletion.
 // The runtime's diagnostic array keeps its indices stable across the deletion.
 /// Class setter dispatch (`__set_<name>`).
 pub(crate) const CFIELD_SETTER: usize = 9;
-/// Sloppy-mode class-field store.
-pub(crate) const CFIELD_SLOPPY: usize = 10;
+// Index 10 (the sloppy-mode class-field store) is a tombstone likewise.
 /// The runtime by-name store (no inline path).
 pub(crate) const BY_NAME_RUNTIME: usize = 11;
 /// The PutValue by-name lowering.

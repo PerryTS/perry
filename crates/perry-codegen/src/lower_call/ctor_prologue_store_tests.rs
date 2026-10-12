@@ -150,7 +150,8 @@ fn a_pointer_bearing_shape_stores_at_the_new_site_without_header_layout() {
         "the mixed-layout fast arm must store both the raw-f64 and pointer fields:\n{ir}"
     );
     assert!(
-        !ir.contains("and i16 ") || !ir.contains(", 4096"),
+        !ir.lines()
+            .any(|line| line.contains("and i16 ") && line.trim_end().ends_with(", 4096")),
         "the mixed-layout arm still tests the retired object INTACT bit:\n{ir}"
     );
 }

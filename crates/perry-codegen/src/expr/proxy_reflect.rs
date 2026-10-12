@@ -1512,28 +1512,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     *strict,
                 );
             }
-            // #7288: sloppy code is barred from the class-field route above
-            // because that route's fallback throws on a rejected write. The
-            // FAST arm is mode-independent (its precheck rejects frozen /
-            // descriptor-bearing receivers and non-number values), so emit it
-            // here with a sloppy-correct miss path instead of surrendering the
-            // whole optimization. #5094/P1 extends it to boxed slots. See
-            // `property_set::try_lower_sloppy_class_field_store`.
-            if !*strict {
-                if let Expr::String(property) = key.as_ref() {
-                    if same_put_value_receiver_expr(target, receiver)
-                        && matches!(target.as_ref(), Expr::LocalGet(_) | Expr::This)
-                    {
-                        if let Some(result) =
-                            super::property_set::try_lower_sloppy_class_field_store(
-                                ctx, target, property, value,
-                            )?
-                        {
-                            return Ok(result);
-                        }
-                    }
-                }
-            }
             if put_value_index_fast_path(ctx, target, key, receiver) {
                 return super::index_set::lower(
                     ctx,

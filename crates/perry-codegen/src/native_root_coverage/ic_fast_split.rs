@@ -21,7 +21,7 @@
 use super::*;
 use perry_hir::{Class, ClassField};
 
-const FAST_SLOW: [(&str, &str); 4] = [
+const FAST_SLOW: [(&str, &str); 2] = [
     (
         "js_put_value_set_packed_fast",
         "js_put_value_set_packed_miss",
@@ -29,14 +29,6 @@ const FAST_SLOW: [(&str, &str); 4] = [
     (
         "js_object_get_field_ic_fast",
         "js_object_get_field_ic_fast_miss",
-    ),
-    (
-        "js_class_field_get_ic_fast",
-        "js_class_field_get_ic_fast_miss",
-    ),
-    (
-        "js_class_field_set_ic_fast",
-        "js_class_field_set_ic_fast_miss",
     ),
 ];
 

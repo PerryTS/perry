@@ -1,36 +1,17 @@
-//! #5093: codegen-inlined class-field shape guard.
+//! #5093: codegen-inlined class shape checks, and the class-layout facts
+//! behind them.
 //!
-//! Monomorphic `this.field` reads/writes on a known class instance previously
-//! routed every access through a cross-crate
-//! `js_typed_feedback_class_field_{get,set}_guard` *call* before touching the
-//! raw slot. Measurements in #5093 showed the call itself — not its body — was
-//! the dominant cost on the `09_method_calls` benchmark (~290× Node). This
-//! emits the cheap part of the guard's contract as inline IR: when the
-//! monomorphic shape holds (and, for raw-f64 fields, the per-object typed-layout
-//! intact bit is set), control branches straight to the fast slot load/store,
-//! skipping the call.
+//! A class-field READ or STORE is not lowered here: it is the shape site
+//! (`property_get/generic_dispatch.rs`, `put_value_store_ic.rs`), whose word
+//! follows the receiver's actual ShapeId (#12483). What remains are the checks
+//! a typed METHOD CLONE's admission makes against its receiver class's
+//! ShapeId (`lower_call/method_override.rs`, `dynamic_dispatch.rs`), and the
+//! facts that say whether a class's static ShapeId describes its instances at
+//! all ([`class_instances_keep_birth_shape`]) and which of its slots are `F64`
+//! lanes ([`class_field_site_raw_f64`]).
 //!
-//! NOTE (repsel Phase 3b audit, verified with `--trace llvm` + `opt -O3` on a
-//! `this.field`-in-loop method): LLVM LICM does NOT hoist this check out of
-//! hot loops. The volatile gate load is never hoistable (volatile ⇒
-//! `!isUnordered`), and — decisively — even a plain or `atomic unordered`
-//! gate load stays in the loop because the diamond's own guard-call/fallback
-//! arm puts an unknown external call inside the loop body, which
-//! clobber-blocks LICM for every load in the check. Per-access cost is
-//! therefore paid on every iteration. The hoisted form exists as the #5093
-//! region preheader checks (`stmt::region_loop`), and statically-proven receivers
-//! skip the diamond entirely (`collectors/ptr_shape.rs`). Do not "fix" this
-//! by de-volatilizing the gate: it buys nothing (the calls still block LICM)
-//! and weakens the mid-loop sticky-flip visibility guarantee for loops whose
-//! bodies CAN flip the gate through a call.
-//!
-//! The inline check is a strict subset of `class_field_fast_contract` (runtime
-//! `typed_feedback/guards.rs`): if it passes, the guard call would have returned
-//! "fast". On any miss it falls through to the unchanged guard-call path, so the
-//! optimization is purely additive — it can never take the fast path the guard
-//! would have rejected. The exact ShapeId carries the raw-f64 lane rep, so a
-//! representation change must move to a different ShapeId before this guard
-//! can pass again.
+//! The exact ShapeId carries the raw-f64 lane rep, so a representation change
+//! must move to a different ShapeId before a check against it can pass again.
 
 use crate::types::{I1, I16, I32, I64, I8};
 
@@ -70,8 +51,8 @@ const MAX_CLASS_FIELD_SUBCLASS_ARMS: usize = 8;
 ///
 /// ## Why this exists
 ///
-/// `emit_class_field_inline_precheck` (and the runtime `class_field_fast_contract`
-/// behind it) speculates that the receiver's dynamic class is EXACTLY the
+/// A check against the declared class's ShapeId (and the runtime
+/// `class_field_fast_contract`) speculates that the receiver's dynamic class is EXACTLY the
 /// expression's declared class. Inside a base class's own constructor or method
 /// that bet is not merely unreliable, it is **guaranteed wrong**: `this` in
 /// `Node2D`'s constructor is only ever reached through `super(...)` from a
@@ -181,40 +162,6 @@ pub(crate) fn class_birth_slot_is_f64(ctx: &FnCtx<'_>, class_name: &str, field_i
         .is_some_and(|&rep| crate::typed_shape::birth_rep_slot_is_f64(rep, field_index))
 }
 
-/// Does `arms` name EVERY transitive subclass of `class_name`?
-///
-/// When it does not — the hierarchy overflowed [`MAX_CLASS_FIELD_SUBCLASS_ARMS`]
-/// (every arm is then dropped), or a subclass shadows the field, declares it
-/// at another representation, or has no canonical keys global — an instance
-/// of that subclass can never match the class-field guard, and every read of
-/// it pays the guard AND the `js_class_field_get_ic` call behind it. In a
-/// base-class method of a wide hierarchy that is every read: measured on Zod
-/// 3.23 (`ZodType` has 36 subclasses), 17,400 of the 27,800 executed
-/// class-field reads per 200 schema parses took that miss call.
-///
-/// A site whose receivers the class guard cannot name belongs on the generic
-/// IC instead: its per-site word learns whichever ShapeId the site actually
-/// sees and serves it with one compare, and its ways serve the next few.
-/// This is the routing half of "one fast path real code actually takes".
-pub(crate) fn class_field_arms_cover_every_subclass(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    arms: &[ClassFieldSubclassArm],
-) -> bool {
-    let Some(&declared_id) = ctx.class_ids.get(class_name) else {
-        return true;
-    };
-    transitive_subclasses(ctx, class_name)
-        .into_iter()
-        .all(|sub_name| {
-            ctx.class_ids.get(sub_name).is_none_or(|&sub_id| {
-                sub_id == 0
-                    || sub_id == declared_id
-                    || arms.iter().any(|arm| arm.class_id == sub_id)
-            })
-        })
-}
-
 /// Do instances of `class_name` (or of any subclass) gain keys in their
 /// constructors beyond the declared layout?
 ///
@@ -273,6 +220,65 @@ pub(crate) fn class_instances_have_constructor_reservations(
         || transitive_subclasses(ctx, class_name)
             .into_iter()
             .any(reserves)
+}
+
+/// Is the class's static ShapeId (its canonical keys global) the shape its
+/// instances are born on AND keep once constructed? Only then can a static
+/// supplier name it. A class whose keys are constructor-store reservations
+/// (every plain JavaScript class) is born without them and reaches a shape by
+/// transitions; a constructor that adds keys or private elements moves every
+/// instance off it. Such a receiver is served by the learned site word, which
+/// follows the shape the instance actually has (#12483).
+pub(crate) fn class_instances_keep_birth_shape(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    !class_instances_have_constructor_reservations(ctx, class_name)
+        && !class_instances_grow_past_layout(ctx, class_name)
+}
+
+/// The ShapeId a read site of `class_name`'s field at `field_index` compares
+/// its receiver against in place of its learned word: the class's static
+/// ShapeId, when every receiver the site can name is born on it and keeps it
+/// (`class_instances_keep_birth_shape`), no subclass exists to carry another
+/// one. Nothing else about the site
+/// changes: one ShapeId compare, one slot load (at the layout's index), and
+/// the site's own miss, which keeps learning the word for any receiver that
+/// is not on that shape. Comparing against a constant is what lets reads of
+/// one receiver share the proof (`class_guard_memo`, or LLVM), which loads of
+/// two learned words never can (#12483).
+///
+/// `this` in an object literal's method names the literal's shape class
+/// (`guarded_this_class`), but nothing makes the receiver that literal: its
+/// methods run on `Object.create` children and on any object they are copied
+/// to, each on its own shape. Such a read keeps the learned word.
+pub(crate) fn class_field_predicted_shape(
+    ctx: &FnCtx<'_>,
+    receiver: &perry_hir::Expr,
+    class_name: &str,
+    field_index: u32,
+) -> Option<PredictedShape> {
+    if matches!(receiver, perry_hir::Expr::This) && ctx.guarded_this_class.is_some() {
+        return None;
+    }
+    let keys_global = ctx.class_keys_globals.get(class_name)?.clone();
+    if !class_instances_keep_birth_shape(ctx, class_name)
+        || !transitive_subclasses(ctx, class_name).is_empty()
+        || super::property_set::class_has_computed_runtime_members(ctx, class_name)
+    {
+        return None;
+    }
+    Some(PredictedShape {
+        keys_global,
+        slot: field_index,
+    })
+}
+
+/// See [`class_field_predicted_shape`].
+#[derive(Clone, Debug)]
+pub(crate) struct PredictedShape {
+    /// The class's canonical keys global; its ShapeId is the static immediate
+    /// when the driver assigned one, else a load of the shape global
+    /// (`class_shape_id_operand_on_block`).
+    pub keys_global: String,
+    pub slot: u32,
 }
 
 /// Do finished instances of `class_name` (or of any subclass) carry a private
@@ -364,7 +370,7 @@ pub(crate) fn emit_plain_finite_number_check(
 /// Set/Map/RegExp registries, out-of-heap-range addresses, and any allocation
 /// whose `GcHeader.obj_type` is not `GC_TYPE_OBJECT`
 /// (`object/field_get_set/field_ops.rs`). So every predicate
-/// [`emit_class_field_inline_precheck`] evaluates *before* its dereference is
+/// [`emit_class_field_read_precheck`] evaluates *before* its dereference is
 /// already discharged, and the loads below need no gate/deref split — they all
 /// fit in the caller's single basic block.
 ///
@@ -434,185 +440,10 @@ pub(crate) fn emit_proven_shape_recheck(
     blk.cond_br(&acc, proven_label, generic_label);
 }
 
-/// Emit the class-field WRITE guard (`this.x = v` on a known class).
-///
-/// Before calling, the caller must have already created `fast_label` (the slot
-/// store block) and computed `obj_bits` (i64 bitcast of the receiver NaN-box)
-/// and `obj_handle` (the low-48 masked pointer) in a block that dominates
-/// everything that follows. On success the emitted IR branches to
-/// `fast_label`; on any miss it branches to a freshly created "guardcall"
-/// block, which is left current and whose label is returned, so the caller
-/// emits the unchanged `js_typed_feedback_class_field_set_guard` call next.
-///
-/// It is the read guard ([`emit_class_field_read_precheck`]) plus the
-/// value check a raw-f64 store needs:
-///
-/// * the receiver range check, as ONE biased unsigned compare (the shared
-///   fused receiver test, `crate::expr::receiver_range`);
-/// * ONE ShapeId compare against the class's own ShapeId global (or a subclass
-///   arm's), and for a raw-f64 field the (class id, ShapeId) pair, exactly as
-///   the read guard — see there for why a matching ShapeId proves the GC
-///   kind, not-forwarded, no descriptor, no tombstone and the slot;
-/// * **not frozen**: `Object.freeze` / `seal` / `preventExtensions` mint a
-///   counter-unique semantic generation (`set_integrity_flags`), so a
-///   receiver still carrying the class ShapeId is not frozen. The read
-///   guard's list therefore covers `OBJ_FLAG_FROZEN` too, and the header word
-///   test the old write guard made (GC kind, forwarded, descriptor, tombstone,
-///   frozen) is gone;
-/// * a numeric-proof Array subclass carries a sibling ShapeId, so the
-///   exact birth-shape compare refuses its inline store;
-/// * for a raw-f64 store, the value is a plain finite number (a non-number
-///   must downgrade through the guard call, never a raw store).
-///
-/// `set_value_bits` is `Some(bits)` for a raw-f64 store's value check.
-/// `subclass_arms` widens the shape test to every subclass that keeps
-/// `property` at this slot (see [`class_field_subclass_arms`]).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_class_field_inline_precheck(
-    ctx: &mut FnCtx,
-    obj_bits: &str,
-    obj_handle: &str,
-    expected_class_id: &str,
-    require_raw_f64: bool,
-    set_value_bits: Option<&str>,
-    fast_label: &str,
-    subclass_arms: &[ClassFieldSubclassArm],
-    keys_global_name: &str,
-    field_index: u32,
-) -> String {
-    // Charter step 5, T1 (c): a store the shape compare admits into an `F64`
-    // birth lane of ANY accepted class stores only a canonical double. That is
-    // the same plain-finite test the raw-f64 arm emits; a non-Number or
-    // non-finite value takes the guard call, whose checked store generalizes.
-    // It is decided here from the birth rep, not inferred from the declared
-    // field type, so a writer cannot raw-store into an `F64` lane by passing
-    // `require_raw_f64 = false`.
-    let f64_lane = crate::typed_shape::birth_rep_slot_is_f64(
-        ctx.class_birth_reps
-            .get(keys_global_name)
-            .copied()
-            .unwrap_or(0),
-        field_index,
-    ) || subclass_arms
-        .iter()
-        .any(|arm| crate::typed_shape::birth_rep_slot_is_f64(arm.birth_rep, field_index));
-    let deref_idx = ctx.new_block("class_field_inline.deref");
-    let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
-    let deref_label = ctx.block_label(deref_idx);
-    let guardcall_label = ctx.block_label(guardcall_idx);
-    {
-        let blk = ctx.block();
-        // POINTER tag and above the handle band, in ONE unsigned range compare
-        // (`crate::expr::receiver_range`); both halves already failed to the
-        // guard call.
-        let ptr_safe =
-            crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits).is_object_pointer;
-        blk.cond_br(&ptr_safe, &deref_label, &guardcall_label);
-    }
-    ctx.current_block = deref_idx;
-    {
-        let blk = ctx.block();
-        crate::expr::receiver_range::emit_route_note(
-            blk,
-            crate::expr::receiver_range::Route::ClassWrite,
-        );
-        let obj_ptr = blk.inttoptr(I64, obj_handle);
-        // The expectation is the class's OWN ShapeId — the id every instance
-        // is stamped with at birth — and nothing else: no site or process
-        // switch can tell this compare not to trust the shape (S6). It is the
-        // driver's static id as an immediate when there is one (design step
-        // 4: a declined static id is carried by no object, so it only
-        // misses); otherwise the mint's global, read volatile so LLVM cannot
-        // keep a forwarded copy alive across the hit path.
-        let live_shape =
-            crate::typed_shape::class_shape_id_operand_on_block(blk, keys_global_name, true);
-        let mut ok = if require_raw_f64 {
-            // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
-            // one 64-bit compare against `(shape << 32) | class_id`.
-            let identity = blk.load(I64, &obj_ptr);
-            let declared = expected_class_identity(blk, expected_class_id, &live_shape);
-            let mut ok = crate::typed_shape::emit_compatible_class_shape_eq(
-                blk,
-                &identity,
-                expected_class_id,
-                &live_shape,
-                &declared,
-                &[field_index],
-            );
-            for arm in subclass_arms {
-                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
-                    blk,
-                    &arm.keys_global,
-                    true,
-                );
-                let arm_expected =
-                    expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
-                let arm_ok = crate::typed_shape::emit_compatible_class_shape_eq(
-                    blk,
-                    &identity,
-                    &arm.class_id.to_string(),
-                    &arm_shape,
-                    &arm_expected,
-                    &[field_index],
-                );
-                ok = blk.or(I1, &ok, &arm_ok);
-            }
-            ok
-        } else {
-            let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-            let shape_id = blk.load(I32, &sid_ptr);
-            let mut ok = crate::typed_shape::emit_compatible_shape_eq(
-                blk,
-                &shape_id,
-                &live_shape,
-                &[field_index],
-            );
-            for arm in subclass_arms {
-                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
-                    blk,
-                    &arm.keys_global,
-                    true,
-                );
-                let arm_ok = crate::typed_shape::emit_compatible_shape_eq(
-                    blk,
-                    &shape_id,
-                    &arm_shape,
-                    &[field_index],
-                );
-                ok = blk.or(I1, &ok, &arm_ok);
-            }
-            ok
-        };
-        // The compared birth ShapeId has kind Ordinary. A numeric-proof
-        // sibling carries another id, so no per-object proof read is needed.
-        if let (Some(value_bits), true) = (set_value_bits, require_raw_f64 || f64_lane) {
-            // Only a plain finite number may be stored raw. Non-finite
-            // (exponent all-ones: +-Inf/NaN) and every NaN-boxed tag share the
-            // all-ones exponent, so one mask/compare routes them to the call.
-            let exp = blk.and(I64, value_bits, F64_EXP_MASK);
-            let finite = blk.icmp_ne(I64, &exp, F64_EXP_MASK);
-            ok = blk.and(I1, &ok, &finite);
-        }
-        blk.cond_br(&ok, fast_label, &guardcall_label);
-    }
-    ctx.current_block = guardcall_idx;
-    guardcall_label
-}
-
-/// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
-/// against the class's own ShapeId global, and — for a raw-f64 site
-/// only — the class id and the per-object typed-layout intact bit.
-///
-/// Hit path on x86-64 (`class P { a; getA() { return this.a } }`): a boxed
-/// field is `lea`/`shr`/`cmp`/`jae` (range), `mov` expectation, `cmp` against
-/// `+4`, `jne`, load; a raw-f64 field adds the class id to the compare
-/// (`shl`/`or` building the 64-bit word) and a one-byte `testb`/`je` of the
-/// intact bit. The pre-split guard spent 11 instructions on a flat
-/// tag+handle predicate and 4 on a GcHeader word mask before its compare.
-///
-/// This is the read-side form of [`emit_class_field_inline_precheck`], and it
-/// is deliberately a separate function: the WRITE guard keeps the full header
-/// word test for `OBJ_FLAG_FROZEN`. The exact ShapeId comparison rejects
+/// Emit the receiver check a typed method clone's admission makes: receiver
+/// range check, ONE ShapeId compare against the class's own ShapeId global,
+/// and — for a raw-f64 receiver — the class id. (A class-field read is the
+/// shape site, not this check: #12483.) The exact ShapeId comparison rejects
 /// the Array-subclass numeric-proof sibling.
 ///
 /// ## What a matching ShapeId already proves (the checks this guard dropped)
@@ -696,54 +527,6 @@ pub(crate) fn emit_class_field_read_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> (String, String) {
-    emit_class_field_read_precheck_for(
-        ctx,
-        None,
-        obj_bits,
-        expected_class_id,
-        require_raw_f64,
-        fast_label,
-        subclass_arms,
-        keys_global_name,
-    )
-}
-
-/// [`emit_class_field_read_precheck`] for a site that names its receiver
-/// expression. Inside a class-guard run (`class_guard_memo`) the first site of
-/// a receiver runs the full guard and, on a pass, sets the run's flag; a later
-/// site whose proof an earlier site already covers tests only that flag, and
-/// takes the unchanged guard call when a call has cleared it since.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_class_field_read_precheck_for(
-    ctx: &mut FnCtx,
-    receiver: Option<&perry_hir::Expr>,
-    obj_bits: &str,
-    expected_class_id: &str,
-    require_raw_f64: bool,
-    fast_label: &str,
-    subclass_arms: &[ClassFieldSubclassArm],
-    keys_global_name: &str,
-) -> (String, String) {
-    // The memo covers the plain declared-class compare only.
-    let memo = receiver
-        .filter(|_| subclass_arms.is_empty())
-        .and_then(|receiver| super::class_guard_memo::memo_for(ctx, receiver, require_raw_f64));
-    if let Some(super::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
-        let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
-        let guardcall_label = ctx.block_label(guardcall_idx);
-        let blk = ctx.block();
-        let biased = blk.sub(
-            I64,
-            obj_bits,
-            &(crate::expr::receiver_range::RECEIVER_BIAS as i64).to_string(),
-        );
-        let handle = crate::expr::receiver_range::emit_handle(blk, &biased);
-        let flag = blk.load(I8, flag_slot);
-        let proven = blk.icmp_ne(I8, &flag, "0");
-        blk.cond_br(&proven, fast_label, &guardcall_label);
-        ctx.current_block = guardcall_idx;
-        return (guardcall_label, handle);
-    }
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -831,19 +614,7 @@ pub(crate) fn emit_class_field_read_precheck_for(
         // is emitted only for an `F64` lane of every compared id's birth rep
         // (`class_field_site_raw_f64`), so the identity compare alone proves
         // the slot holds a Number.
-        match &memo {
-            Some(super::class_guard_memo::Memo::Set(slots)) => {
-                let set_idx = ctx.new_block("class_field_inline.memo_set");
-                let set_label = ctx.block_label(set_idx);
-                ctx.block().cond_br(&ok, &set_label, &guardcall_label);
-                ctx.current_block = set_idx;
-                for slot in slots {
-                    ctx.block().store(I8, "1", slot);
-                }
-                ctx.block().br(fast_label);
-            }
-            _ => blk.cond_br(&ok, fast_label, &guardcall_label),
-        }
+        blk.cond_br(&ok, fast_label, &guardcall_label);
     }
 
     ctx.current_block = guardcall_idx;

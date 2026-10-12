@@ -72,7 +72,7 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::Array(_)
             | Expr::ArraySpread(_)
             // #8583 (`__AnonShape_*_constructor`): a property/index STORE lowers
-            // to an allocating, collecting runtime call (`js_class_field_set_ic`
+            // to an allocating, collecting runtime call (`js_put_value_set_packed_miss`
             // / `js_set_property` / the array-set helpers) that RS4GC gives a
             // statepoint. A closed-shape object literal compiles to a constructor
             // that is one long run of `this.field = v` stores (`PropertySet`);

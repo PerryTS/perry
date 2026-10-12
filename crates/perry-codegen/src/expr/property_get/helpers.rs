@@ -22,11 +22,9 @@ use super::*;
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
-};
+use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, NativeRep, SemanticKind};
 use crate::type_analysis::receiver_class_name;
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I64, I8, PTR};
 
 pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -478,12 +476,10 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     ) {
         return Ok(None);
     }
-    let (Some(&expected_class_id), Some(keys_global_name)) = (
-        ctx.class_ids.get(&class_name),
-        ctx.class_keys_globals.get(&class_name).cloned(),
-    ) else {
+    if !ctx.class_ids.contains_key(&class_name) || !ctx.class_keys_globals.contains_key(&class_name)
+    {
         return Ok(None);
-    };
+    }
 
     // Representation-selection Phase 3b: shape-proven Ptr<Shape> receiver
     // whose field is numeric-proven (every reachable store is a number) —
@@ -654,216 +650,10 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         return Ok(Some(merged));
     }
 
-    let recv_box = lower_expr(ctx, object)?;
-    let key_idx = ctx.strings.intern(property);
-    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let site_id = emit_typed_feedback_register_site(
-        ctx,
-        TypedFeedbackKind::PropertyGet,
-        property,
-        TypedFeedbackContract::class_field_get(),
-    );
-    let field_idx_str = field_index.to_string();
-    let expected_class_id_str = expected_class_id.to_string();
-    let expected_shape_id =
-        crate::typed_shape::class_shape_id_operand(ctx, &class_name, &keys_global_name);
-    let (obj_bits, key_raw) = {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        (obj_bits, key_raw)
-    };
-
-    let fast_idx = ctx.new_block("class_field_get_number.fast");
-    let fallback_idx = ctx.new_block("class_field_get_number.fallback");
-    let merge_idx = ctx.new_block("class_field_get_number.merge");
-    let fast_label = ctx.block_label(fast_idx);
-    let fallback_label = ctx.block_label(fallback_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let subclass_arms = crate::expr::class_field_inline_guard::class_field_subclass_arms(
-        ctx,
-        &class_name,
-        property,
-        field_index,
-        true,
-    );
-    let (_guardcall_label, obj_handle) =
-        crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
-            ctx,
-            &obj_bits,
-            &expected_class_id_str,
-            true,
-            &fast_label,
-            &subclass_arms,
-            &keys_global_name,
-        );
-    let guard_ok = ctx.block().call(
-        I32,
-        "js_typed_feedback_class_field_get_guard",
-        &[
-            (I64, &site_id),
-            (DOUBLE, &recv_box),
-            (I32, &expected_class_id_str),
-            (I32, &expected_shape_id),
-            (I64, &key_raw),
-            (I32, &field_idx_str),
-            (I32, "1"),
-        ],
-    );
-    let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
-    ctx.block()
-        .cond_br(&guard_pass, &fast_label, &fallback_label);
-
-    ctx.current_block = fast_idx;
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let blk = ctx.block();
-    let obj_ptr = blk.inttoptr(I64, &obj_handle);
-    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-    let val_fast = blk.load(DOUBLE, &field_ptr);
-    let fast_end_label = blk.label.clone();
-    blk.br(&merge_label);
-    let fast = LoweredValue {
-        semantic: SemanticKind::JsNumber,
-        rep: NativeRep::F64,
-        llvm_ty: DOUBLE,
-        value: val_fast.clone(),
-    };
-    ctx.record_lowered_value_with_access_mode_and_facts(
-        "ClassFieldGet",
-        None,
-        "class_field_get.raw_f64_number_context",
-        &fast,
-        Some(BoundsState::Guarded {
-            guard_id: "class_field_get_guard".to_string(),
-        }),
-        None,
-        Some(BufferAccessMode::CheckedNative),
-        None,
-        None,
-        None,
-        vec![raw_f64_layout_fact(
-            None,
-            "consumed",
-            "class_field_get_guard",
-            None,
-        )],
-        Vec::new(),
-        false,
-        false,
-        vec![
-            format!("class={}", class_name),
-            format!("class_id={}", expected_class_id_str),
-            format!("field={}", property),
-            format!("field_index={}", field_idx_str),
-            "receiver_proof=declared_named_receiver_guarded_exact_class".to_string(),
-            "field_layout=raw_f64_slot_array".to_string(),
-            "pointer_bitmap=non_pointer".to_string(),
-            "number_context=true".to_string(),
-        ],
-    );
-
-    ctx.current_block = fallback_idx;
-    // #7153: same nullish-receiver check as the value-context diamond in
-    // property_get.rs — a nullish field read must throw TypeError, not coerce
-    // `undefined` to NaN and keep running.
-    let (is_null, is_nullish) = {
-        let blk = ctx.block();
-        let is_undef = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
-        let is_null = blk.icmp_eq(I64, &obj_bits, crate::nanbox::TAG_NULL_I64);
-        let is_nullish = blk.or(I1, &is_undef, &is_null);
-        (is_null, is_nullish)
-    };
-    let throw_idx = ctx.new_block("class_field_get_number.throw_nullish");
-    let lookup_idx = ctx.new_block("class_field_get_number.fallback_lookup");
-    let throw_label = ctx.block_label(throw_idx);
-    let lookup_label = ctx.block_label(lookup_idx);
-    ctx.block()
-        .cond_br(&is_nullish, &throw_label, &lookup_label);
-
-    ctx.current_block = throw_idx;
-    let prop_entry = ctx.strings.entry(key_idx);
-    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
-    let prop_len_str = prop_entry.byte_len.to_string();
-    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
-    ctx.block().call_void(
-        "js_throw_type_error_property_access",
-        &[
-            (I32, &is_null_i32),
-            (PTR, &prop_bytes_global),
-            (I64, &prop_len_str),
-        ],
-    );
-    ctx.block().unreachable();
-
-    ctx.current_block = lookup_idx;
-    let blk = ctx.block();
-    crate::expr::emit_typed_feedback_record_call(
-        blk,
-        "js_typed_feedback_record_fallback_call",
-        &[(I64, &site_id)],
-    );
-    let val_fallback_js = blk.call(
-        DOUBLE,
-        "js_object_get_field_by_name_f64",
-        &[(I64, &obj_bits), (I64, &key_raw)],
-    );
-    let val_fallback = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &val_fallback_js)]);
-    let fallback_end_label = blk.label.clone();
-    blk.br(&merge_label);
-    let fallback = LoweredValue {
-        semantic: SemanticKind::JsValue,
-        rep: NativeRep::JsValue,
-        llvm_ty: DOUBLE,
-        value: val_fallback_js.clone(),
-    };
-    ctx.record_lowered_value_with_access_mode_and_facts(
-        "ClassFieldGet",
-        None,
-        "js_object_get_field_by_name_f64.number_context_fallback",
-        &fallback,
-        Some(BoundsState::Unknown),
-        None,
-        Some(BufferAccessMode::DynamicFallback),
-        Some(MaterializationReason::RuntimeApi),
-        None,
-        None,
-        Vec::new(),
-        vec![
-            raw_f64_layout_fact(
-                None,
-                "rejected",
-                "class_field_get_guard",
-                Some(MaterializationReason::RuntimeApi),
-            ),
-            raw_f64_layout_fact(
-                None,
-                "invalidated",
-                "runtime_api",
-                Some(MaterializationReason::RuntimeApi),
-            ),
-        ],
-        false,
-        false,
-        vec![
-            format!("class={}", class_name),
-            format!("field={}", property),
-            format!("field_index={}", field_idx_str),
-            "number_context=true".to_string(),
-        ],
-    );
-
-    ctx.current_block = merge_idx;
-    Ok(Some(ctx.block().phi(
-        DOUBLE,
-        &[
-            (&val_fast, &fast_end_label),
-            (&val_fallback, &fallback_end_label),
-        ],
-    )))
+    // Everything the static proof does not cover is an ordinary property
+    // read: the shape site serves it, and the number context converts the
+    // value it returns (#12483).
+    Ok(None)
 }
 
 /// A declared class may nominate the guarded field/method route, but never a

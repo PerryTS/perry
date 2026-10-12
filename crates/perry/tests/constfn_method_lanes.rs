@@ -298,11 +298,12 @@ fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
     );
 }
 
-/// The method body's receiver guard (`this.a` in a literal method) compares
-/// the completed ConstFn id first and the birth id second: a finalized
-/// literal hits on the first compare.
+/// The method body's `this.a` (a literal method whose receiver completes on a
+/// ConstFn shape) is a shape-site read (#12483): the site's word follows the
+/// shape the receiver actually has, completed or not, so no class guard
+/// against the literal's birth or completed id is emitted for it.
 #[test]
-fn the_body_guard_compares_the_completed_shape_first() {
+fn the_body_reads_this_through_the_shape_site() {
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 function run(n: number): number {
@@ -316,31 +317,17 @@ console.log(run(10));
     let (exe, ll) = compile(dir.path(), source, None);
     assert_eq!(run(&exe, &[]).0, "10");
     let body = function_ir(&ll, "@perry_closure_main_ts__");
-    let deref = body
-        .iter()
-        .position(|l| l.starts_with("class_field_inline.deref"))
-        .unwrap_or_else(|| {
-            panic!(
-                "the body reads this.a through a class guard:\n{}",
-                body.join("\n")
-            )
-        });
-    let compares: Vec<&str> = body[deref..]
-        .iter()
-        .take_while(|l| !l.trim_start().starts_with("br "))
-        .filter(|l| l.contains("icmp eq i64"))
-        .copied()
-        .collect();
-    assert_eq!(compares.len(), 2, "completed id + birth id: {compares:?}");
-    let first = compares[0].rsplit(", ").next().unwrap();
     assert!(
-        first.parse::<u64>().is_ok(),
-        "the first compare must be the completed shape's immediate word: {compares:?}"
+        body.iter().any(|l| l.contains("_packed_get")),
+        "the body must read this.a through the shape site:\n{}",
+        body.join("\n")
     );
-    let second = compares[1].rsplit(", ").next().unwrap();
     assert!(
-        second.starts_with('%'),
-        "the birth word (built from the live shape id) is compared second: {compares:?}"
+        !body
+            .iter()
+            .any(|l| l.starts_with("class_field_inline.") || l.starts_with("class_field_get.")),
+        "no class guard may be emitted for this.a:\n{}",
+        body.join("\n")
     );
 }
 

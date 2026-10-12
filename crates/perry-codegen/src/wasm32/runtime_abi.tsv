@@ -626,13 +626,7 @@ js_class_evaluation_object_with_parent	i64	i32u,i32u,i32u,ptr,f64
 js_class_evaluation_object_with_prototype	i64	i32u,i32u,i32u,ptr,f64,f64
 js_class_evaluation_parent_prototype	f64	i32u,f64
 js_class_field_add	f64	f64,f64,f64
-js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
-js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
-js_class_field_get_ic_fast_miss	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_set_fallback	void	i64,i64,i64,f64
-js_class_field_set_ic	void	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
-js_class_field_set_ic_fast	i32s	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
-js_class_field_set_ic_fast_miss	void	i32s,i64,f64,i32u,i32u,ptr,i32u,f64,i32s
 js_class_lexical_binding_get	f64	f64
 js_class_lexical_binding_set	f64	f64,f64
 js_class_method_bind	f64	f64,ptr,usize
@@ -3990,7 +3984,6 @@ js_typed_feedback_array_set_f64_extend	ptr	i64,ptr,i32u,f64
 js_typed_feedback_array_set_index_or_string	ptr	i64,ptr,f64,f64,i32s
 js_typed_feedback_array_set_string_key	ptr	i64,ptr,ptr,f64
 js_typed_feedback_class_field_get_guard	i32s	i64,f64,i32u,i32u,ptr,i32u,i32s
-js_typed_feedback_class_field_set_guard	i32s	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
 js_typed_feedback_closure_direct_call_guard	i32s	i64,f64,ptr,i32u,i32u
 js_typed_feedback_masked_window_ta_kind	i32s	i64,f64,i32s,i32s
 js_typed_feedback_maybe_dump_trace	void	

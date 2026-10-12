@@ -263,7 +263,7 @@ fn pointer_slot_store_keeps_barrier_without_layout_note() {
         "object store emitted a layout note:\n{ir}"
     );
     assert!(
-        ir.contains("class_field_set.barrier"),
+        ir.contains("put.pic.barrier"),
         "pointer store lost its barrier arm:\n{ir}"
     );
 }
@@ -278,7 +278,7 @@ fn dynamically_pointer_valued_scalar_slot_keeps_barrier_without_layout_note() {
         "object store emitted a layout note:\n{ir}"
     );
     assert!(
-        ir.contains("class_field_set.barrier"),
+        ir.contains("put.pic.barrier"),
         "dynamic pointer store lost its barrier arm:\n{ir}"
     );
 }

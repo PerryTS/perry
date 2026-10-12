@@ -1137,15 +1137,12 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
 
 #[path = "typed_feedback/guards.rs"]
 mod guards;
-#[cfg(test)]
-pub(crate) use guards::js_class_field_get_ic_fast;
 pub use guards::{
     js_closure_exact_func_guard, js_object_own_method_cache_miss,
-    js_typed_feedback_class_field_get_guard, js_typed_feedback_class_field_set_guard,
-    js_typed_feedback_closure_direct_call_guard, js_typed_feedback_method_direct_call_guard,
-    js_typed_feedback_native_call_method, js_typed_feedback_native_call_method_apply,
-    js_typed_feedback_native_call_method_by_id, MethodPicCache, MethodPicCacheSlot,
-    METHOD_PIC_WORDS,
+    js_typed_feedback_class_field_get_guard, js_typed_feedback_closure_direct_call_guard,
+    js_typed_feedback_method_direct_call_guard, js_typed_feedback_native_call_method,
+    js_typed_feedback_native_call_method_apply, js_typed_feedback_native_call_method_by_id,
+    MethodPicCache, MethodPicCacheSlot, METHOD_PIC_WORDS,
 };
 
 #[path = "typed_feedback/trace.rs"]

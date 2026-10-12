@@ -8,12 +8,13 @@
 //!
 //! The fixture is `test-files/test_gap_ic_fast_split_slow_path.ts` (also a gap
 //! test, against node). Here it is compiled with `PERRY_FULL_OUTLINE_IC=1`,
-//! where the four IC splits apply, and run under a seeded evacuating schedule
+//! where the IC splits apply (a class-field read or store takes the property
+//! read and static-key store splits, #12483), and run under a seeded evacuating schedule
 //! with the from-space quarantine and the evacuation verifier on. The run must
 //! print node's output AND report copying minors that moved objects — a green
 //! run with zero moves would say nothing.
 //!
-//! Sabotage (run for the PR, 2026-09-27): classifying the four slow
+//! Sabotage (run for the PR, 2026-09-27): classifying the slow
 //! continuations `CannotCollect` makes the evacuating run fault in retired
 //! from-space (`[gc-fromspace-protect] FAULT`, obj_type=1).
 
@@ -129,10 +130,6 @@ fn slow_arms_that_run_allocating_user_code_keep_the_callers_values_relocated() {
         "@js_object_get_field_ic_fast_miss(",
         "@js_put_value_set_packed_fast(",
         "@js_put_value_set_packed_miss(",
-        "@js_class_field_get_ic_fast(",
-        "@js_class_field_get_ic_fast_miss(",
-        "@js_class_field_set_ic_fast(",
-        "@js_class_field_set_ic_fast_miss(",
         "@js_template_string_coerce_box(",
         "@js_closure_unbox_callee_checked(",
     ] {

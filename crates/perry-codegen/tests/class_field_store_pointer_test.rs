@@ -1,7 +1,10 @@
 //! #7511 — the class-field store's GC bookkeeping sits behind ONE inline,
 //! live test of the stored value's bits.
 //!
-//! The subject is `expr::write_barrier::emit_jsvalue_slot_store_pointer_tested`.
+//! A class-field store is the static-key store site (#12483), so the subject
+//! is that site's bookkeeping (`put_value_store_ic::emit_static_store_ic_bookkeeping`),
+//! which takes the same pointer test as
+//! `expr::write_barrier::emit_jsvalue_slot_store_pointer_tested`.
 //! What these tests have to pin is not "the calls got faster" but the two
 //! structural properties that make the guard sound:
 //!
@@ -234,17 +237,21 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
     }
 }
 
+/// The store site's guarded bookkeeping region and its join.
+const BOOKKEEPING: &str = "put.pic.gc_bookkeeping.";
+const BOOKKEEPING_DONE: &str = "put.pic.gc_bookkeeping.done";
+
 fn compile_ir(module: &Module) -> String {
     String::from_utf8(compile_module(module, empty_opts()).unwrap()).expect("IR should be UTF-8")
 }
 
 /// The body of the guarded block: every line after the
-/// `class_field_set.gc_bookkeeping.<n>:` LABEL up to (and excluding) its
+/// `put.pic.gc_bookkeeping.<n>:` LABEL up to (and excluding) its
 /// terminator. `None` when no guard was emitted.
 ///
 /// Matched on the label DEFINITION, never on the first textual occurrence of
-/// the name — that is the `br i1 …, label %class_field_set.gc_bookkeeping.N,
-/// label %class_field_set.gc_bookkeeping.done.M` a line above, and starting
+/// the name — that is the `br i1 …, label %put.pic.gc_bookkeeping.N,
+/// label %put.pic.gc_bookkeeping.done.M` a line above, and starting
 /// there yields an empty slice that passes nothing and fails everything.
 /// The guarded REGION: every block reachable from the `gc_bookkeeping` entry
 /// without passing through `gc_bookkeeping.done`, i.e. exactly the blocks the
@@ -296,8 +303,7 @@ fn gc_bookkeeping_block(ir: &str) -> Option<String> {
     }
 
     let entry = blocks.iter().position(|(label, _, _)| {
-        label.starts_with("class_field_set.gc_bookkeeping.")
-            && !label.starts_with("class_field_set.gc_bookkeeping.done")
+        label.starts_with(BOOKKEEPING) && !label.starts_with(BOOKKEEPING_DONE)
     })?;
 
     let mut region = String::new();
@@ -315,7 +321,7 @@ fn gc_bookkeeping_block(ir: &str) -> Option<String> {
         }
         for succ in succs {
             // The join is the region's exit, not part of it.
-            if succ.starts_with("class_field_set.gc_bookkeeping.done") {
+            if succ.starts_with(BOOKKEEPING_DONE) {
                 continue;
             }
             if let Some(next) = blocks.iter().position(|(label, _, _)| label == succ) {
@@ -347,7 +353,7 @@ fn opaque_param_store_guards_both_bookkeeping_calls() {
     // happens to look like one. `32765`/`32767`/`32762` are POINTER/STRING/
     // BIGINT `>> 48`; `4096` is the bare-address floor.
     assert!(
-        ir.contains("lshr i64") && ir.contains("class_field_set.gc_bookkeeping"),
+        ir.contains("lshr i64") && ir.contains(BOOKKEEPING),
         "expected an inline pointer-bearing guard around the field-store bookkeeping:\n{ir}"
     );
     for comparand in ["32765", "32767", "32762", "4096"] {
@@ -498,29 +504,6 @@ fn guarded_store_leaves_every_block_terminated() {
     );
 }
 
-/// A `number`-declared field takes the raw-f64 store path, which is proven
-/// pointer-free by the typed shape descriptor and never had bookkeeping to
-/// guard. Asserting the guard is ABSENT there keeps the test above from being
-/// satisfied by "codegen emits this block everywhere".
-#[test]
-fn raw_f64_field_store_emits_no_guard() {
-    assert_default_barrier_env_not_disabled();
-    let module = module_with_new(
-        class(
-            3,
-            "Numeric",
-            vec![field("v", Type::Number)],
-            Some(param_prologue_ctor("v", 7, Type::Number)),
-        ),
-        vec![Expr::Number(1.0)],
-    );
-    let ir = compile_ir(&module);
-    assert!(
-        !ir.contains("class_field_set.gc_bookkeeping"),
-        "a raw-f64 class-field store has no bookkeeping to guard:\n{ir}"
-    );
-}
-
 /// #10907: `function probe(p: Numeric, x: number) { p.v = <stored>; return p }`
 /// — a `: number` field written through a declared-class PARAMETER receiver,
 /// so the store takes the runtime-guarded class-field arm (sloppy or strict per
@@ -583,119 +566,34 @@ fn probe_blocks(ir: &str) -> Vec<(String, String)> {
 
 const CANONICALIZE: &str = "@js_array_numeric_value_to_raw_f64";
 
-/// #10907, sloppy arm: the fast block's ONLY predecessor is the inline
-/// precheck, which already rejected every value that is not a plain finite
-/// double — so the canonicalization call is dead and must not be emitted at
-/// all. It used to be, and it was the whole ~31-instruction `: number` vs
-/// `: any` store penalty.
+/// #10907 / #12483: a `: number` field written through a declared-class
+/// parameter is the static-key store site, strict or sloppy. Its `F64`-lane
+/// hit stores only a plain finite double (one exponent test) and sends every
+/// other value to the miss, so no path of the probe calls the canonicalizer —
+/// the ~31-instruction `: number` vs `: any` store penalty #10907 removed —
+/// and no class guard against the birth ShapeId is emitted.
 #[test]
-fn sloppy_raw_f64_field_store_skips_the_canonicalize_call() {
-    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
-        false,
-        Expr::LocalGet(9),
-    ));
-    let blocks = probe_blocks(&ir);
-    let fast: Vec<_> = blocks
-        .iter()
-        .filter(|(label, _)| label.starts_with("class_field_sloppy_set.fast"))
-        .collect();
-    assert!(
-        !fast.is_empty(),
-        "expected the sloppy raw-f64 class-field fast arm in probe:\n{ir}"
-    );
-    for (label, body) in &fast {
-        assert!(
-            body.contains("store double"),
-            "{label} must still store the value into the slot:\n{body}"
-        );
-    }
-    for (label, body) in &blocks {
-        assert!(
-            !body.contains(CANONICALIZE),
-            "{label}: the sloppy raw-f64 store must not canonicalize a value the \
-             precheck already proved plain-finite:\n{body}"
-        );
-    }
-}
-
-/// #10907, strict arm: its fast block is ALSO reached from the runtime guard
-/// call, which admits INT32-boxed / non-finite numbers, so canonicalization
-/// must survive — but only behind an inline plain-finite test, never on the
-/// fast block itself, and with the plain arm storing the value verbatim.
-#[test]
-fn strict_raw_f64_field_store_canonicalizes_only_off_the_plain_finite_path() {
-    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
-        true,
-        Expr::LocalGet(9),
-    ));
-    let blocks = probe_blocks(&ir);
-    let find = |prefix: &str| -> Vec<&(String, String)> {
-        blocks
-            .iter()
-            .filter(|(label, _)| label.starts_with(prefix))
-            .collect()
-    };
-    let fast = find("class_field_set.fast");
-    let plain = find("class_field_set.raw_plain");
-    let canon = find("class_field_set.raw_canonicalize");
-    assert!(
-        !fast.is_empty() && !plain.is_empty() && !canon.is_empty(),
-        "expected fast / raw_plain / raw_canonicalize blocks in probe:\n{ir}"
-    );
-    for (label, body) in &fast {
-        assert!(
-            !body.contains(CANONICALIZE),
-            "{label}: canonicalization must be off the fast block's straight line:\n{body}"
-        );
-        assert!(
-            body.contains("9218868437227405312") && body.contains("class_field_set.raw_plain"),
-            "{label}: expected the inline exponent test branching to raw_plain:\n{body}"
-        );
-    }
-    for (label, body) in &plain {
-        assert!(
-            body.contains("store double") && !body.contains("@js_"),
-            "{label}: the plain-finite arm stores the value verbatim, with no runtime call:\n{body}"
-        );
-    }
-    for (label, body) in &canon {
-        assert!(
-            body.contains(CANONICALIZE) && body.contains("store double"),
-            "{label}: the non-plain arm must still canonicalize before storing:\n{body}"
-        );
-    }
-    // No phi merges the two arms: a phi operand is invisible to root_reload.
-    for (label, body) in find("class_field_set.raw_join") {
-        assert!(
-            !body.contains(" phi "),
-            "{label}: the arms must store separately, not merge through a phi:\n{body}"
-        );
-    }
-}
-
-/// #10907: a value that is canonical raw f64 by construction needs neither the
-/// call nor the inline test.
-#[test]
-fn strict_raw_f64_field_store_of_a_literal_emits_no_canonicalization() {
-    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
-        true,
-        Expr::Number(3.5),
-    ));
-    let blocks = probe_blocks(&ir);
-    assert!(
-        blocks
-            .iter()
-            .any(|(label, _)| label.starts_with("class_field_set.fast")),
-        "expected the strict guarded class-field arm in probe:\n{ir}"
-    );
-    for (label, body) in &blocks {
-        assert!(
-            !body.contains(CANONICALIZE),
-            "{label}: a literal store must not canonicalize:\n{body}"
-        );
-        assert!(
-            !label.starts_with("class_field_set.raw_canonicalize"),
-            "{label}: a literal store needs no plain-finite diamond:\n{ir}"
-        );
+fn raw_f64_field_store_is_the_store_site_and_never_canonicalizes() {
+    for strict in [false, true] {
+        for stored in [Expr::LocalGet(9), Expr::Number(3.5)] {
+            let ir = compile_ir(&module_with_param_receiver_raw_f64_store(strict, stored));
+            let blocks = probe_blocks(&ir);
+            assert!(
+                blocks.iter().any(|(label, _)| label.starts_with("put.pic.")),
+                "strict={strict}: the store must be the static-key store site:\n{ir}"
+            );
+            for (label, body) in &blocks {
+                assert!(
+                    !label.starts_with("class_field_set.")
+                        && !label.starts_with("class_field_sloppy_set.")
+                        && !label.starts_with("class_field_inline."),
+                    "strict={strict}: {label}: no class store guard may be emitted:\n{ir}"
+                );
+                assert!(
+                    !body.contains(CANONICALIZE),
+                    "strict={strict}: {label}: the store must not canonicalize:\n{body}"
+                );
+            }
+        }
     }
 }

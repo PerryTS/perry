@@ -1545,34 +1545,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if receiver_class_is_proven && is_web_stream_method {
                     return lower_class_method_bind(ctx, object, property);
                 }
-                // Fast path: known class instance + plain instance field
-                // (no getter/setter shadowing). Inline a direct GEP+load
-                // at the field's slot offset, bypassing the
-                // `js_object_get_field_by_name_f64` runtime helper which
-                // hashes the property name + walks the keys array. The
-                // ObjectHeader layout (`#[repr(C)]` in
-                // `crates/perry-runtime/src/object/mod.rs`) is 16 bytes on
-                // LP64 and ILP32 (#8047) followed by the inline field
-                // array of f64-sized slots:
+                // A class field read is a property read: the shape site below
+                // (receiver test, the site's ShapeId word against the
+                // receiver's, one slot load) serves it like any receiver. Only
+                // a receiver whose shape is statically PROVEN (a `Ptr<Shape>`
+                // local or a proven-`this` clone) skips even that compare.
                 //
-                //   offset  0..16:  ObjectHeader (class_id, parent_class_id
-                //                   [= ShapeId], meta)
-                //   offset 16..24:  field 0
-                //   offset 24..32:  field 1
-                //   ...
+                // #12483: this used to be a second guard, compared against the
+                // class's BIRTH ShapeId. Every instance that left the birth
+                // shape -- a plain JS class whose constructor stores define its
+                // keys, a `: any` field whose lane generalized, a subclass the
+                // arm list could not name -- missed it on every read and paid an
+                // out-of-line call behind it (150 instructions per `this.a` in
+                // an untyped `.js` class, against ~12 at the shape site).
                 //
-                // Parent class fields come first in the slot order
-                // (matches `js_object_alloc_with_parent` and the
-                // constructor codegen in lower_call.rs::compile_new), so
-                // `class_field_global_index` returns the cumulative
-                // offset across the inheritance chain.
+                // The slot index is the class layout's: parent class fields
+                // come first (`js_object_alloc_with_parent`, `compile_new`).
                 if let Some(field_index) =
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 {
-                    if let (Some(&expected_class_id), Some(keys_global_name)) = (
-                        ctx.class_ids.get(&class_name),
-                        ctx.class_keys_globals.get(&class_name).cloned(),
-                    ) {
+                    if ctx.class_ids.contains_key(&class_name)
+                        && ctx.class_keys_globals.contains_key(&class_name)
+                    {
                         // Representation-selection Phase 3b: shape-proven
                         // Ptr<Shape> local (collectors/ptr_shape.rs). The
                         // guard diamond is statically proven away — emit the
@@ -1655,314 +1649,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             return Ok(val);
                         }
-                        let requires_raw_f64 =
-                            crate::expr::class_field_inline_guard::class_field_site_raw_f64(
+                        // A class whose instances are born on and keep its
+                        // static ShapeId, with no subclass: the site compares
+                        // against that constant instead of its learned word,
+                        // so reads of one receiver share one proof.
+                        if let Some(predicted) =
+                            crate::expr::class_field_inline_guard::class_field_predicted_shape(
                                 ctx,
+                                object,
                                 &class_name,
-                                property,
                                 field_index,
-                            );
-                        let subclass_arms =
-                            crate::expr::class_field_inline_guard::class_field_subclass_arms(
+                            )
+                        {
+                            return generic_dispatch::lower_class_field_property_get(
                                 ctx,
-                                &class_name,
+                                object,
                                 property,
-                                field_index,
-                                requires_raw_f64,
-                            );
-                        // A subclass the guard cannot name would miss it on
-                        // every read and pay the IC call behind it; the
-                        // generic IC serves such a site from its own word.
-                        // The same holds when instances outgrow the birth
-                        // shape the guard compares against: a constructor
-                        // that adds keys moves every finished instance off
-                        // it, so every read would miss (tsc's per-evaluation
-                        // classes, Zod's `ZodType`).
-                        if !crate::expr::class_field_inline_guard::class_field_arms_cover_every_subclass(
-                            ctx,
-                            &class_name,
-                            &subclass_arms,
-                        ) || crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
-                            ctx,
-                            &class_name,
-                        ) {
-                            return lower_generic_property_get(ctx, object, property, *byte_offset);
-                        }
-                        let recv_box = lower_expr(ctx, object)?;
-                        let key_idx = ctx.strings.intern(property);
-                        let key_handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        let site_id = emit_typed_feedback_register_site(
-                            ctx,
-                            TypedFeedbackKind::PropertyGet,
-                            property,
-                            TypedFeedbackContract::class_field_get(),
-                        );
-                        let field_idx_str = field_index.to_string();
-                        let expected_class_id_str = expected_class_id.to_string();
-                        let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let expected_shape_id = crate::typed_shape::class_shape_id_operand(
-                            ctx,
-                            &class_name,
-                            &keys_global_name,
-                        );
-                        // #5391 path 2: oversized modules full-outline the entire
-                        // class-field-GET diamond (guard + fast load + fallback +
-                        // phi) to a single `js_class_field_get_ic(...)` call that
-                        // returns the field value. This shrinks large minified
-                        // user functions enough for LLVM to optimize them in
-                        // practical time (per-function cost is superlinear in size).
-                        // Mirrors the field-SET full-outline (#5334 lever B).
-                        if crate::codegen::full_outline_ic_enabled() {
-                            let key_raw = {
-                                let blk = ctx.block();
-                                let key_box = blk.load(DOUBLE, &key_handle_global);
-                                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                blk.and(I64, &key_bits, POINTER_MASK_I64)
-                            };
-                            // S2: guard + load is a GC-leaf call; the by-name
-                            // fallback is the cold collecting arm. The site's
-                            // own read cache: what the guard cannot prove, the
-                            // One Path read answers from the receiver's shape.
-                            let cache_slot =
-                                format!("@{}", generic_dispatch::allocate_property_cache(ctx));
-                            let ic_args = [
-                                (I64, site_id.as_str()),
-                                (DOUBLE, recv_box.as_str()),
-                                (I32, expected_class_id_str.as_str()),
-                                (I32, expected_shape_id.as_str()),
-                                (I64, key_raw.as_str()),
-                                (I32, field_idx_str.as_str()),
-                                (I32, requires_raw_f64_str),
-                                (PTR, cache_slot.as_str()),
-                            ];
-                            let val = crate::expr::ic_fast_split::emit_hole_declining_split(
-                                ctx,
-                                "class_field_get",
-                                "js_class_field_get_ic_fast",
-                                &ic_args,
-                                "js_class_field_get_ic_fast_miss",
-                                &ic_args,
-                            );
-                            return Ok(val);
-                        }
-                        // #5093: build the guard operands once, up front, so
-                        // both the inline shape pre-check and the fast slot
-                        // load can reference them.
-                        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-                        let fast_idx = ctx.new_block("class_field_get.fast");
-                        let merge_idx = ctx.new_block("class_field_get.merge");
-                        let fast_label = ctx.block_label(fast_idx);
-                        let merge_label = ctx.block_label(merge_idx);
-
-                        // #5093: inline shape pre-check. On a monomorphic hit it
-                        // branches straight to the fast slot load, skipping the
-                        // cross-crate guard call; on a miss it leaves the current
-                        // block at the single-exit IC call below.
-                        let (_guardcall_label, obj_handle) =
-                            crate::expr::class_field_inline_guard::emit_class_field_read_precheck_for(
-                                ctx,
-                                Some(object.as_ref()),
-                                &obj_bits,
-                                &expected_class_id_str,
-                                requires_raw_f64,
-                                &fast_label,
-                                &subclass_arms,
-                                &keys_global_name,
-                            );
-                        // ONE EXIT. Everything the pre-check could not prove —
-                        // the guard call, the guard-PASS slot load, the nullish
-                        // TypeError, the fallback record and the by-name lookup —
-                        // is the body of `js_class_field_get_ic`, the same helper
-                        // the #5391 path-2 full outline a few lines above already
-                        // calls. Emitting the four arms inline cost ~74 IR
-                        // instructions and 4 runtime call sites per monomorphic
-                        // `this.field` read; @babel/parser has 13,636 of them
-                        // (27 % of its IR), and each call site is a statepoint,
-                        // so `.perry_gcmap` scaled with them too.
-                        //
-                        // The pre-check and the fast slot load below are
-                        // unchanged, so a pre-check HIT costs exactly what it
-                        // cost before (no call at all) and a pre-check MISS costs
-                        // exactly one call — what the guard call alone already
-                        // cost. Arm for arm the helper reproduces the diamond:
-                        //   guard PASS -> reads the same slot at the same
-                        //                 header-relative offset;
-                        //   nullish    -> throws the same
-                        //                 `js_throw_type_error_property_access`
-                        //                 (#7153 added that check to the helper
-                        //                 for exactly this equivalence);
-                        //   guard FAIL -> records the fallback, then
-                        //                 `js_object_get_field_by_name_f64`.
-                        // A plain number is self-boxing under NaN-boxing, so a
-                        // `requires_raw_f64` site reads the helper's return the
-                        // same way the old phi read the by-name fallback's return
-                        // — neither arm converted, and neither does this one.
-                        //
-                        // The key handle is loaded HERE, in the cold miss block,
-                        // instead of in the entry block: the call is its only
-                        // consumer, so sinking it takes a load, a bitcast and a
-                        // mask off the inline hit path.
-                        let key_raw = {
-                            let blk = ctx.block();
-                            let key_box = blk.load(DOUBLE, &key_handle_global);
-                            let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            blk.and(I64, &key_bits, POINTER_MASK_I64)
-                        };
-                        // Loaded HERE, not through the function-entry cache
-                        // `load_class_shape_id` keeps: an entry-block load
-                        // would be two instructions the fast path pays and
-                        // never reads. VOLATILE, like the precheck's own load
-                        // of the same global: a plain load here lets LLVM
-                        // forward the precheck's value into this cold block,
-                        // which keeps a copy of it alive across the hit path's
-                        // `shl` (+1 `mov` per read, measured on `cls`).
-                        let ic_shape_id = crate::typed_shape::class_shape_id_operand_on_block(
-                            ctx.block(),
-                            &keys_global_name,
-                            true,
-                        );
-                        // The site's own read cache. A receiver the
-                        // pre-check cannot prove (an `Object.create` child
-                        // reading through `this`, an instance past the birth
-                        // shape, a subclass) is answered from ITS shape by the
-                        // One Path read behind the call, like any receiver,
-                        // instead of by the site-less by-name walk.
-                        let cache_slot =
-                            format!("@{}", generic_dispatch::allocate_property_cache(ctx));
-                        let val_ic = ctx.block().call(
-                            DOUBLE,
-                            "js_class_field_get_ic",
-                            &[
-                                (I64, &site_id),
-                                (DOUBLE, &recv_box),
-                                (I32, &expected_class_id_str),
-                                (I32, &ic_shape_id),
-                                (I64, &key_raw),
-                                (I32, &field_idx_str),
-                                (I32, requires_raw_f64_str),
-                                (PTR, &cache_slot),
-                            ],
-                        );
-                        let ic_end_label = ctx.block().label.clone();
-                        ctx.block().br(&merge_label);
-                        if requires_raw_f64 {
-                            // The miss arm's value now arrives from the outlined
-                            // IC instead of the inline by-name call, so the
-                            // dynamic-fallback record follows it. Same contract
-                            // as before — a JS value, not a proven raw double,
-                            // with the raw-f64 layout rejected and invalidated by
-                            // a runtime API (`native_value/verify/raw_f64.rs`
-                            // enforces all three on this consumer).
-                            let fallback = LoweredValue {
-                                semantic: SemanticKind::JsValue,
-                                rep: NativeRep::JsValue,
-                                llvm_ty: DOUBLE,
-                                value: val_ic.clone(),
-                            };
-                            ctx.record_lowered_value_with_access_mode_and_facts(
-                                "ClassFieldGet",
-                                None,
-                                "js_class_field_get_ic",
-                                &fallback,
-                                Some(BoundsState::Unknown),
-                                None,
-                                Some(BufferAccessMode::DynamicFallback),
-                                Some(MaterializationReason::RuntimeApi),
-                                None,
-                                None,
-                                Vec::new(),
-                                vec![
-                                    raw_f64_layout_fact(
-                                        None,
-                                        "rejected",
-                                        "class_field_get_guard",
-                                        Some(MaterializationReason::RuntimeApi),
-                                    ),
-                                    raw_f64_layout_fact(
-                                        None,
-                                        "invalidated",
-                                        "runtime_api",
-                                        Some(MaterializationReason::RuntimeApi),
-                                    ),
-                                ],
-                                false,
-                                false,
-                                vec![
-                                    format!("class={}", class_name),
-                                    format!("field={}", property),
-                                    format!("field_index={}", field_idx_str),
-                                ],
+                                *byte_offset,
+                                predicted,
                             );
                         }
-
-                        ctx.current_block = fast_idx;
-                        // arm64_32 watchOS: the object fields region begins at
-                        // `size_of::<ObjectHeader>()` past the user pointer — 16 on
-                        // both LP64 and ILP32 since #8047. A hardcoded offset reads
-                        // class fields from the wrong word when the header changes, so
-                        // this inline class-field load
-                        // disagreed with the generic-PIC load / runtime setter (both
-                        // target-aware) and typed-object string fields came back as
-                        // word-swapped NaN-boxes. Derive it from the target triple
-                        // (no-op on 64-bit; see `target_layout`).
-                        let header_skip =
-                            crate::target_layout::object_header_size_bytes(ctx.target_triple)
-                                .to_string();
-                        let blk = ctx.block();
-                        let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                        let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                        let val_fast = blk.load(DOUBLE, &field_ptr);
-                        let fast_end_label = blk.label.clone();
-                        blk.br(&merge_label);
-                        if requires_raw_f64 {
-                            let fast = LoweredValue {
-                                semantic: SemanticKind::JsNumber,
-                                rep: NativeRep::F64,
-                                llvm_ty: DOUBLE,
-                                value: val_fast.clone(),
-                            };
-                            ctx.record_lowered_value_with_access_mode_and_facts(
-                                "ClassFieldGet",
-                                None,
-                                "class_field_get.raw_f64_load",
-                                &fast,
-                                Some(BoundsState::Guarded {
-                                    guard_id: "class_field_get_guard".to_string(),
-                                }),
-                                None,
-                                Some(BufferAccessMode::CheckedNative),
-                                None,
-                                None,
-                                None,
-                                vec![raw_f64_layout_fact(
-                                    None,
-                                    "consumed",
-                                    "class_field_get_guard",
-                                    None,
-                                )],
-                                Vec::new(),
-                                false,
-                                false,
-                                vec![
-                                    format!("class={}", class_name),
-                                    format!("class_id={}", expected_class_id_str),
-                                    format!("field={}", property),
-                                    format!("field_index={}", field_idx_str),
-                                    "receiver_proof=declared_named_receiver_guarded_exact_class"
-                                        .to_string(),
-                                    "field_layout=raw_f64_slot_array".to_string(),
-                                    "pointer_bitmap=non_pointer".to_string(),
-                                ],
-                            );
-                        }
-
-                        ctx.current_block = merge_idx;
-                        return Ok(ctx.block().phi(
-                            DOUBLE,
-                            &[(&val_fast, &fast_end_label), (&val_ic, &ic_end_label)],
-                        ));
                     }
                 }
                 // #12016: declared public methods are function values in

@@ -627,7 +627,8 @@ pub(crate) unsafe fn install_private_field_lanes(
 
 /// Is `slot` of shape `id` an `Any` lane (the store IC words' flag: a
 /// non-`Any` lane is published with the flag that makes the emitted hit
-/// check the value, DESIGN §3.2)?
+/// check the value, DESIGN §3.2)? The store tests' oracle.
+#[cfg(test)]
 #[inline]
 pub(crate) fn shape_slot_is_any(id: u32, slot: u32) -> bool {
     object_slot_rep_of(id, slot) == REP_ANY

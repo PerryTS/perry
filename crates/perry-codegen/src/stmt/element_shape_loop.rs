@@ -1360,6 +1360,12 @@ fn match_class_identity(
     if class.extends_name.is_some() {
         return None;
     }
+    // The class arm compares each element against the class's static ShapeId.
+    // Elements of a class that leaves it never carry it; the shape arm asks
+    // the runtime for the shape they do carry (#12483).
+    if !crate::expr::class_field_inline_guard::class_instances_keep_birth_shape(ctx, class_name) {
+        return Some(ElementShapeIdentity::Shape);
+    }
     let expected_class_id = *ctx.class_ids.get(class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(class_name)?.clone();
     let statically_class_proven = ctx
