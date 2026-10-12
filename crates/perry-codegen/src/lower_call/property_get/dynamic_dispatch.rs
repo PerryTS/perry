@@ -624,7 +624,8 @@ pub(crate) fn try_lower_instance_method_call(
                 site_arm = Some((v_site, after_site));
                 ctx.current_block = own_call_idx;
             }
-
+            let default_idx = ctx.new_block("idispatch.default");
+            let default_label = ctx.block_label(default_idx);
             let own_method_probe = ctx.block().call(
                 DOUBLE,
                 "js_object_get_own_field_or_undef",
@@ -637,12 +638,9 @@ pub(crate) fn try_lower_instance_method_call(
             let own_bits_probe = ctx.block().bitcast_double_to_i64(&own_method_probe);
             let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
             let is_undef_probe = ctx.block().icmp_eq(I64, &own_bits_probe, &undef_bits_str);
-            ctx.block().cond_br(
-                &is_undef_probe,
-                &probe_dispatch_label,
-                &probe_override_label,
-            );
-
+            // #12466: an unproven shape must resolve the live prototype, even without an own method.
+            ctx.block()
+                .cond_br(&is_undef_probe, &default_label, &probe_override_label);
             // Override path: pack user args (skip recv at slot 0) and
             // invoke via js_native_call_value. The stored value is
             // typically an arrow function or `.bind()` closure whose
@@ -705,7 +703,6 @@ pub(crate) fn try_lower_instance_method_call(
             for (i, _) in implementors.iter().enumerate() {
                 case_idxs.push(ctx.new_block(&format!("idispatch.case{}", i)));
             }
-            let default_idx = ctx.new_block("idispatch.default");
             let merge_idx = ctx.new_block("idispatch.merge");
             let merge_label = ctx.block_label(merge_idx);
 
