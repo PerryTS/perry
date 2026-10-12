@@ -1,0 +1,1 @@
+Preserve the temporal dead zone for module-level `let` and `const` bindings initialized by class expressions. Early reads, `typeof`, construction, and initializer references now use the existing module TDZ checks, while `var` and named class-expression inner bindings keep their behavior.
