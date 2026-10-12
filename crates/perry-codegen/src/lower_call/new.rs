@@ -496,26 +496,39 @@ fn lower_new_impl_inner<'a>(
                 )
             })
         });
-    let constructor_birth = birth_plan
+    let birth_plan = birth_plan.filter(|_| declared_layout || literal_constant_image);
+    // A complete birth writes the argument values in the nursery arm, so it
+    // consumes them here, before the post-allocation refresh below. The
+    // registers in `lowered_args` hold each argument as it was when it was
+    // lowered: argument 0 of `{ a: f(), b: g() }` was produced before `g()`
+    // ran, and `g()` can collect. That collection rewrote only the group's
+    // roots, so the stored values must be the group's re-reads, as for every
+    // other consumer after a collection point (#12462).
+    let birth_args = if birth_plan
         .as_ref()
-        .filter(|_| declared_layout || literal_constant_image)
-        .map(|plan| {
-            let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
-                plan.iter()
-                    .map(|store| {
-                        let value = store.numeric_addend.map_or_else(
-                            || lowered_args[store.arg_index].clone(),
-                            |addend| {
-                                ctx.block()
-                                    .fadd(&lowered_args[store.arg_index], &double_literal(addend))
-                            },
-                        );
-                        (store.slot, ctx.block().bitcast_double_to_i64(&value))
-                    })
-                    .collect()
-            });
-            super::new_alloc::ConstructorBirth { fields }
+        .is_some_and(|plan| plan.iter().all(|store| !store.requires_raw_f64))
+    {
+        refresh_rooted_args(ctx, group)?
+    } else {
+        lowered_args.clone()
+    };
+    let constructor_birth = birth_plan.as_ref().map(|plan| {
+        let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
+            plan.iter()
+                .map(|store| {
+                    let value = store.numeric_addend.map_or_else(
+                        || birth_args[store.arg_index].clone(),
+                        |addend| {
+                            ctx.block()
+                                .fadd(&birth_args[store.arg_index], &double_literal(addend))
+                        },
+                    );
+                    (store.slot, ctx.block().bitcast_double_to_i64(&value))
+                })
+                .collect()
         });
+        super::new_alloc::ConstructorBirth { fields }
+    });
     let alloc =
         super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
     let fresh_prologue = super::new_alloc::prove_fresh_prologue(&alloc);

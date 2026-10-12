@@ -164,12 +164,70 @@ pub(super) fn comes_from_call(body: &str, value: &str, callee: &str, depth: usiz
     false
 }
 
+// True when `value` is a native root re-read (the tied, non-collecting asm
+// launder every root reload emits), followed through boxing and bit casts.
+// A register that reaches a call without passing a re-read holds the value
+// from before any later collection point.
+fn comes_from_root_reread(body: &str, value: &str, depth: usize) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let Some(rhs) = body
+        .lines()
+        .filter_map(|l| l.trim().split_once(" = "))
+        .find(|(lhs, _)| *lhs == value)
+        .map(|(_, rhs)| rhs)
+    else {
+        return false;
+    };
+    if rhs.starts_with("call i64 asm \"\", \"=r,0\"(ptr addrspace(1) ") {
+        return true;
+    }
+    if ["inttoptr ", "ptrtoint ", "bitcast ", "or ", "and "]
+        .iter()
+        .any(|op| rhs.starts_with(op))
+    {
+        return rhs
+            .split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
+            .filter(|r| r.starts_with('%'))
+            .all(|r| comes_from_root_reread(body, r, depth - 1));
+    }
+    false
+}
+
+// #12462: a complete birth stores its arguments in the nursery arm. Argument 0
+// was lowered before argument 1's allocation, which collects, so every
+// dynamic field value the fast arm stores must be a re-read of its root, never
+// the register the argument's own lowering produced.
+fn assert_fast_fields_are_rereads(body: &str) {
+    let fast = body
+        .split("\nalloc.fast.")
+        .nth(1)
+        .expect("fast birth must be live");
+    let fast = fast.split("\nalloc.slow.").next().unwrap();
+    let operands: Vec<_> = fast
+        .lines()
+        .filter(|l| l.contains(" = insertelement "))
+        .filter_map(|l| {
+            let value = l.split(", i64 ").nth(1)?.split(',').next()?.trim();
+            value.starts_with('%').then_some(value)
+        })
+        .collect();
+    assert_eq!(operands.len(), 2, "both fields are dynamic: {fast}");
+    for value in operands {
+        assert!(
+            comes_from_root_reread(body, value, 16),
+            "fast birth stores {value}, not a root re-read:\n{body}"
+        );
+    }
+}
+
 fn assert_constructor_instance(body: &str) {
     let ctor_point = body
         .lines()
         .filter(|l| {
             l.contains("@llvm.experimental.gc.statepoint.")
-                && callee_after_elementtype(l).as_deref() == Some("js_object_alloc")
+                && callee_after_elementtype(l).as_deref() == Some("js_object_alloc_plain")
         })
         .last()
         .expect("allocating constructor body");
@@ -244,13 +302,21 @@ fn complete_birth_writes_final_fields_and_relocates_slow_arguments() {
             .nth(1)
             .expect("fast birth must be live");
         let fast = fast.split("\nalloc.slow.").next().unwrap();
-        assert!(!fast.contains("call "), "{fast}");
+        // Root re-reads are tied asm operands, not calls: nothing in the fast
+        // arm may collect.
+        assert!(
+            !fast
+                .lines()
+                .any(|l| l.contains("call ") && !l.contains("call i64 asm \"\", \"=r,0\"")),
+            "{fast}"
+        );
         assert_eq!(
             fast.matches("store <2 x i64>").count(),
             2,
             "header and final fields: {fast}"
         );
         assert_eq!(fast.matches("insertelement <2 x i64>").count(), 2, "{fast}");
+        assert_fast_fields_are_rereads(body);
         let rewritten =
             crate::inprocess::statepoint_rewritten_ir(&ir, target, "complete_birth").unwrap();
         let body = function_slice(&rewritten, "main");
@@ -303,7 +369,7 @@ fn class_birth_slow_arm_relocates_arguments_and_constructor_relocates_instance()
             point
                 .live
                 .iter()
-                .filter(|value| { comes_from_call(args_body, value, "js_object_alloc", 32) })
+                .filter(|value| comes_from_call(args_body, value, "js_object_alloc_plain", 32))
                 .count(),
             2,
             "both fresh argument values must be listed at the slow birth: {point:?}"
