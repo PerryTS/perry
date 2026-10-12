@@ -90,6 +90,12 @@ fn elf_triple(triple: &str) -> bool {
         && (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
 }
 
+/// The image can address runtime TLS without a resolver call. Shared images
+/// keep the generic accessor; each executable invocation stays on one thread.
+pub(crate) fn executable_tls(triple: &str) -> bool {
+    elf_triple(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get())
+}
+
 /// How this compile reaches the block. `PERRY_AGENT_PTR_ACCESS=call` forces
 /// the call (A/B knob).
 pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {

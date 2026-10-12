@@ -1243,6 +1243,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Field offsets are load-bearing — keep `#[repr(C)] InlineArenaState`
     // in sync with the GEPs we emit in `lower_call::compile_new`.
     module.declare_function("js_inline_arena_state", PTR, &[]);
+    module.add_external_tls_global(
+        "PERRY_INLINE_ARENA_STATE",
+        "{ ptr, i64, i64, ptr, ptr }",
+        "initialexec",
+    );
+    module.declare_function(crate::function::TLS_ADDRESS_INTRINSIC, PTR, &[PTR]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_gc_note_black_birth", VOID, &[PTR, PTR]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);

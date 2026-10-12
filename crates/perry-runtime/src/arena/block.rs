@@ -1271,24 +1271,47 @@ crate::perry_thread_local! {
 
 }
 
-thread_local! {
-    /// Inline allocator state — a cache of the current arena block's
-    /// `(data, offset, size)` tuple, exposed via a stable pointer so
-    /// codegen can emit inline bump-allocate IR without going through
-    /// any function call or `LocalKey::with` wrapper.
-    ///
-    /// `#[repr(C)]` on `InlineArenaState` keeps the field offsets stable
-    /// (data=0, offset=8, size=16). The codegen reads/writes these fields
-    /// directly via fixed GEPs, so changing the struct layout would
-    /// silently break every emitted `new ClassName()`.
-    pub(crate) static INLINE_STATE: UnsafeCell<InlineArenaState> = const { UnsafeCell::new(InlineArenaState {
+/// Native TLS storage with the same scoped access interface as the old
+/// const-initialized LocalKey. It has no destructor or lazy-init metadata.
+#[repr(transparent)]
+pub(crate) struct InlineStateCell(UnsafeCell<InlineArenaState>);
+
+impl InlineStateCell {
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&UnsafeCell<InlineArenaState>) -> R) -> R {
+        f(&self.0)
+    }
+
+    pub(crate) fn try_with<R>(
+        &self,
+        f: impl FnOnce(&UnsafeCell<InlineArenaState>) -> R,
+    ) -> Result<R, std::thread::AccessError> {
+        // Like the old const LocalKey without Drop, this storage remains
+        // available throughout thread teardown.
+        Ok(self.with(f))
+    }
+}
+
+/// Inline allocator state — a cache of the current arena block's
+/// `(data, offset, size)` tuple, exposed via a stable pointer so
+/// codegen can emit inline bump-allocate IR without going through
+/// any function call or `LocalKey::with` wrapper.
+///
+/// `#[repr(C)]` on `InlineArenaState` keeps the field offsets stable
+/// (data=0, offset=8, size=16). The codegen reads/writes these fields
+/// directly via fixed GEPs, so changing the struct layout would
+/// silently break every emitted `new ClassName()`.
+#[cfg_attr(not(windows), no_mangle)]
+#[thread_local]
+pub(crate) static PERRY_INLINE_ARENA_STATE: InlineStateCell =
+    InlineStateCell(UnsafeCell::new(InlineArenaState {
         data: std::ptr::null_mut(),
         offset: 0,
         size: 0,
         birth_flags: std::ptr::null(),
         birth_seeds: std::ptr::null_mut(),
-    }) };
-}
+    }));
+
+pub(crate) use PERRY_INLINE_ARENA_STATE as INLINE_STATE;
 
 /// Hot-cache slot claimed by `OLD_GEN_IN_USE_BYTES`. See above.
 #[cfg(test)]

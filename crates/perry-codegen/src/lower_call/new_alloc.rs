@@ -157,6 +157,11 @@ fn inline_shape_descriptor_facts_exact(
 /// layout into the object's `GcHeader` constant (#7834).
 pub(super) struct InstanceAlloc {
     pub(super) handle: String,
+    /// Both arms of an emitted Eden allocation produce nursery storage. The
+    /// allocating arm may collect BEFORE birth; its shared initializer then
+    /// queues a black birth without draining it. This fact is consumed only
+    /// by the complete, unpublished, NoCollect constructor prologue.
+    fresh_nursery: bool,
     /// `true` when the allocator publishes this class's canonical keys and
     /// ShapeId at birth. Both the inline bump and the stamped outlined
     /// allocator provide the structural proof needed by constructor-free
@@ -164,6 +169,15 @@ pub(super) struct InstanceAlloc {
     pub(super) constructor_stores_ready: bool,
     /// True only on the arm that already wrote every constructor field.
     pub(super) fields_written: Option<String>,
+}
+
+/// Fresh(parent) for a complete constructor prologue: all argument evaluation
+/// precedes birth, root reloads are leaf, and the proven plan contains only
+/// pure values and stores. No statepoint or publication can drain the birth
+/// seed or promote its parent before those stores finish. Outlined births may
+/// be old and cannot supply this proof.
+pub(super) fn prove_fresh_prologue(alloc: &InstanceAlloc) -> bool {
+    alloc.fresh_nursery
 }
 
 pub(super) struct ConstructorBirth {
@@ -353,6 +367,7 @@ pub(super) fn emit_instance_alloc(
 ) -> InstanceAlloc {
     let mut constructor_stores_ready = false;
     let mut fields_written = None;
+    let mut fresh_nursery = false;
     let handle = emit_instance_alloc_inner(
         ctx,
         class_name,
@@ -360,11 +375,13 @@ pub(super) fn emit_instance_alloc(
         &mut constructor_stores_ready,
         constructor_birth,
         &mut fields_written,
+        &mut fresh_nursery,
     );
     InstanceAlloc {
         handle,
         constructor_stores_ready,
         fields_written,
+        fresh_nursery,
     }
 }
 
@@ -375,6 +392,7 @@ fn emit_instance_alloc_inner(
     constructor_stores_ready: &mut bool,
     constructor_birth: Option<&ConstructorBirth>,
     fields_written: &mut Option<String>,
+    fresh_nursery: &mut bool,
 ) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
@@ -652,6 +670,7 @@ fn emit_instance_alloc_inner(
                 ],
             )
         } else {
+            *fresh_nursery = true;
             let total_size =
                 crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
             let total_size_str = total_size.to_string();

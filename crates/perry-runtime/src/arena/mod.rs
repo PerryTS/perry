@@ -44,6 +44,8 @@ mod tests;
 #[cfg(test)]
 mod tests_alloc_fast;
 #[cfg(test)]
+mod tests_inline_state;
+#[cfg(test)]
 mod tests_batch_unregister;
 #[cfg(test)]
 mod tests_page_meta_audit;

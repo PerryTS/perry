@@ -518,6 +518,7 @@ fn lower_new_impl_inner<'a>(
         });
     let alloc =
         super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
+    let fresh_prologue = super::new_alloc::prove_fresh_prologue(&alloc);
     let fields_written = alloc.fields_written;
     let obj_handle = alloc.handle;
     // #7154: root the instance for the duration of the constructor body.
@@ -763,7 +764,7 @@ fn lower_new_impl_inner<'a>(
                     let child_bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);
                     (field_addr, child_bits)
                 };
-                if !store.requires_raw_f64 {
+                if !store.requires_raw_f64 && !fresh_prologue {
                     crate::expr::emit_write_barrier_slot_value_and_generation_tested(
                         ctx,
                         &obj_handle,

@@ -30,28 +30,22 @@ const _: () =
 const _: () =
     assert!(std::mem::offset_of!(InlineArenaState, birth_seeds) == INLINE_BIRTH_SEEDS_OFFSET_LP64);
 
-/// Get the per-thread inline arena state pointer. Called once per JS
-/// function entry; the codegen caches the result in a stack slot and
-/// reuses it for every `new ClassName()` in that function. The address
-/// is stable for the lifetime of the thread, so caching is safe.
-///
-/// First call on each thread lazy-syncs from the underlying ARENA.
-///
-/// #7469: this resolves `INLINE_STATE` and `ARENA` through
-/// [`crate::arena::block::hot_inline_state`] / [`crate::arena::block::hot_arena`]
-/// rather than `.with()`. Both already *have* named slots in the hot cache —
-/// they are two of its sixteen — but this call site was still going through
-/// the `LocalKey`, so it paid `_tlv_get_addr` anyway: 5.2% of `interp`'s
-/// remaining calls, from a function whose whole job is to be called once per
-/// JS function entry. A cache with a covered entry that the caller does not
-/// use is the same as no cache.
+/// Generic ThreadHeap entry: resolve this thread's cursor, proving and
+/// initializing it when necessary. Runtime callers can use it before gc_init.
+/// Compiled ELF executable entries take the same storage's native TLS address
+/// after gc_init; other output kinds and targets retain this generic entry.
+/// The address is stable for the lifetime of the thread, across refills and GC.
 #[no_mangle]
 pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
     // SAFETY: `hot_inline_state`/`hot_arena` return this thread's own
     // `INLINE_STATE`/`ARENA` storage — the same addresses `.with()` would hand
     // out, resolved once per thread instead of once per call.
     unsafe {
-        let state = &mut *super::block::hot_inline_state();
+        let ptr = super::block::inline_state_hot_addr().cast::<InlineArenaState>();
+        if prove_inline_arena_state(ptr) {
+            return ptr;
+        }
+        let state = &mut *ptr;
         if state.birth_flags.is_null() {
             state.birth_seeds = crate::gc::mark_seed_queue_address();
             state.birth_flags = crate::gc::gc_birth_flags_address();
@@ -66,6 +60,13 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
         }
         state as *mut InlineArenaState
     }
+}
+
+/// Shared ThreadHeap proof for the generic initializer and contract tests.
+/// Compiled ELF entries use the same TLS storage after gc_init has established
+/// this fact on each thread; they cache its address, never its mutable contents.
+pub(crate) unsafe fn prove_inline_arena_state(state: *const InlineArenaState) -> bool {
+    !(*state).data.is_null() && !(*state).birth_flags.is_null() && !(*state).birth_seeds.is_null()
 }
 
 /// Slow path for inline bump alloc. Called from emitted IR when the

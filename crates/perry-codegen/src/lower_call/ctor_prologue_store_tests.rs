@@ -190,25 +190,48 @@ fn a_finite_numeric_param_offset_is_stored_at_the_new_site() {
 /// gate.
 #[test]
 fn an_outlined_pointer_bearing_shape_keeps_its_write_barrier() {
-    let ir = emit(&outlined_new_module(
+    // A widened capacity cannot stamp the canonical birth descriptor. Its
+    // runtime allocation may be old, and its constructor retains barriers.
+    let mut module = outlined_new_module(
         "Link",
         Type::Union(vec![Type::Named("Link".to_string()), Type::Null]),
         Expr::Null,
-    ));
-    assert!(
-        ir.contains(FAST_BLOCK),
-        "a stamped outlined allocation did not get a constructor-free arm:\n{ir}"
     );
-    assert_eq!(fast_arm_double_stores(&ir), 2, "{ir}");
+    module.classes[0].alloc_width_hint = 4096;
+    let ir = emit(&module);
+    assert!(ir.contains("call i64 @js_object_alloc_class_inline_keys_stamped("));
+    assert!(ir.contains("call void @js_write_barrier_slot"));
+    assert!(ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"));
+}
+
+/// Five boxed slots exceed the compact image budget. Their complete prologue
+/// is still NoCollect and unpublished on both emitted Eden allocation arms.
+#[test]
+fn a_fresh_wide_prologue_needs_no_store_barrier() {
+    let mut module = loop_new_module("Wide", Type::Any, Expr::Null);
+    let class = &mut module.classes[0];
+    for i in 2..5 {
+        let mut field = class.fields[1].clone();
+        field.name = format!("f{i}");
+        class.fields.push(field);
+        let mut store = class.constructor.as_ref().unwrap().body[1].clone();
+        let Stmt::Expr(Expr::PropertySet { property, .. }) = &mut store else {
+            unreachable!()
+        };
+        *property = format!("f{i}");
+        class.constructor.as_mut().unwrap().body.push(store);
+    }
+    let ir = emit(&module);
+    let label = ir
+        .find("\nctor_prologue.fast.")
+        .expect("fresh complete prologue must execute");
+    let fast = &ir[label..];
+    let fast = &fast[..fast.find("\nctor_prologue.slow.").unwrap()];
+    assert_eq!(fast.matches("store double").count(), 5, "{fast}");
     assert!(
-        ir.contains("and i8")
-            && ir.contains(", 32")
-            && ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
-        "the outlined mixed-layout arm must retain every required pointer barrier:\n{ir}"
+        !fast.contains("call ") && !fast.contains("barrier"),
+        "{fast}"
     );
-    assert!(
-        ir.contains("ctor_prologue.barrier.maybe")
-            && ir.contains("call void @js_write_barrier_slot"),
-        "the direct pointer store must reach the ordinary write-barrier call:\n{ir}"
-    );
+    // The slow constructor still handles observations and ordinary stores.
+    assert!(ir.contains("call void @js_write_barrier_slot"));
 }

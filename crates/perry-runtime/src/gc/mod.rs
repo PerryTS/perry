@@ -1344,6 +1344,9 @@ pub fn gc_init() {
     );
     #[cfg(feature = "ohos-napi")]
     reg_scanner!(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
+    // Establish ThreadHeap before generated code on this thread can read its
+    // exported allocator cursor. Worker agents enter through gc_init too.
+    crate::arena::js_inline_arena_state();
 }
 
 /// #10399: see `js_gc_init`. Default floor for `std::thread` stacks in a

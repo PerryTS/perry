@@ -374,7 +374,7 @@ fn ir_for_target(m: Module, target: &str) -> String {
 
 /// On Apple aarch64 the first-use arena-state resolution reads the hot cache
 /// inline (`mrs tpidrro_el0` through the exported pthread key) and keeps the
-/// runtime accessor only as the fallback; every other target calls it.
+/// runtime accessor only as the fallback; Windows retains the call.
 #[test]
 fn inline_arena_state_is_resolved_through_the_hot_cache_on_apple_aarch64() {
     assert_inline_new_not_forced();
@@ -390,10 +390,10 @@ fn inline_arena_state_is_resolved_through_the_hot_cache_on_apple_aarch64() {
         "the Apple aarch64 lowering should read the hot cache inline with the runtime \
          accessor as its fallback:\n{ir}"
     );
-    let ir = ir_for_target(tiny_factory_module(0), "x86_64-unknown-linux-gnu");
+    let ir = ir_for_target(tiny_factory_module(0), "x86_64-pc-windows-msvc");
     assert!(
         !ir.contains("tpidrro_el0") && ir.contains("call ptr @js_inline_arena_state()"),
-        "other targets keep the runtime accessor alone:\n{ir}"
+        "Windows keeps the runtime accessor alone:\n{ir}"
     );
 }
 
@@ -539,11 +539,11 @@ fn a_self_recursive_allocator_threads_arena_state_through_self_calls() {
     let mut module = walk_module(true);
     module.functions[0].params[0].ty = Type::Any;
     module.functions[0].return_type = Type::Any;
-    let ir = ir_for(module);
+    let ir = ir_for_target(module, "x86_64-unknown-linux-gnu");
     assert_eq!(
         ir.matches("call ptr @js_inline_arena_state()").count(),
-        1,
-        "only the public entry wrapper should resolve arena state:\n{ir}"
+        0,
+        "ELF entries resolve arena state through native TLS:\n{ir}"
     );
     assert!(
         ir.contains("define internal double @perry_fn_alloc_hot_ts__walk.__arena(")
@@ -740,4 +740,20 @@ fn indirect_closure_admission_accepts_the_eight_site_budget() {
         !ir.contains(OUTLINED_CALL),
         "the eight-site boundary was only partially admitted:\n{ir}"
     );
+}
+
+#[test]
+fn executable_allocations_reuse_the_existing_native_tls_cursor() {
+    let ir = ir_for_target(tiny_factory_module(0), "x86_64-unknown-linux-gnu");
+    assert!(ir.contains("@PERRY_INLINE_ARENA_STATE = external thread_local(localexec)"));
+    assert!(ir.contains("@llvm.threadlocal.address.p0(ptr @PERRY_INLINE_ARENA_STATE)"));
+    assert!(!ir.contains("call ptr @js_inline_arena_state()"));
+    assert!(!ir.contains("arena_state.init"));
+    // Shared images cannot assume a fixed executable TLS offset.
+    let mut opts = ir_opts();
+    opts.target = Some("x86_64-unknown-linux-gnu".into());
+    opts.output_type = "dylib".into();
+    let shared = String::from_utf8(compile_module(&tiny_factory_module(0), opts).unwrap()).unwrap();
+    assert!(shared.contains("call ptr @js_inline_arena_state()"));
+    assert!(!shared.contains("@llvm.threadlocal.address.p0(ptr @PERRY_INLINE_ARENA_STATE)"));
 }

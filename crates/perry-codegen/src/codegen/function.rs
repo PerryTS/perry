@@ -52,10 +52,19 @@ fn emit_public_arena_threaded_wrapper(
         .map(|p| (DOUBLE, format!("%arg{}", p.id)))
         .collect();
     let mut call_args: Vec<(LlvmType, String)> = params.clone();
+    let direct_tls = crate::expr::agent_ptr::executable_tls(&llmod.target_triple);
     let wrapper = llmod.define_function(public_name, DOUBLE, params);
     wrapper.force_inline = true;
-    let entry = wrapper.create_block("entry");
-    let arena_state = entry.call(PTR, "js_inline_arena_state", &[]);
+    wrapper.create_block("entry");
+    let arena_state = if direct_tls {
+        wrapper.entry_materialized_tls_address("PERRY_INLINE_ARENA_STATE")
+    } else {
+        wrapper
+            .block_mut(0)
+            .unwrap()
+            .call(PTR, "js_inline_arena_state", &[])
+    };
+    let entry = wrapper.block_mut(0).unwrap();
     call_args.push((PTR, arena_state));
     let call_args: Vec<(LlvmType, &str)> = call_args
         .iter()

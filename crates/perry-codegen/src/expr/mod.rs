@@ -2627,6 +2627,12 @@ fn inline_cache_global_name_for_prefix(module_prefix: &str, site_id: u32) -> Str
 /// every other function lazily emits the ordinary entry accessor when its
 /// first inline allocation site is lowered.
 pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
+    if agent_ptr::executable_tls(ctx.target_triple) && ctx.arena_state_slot.is_none() {
+        // ThreadHeap is established by gc_init on the main thread and every
+        // worker before compiled code enters. One address per activation;
+        // collections update the cursor in place and never move TLS storage.
+        return ctx.func.entry_materialized_tls_address("PERRY_INLINE_ARENA_STATE");
+    }
     // The state is resolved on the first allocation that actually executes,
     // not in the entry block: a function whose hot path never allocates
     // (`exists`, the typed guard arms of `set`) used to pay the thread-local

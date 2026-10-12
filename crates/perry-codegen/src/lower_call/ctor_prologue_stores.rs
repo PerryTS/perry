@@ -72,8 +72,10 @@
 //!
 //! GC: the instance is fresh and unpublished. Pointer stores are already
 //! covered by ShapeId tracing, so no per-slot layout note is due; each
-//! pointer/boxed field still emits the ordinary value-and-generation-tested
-//! write barrier for old-generation and incremental-marking correctness.
+//! pointer/boxed field on an outlined birth still emits the ordinary barrier.
+//! Emitted Eden births carry Fresh(parent): the complete NoCollect prologue
+//! finishes before publication or a statepoint. No remembered edge is needed,
+//! and a black birth's pending seed traces its completed fields.
 
 use crate::expr::FnCtx;
 

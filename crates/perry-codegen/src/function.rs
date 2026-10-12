@@ -188,7 +188,7 @@ pub struct LlFunction {
     /// Thread-local globals whose current-thread address this function has
     /// already computed in its entry block, with the SSA register holding it
     /// (see [`Self::entry_tls_address`]).
-    entry_tls_addresses: Vec<(String, String)>,
+    entry_tls_addresses: Vec<(String, String, bool)>,
 }
 
 /// Render the frame-push instruction. Kept in one place so the eager
@@ -545,7 +545,11 @@ impl LlFunction {
     ///
     /// The caller declares `llvm.threadlocal.address.p0` in the module.
     pub fn entry_tls_address(&mut self, global: &str) -> String {
-        if let Some((_, reg)) = self.entry_tls_addresses.iter().find(|(g, _)| g == global) {
+        if let Some((_, reg, _)) = self
+            .entry_tls_addresses
+            .iter()
+            .find(|(g, _, _)| g == global)
+        {
             return reg.clone();
         }
         let reg = format!("%r{}", self.reg_counter.next());
@@ -553,8 +557,31 @@ impl LlFunction {
             "  {reg} = call ptr @{TLS_ADDRESS_INTRINSIC}(ptr @{global})"
         ));
         self.entry_tls_addresses
-            .push((global.to_string(), reg.clone()));
+            .push((global.to_string(), reg.clone(), false));
         reg
+    }
+
+    /// Keep a runtime cursor's address in one register. Otherwise the x86
+    /// backend folds every field load back into a long fs: displacement,
+    /// duplicating TLS addressing at each operation. The tied empty asm emits
+    /// no instruction; it only preserves the once-per-activation address.
+    pub(crate) fn entry_materialized_tls_address(&mut self, global: &str) -> String {
+        let address = self.entry_tls_address(global);
+        let entry = self
+            .entry_tls_addresses
+            .iter_mut()
+            .find(|(g, _, _)| g == global)
+            .unwrap();
+        if entry.2 {
+            return address;
+        }
+        let held = format!("%r{}", self.reg_counter.next());
+        self.entry_allocas.push(format!(
+            "  {held} = call ptr asm \"\", \"=r,0\"(ptr {address}) \"gc-leaf-function\""
+        ));
+        entry.1 = held.clone();
+        entry.2 = true;
+        held
     }
 
     /// Allocate a fixed-size `[count x elem_ty]` array slot in the function
