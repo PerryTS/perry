@@ -705,3 +705,38 @@ fn stream_chunk_uses_uint8array_placement_at_birth() {
         );
     }
 }
+
+/// #9202: `drain_readable_into_bytes` creates a reader read, polls its state
+/// directly and drops it. An errored stream rejects that read, and the drain
+/// is its only observer — the caller reports the error through its own path
+/// (fetch's `drain_body_stream`), so the rejection must count as handled.
+/// Before the fix it leaked as an "Uncaught (in promise)" for an error the
+/// program already caught, and exited 1.
+#[test]
+fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
+    let _serial = serial_guard();
+    let chunk = js_string_from_bytes(b"partial".as_ptr(), 7);
+    let reason = js_string_from_bytes(b"boom".as_ptr(), 4);
+    let id = alloc_readable(0, 0, 0, 1.0);
+    {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        let s = g.get_mut(&id).unwrap();
+        s.push_chunk(JSValue::string_ptr(chunk).bits(), 1.0);
+        s.started = true;
+        s.state = ReadableState::Readable;
+        // A read delivering the last chunk flips the stream to Errored, so the
+        // NEXT read is the one that rejects.
+        s.pending_error_after_chunks = Some(JSValue::string_ptr(reason).bits());
+    }
+    let before = perry_runtime::promise::rejection::unhandled_rejection_count();
+    let bytes = unsafe { drain_readable_into_bytes(id) };
+    assert_eq!(
+        bytes, b"partial",
+        "the chunk yielded before the error is still delivered"
+    );
+    assert_eq!(
+        perry_runtime::promise::rejection::unhandled_rejection_count(),
+        before,
+        "the drain consumed the errored read; it must not stay unhandled"
+    );
+}

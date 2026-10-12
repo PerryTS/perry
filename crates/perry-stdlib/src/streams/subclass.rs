@@ -478,6 +478,14 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
             // callbacks; previous chunks have already become native bytes.
             let pull_scope = perry_runtime::gc::RuntimeHandleScope::new();
             let promise = pull_scope.root_raw_mut_ptr(js_reader_read(reader));
+            // This read is private to the drain: polling `js_promise_state`
+            // below IS its reaction, and an errored stream rejects it with the
+            // error the drain's caller reports through its own path (fetch's
+            // `drain_body_stream`). Without the mark that rejection surfaces as
+            // an unhandled rejection of an error the program already handled
+            // (#9202). Same mark the stream machinery puts on its internal
+            // promises (#1545).
+            js_promise_mark_internally_handled(promise.get_raw_mut_ptr());
             for _ in 0..100_000 {
                 if js_promise_state(promise.get_raw_mut_ptr()) != 0 {
                     break;

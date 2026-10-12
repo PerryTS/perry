@@ -76,6 +76,15 @@ pub(super) fn checkpoint_work_pending() -> bool {
     })
 }
 
+/// Rejections recorded as currently unhandled and still awaiting a checkpoint
+/// report. Test and diagnostic observability for that set: a consumer that
+/// reads a promise's settled state directly (instead of attaching a reaction)
+/// has to mark it handled (`js_promise_mark_internally_handled`), and this is
+/// how the streams regression test for #9202 checks it did.
+pub fn unhandled_rejection_count() -> usize {
+    REJECTIONS.with(|tracker| tracker.borrow().unhandled.len())
+}
+
 /// Mark a promise as internally handled (Node's `markPromiseAsHandled`): a
 /// later rejection of it is never reported as unhandled. Used by the WHATWG
 /// stream implementation for the internal `closed` / `closeRequest` promises it
