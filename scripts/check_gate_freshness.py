@@ -50,6 +50,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "scripts" / "gate_freshness.json"
@@ -66,6 +67,14 @@ POST_MERGE_EVENTS = frozenset({"push", "schedule", "workflow_dispatch"})
 # else returned with status=completed did reach a terminal result; in particular,
 # failure and timed_out are visible gate failures rather than freshness failures.
 NON_RESULTS = frozenset({None, "action_required", "cancelled", "skipped", "stale"})
+
+# Bound API work even when a parent workflow has an unusually deep history.
+# These are a sampled freshness search: a fresh inspected completion is enough
+# evidence to pass; exhausting either bound without fresh evidence fails closed.
+MAX_API_REQUESTS_PER_PARENT = 256
+MAX_RUN_PAGES_PER_EVENT = 10
+RUNS_PER_PAGE = 100
+JOBS_PER_PAGE = 100
 
 
 def _utcnow() -> _dt.datetime:
@@ -96,6 +105,7 @@ class Verdict:
     last_result: str | None
     last_sha: str | None
     conclusion: str | None
+    search_error: str | None = None
 
     @property
     def stale(self) -> bool:
@@ -103,7 +113,14 @@ class Verdict:
 
     @property
     def detail(self) -> str:
+        if self.search_error and self.age_hours is not None:
+            return (
+                f"best inspected result {self.age_hours:.1f}h ago; "
+                f"search incomplete: {self.search_error}"
+            )
         if self.age_hours is None:
+            if self.search_error:
+                return f"INCOMPLETE SEARCH: {self.search_error}"
             return "NO completed post-merge result in the sampled window"
         return (
             f"last {self.conclusion} result {self.age_hours:.1f}h ago "
@@ -139,86 +156,228 @@ def _gh_json(path: str) -> dict:
     return json.loads(proc.stdout)
 
 
+class _IncompleteSearch(RuntimeError):
+    def __init__(
+        self, message: str, best: tuple[str, str, str] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.best = best
+
+
+class _SearchContext:
+    """Request and response cache shared by gates using the same parent run."""
+
+    def __init__(
+        self,
+        fetch,
+        max_requests: int = MAX_API_REQUESTS_PER_PARENT,
+        max_run_pages: int = MAX_RUN_PAGES_PER_EVENT,
+    ) -> None:
+        self.fetch = fetch
+        self.max_requests = max_requests
+        self.max_run_pages = max_run_pages
+        self.requests: dict[tuple[str, str], int] = {}
+        self.responses: dict[str, dict] = {}
+
+    def get(self, repo: str, parent: str, path: str) -> dict:
+        if path in self.responses:
+            return self.responses[path]
+        key = (repo, parent)
+        used = self.requests.get(key, 0)
+        if used >= self.max_requests:
+            raise _IncompleteSearch(
+                f"request cap {self.max_requests} reached for parent workflow {parent}"
+            )
+        self.requests[key] = used + 1
+        try:
+            payload = self.fetch(path)
+        except (RuntimeError, ValueError, OSError) as exc:
+            raise _IncompleteSearch(f"API request failed for {path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise _IncompleteSearch(f"API response for {path} was not an object")
+        self.responses[path] = payload
+        return payload
+
+
 def newest_post_merge_result(
-    repo: str, gate: Gate, branch: str, fetch=_gh_json
+    repo: str,
+    gate: Gate,
+    branch: str,
+    now: _dt.datetime,
+    context: _SearchContext,
 ) -> tuple[str, str, str] | None:
-    """Return (completed_at, head_sha, conclusion) for the newest result, or None.
+    """Return newest inspected completion, or fail closed on incomplete search.
 
-    Asks for completed runs on the branch and then filters by event and conclusion.
-    The API's `?event=` parameter takes a single value, so filtering client-side is
-    what lets one request cover push + schedule + workflow_dispatch.
-
-    The API orders runs by creation time, not completion time. Deep queues can invert
-    those orders, so inspect the whole sampled page and choose the newest completion.
+    Event streams are partitioned because high-rate workflow_dispatch runs can
+    crowd scheduled runs off a single creation-ordered page. Pages are inspected
+    round-robin by event, and actual selected-job completion timestamps determine
+    the winner. A fresh inspected result is sufficient evidence; this bounded
+    search does not claim to find the globally newest historical completion.
     """
-    path = (
-        f"repos/{repo}/actions/workflows/{gate.api_workflow}/runs"
-        f"?branch={branch}&status=completed&per_page=50"
-    )
-    payload = fetch(path)
-    candidates: list[tuple[str, str, str]] = []
-    for run in payload.get("workflow_runs", []):
-        if run.get("event") not in POST_MERGE_EVENTS:
-            continue
-        if run.get("status") != "completed":
-            continue
-        if gate.job_names:
-            jobs = []
-            page = 1
-            while True:
-                batch = fetch(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100&page={page}").get("jobs", [])
-                jobs.extend(batch)
-                if len(batch) < 100:
-                    break
-                page += 1
-            selected = [
-                next((job for job in jobs if job.get("name") == name), None)
-                for name in gate.job_names
-            ]
-            if any(job is None for job in selected):
-                continue
-            if any(
-                job.get("status") != "completed"
-                or job.get("conclusion") in NON_RESULTS
-                or not job.get("completed_at")
-                for job in selected
-                if job is not None
-            ):
-                continue
-            completed = max(
-                (job["completed_at"] for job in selected if job is not None),
-                key=_parse_ts,
+    best: tuple[str, str, str] | None = None
+    exhausted = {event: False for event in ("schedule", "push", "workflow_dispatch")}
+    prior_run_pages: dict[str, set[tuple[str, ...]]] = {
+        event: set() for event in exhausted
+    }
+
+    def is_fresh(result: tuple[str, str, str] | None) -> bool:
+        if result is None:
+            return False
+        age = (now - _parse_ts(result[0])).total_seconds() / 3600.0
+        return age <= gate.max_age_hours
+
+    def job_group_result(run: dict) -> tuple[str, str] | None:
+        jobs: list[dict] = []
+        prior_pages: set[tuple[str, ...]] = set()
+        page = 1
+        while True:
+            path = (
+                f"repos/{repo}/actions/runs/{run['id']}/jobs?"
+                + urlencode({"per_page": JOBS_PER_PAGE, "page": page})
             )
-            conclusion = (
-                "success"
-                if all(job.get("conclusion") == "success" for job in selected if job is not None)
-                else "failure"
+            payload = context.get(repo, gate.api_workflow, path)
+            if "jobs" not in payload:
+                raise _IncompleteSearch(f"jobs response for run {run['id']} omitted jobs")
+            rows = payload["jobs"]
+            if not isinstance(rows, list):
+                raise _IncompleteSearch(f"jobs response for run {run['id']} was not a list")
+            signature = tuple(
+                str(job.get("id") or f"{job.get('name')}:{job.get('started_at')}:{job.get('completed_at')}")
+                for job in rows
             )
-            # A green category parent can contain skipped siblings. This gate
-            # measures only the configured logical subject jobs above.
-        else:
-            if run.get("conclusion") in NON_RESULTS:
-                continue
-            completed = run.get("updated_at")
-            conclusion = run.get("conclusion")
-            if not completed or not conclusion:
-                continue
-        candidates.append((completed, run.get("head_sha", ""), conclusion))
-    return max(candidates, key=lambda row: _parse_ts(row[0])) if candidates else None
+            if len(rows) == JOBS_PER_PAGE and signature in prior_pages:
+                raise _IncompleteSearch(f"repeated full jobs page for run {run['id']}")
+            if len(rows) == JOBS_PER_PAGE:
+                prior_pages.add(signature)
+            jobs.extend(rows)
+            if len(rows) < JOBS_PER_PAGE:
+                break
+            page += 1
+        selected = [
+            next((job for job in jobs if job.get("name") == name), None)
+            for name in gate.job_names
+        ]
+        if any(job is None for job in selected):
+            return None
+        if any(
+            job.get("status") != "completed"
+            or job.get("conclusion") in NON_RESULTS
+            or not job.get("completed_at")
+            for job in selected
+            if job is not None
+        ):
+            return None
+        completed = max(
+            (job["completed_at"] for job in selected if job is not None),
+            key=_parse_ts,
+        )
+        conclusion = (
+            "success"
+            if all(job.get("conclusion") == "success" for job in selected if job is not None)
+            else "failure"
+        )
+        return completed, conclusion
+
+    try:
+        for page in range(1, context.max_run_pages + 1):
+            for event in ("schedule", "push", "workflow_dispatch"):
+                if exhausted[event]:
+                    continue
+                path = (
+                    f"repos/{repo}/actions/workflows/{gate.api_workflow}/runs?"
+                    + urlencode(
+                        {
+                            "branch": branch,
+                            "status": "completed",
+                            "event": event,
+                            "per_page": RUNS_PER_PAGE,
+                            "page": page,
+                        }
+                    )
+                )
+                payload = context.get(repo, gate.api_workflow, path)
+                if "workflow_runs" not in payload:
+                    raise _IncompleteSearch(
+                        f"runs response for {event} page {page} omitted workflow_runs"
+                    )
+                rows = payload["workflow_runs"]
+                if not isinstance(rows, list):
+                    raise _IncompleteSearch(f"runs response for {event} page {page} was not a list")
+                signature = tuple(str(run.get("id") or f"{run.get('created_at')}:{run.get('head_sha')}") for run in rows)
+                if len(rows) == RUNS_PER_PAGE and signature in prior_run_pages[event]:
+                    raise _IncompleteSearch(f"repeated full {event} run page {page}")
+                if len(rows) == RUNS_PER_PAGE:
+                    prior_run_pages[event].add(signature)
+                else:
+                    exhausted[event] = True
+
+                for run in rows:
+                    if run.get("event") != event or run.get("status") != "completed":
+                        continue
+                    if gate.job_names:
+                        result = job_group_result(run)
+                        if result is None:
+                            continue
+                        completed, conclusion = result
+                    else:
+                        if run.get("conclusion") in NON_RESULTS:
+                            continue
+                        completed = run.get("updated_at")
+                        conclusion = run.get("conclusion")
+                        if not completed or not conclusion:
+                            continue
+                    candidate = (completed, run.get("head_sha", ""), conclusion)
+                    if best is None or _parse_ts(candidate[0]) > _parse_ts(best[0]):
+                        best = candidate
+                # Once this fetched page has been fully inspected, an in-budget
+                # observation proves freshness even if older pages remain.
+                if is_fresh(best):
+                    return best
+
+            if all(exhausted.values()):
+                return best
+        raise _IncompleteSearch(
+            f"run-page cap {context.max_run_pages} reached for parent workflow {gate.api_workflow}"
+        )
+    except _IncompleteSearch as exc:
+        if is_fresh(best):
+            return best
+        raise _IncompleteSearch(str(exc), best=best) from exc
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        message = f"invalid Actions response data for {gate.api_workflow}: {exc}"
+        if is_fresh(best):
+            return best
+        raise _IncompleteSearch(message, best=best) from exc
 
 
 def evaluate(
-    gates: Sequence[Gate], repo: str, branch: str, now: _dt.datetime, fetch=_gh_json
+    gates: Sequence[Gate],
+    repo: str,
+    branch: str,
+    now: _dt.datetime,
+    fetch=_gh_json,
+    *,
+    max_api_requests: int = MAX_API_REQUESTS_PER_PARENT,
+    max_run_pages: int = MAX_RUN_PAGES_PER_EVENT,
 ) -> list[Verdict]:
     verdicts: list[Verdict] = []
+    context = _SearchContext(fetch, max_api_requests, max_run_pages)
     for gate in gates:
         try:
-            found = newest_post_merge_result(repo, gate, branch, fetch=fetch)
-        except RuntimeError as exc:
-            # A workflow file that no longer exists, or an API failure, must not be
-            # silently treated as "fresh". Report it as stale with no timestamp.
+            found = newest_post_merge_result(repo, gate, branch, now, context)
+        except _IncompleteSearch as exc:
+            # An incomplete search without a fresh observation must remain a
+            # stale, explicit error rather than a synthesized no-result verdict.
             print(f"::warning::{gate.workflow}: {exc}", file=sys.stderr)
-            found = None
+            if exc.best is None:
+                verdicts.append(Verdict(gate, None, None, None, None, str(exc)))
+            else:
+                completed, sha, conclusion = exc.best
+                age = (now - _parse_ts(completed)).total_seconds() / 3600.0
+                verdicts.append(
+                    Verdict(gate, age, completed, sha, conclusion, str(exc))
+                )
+            continue
         if found is None:
             verdicts.append(Verdict(gate, None, None, None, None))
             continue
@@ -369,8 +528,9 @@ def self_test() -> int:
         created_hours_ago: float,
         completed_hours_ago: float | None,
         sha: str,
+        run_id: int | None = None,
     ) -> dict:
-        return {
+        result = {
             "event": event,
             "status": status,
             "conclusion": conclusion,
@@ -378,6 +538,9 @@ def self_test() -> int:
             "updated_at": stamp(completed_hours_ago) if completed_hours_ago is not None else None,
             "head_sha": sha,
         }
+        if run_id is not None:
+            result["id"] = run_id
+        return result
 
     fixtures = {
         # Fresh: a scheduled success completed 2h ago.
@@ -419,6 +582,10 @@ def self_test() -> int:
         # group, which is stale.
         "partial.yml": [
             {
+                **run("push", "completed", "success", 1, 0.5, "ggx"),
+                "id": 105,
+            },
+            {
                 **run("push", "completed", "failure", 2, 1, "ggg"),
                 "id": 102,
             },
@@ -444,18 +611,31 @@ def self_test() -> int:
         ],
         104: ([{"name": f"noise {i}", "status": "completed", "conclusion": "success", "completed_at": stamp(2)} for i in range(100)]
               + [{"name": "audit / required", "status": "completed", "conclusion": "failure", "completed_at": stamp(1)}]),
+        105: [
+            {"name": "audit / first", "status": "completed", "conclusion": "success", "completed_at": stamp(0.5)},
+            {"name": "audit / second", "status": "completed", "conclusion": "skipped", "completed_at": stamp(0.5)},
+        ],
     }
 
+    fake_calls: list[str] = []
+
     def fake_fetch(path: str) -> dict:
-        if "/actions/runs/" in path:
-            run_id = int(path.split("/actions/runs/")[1].split("/jobs")[0])
-            if "page=" in path:
-                page = int(path.split("page=")[2])
+        fake_calls.append(path)
+        parsed = urlsplit(path)
+        query = parse_qs(parsed.query)
+        if "/actions/runs/" in parsed.path:
+            run_id = int(parsed.path.split("/actions/runs/")[1].split("/jobs")[0])
+            if "page" in query:
+                page = int(query["page"][0])
                 rows = job_fixtures[run_id]
                 return {"jobs": rows[(page - 1) * 100 : page * 100]}
             return {"jobs": job_fixtures[run_id]}
-        wf = path.split("/actions/workflows/")[1].split("/runs")[0]
-        return {"workflow_runs": fixtures[wf]}
+        wf = parsed.path.split("/actions/workflows/")[1].split("/runs")[0]
+        rows = fixtures[wf]
+        if "event" in query:
+            rows = [row for row in rows if row.get("event") == query["event"][0]]
+        page = int(query.get("page", ["1"])[0])
+        return {"workflow_runs": rows[(page - 1) * RUNS_PER_PAGE : page * RUNS_PER_PAGE]}
 
     direct_workflows = [w for w in fixtures if w not in {"test.yml", "partial.yml"}]
     gates = [Gate(w, 12, "self-test") for w in direct_workflows]
@@ -499,6 +679,268 @@ def self_test() -> int:
     expect("nested.yml", False, "all reusable-workflow jobs form a fresh result")
     expect("nested-partial.yml", True, "a partial reusable-workflow job group is not fresh")
     expect("paged-subject.yml", False, "a required job on page two is found")
+    if not any("/actions/runs/104/jobs" in path and "page=2" in path for path in fake_calls):
+        failures.append("nested selected-job pagination did not request jobs page two")
+
+    def offline_fetch(run_map: dict[str, list[dict]], job_map: dict[int, list[dict]], calls: list[str]):
+        def fetch(path: str) -> dict:
+            calls.append(path)
+            parsed = urlsplit(path)
+            query = parse_qs(parsed.query)
+            if "/actions/runs/" in parsed.path:
+                run_id = int(parsed.path.split("/actions/runs/")[1].split("/jobs")[0])
+                page = int(query.get("page", ["1"])[0])
+                rows = job_map.get(run_id, [])
+                return {"jobs": rows[(page - 1) * JOBS_PER_PAGE : page * JOBS_PER_PAGE]}
+            workflow = parsed.path.split("/actions/workflows/")[1].split("/runs")[0]
+            event = query["event"][0]
+            rows = [row for row in run_map.get(workflow, []) if row.get("event") == event]
+            page = int(query.get("page", ["1"])[0])
+            start = (page - 1) * RUNS_PER_PAGE
+            return {"workflow_runs": rows[start : start + RUNS_PER_PAGE]}
+
+        return fetch
+
+    # Fifty unrelated dispatches used to displace the daily scheduled result
+    # from the single mixed page. Event partitioning exposes the failed run.
+    displaced_runs = [
+        {**run("workflow_dispatch", "completed", "success", 1, 0.5, f"noise-{i}"), "id": 500 + i}
+        for i in range(50)
+    ] + [{**run("schedule", "completed", "failure", 40, 25, "daily"), "id": 600}]
+    displaced_jobs = {
+        600: [{"name": "npm-publish-freshness / npm-publish-freshness", "status": "completed", "conclusion": "failure", "completed_at": stamp(25)}]
+    }
+    calls: list[str] = []
+    displaced_gate = Gate(
+        "npm-publish-freshness.yml",
+        30,
+        "self-test",
+        source_workflow="maintenance.yml",
+        job_names=("npm-publish-freshness / npm-publish-freshness",),
+    )
+    displaced = evaluate(
+        [displaced_gate],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"maintenance.yml": displaced_runs}, displaced_jobs, calls),
+    )[0]
+    if displaced.stale or displaced.conclusion != "failure" or displaced.age_hours != 25:
+        failures.append("event partitioning did not preserve the older in-budget failed schedule result")
+    if not any("event=schedule" in path for path in calls):
+        failures.append("freshness search did not request the scheduled event partition")
+
+    # The observed 42-run scheduled queue costs 43 calls: one parent page and
+    # one jobs page per run. Keep the configured request budget comfortably
+    # above this known maintenance traffic while still bounding runaway search.
+    batch_runs = [
+        {**run("schedule", "completed", "failure", 40, 25, f"batch-{i}"), "id": 620 + i}
+        for i in range(42)
+    ]
+    batch_jobs = {
+        620 + i: ([{
+            "name": "npm-publish-freshness / npm-publish-freshness",
+            "status": "completed",
+            "conclusion": "failure",
+            "completed_at": stamp(25),
+        }] if i == 41 else [])
+        for i in range(42)
+    }
+    batch_calls: list[str] = []
+    batch_result = evaluate(
+        [displaced_gate],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"maintenance.yml": batch_runs}, batch_jobs, batch_calls),
+    )[0]
+    if batch_result.stale or batch_result.conclusion != "failure" or len(batch_calls) != 43:
+        failures.append("42-run scheduled traffic did not complete within its calibrated 43-request search")
+
+    # Round-robin pagination reaches page two even when another event also has
+    # a full noise page. Creation order does not determine the winning result.
+    page_runs = [
+        run("schedule", "completed", "failure", 50, 40, f"old-{i}")
+        for i in range(RUNS_PER_PAGE)
+    ] + [run("schedule", "completed", "failure", 100, 2, "late-completion")] + [
+        run("workflow_dispatch", "completed", "failure", 3, 40, f"dispatch-{i}")
+        for i in range(RUNS_PER_PAGE)
+    ]
+    calls = []
+    paged = evaluate(
+        [Gate("page-two.yml", 12, "self-test")],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"page-two.yml": page_runs}, {}, calls),
+    )[0]
+    if paged.stale or paged.conclusion != "failure" or paged.last_sha != "late-completion":
+        failures.append("round-robin bounded search did not find the fresh schedule result on run page two")
+    if not any("event=schedule" in path and "page=2" in path for path in calls):
+        failures.append("run page two was not requested")
+
+    # The newer-created run completed earlier; select by actual completion.
+    inverted_runs = [
+        run("schedule", "completed", "failure", 8, 1, "created-older-completed-newer"),
+        run("schedule", "completed", "success", 6, 5, "created-newer-completed-older"),
+    ]
+    inverted = evaluate(
+        [Gate("inverted.yml", 12, "self-test")],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"inverted.yml": inverted_runs}, {}, []),
+    )[0]
+    if inverted.last_result != stamp(1) or inverted.last_sha != "created-older-completed-newer":
+        failures.append("freshness selection used run creation order instead of completion time")
+
+    nested_inverted_runs = [
+        {**run("schedule", "completed", "failure", 20, 0.5, "parent-completed-newer"), "id": 901},
+        {**run("schedule", "completed", "success", 10, 1, "parent-completed-older"), "id": 902},
+    ]
+    nested_inverted_jobs = {
+        901: [{"name": "nested subject", "status": "completed", "conclusion": "failure", "completed_at": stamp(10)}],
+        902: [{"name": "nested subject", "status": "completed", "conclusion": "success", "completed_at": stamp(2)}],
+    }
+    nested_inverted = evaluate(
+        [Gate("nested-inverted.yml", 12, "self-test", source_workflow="nested-inverted-parent.yml", job_names=("nested subject",))],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"nested-inverted-parent.yml": nested_inverted_runs}, nested_inverted_jobs, []),
+    )[0]
+    if nested_inverted.last_result != stamp(2) or nested_inverted.last_sha != "parent-completed-older":
+        failures.append("nested freshness selection did not use the latest selected-job completion")
+
+    # No fresh observation before a request cap, API failure, repeated page, or
+    # configured page limit must produce an explicit incomplete-search verdict.
+    stale_full_page = [
+        run("schedule", "completed", "success", 50, 49, f"stale-{i}")
+        for i in range(RUNS_PER_PAGE)
+    ]
+    cap_runs = {"capped.yml": stale_full_page}
+    cap_calls: list[str] = []
+    cap = evaluate(
+        [Gate("capped.yml", 12, "self-test")],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch(cap_runs, {}, cap_calls),
+        max_api_requests=1,
+    )[0]
+    if not cap.stale or "search incomplete" not in cap.detail or "request cap 1" not in cap.detail:
+        failures.append("request-cap exhaustion did not fail closed with an explicit reason")
+    if len(cap_calls) != 1:
+        failures.append(f"request cap 1 allowed {len(cap_calls)} API calls")
+
+    # A realistic noisy nested parent can consume the bounded budget inspecting
+    # page-one job groups before reaching later event pages. It must say that
+    # search was incomplete, never claim the gate had no result historically.
+    nested_noise_runs = [
+        {**run("schedule", "completed", "failure", 50, 40, f"nested-noise-{i}"), "id": 1000 + i}
+        for i in range(RUNS_PER_PAGE)
+    ] + [
+        {**run("push", "completed", "failure", 50, 40, f"nested-push-{i}"), "id": 2000 + i}
+        for i in range(RUNS_PER_PAGE)
+    ] + [
+        {**run("workflow_dispatch", "completed", "failure", 50, 40, f"nested-dispatch-{i}"), "id": 3000 + i}
+        for i in range(RUNS_PER_PAGE)
+    ] + [
+        {**run("schedule", "completed", "failure", 50, 2, "nested-page-two"), "id": 4000}
+    ]
+    nested_budget_calls: list[str] = []
+    nested_budget = evaluate(
+        [Gate("nested-budget.yml", 12, "self-test", source_workflow="nested-budget-parent.yml", job_names=("missing subject",))],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"nested-budget-parent.yml": nested_noise_runs}, {}, nested_budget_calls),
+    )[0]
+    if not nested_budget.stale or "request cap 256" not in nested_budget.detail or len(nested_budget_calls) != 256:
+        failures.append(
+            "nested job scans exceeded their request budget or hid incomplete-search status: "
+            f"{nested_budget.detail}; calls={len(nested_budget_calls)}"
+        )
+    if any("event=schedule" in path and "page=2" in path for path in nested_budget_calls):
+        failures.append("nested request-cap fixture unexpectedly advanced past its page-one job scans")
+
+    page_cap = evaluate(
+        [Gate("capped.yml", 12, "self-test")],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch(cap_runs, {}, []),
+        max_run_pages=1,
+    )[0]
+    if not page_cap.stale or "run-page cap 1" not in page_cap.detail:
+        failures.append("run-page exhaustion did not fail closed with an explicit reason")
+
+    def api_failure(_path: str) -> dict:
+        raise RuntimeError("synthetic API outage")
+
+    failed_search = evaluate(
+        [Gate("api-error.yml", 12, "self-test")], "o/r", "main", now, fetch=api_failure
+    )[0]
+    if not failed_search.stale or "API request failed" not in failed_search.detail:
+        failures.append("API failure did not report an explicit incomplete-search verdict")
+
+    repeated_fetch_calls: list[str] = []
+    repeated_page = [run("schedule", "completed", "success", 50, 49, f"repeat-{i}") for i in range(100)]
+
+    def repeating_fetch(path: str) -> dict:
+        parsed = urlsplit(path)
+        if "/actions/runs/" not in parsed.path:
+            repeated_fetch_calls.append(path)
+            return {"workflow_runs": repeated_page}
+        return {"jobs": []}
+
+    repeated = evaluate(
+        [Gate("repeat.yml", 12, "self-test")], "o/r", "main", now, fetch=repeating_fetch
+    )[0]
+    if "repeated full schedule run page" not in repeated.detail or len(repeated_fetch_calls) > 5:
+        failures.append("repeated full run pages were not bounded and diagnosed")
+
+    # If the request cap interrupts later work, an already-observed fresh
+    # completion is still sufficient execution evidence.
+    cap_fresh_runs = [
+        {**run("schedule", "completed", "failure", 3, 1, "fresh-before-cap"), "id": 701},
+        {**run("schedule", "completed", "success", 3, 1, "second-group"), "id": 702},
+    ]
+    cap_fresh_jobs = {
+        701: [{"name": "subject", "status": "completed", "conclusion": "failure", "completed_at": stamp(1)}],
+    }
+    cap_fresh = evaluate(
+        [Gate("cap-fresh.yml", 12, "self-test", source_workflow="cap-parent.yml", job_names=("subject",))],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"cap-parent.yml": cap_fresh_runs}, cap_fresh_jobs, []),
+        max_api_requests=2,
+    )[0]
+    if cap_fresh.stale or cap_fresh.last_sha != "fresh-before-cap":
+        failures.append("request exhaustion discarded already-observed fresh evidence")
+
+    # Parent run and jobs pages are cached across logical gates sharing a source.
+    shared_runs = [{**run("schedule", "completed", "failure", 3, 1, "shared"), "id": 801}]
+    shared_jobs = [{
+        "name": name,
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": stamp(1),
+    } for name in ("subject A", "subject B")]
+    shared_calls: list[str] = []
+    shared = evaluate(
+        [
+            Gate("logical-a.yml", 12, "self-test", source_workflow="shared-parent.yml", job_names=("subject A",)),
+            Gate("logical-b.yml", 12, "self-test", source_workflow="shared-parent.yml", job_names=("subject B",)),
+        ],
+        "o/r",
+        "main",
+        now,
+        fetch=offline_fetch({"shared-parent.yml": shared_runs}, {801: shared_jobs}, shared_calls),
+    )
+    if any(verdict.stale for verdict in shared) or len(shared_calls) != 2:
+        failures.append("shared parent runs/jobs were not cached across logical gates")
 
     # The renderer must actually say STALE, or a red verdict could print as green.
     table = render(verdicts.values())
@@ -597,7 +1039,7 @@ def self_test() -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print(f"\nself-test OK: {len(fixtures)} planted shapes, all verdicts as expected")
+    print(f"\nself-test OK: base fixtures plus bounded-search controls, all verdicts as expected")
     return 0
 
 
