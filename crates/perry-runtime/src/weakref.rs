@@ -20,7 +20,7 @@ use crate::value::{
 };
 use std::cell::RefCell;
 
-mod operations;
+pub(crate) mod operations;
 /// #7900: weak-to-strong READ barrier. See the module for the full argument.
 mod read_barrier;
 pub(crate) mod storage;
@@ -1540,7 +1540,12 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
-    operations::set(set, value, f64::from_bits(TAG_UNDEFINED), true)
+    operations::set(
+        set,
+        value,
+        f64::from_bits(TAG_UNDEFINED),
+        operations::Receiver::Folded(CLASS_ID_WEAKSET),
+    )
 }
 
 #[no_mangle]

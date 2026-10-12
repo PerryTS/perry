@@ -2,14 +2,50 @@
 use super::*;
 use storage::{Entry, WeakStorage};
 
-/// Callback-free, non-collecting view. Never survives the rooted grow path.
+/// The adapters select receiver-failure semantics, never prove the receiver.
+/// Both adapters enter the same operation and the same shape-brand proof.
+#[derive(Clone, Copy)]
+pub(crate) enum Receiver {
+    Folded(u32),
+    Prototype(u32),
+}
+
+impl Receiver {
+    #[inline]
+    fn brand(self) -> u32 {
+        match self {
+            Self::Folded(brand) | Self::Prototype(brand) => brand,
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn reject(self, receiver: f64, method: &str, args: &[f64]) -> f64 {
+        match self {
+            Self::Folded(_) => {
+                crate::object::dispatch_foreign_weak_receiver(receiver, method, args)
+            }
+            Self::Prototype(brand) => crate::object::throw_incompatible_receiver(
+                if brand == CLASS_ID_WEAKSET {
+                    "WeakSet.prototype"
+                } else {
+                    "WeakMap.prototype"
+                },
+                method,
+                receiver.to_bits(),
+            ),
+        }
+    }
+}
+
+/// Callback-free, non-collecting proof. Never survives the rooted grow path.
 struct View {
     storage: *mut WeakStorage,
 }
 
 impl View {
     #[inline]
-    fn of(receiver: f64, expected: u32) -> Option<Self> {
+    fn prove(receiver: f64, expected: u32) -> Option<Self> {
         let addr = js_nanbox_get_pointer(receiver) as usize;
         unsafe {
             let header = crate::value::addr_class::try_read_gc_header(addr)?;
@@ -37,19 +73,14 @@ impl View {
     }
 }
 
-pub(super) fn set(map: f64, key: f64, value: f64, weakset: bool) -> f64 {
-    let Some(view) = View::of(
-        map,
-        if weakset {
-            CLASS_ID_WEAKSET
-        } else {
-            CLASS_ID_WEAKMAP
-        },
-    ) else {
+#[inline(never)]
+pub(crate) fn set(map: f64, key: f64, value: f64, receiver: Receiver) -> f64 {
+    let weakset = receiver.brand() == CLASS_ID_WEAKSET;
+    let Some(view) = View::prove(map, receiver.brand()) else {
         return if weakset {
-            crate::object::dispatch_foreign_weak_receiver(map, "add", &[key])
+            receiver.reject(map, "add", &[key])
         } else {
-            crate::object::dispatch_foreign_weak_receiver(map, "set", &[key, value])
+            receiver.reject(map, "set", &[key, value])
         };
     };
     if !is_valid_weak_target(key) {
@@ -96,13 +127,13 @@ pub(super) fn set(map: f64, key: f64, value: f64, weakset: bool) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
-    set(map, key, value, false)
+    set(map, key, value, Receiver::Folded(CLASS_ID_WEAKMAP))
 }
 
-#[no_mangle]
-pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
-    let Some(view) = View::of(map, CLASS_ID_WEAKMAP) else {
-        return crate::object::dispatch_foreign_weak_receiver(map, "get", &[key]);
+#[inline(never)]
+pub(crate) fn get(map: f64, key: f64, receiver: Receiver) -> f64 {
+    let Some(view) = View::prove(map, receiver.brand()) else {
+        return receiver.reject(map, "get", &[key]);
     };
     if is_valid_weak_target(key) {
         unsafe {
@@ -115,10 +146,10 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-#[no_mangle]
-pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
-    let Some(view) = View::of(map, 0) else {
-        return crate::object::dispatch_foreign_weak_receiver(map, "has", &[key]);
+#[inline(never)]
+pub(crate) fn has(map: f64, key: f64, receiver: Receiver) -> f64 {
+    let Some(view) = View::prove(map, receiver.brand()) else {
+        return receiver.reject(map, "has", &[key]);
     };
     if is_valid_weak_target(key) {
         unsafe {
@@ -131,10 +162,10 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
     f64::from_bits(TAG_FALSE)
 }
 
-#[no_mangle]
-pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
-    let Some(view) = View::of(map, 0) else {
-        return crate::object::dispatch_foreign_weak_receiver(map, "delete", &[key]);
+#[inline(never)]
+pub(crate) fn delete(map: f64, key: f64, receiver: Receiver) -> f64 {
+    let Some(view) = View::prove(map, receiver.brand()) else {
+        return receiver.reject(map, "delete", &[key]);
     };
     if is_valid_weak_target(key) {
         unsafe {
@@ -145,4 +176,19 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
         }
     }
     f64::from_bits(TAG_FALSE)
+}
+
+#[no_mangle]
+pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
+    get(map, key, Receiver::Folded(CLASS_ID_WEAKMAP))
+}
+
+#[no_mangle]
+pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
+    has(map, key, Receiver::Folded(0))
+}
+
+#[no_mangle]
+pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
+    delete(map, key, Receiver::Folded(0))
 }

@@ -496,7 +496,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
 /// <receiver>`. Matches V8/node's wording INCLUDING the appended receiver
 /// rendering (#6658 asserts the full message; Test262's brand-check tests
 /// assert only the error *type*). Never returns.
-fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bits: u64) -> ! {
+pub(crate) fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bits: u64) -> ! {
     let msg = format!(
         "Method {proto}.{method} called on incompatible receiver {}",
         render_incompatible_receiver(receiver_bits)
@@ -547,20 +547,6 @@ fn collection_this_value(this: crate::closure::JsThis) -> f64 {
         crate::value::js_nanbox_pointer(bits as i64)
     } else {
         f64::from_bits(bits)
-    }
-}
-
-#[inline]
-fn weak_receiver_or_throw(
-    this: crate::closure::JsThis,
-    expected: u32,
-    proto: &str,
-    method: &str,
-) -> f64 {
-    let receiver = f64::from_bits(this.bits());
-    match super::weak_class_id_from_receiver(receiver) {
-        Some(cid) if cid == expected => receiver,
-        _ => throw_incompatible_receiver(proto, method, receiver.to_bits()),
     }
 }
 
@@ -776,18 +762,19 @@ pub(super) extern "C" fn map_proto_entries_thunk(
     )
 }
 
+// Prototype calls and folded calls share the operation body and its proof.
+// The prototype adapter only selects exact-brand rejection on proof failure.
 pub(super) extern "C" fn weakset_proto_add_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKSET,
-        "WeakSet.prototype",
-        "add",
-    );
-    crate::weakref::js_weakset_add(r, v)
+    crate::weakref::operations::set(
+        f64::from_bits(this.bits()),
+        v,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKSET),
+    )
 }
 
 pub(super) extern "C" fn weakset_proto_has_thunk(
@@ -795,13 +782,11 @@ pub(super) extern "C" fn weakset_proto_has_thunk(
     this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKSET,
-        "WeakSet.prototype",
-        "has",
-    );
-    crate::weakref::js_weakmap_has(r, v)
+    crate::weakref::operations::has(
+        f64::from_bits(this.bits()),
+        v,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKSET),
+    )
 }
 
 pub(super) extern "C" fn weakset_proto_delete_thunk(
@@ -809,13 +794,11 @@ pub(super) extern "C" fn weakset_proto_delete_thunk(
     this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKSET,
-        "WeakSet.prototype",
-        "delete",
-    );
-    crate::weakref::js_weakmap_delete(r, v)
+    crate::weakref::operations::delete(
+        f64::from_bits(this.bits()),
+        v,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKSET),
+    )
 }
 
 pub(super) extern "C" fn weakmap_proto_get_thunk(
@@ -823,13 +806,11 @@ pub(super) extern "C" fn weakmap_proto_get_thunk(
     this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKMAP,
-        "WeakMap.prototype",
-        "get",
-    );
-    crate::weakref::js_weakmap_get(r, k)
+    crate::weakref::operations::get(
+        f64::from_bits(this.bits()),
+        k,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKMAP),
+    )
 }
 
 pub(super) extern "C" fn weakmap_proto_set_thunk(
@@ -838,13 +819,12 @@ pub(super) extern "C" fn weakmap_proto_set_thunk(
     k: f64,
     v: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKMAP,
-        "WeakMap.prototype",
-        "set",
-    );
-    crate::weakref::js_weakmap_set(r, k, v)
+    crate::weakref::operations::set(
+        f64::from_bits(this.bits()),
+        k,
+        v,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKMAP),
+    )
 }
 
 pub(super) extern "C" fn weakmap_proto_has_thunk(
@@ -852,13 +832,11 @@ pub(super) extern "C" fn weakmap_proto_has_thunk(
     this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKMAP,
-        "WeakMap.prototype",
-        "has",
-    );
-    crate::weakref::js_weakmap_has(r, k)
+    crate::weakref::operations::has(
+        f64::from_bits(this.bits()),
+        k,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKMAP),
+    )
 }
 
 pub(super) extern "C" fn weakmap_proto_delete_thunk(
@@ -866,13 +844,11 @@ pub(super) extern "C" fn weakmap_proto_delete_thunk(
     this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
-    let r = weak_receiver_or_throw(
-        this,
-        crate::weakref::CLASS_ID_WEAKMAP,
-        "WeakMap.prototype",
-        "delete",
-    );
-    crate::weakref::js_weakmap_delete(r, k)
+    crate::weakref::operations::delete(
+        f64::from_bits(this.bits()),
+        k,
+        crate::weakref::operations::Receiver::Prototype(crate::weakref::CLASS_ID_WEAKMAP),
+    )
 }
 
 #[cfg(test)]
