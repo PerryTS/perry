@@ -708,6 +708,8 @@ fn ic_diag_note(
 
 #[path = "ic_miss/class_field_define_fast.rs"]
 mod class_field_define_fast;
+#[path = "ic_miss/class_field_chain.rs"]
+mod class_field_chain;
 #[path = "ic_miss/packed_get.rs"]
 mod packed_get;
 pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
@@ -2066,35 +2068,45 @@ pub extern "C" fn js_private_field_add(
 /// receivers observe `defineProperty`, not `set`.
 #[no_mangle]
 pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64 {
-    // Definitions share the shape-authoritative append/overwrite used by
-    // object literals. It returns the refreshed value after a collecting
-    // store; a decline leaves all operands untouched.
-    if let Some(stored) =
-        unsafe { crate::object::define_own_data::define_own_data_from_shape(receiver, key, value) }
-    {
-        return stored;
+    if unsafe { class_field_chain::try_define(receiver, key, value) } {
+        return value;
     }
+    class_field_add_slow(receiver, key, value)
+}
+
+#[inline(never)]
+fn class_field_add_slow(receiver: f64, key: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let key = scope.root_nanbox_f64(key);
     let value = scope.root_nanbox_f64(value);
-    if class_field_define_fast::try_define_new_class_field(
-        receiver.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        value.get_nanbox_f64(),
-    ) {
-        return value.get_nanbox_f64();
+    let predecessor = unsafe { class_field_chain::predecessor(receiver.get_nanbox_f64()) };
+    let stored = unsafe {
+        crate::object::define_own_data::define_own_data_from_shape(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+        )
     }
-    // Use [[DefineOwnProperty]] for both ordinary objects and Proxies.  The
-    // ordinary define path bypasses an inherited setter; the Proxy path invokes
-    // the receiver's `defineProperty` trap.  A normal `[[Set]]` helper cannot
-    // provide both sides of DefineField semantics.
-    if !crate::proxy::create_data_property(
-        receiver.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        value.get_nanbox_f64(),
-    ) {
+    .is_some();
+    if !stored
+        && !class_field_define_fast::try_define_new_class_field(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+        )
+        && !crate::proxy::create_data_property(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+        )
+    {
         throw_private_type_error("Cannot define class field on receiver");
+    }
+    if predecessor != 0 {
+        unsafe {
+            class_field_chain::learn(predecessor, receiver.get_nanbox_f64(), key.get_nanbox_f64());
+        }
     }
     value.get_nanbox_f64()
 }

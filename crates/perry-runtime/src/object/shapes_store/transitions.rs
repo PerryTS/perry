@@ -3,6 +3,24 @@
 use super::*;
 
 impl ShapeRecord {
+    #[inline]
+    pub(in super::super) fn field_define_target(&self) -> u32 {
+        if !self.has_boxed_extras() {
+            return 0;
+        }
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }.field_define_target
+    }
+
+    #[cold]
+    pub(in super::super) fn note_field_define_target(&mut self, target: u32) {
+        if !self.has_boxed_extras() {
+            let parent = self.rollback_parent();
+            self.extras = new_extras(&[], &[]);
+            self.note_rollback_parent(parent);
+        }
+        unsafe { &mut *(self.extras as usize as *mut ShapeExtras) }.field_define_target = target;
+    }
+
     /// Unrestricted records answer from their existing packed word alone.
     #[inline]
     pub(in super::super) fn integrity_flags(&self) -> u16 {

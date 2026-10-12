@@ -299,6 +299,15 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    #[inline]
+    pub(crate) fn field_define_target(self) -> u32 {
+        unsafe { (*self.0.as_ptr()).field_define_target() }
+    }
+
+    pub(crate) fn note_field_define_target(self, target: u32) {
+        unsafe { (*self.0.as_ptr()).note_field_define_target(target) }
+    }
+
     /// Seed-only derivation from checked permanent-image body metadata.
     pub(crate) unsafe fn derive_constfn_birth_admission(self) {
         (*self.0.as_ptr()).derive_constfn_birth_admission();

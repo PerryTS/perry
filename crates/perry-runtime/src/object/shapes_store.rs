@@ -55,7 +55,7 @@ pub(crate) struct ConstFnSlotInfo {
 const _: () = assert!(std::mem::align_of::<ShapeExtras>() >= 2);
 // Birth/store facts and weak integrity edges share the same record extension.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 72);
+const _: () = assert!(std::mem::size_of::<ShapeExtras>() == 80);
 
 /// A brand list is strictly ascending: sorted with no duplicate, so equal
 /// sets are equal slices.
@@ -759,6 +759,7 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         to_any: std::sync::atomic::AtomicU32::new(0),
         rollback_parent: std::sync::atomic::AtomicU32::new(0),
         created_birth_shape: std::sync::atomic::AtomicU32::new(0),
+        field_define_target: 0,
         store_chain: None,
         integrity_targets: [0; 3],
         integrity_flags: 0,

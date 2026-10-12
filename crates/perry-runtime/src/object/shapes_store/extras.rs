@@ -21,6 +21,9 @@ pub(in crate::object) struct ShapeExtras {
     /// Weak keyless receiver-birth ShapeId of this prototype's shape.
     /// Revalidated at use; no identity, width or GC edge.
     pub(in crate::object) created_birth_shape: std::sync::atomic::AtomicU32,
+    /// Weak forward DefineField edge. The target owns the key and slot;
+    /// this scalar owns no GC pointer and is revalidated before use.
+    pub(in crate::object) field_define_target: u32,
     /// Weak integrity successors, validated against live shape facts at use.
     /// Scalar ShapeIds do not root targets and are never reused.
     pub(in crate::object) integrity_targets: [u32; 3],
