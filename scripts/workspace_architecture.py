@@ -20,9 +20,11 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +45,8 @@ ALLOWED_CATEGORIES = {
     "tool",
 }
 ALLOWED_DECISIONS = {"keep", "merge", "externalize", "remove", "review"}
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
+BASELINE_FIELDS = {"default_dependency_closure", "perry_dependency_closure"}
 
 
 def load_metadata():
@@ -66,7 +69,20 @@ def validate_policy_schema(policy):
     if version != SUPPORTED_SCHEMA_VERSION:
         raise ValueError(
             "unsupported workspace architecture schema version: {!r}; "
-            "expected {}".format(version, SUPPORTED_SCHEMA_VERSION)
+            "expected {}. Migrate the policy by removing baseline.workspace_members "
+            "and baseline.decision_counts; exact dependency closures remain "
+            "required structural checks.".format(version, SUPPORTED_SCHEMA_VERSION)
+        )
+    baseline = policy.get("baseline", {})
+    if not isinstance(baseline, dict):
+        raise ValueError("workspace architecture baseline must be an object")
+    stale = set(baseline) - BASELINE_FIELDS
+    if stale:
+        raise ValueError(
+            "unsupported workspace architecture baseline field(s): {}; "
+            "remove derived aggregates and retain only exact dependency closures".format(
+                ", ".join(sorted(stale))
+            )
         )
 
 
@@ -338,14 +354,9 @@ def audit(metadata, policy, manifest_text):
     baseline = policy.get("baseline", {})
     cli_closure = sorted(dependency_closure(packages, {"perry"}))
     default_closure = sorted(dependency_closure(packages, set(actual_defaults)))
-    decision_counts = defaultdict(int)
-    for classification in policy.get("crates", {}).values():
-        decision_counts[classification.get("decision")] += 1
     expected_baseline = {
-        "workspace_members": len(packages),
         "default_dependency_closure": default_closure,
         "perry_dependency_closure": cli_closure,
-        "decision_counts": dict(sorted(decision_counts.items())),
     }
     if baseline != expected_baseline:
         errors.append(
@@ -462,10 +473,266 @@ something = "1"
 
     def test_unknown_policy_schema_version_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "schema version"):
-            validate_policy_schema({"schema_version": 2})
+            validate_policy_schema({"schema_version": 3})
 
     def test_supported_policy_schema_version_is_accepted(self):
-        validate_policy_schema({"schema_version": SUPPORTED_SCHEMA_VERSION})
+        validate_policy_schema(
+            {
+                "schema_version": SUPPORTED_SCHEMA_VERSION,
+                "baseline": {
+                    "default_dependency_closure": [],
+                    "perry_dependency_closure": [],
+                },
+            }
+        )
+
+    def test_schema_one_has_actionable_migration_error(self):
+        with self.assertRaisesRegex(ValueError, "removing baseline.workspace_members"):
+            validate_policy_schema({"schema_version": 1})
+
+    def test_aggregate_baseline_fields_are_rejected_in_schema_two(self):
+        closures = {
+            "default_dependency_closure": [],
+            "perry_dependency_closure": [],
+        }
+        for field, value in (
+            ("workspace_members", 4),
+            ("decision_counts", {"keep": 4}),
+            ("unexpected", True),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, field):
+                    validate_policy_schema(
+                        {
+                            "schema_version": 2,
+                            "baseline": {**closures, field: value},
+                        }
+                    )
+
+    def test_checked_in_policy_uses_only_exact_closure_baselines(self):
+        with POLICY_PATH.open(encoding="utf-8") as handle:
+            policy = json.load(handle)
+        validate_policy_schema(policy)
+        self.assertEqual(set(policy["baseline"]), BASELINE_FIELDS)
+
+    @staticmethod
+    def _write_workspace(root, names, default_names=("perry",)):
+        member_paths = ["crates/{}".format(name) for name in names]
+        default_paths = ["crates/{}".format(name) for name in default_names]
+        lines = ["[workspace]", "members = ["]
+        lines.extend('    "{}",'.format(path) for path in member_paths)
+        lines.extend(["]", "default-members = ["])
+        lines.extend('    "{}",'.format(path) for path in default_paths)
+        lines.append("]")
+        text = "\n".join(lines) + "\n"
+        (root / "Cargo.toml").write_text(text, encoding="utf-8")
+        return text
+
+    @classmethod
+    def _audit_fixture(cls, root):
+        names = ["perry", "perry-runtime", "leaf-a", "leaf-b"]
+        dependencies = {"perry": ["perry-runtime"]}
+        packages = []
+        for name in names:
+            crate = root / "crates" / name
+            (crate / "src").mkdir(parents=True)
+            manifest_path = crate / "Cargo.toml"
+            manifest_path.write_text(
+                "[package]\nname = \"{}\"\nversion = \"0.1.0\"\n\n"
+                "[lints]\nworkspace = true\n".format(name),
+                encoding="utf-8",
+            )
+            packages.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "manifest_path": str(manifest_path),
+                    "dependencies": [
+                        {"name": dependency, "kind": None}
+                        for dependency in dependencies.get(name, [])
+                    ],
+                }
+            )
+        manifest = cls._write_workspace(root, names)
+        metadata = {
+            "packages": packages,
+            "workspace_members": names.copy(),
+            "workspace_default_members": ["perry"],
+        }
+        policy = {
+            "schema_version": 2,
+            "expected_default_members": ["perry"],
+            "allowed_binding_runtime_dependencies": [],
+            "ci": {
+                "linux_host_excluded_members": [],
+                "linux_test_extra_excluded_members": [],
+            },
+            "baseline": {
+                "default_dependency_closure": ["perry", "perry-runtime"],
+                "perry_dependency_closure": ["perry", "perry-runtime"],
+            },
+            "crates": {
+                "perry": {"category": "product", "decision": "keep"},
+                "perry-runtime": {
+                    "category": "runtime-core",
+                    "decision": "keep",
+                },
+                "leaf-a": {"category": "tool", "decision": "keep"},
+                "leaf-b": {"category": "tool", "decision": "keep"},
+            },
+        }
+        return metadata, policy, manifest
+
+    @staticmethod
+    def _drop_fixture_member(root, metadata, policy, manifest_text, name):
+        metadata["packages"] = [
+            package for package in metadata["packages"] if package["name"] != name
+        ]
+        metadata["workspace_members"].remove(name)
+        policy["crates"].pop(name)
+        names = [package["name"] for package in metadata["packages"]]
+        return HelpersTest._write_workspace(root, names), metadata, policy
+
+    def _audit_fixture_at(self, root, metadata, policy, manifest):
+        with mock.patch(__name__ + ".ROOT", root):
+            validate_policy_schema(policy)
+            return audit(metadata, policy, manifest)
+
+    def test_independent_and_composed_leaf_removals_need_no_aggregate_edits(self):
+        for removals in (("leaf-a",), ("leaf-b",), ("leaf-a", "leaf-b"),
+                         ("leaf-b", "leaf-a")):
+            with self.subTest(removals=removals), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                metadata, policy, manifest = self._audit_fixture(root)
+                for name in removals:
+                    manifest, metadata, policy = self._drop_fixture_member(
+                        root, metadata, policy, manifest, name
+                    )
+                self.assertEqual(self._audit_fixture_at(root, metadata, policy, manifest), [])
+
+    def test_new_member_without_classification_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            crate = root / "crates" / "new-tool"
+            crate.mkdir(parents=True)
+            manifest_path = crate / "Cargo.toml"
+            manifest_path.write_text("[package]\nname = \"new-tool\"\n", encoding="utf-8")
+            metadata["packages"].append(
+                {"id": "new-tool", "name": "new-tool", "manifest_path": str(manifest_path), "dependencies": []}
+            )
+            metadata["workspace_members"].append("new-tool")
+            manifest = self._write_workspace(
+                root, metadata["workspace_members"]
+            )
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("unclassified workspace crates: new-tool" in e for e in errors))
+
+    def test_stale_policy_entry_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, manifest = self._audit_fixture(root)
+            policy["crates"]["removed-crate"] = {"category": "tool", "decision": "keep"}
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("policy entries without workspace crates" in e for e in errors))
+
+    def test_implicit_and_stale_declared_members_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            manifest = self._write_workspace(root, ["perry", "perry-runtime", "leaf-b"])
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("implicit workspace members" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            manifest = self._write_workspace(
+                root,
+                ["perry", "perry-runtime", "leaf-a", "leaf-b", "stale-path"],
+            )
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("declared workspace paths not present" in e for e in errors))
+
+    def test_expanded_default_members_and_dependency_closure_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            manifest = self._write_workspace(
+                root,
+                ["perry", "perry-runtime", "leaf-a", "leaf-b"],
+                default_names=("perry", "leaf-a"),
+            )
+            metadata["workspace_default_members"].append("leaf-a")
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("default members differ" in e for e in errors))
+            self.assertTrue(any("baseline differs" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, manifest = self._audit_fixture(root)
+            perry = next(p for p in metadata["packages"] if p["name"] == "perry")
+            perry["dependencies"].append({"name": "leaf-a", "kind": None})
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("baseline differs" in e for e in errors))
+
+    def test_each_exact_dependency_closure_remains_independently_checked(self):
+        for field in ("default_dependency_closure", "perry_dependency_closure"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                metadata, policy, manifest = self._audit_fixture(root)
+                policy["baseline"][field] = ["deliberately-wrong"]
+                errors = self._audit_fixture_at(root, metadata, policy, manifest)
+                self.assertTrue(any("baseline differs" in e for e in errors))
+
+    def test_binding_runtime_edge_and_allowlist_change_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            name = "perry-ext-example"
+            crate = root / "crates" / name
+            crate.mkdir(parents=True)
+            manifest_path = crate / "Cargo.toml"
+            manifest_path.write_text("[package]\nname = \"{}\"\n".format(name), encoding="utf-8")
+            metadata["packages"].append(
+                {
+                    "id": name,
+                    "name": name,
+                    "manifest_path": str(manifest_path),
+                    "dependencies": [{"name": "perry-runtime", "kind": None}],
+                }
+            )
+            metadata["workspace_members"].append(name)
+            policy["crates"][name] = {"category": "binding", "decision": "keep"}
+            manifest = self._write_workspace(root, metadata["workspace_members"])
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("production binding -> runtime edges differ" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, manifest = self._audit_fixture(root)
+            policy["allowed_binding_runtime_dependencies"] = ["perry-ext-example"]
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("production binding -> runtime edges differ" in e for e in errors))
+
+    def test_missing_workspace_lints_and_bad_ci_exclusions_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, _ = self._audit_fixture(root)
+            path = Path(next(p["manifest_path"] for p in metadata["packages"] if p["name"] == "leaf-a"))
+            path.write_text("[package]\nname = \"leaf-a\"\n", encoding="utf-8")
+            manifest = (root / "Cargo.toml").read_text(encoding="utf-8")
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("crates missing [lints]" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, manifest = self._audit_fixture(root)
+            policy["ci"]["linux_host_excluded_members"] = ["perry"]
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("must be platform adapters" in e for e in errors))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata, policy, manifest = self._audit_fixture(root)
+            policy["ci"]["linux_test_extra_excluded_members"] = ["unknown"]
+            errors = self._audit_fixture_at(root, metadata, policy, manifest)
+            self.assertTrue(any("CI exclusions without workspace crates" in e for e in errors))
 
 
 def main():

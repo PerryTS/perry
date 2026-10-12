@@ -113,10 +113,16 @@ views reproduce each crate's category, decision, source path, Rust LOC,
 production dependencies, internal consumers, default membership, and workspace
 lint inheritance. LOC is reported live and is deliberately not committed.
 
-The committed baseline records only structural signals: the 76 reviewed member
-decisions, the default dependency closure, the `perry` CLI closure, and decision
-counts. Any structural change must update the policy intentionally; ordinary
-Rust source edits do not churn the baseline.
+`workspace-architecture.json` schema 2 records the exact default dependency
+closure and the `perry` CLI closure. Migrating schema 1 means deleting its
+`baseline.workspace_members` and `baseline.decision_counts` fields while
+retaining both closure arrays. Workspace membership and crate classifications
+are already derived by joining Cargo metadata with the explicit crate policy,
+so aggregate member and decision counts are not stored a second time.
+Removing an unrelated member requires its actual workspace and classification
+edits; it does not require editing aggregate counts. A removal that changes
+either dependency closure still requires reviewing and updating that exact
+structural baseline.
 
 ## Adding or removing a crate
 
