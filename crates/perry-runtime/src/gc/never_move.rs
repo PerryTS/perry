@@ -88,6 +88,19 @@ pub(crate) unsafe fn request_never_move(addr: usize) {
     }
 }
 
+/// Is `addr` in the old generation (an old-arena or longlived block)? For a
+/// birth that follows its owner's lifetime (`class_registry::
+/// ensure_function_prototype_object`).
+///
+/// # Safety
+/// `addr` is a live GC user pointer.
+pub(crate) unsafe fn lives_old(addr: usize) -> bool {
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived
+    )
+}
+
 /// May a per-site memo store `addr` as a plain, unrooted word? True for a
 /// stable object: an ordinary `GC_TYPE_OBJECT`, not a forwarding stub,
 /// marked never-move, in an old-generation block. Asking marks it, so a young

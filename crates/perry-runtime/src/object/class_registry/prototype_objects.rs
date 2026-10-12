@@ -2,6 +2,19 @@ use super::*;
 use crate::JSValue;
 use std::collections::HashMap;
 
+/// Does `func_value` live as long as an old object: an old function object,
+/// or a native constructor export (built once per realm)?
+fn function_is_long_lived(func_value: f64) -> bool {
+    let value = JSValue::from_bits(func_value.to_bits());
+    if !value.is_pointer() {
+        return false;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    // SAFETY: a live function value the caller holds rooted.
+    let old = unsafe { crate::gc::never_move::lives_old(addr) };
+    old || super::super::native_module::bound_native_callable_is_constructor_value(func_value)
+}
+
 pub(crate) fn ensure_function_prototype_object(
     func_value: f64,
     class_id: u32,
@@ -44,10 +57,21 @@ pub(crate) fn ensure_function_prototype_object(
         Some(ops) => unsafe { (ops.ee_prototype_inline_slots)(func_handle.get_nanbox_f64()) },
         None => 0,
     };
-    // Not born old: a program can mint function objects (and so default
-    // prototypes) without bound. It becomes never-move when it is linked as
-    // a prototype (`proto_validity::mark_object_as_prototype`).
-    let proto = js_object_alloc(0, inline_slots);
+    // Born where its function lives. A function that is already old keeps
+    // this prototype (its `prototype`) at least as long as it lives, and a
+    // native constructor export is built once per realm (O3), so for either
+    // the prototype is born old and never-move (`gc::never_move`) and every
+    // site memo that answers through it is admitted at once. Born young, it
+    // is refused until a copying minor promotes it, and a program with no
+    // minor in that window reads through it on the slow path. A young
+    // function's prototype stays young: a program can mint functions without
+    // bound; it becomes never-move when it is linked as a prototype
+    // (`proto_validity::mark_object_as_prototype`).
+    let proto = if function_is_long_lived(func_handle.get_nanbox_f64()) {
+        crate::object::object_alloc_prototype_old(0, inline_slots)
+    } else {
+        js_object_alloc(0, inline_slots)
+    };
     if proto.is_null() {
         return proto;
     }
@@ -1264,5 +1288,64 @@ pub(crate) unsafe fn nm_ee_prototype_install(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod born_old_tests {
+    use super::*;
+
+    extern "C" fn body(
+        _: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        0.0
+    }
+
+    unsafe fn is_born_old(proto: *mut ObjectHeader) -> bool {
+        let header =
+            (proto as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        crate::gc::never_move::is_never_move(header)
+            && crate::gc::never_move::lives_old(proto as usize)
+    }
+
+    /// A function's default prototype is born where its function lives: old
+    /// and never-move for an old function, young for a young one.
+    #[test]
+    fn a_default_prototype_is_born_where_its_function_lives() {
+        let _copying = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _age = crate::gc::pin_tenuring_survivals_for_test(1);
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let make = || {
+            crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+                crate::fn_info!(body, 0),
+                0,
+            ) as i64)
+        };
+        let young = scope.root_nanbox_f64(make());
+        let young_proto = ensure_function_prototype_object(young.get_nanbox_f64(), 0x6E20);
+        assert!(!young_proto.is_null());
+        assert!(
+            unsafe { !is_born_old(young_proto) },
+            "a young function's prototype is born young"
+        );
+        let old = scope.root_nanbox_f64(make());
+        let _ = crate::gc::gc_collect_minor();
+        let old_addr =
+            JSValue::from_bits(old.get_nanbox_f64().to_bits()).as_pointer::<u8>() as usize;
+        assert!(
+            unsafe { crate::gc::never_move::lives_old(old_addr) },
+            "premise: the minor promoted the function"
+        );
+        let old_proto = ensure_function_prototype_object(old.get_nanbox_f64(), 0x6E21);
+        assert!(!old_proto.is_null());
+        assert!(
+            unsafe { is_born_old(old_proto) },
+            "an old function's prototype is born old and never-move"
+        );
     }
 }
