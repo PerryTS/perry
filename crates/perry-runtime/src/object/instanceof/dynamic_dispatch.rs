@@ -154,6 +154,22 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             }
         }
     }
+    // #6558 sibling: `mod instanceof WebAssembly.Module` for the wasm-host
+    // module wrapper. Its `[[Prototype]]` does not reach the namespace ctor's
+    // `.prototype`, so brand-check its GC-aware internal wrapper identity.
+    //
+    // This has to run BEFORE the terminal-shape short-circuit below: the
+    // wrapper is an ordinary heap object whose shape answers
+    // `PROTO_ID_DEFAULT`, so `terminal_prototype_id` claimed the whole
+    // comparison and returned `false` from the `Object.prototype` walk without
+    // ever reaching this probe — `addModule instanceof WebAssembly.Module`
+    // reported `false` for a module this very runtime had built (#9202). A
+    // positive match is still the only thing that short-circuits: a miss
+    // returns `None`, so the prototype walk below keeps deciding
+    // `WebAssembly.Memory` instances and foreign objects exactly as before.
+    if let Some(true) = super::global_this::webassembly_value_ctor_instanceof(value, type_ref) {
+        return f64::from_bits(crate::value::TAG_TRUE);
+    }
     // Hooks precede OrdinaryHasInstance. A class must still consult its
     // lifted/static hooks before using this primitive fact.
     let primitive = instanceof_lhs_is_primitive(value);
@@ -377,15 +393,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         } else {
             crate::value::TAG_FALSE
         });
-    }
-    // #6558 sibling: `mod instanceof WebAssembly.Module` for the wasm-host
-    // module wrapper. Its `[[Prototype]]` does not reach the namespace ctor's
-    // `.prototype`, so brand-check its GC-aware internal wrapper identity.
-    // Only a positive match short-circuits here; a miss returns `None` so the
-    // value still flows to the prototype walk below (how `WebAssembly.Memory`
-    // instances resolve, and how a foreign object answers `false`).
-    if let Some(true) = super::global_this::webassembly_value_ctor_instanceof(value, type_ref) {
-        return f64::from_bits(crate::value::TAG_TRUE);
     }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if module == "stream"
