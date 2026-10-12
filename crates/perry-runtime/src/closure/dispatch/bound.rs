@@ -589,8 +589,7 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
     if target_jv.is_pointer() {
         let target_closure = target_jv.as_pointer::<ClosureHeader>();
         if !target_closure.is_null() && is_closure_ptr(target_closure as usize) {
-            return crate::builtins::function_name_for_ptr((*target_closure).code() as usize)
-                .unwrap_or_default();
+            return crate::builtins::function_name_for_closure(target_closure).unwrap_or_default();
         }
         return String::new();
     }

@@ -1380,7 +1380,7 @@ pub(crate) struct ShapeTable {
 
 impl ShapeTable {
     pub(crate) fn new() -> Self {
-        ShapeTable {
+        let table = ShapeTable {
             slab: std::cell::UnsafeCell::new(ShapeSlab::new_agent()),
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
@@ -1388,7 +1388,60 @@ impl ShapeTable {
                 families: crate::fast_hash::new_ptr_hash_map(),
                 young_keys: crate::gc::young_log::YoungLog::new(),
             }),
+        };
+        table.seed_function_shapes();
+        table
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn seed_function_shapes(&self) {
+        let mut inner = self.inner.borrow_mut();
+        // Seed fixed function layouts once per agent. These keyless intrinsic
+        // records have no GC edges; the external-carrier flag retains them
+        // through full pruning. The ordinary intern sees the same records.
+        for (id, kind, proto, summary) in crate::closure::shape::intrinsic_shapes() {
+            self.seed_function_shape(&mut inner, id, kind, proto, summary);
         }
+    }
+
+    // Keep one installer for all nine records: constant iteration facts must
+    // not clone record construction and hashing into the startup function.
+    #[inline(never)]
+    fn seed_function_shape(
+        &self,
+        inner: &mut ShapeTableInner,
+        id: u32,
+        kind: ShapeObjectKind,
+        proto: u64,
+        summary: u8,
+    ) {
+        let rep = super::field_rep::REP_ANY;
+        let mut record = ShapeRecord::new(0, 0, 0, 0, kind, 0)
+            .with_proto_id(proto)
+            .with_summary(summary)
+            .with_special_facts(rep, &[], &[]);
+        record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+        // SAFETY: no reference into the slab is held while seeding.
+        unsafe { self.slab_mut().insert(id, record) };
+        let facts = shapes_store::integrity_facts_key(
+            shapes_store::facts_key_proto_with_special(
+                0,
+                0,
+                0,
+                0,
+                kind,
+                0,
+                proto,
+                summary,
+                rep,
+                &[],
+                &[],
+            ),
+            0,
+        );
+        inner.facts_append_fresh(facts, id);
+        inner.family_append_fresh(0, id);
     }
 
     /// Shared view of the slab. Sound under the single-threaded agent
@@ -1513,9 +1566,15 @@ static DICTIONARY_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
 
 /// The exotic band's own monotonic counters ([`EXOTIC_SHAPE_ID_BASE`]).
 static EXOTIC_SHAPE_ID_NEXT: [std::sync::atomic::AtomicU32; 3] = [
-    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
-    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
-    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE),
+    std::sync::atomic::AtomicU32::new(
+        EXOTIC_SHAPE_ID_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
+    ),
+    std::sync::atomic::AtomicU32::new(
+        crate::codegen_abi::FUNCTION_SHAPE_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
+    ),
+    std::sync::atomic::AtomicU32::new(
+        EXOTIC_SHAPE_ID_BASE + crate::codegen_abi::FUNCTION_SHAPE_COUNT,
+    ),
 ];
 
 /// # The identity kind: a ShapeId says what kind of prototype identity it names

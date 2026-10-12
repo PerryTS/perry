@@ -360,7 +360,7 @@ fn a_closure_captures_a_group_through_one_slot() {
         crate::testing::root_slots::function_slice(&ir, "perry_fn_scope_env_probe_ts__probe1");
     let births: Vec<_> = fn_ir
         .lines()
-        .filter(|line| line.contains("@js_closure_alloc_init_boxed"))
+        .filter(|line| line.contains("@js_closure_alloc_small"))
         .collect();
     assert_eq!(
         births.len(),
@@ -368,7 +368,9 @@ fn a_closure_captures_a_group_through_one_slot() {
         "one bulk capture birth for the group:\n{fn_ir}"
     );
     assert!(
-        births[0].contains("i32 1, ptr"),
+        fn_ir
+            .lines()
+            .any(|line| line.contains("or i64") && line.trim_end().ends_with(", 1")),
         "the closure's capture count must be 1:\n{fn_ir}"
     );
     assert!(

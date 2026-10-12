@@ -256,9 +256,10 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     return JSValue::number(length.unwrap_or(0) as f64);
                 }
                 if name_str == "name" {
-                    let func_ptr = (*(obj as *const crate::closure::ClosureHeader)).code() as usize;
-                    let fname =
-                        crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+                    let fname = crate::builtins::function_name_for_closure(
+                        obj as *const crate::closure::ClosureHeader,
+                    )
+                    .unwrap_or_default();
                     let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
                     return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                 }
@@ -720,10 +721,10 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     // `[Function: <name>]` formatter uses); anonymous functions
                     // read back `""`, matching Node, not `undefined`.
                     if name_str == "name" {
-                        let func_ptr =
-                            (*(obj as *const crate::closure::ClosureHeader)).code() as usize;
-                        let fname =
-                            crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+                        let fname = crate::builtins::function_name_for_closure(
+                            obj as *const crate::closure::ClosureHeader,
+                        )
+                        .unwrap_or_default();
                         let s =
                             crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
                         return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());

@@ -52,6 +52,15 @@ pub const CLOSURE_INFO_OFFSET: usize = 8;
 pub const CLOSURE_PROPS_OFFSET: usize = 16;
 pub const CLOSURE_HEADER_SIZE: usize = 24;
 
+/// Reserved intrinsic function ShapeIds, seeded in each agent's authoritative
+/// shape table. No body/shape cache is needed when a closure is born.
+pub const FUNCTION_SHAPE_BASE: u32 = 0xB810_0000;
+/// Per-object dictionary prototype identity uses the plain kind band.
+pub const FUNCTION_DICTIONARY_SHAPE: u32 = 0xB800_0004;
+pub const FUNCTION_SHAPE_COUNT: u32 = 9;
+pub const FUNCTION_SHAPE: u32 = FUNCTION_SHAPE_BASE;
+pub const ASYNC_FUNCTION_SHAPE: u32 = FUNCTION_SHAPE_BASE + 1;
+
 /// `object::ObjectHeader::parent_class_id`: the object's ShapeId word (LP64
 /// and ILP32 alike; `CLOSURE_SHAPE_OFFSET` is the same word of a closure).
 pub const OBJECT_SHAPE_OFFSET: usize = 4;
@@ -424,6 +433,9 @@ pub const FN_HAS_SOURCE: u32 = 1 << 14;
 /// The retained source describes an ordinary non-strict function. Methods,
 /// arrows and strict ordinary functions leave this clear.
 pub const FN_NON_STRICT_ORDINARY: u32 = 1 << 15;
+/// Compiled name bytes follow the info (and any retained-source tail) as
+/// an i32 relative displacement and a u32 byte length. No GC edge or birth work.
+pub const FN_HAS_NAME: u32 = 1 << 21;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;

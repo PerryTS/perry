@@ -670,10 +670,12 @@ fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
             len
         } else {
             // "name"
-            let func_ptr =
-                crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader)
-                    as usize;
-            let fname = crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+            let fname = unsafe {
+                crate::builtins::function_name_for_closure(
+                    ptr as *const crate::closure::ClosureHeader,
+                )
+            }
+            .unwrap_or_default();
             let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
             f64::from_bits(JSValue::string_ptr(s).bits())
         };

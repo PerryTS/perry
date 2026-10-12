@@ -373,8 +373,33 @@ pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, std::sync::
     )
 }
 
-/// Look up the codegen-registered JS name for a function pointer.
+/// A compiled closure's immutable name range comes from its body descriptor.
+/// Legacy/native names retain their existing code-address metadata fallback.
 ///
+/// # Safety
+/// The closure is live; its static info owns the optional ranges its flags license.
+#[inline(never)]
+pub(crate) unsafe fn function_name_for_closure(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<String> {
+    let closure = closure.as_ref()?;
+    let info = closure.info.as_ref()?;
+    if info.flags & crate::codegen_abi::FN_HAS_NAME != 0 {
+        let base = closure.info.cast::<u8>();
+        let source_tail =
+            info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 && !info.versioned_code.is_null();
+        let tail = base.add(
+            std::mem::size_of::<crate::closure::JsFunctionInfo>() + if source_tail { 8 } else { 0 },
+        );
+        let delta = tail.cast::<i32>().read_unaligned();
+        let len = tail.add(4).cast::<u32>().read_unaligned() as usize;
+        // Compiler names originate as UTF-8 strings in immutable image bytes.
+        let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
+        return Some(String::from_utf8_unchecked(bytes.to_vec()));
+    }
+    function_name_for_ptr(info.code as usize)
+}
+
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
 /// on the `__perry_wrap_<name>` wrapper address that
 /// `js_closure_alloc_singleton` stamps into the `ClosureHeader`), or `None`
@@ -705,6 +730,51 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
         ));
     }
     rows
+}
+
+#[cfg(test)]
+mod descriptor_name_tests {
+    use super::*;
+    #[repr(C)]
+    struct Image {
+        info: crate::closure::JsFunctionInfo,
+        tail: [i32; 4],
+        name: [u8; 5],
+    }
+    extern "C" fn body(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
+        0.0
+    }
+    #[test]
+    fn name_range_is_read_after_the_optional_source_range() {
+        for source_tail in [false, true] {
+            let mut image = Image {
+                info: crate::closure::JsFunctionInfo::of(
+                    body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+                ),
+                tail: [0; 4],
+                name: *b"named",
+            };
+            image.info.flags |= crate::codegen_abi::FN_HAS_NAME;
+            if source_tail {
+                image.info.flags |= crate::codegen_abi::FN_HAS_SOURCE;
+                image.info.versioned_code = body as *const u8;
+            }
+            let slot = if source_tail { 2 } else { 0 };
+            image.tail[slot] =
+                (image.name.as_ptr() as isize - &image.info as *const _ as isize) as i32;
+            image.tail[slot + 1] = 5;
+            let closure = crate::closure::ClosureHeader {
+                capture_count: 0,
+                shape_id: crate::codegen_abi::FUNCTION_SHAPE,
+                info: std::ptr::addr_of!(image.info),
+                props: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                unsafe { function_name_for_closure(&closure) }.as_deref(),
+                Some("named")
+            );
+        }
+    }
 }
 
 #[cfg(test)]

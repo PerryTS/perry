@@ -7994,7 +7994,7 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     );
     assert!(
         ir.contains("call i64 @js_closure_get_capture_bits")
-            && ir.contains("call i64 @js_closure_alloc_init_boxed"),
+            && ir.contains("call i64 @js_closure_alloc_small"),
         "generated boxed capture traffic should bulk initialize exact i64 box capture slots:\n{ir}"
     );
     for old_helper in [
@@ -13599,7 +13599,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
+        ir.contains(&format!("call i64 @js_closure_alloc_empty(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -13753,7 +13753,7 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed-i32 closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
+        ir.contains(&format!("call i64 @js_closure_alloc_empty(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -13949,7 +13949,7 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
+        ir.contains(&format!("call i64 @js_closure_alloc_empty(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -14197,7 +14197,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed string closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
+        ir.contains(&format!("call i64 @js_closure_alloc_empty(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(

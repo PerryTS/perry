@@ -26,8 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
-    FN_HAS_LENGTH, FN_HAS_SOURCE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE,
-    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NOT_PLAIN,
+    FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY,
+    FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS,
+    FN_STRICT, NOT_PLAIN,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -65,6 +66,13 @@ pub(crate) struct RetainedSource {
     pub is_non_strict_ordinary: bool,
 }
 
+/// A name range in the module image, shared by every birth of this body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedName {
+    pub global: String,
+    pub byte_len: usize,
+}
+
 /// What the module knows about one of its bodies beyond its parameter
 /// count, which comes from the body's definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -76,6 +84,7 @@ pub(crate) struct FnInfoFacts {
     pub trusted: Option<CloneTarget>,
     pub versioned: Option<CloneTarget>,
     pub source: Option<RetainedSource>,
+    pub name: Option<RetainedName>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
 }
@@ -283,6 +292,7 @@ fn render_definition(
     let flags = facts.flags
         | FN_COMPILED_BODY
         | source_flags
+        | if facts.name.is_some() { FN_HAS_NAME } else { 0 }
         | if permanent_image {
             FN_PERMANENT_IMAGE
         } else {
@@ -336,22 +346,38 @@ fn render_definition(
         declared = facts.declared,
         vmask = versioned_mask_value,
     );
-    let Some(_source) = facts.source else {
-        return format!("@{info} = {linkage}constant {INFO_TYPE} {value}");
-    };
-    if source_in_mask {
-        return format!("@{info} = {linkage}constant {INFO_TYPE} {value}");
+    // Optional immutable ranges follow the unchanged 64-byte base info.
+    // Source precedes name only when it cannot use the idle clone fields.
+    let mut types = vec![INFO_TYPE.to_string()];
+    let mut fields = vec![format!("{INFO_TYPE} {value}")];
+    if let Some((delta, byte_len)) = source_encoding.filter(|_| !source_in_mask) {
+        types.extend(["i32".to_string(), "i32".to_string()]);
+        fields.extend([
+            format!("i32 trunc (i64 {delta} to i32)"),
+            format!("i32 {byte_len}"),
+        ]);
     }
-    // The info remains the first field, so every existing opaque `ptr
-    // @<body>$info` addresses a byte-for-byte JsFunctionInfo. Only the flag
-    // licenses reading the compact tail at +JS_FUNCTION_INFO_SIZE.
-    let (delta, byte_len) = source_encoding.unwrap();
-    let relative = format!("trunc (i64 {delta} to i32)");
-    format!(
-        "@{info} = {linkage}constant {{ {INFO_TYPE}, i32, i32 }} \
-         {{ {INFO_TYPE} {value}, i32 {relative}, i32 {} }}",
-        byte_len
-    )
+    if let Some(name) = facts.name {
+        let delta = format!(
+            "sub (i64 ptrtoint (ptr @{} to i64), i64 ptrtoint (ptr @{info} to i64))",
+            name.global
+        );
+        let byte_len = u32::try_from(name.byte_len).expect("function name fits the info range");
+        types.extend(["i32".to_string(), "i32".to_string()]);
+        fields.extend([
+            format!("i32 trunc (i64 {delta} to i32)"),
+            format!("i32 {byte_len}"),
+        ]);
+    }
+    if types.len() == 1 {
+        format!("@{info} = {linkage}constant {INFO_TYPE} {value}")
+    } else {
+        format!(
+            "@{info} = {linkage}constant {{ {} }} {{ {} }}",
+            types.join(", "),
+            fields.join(", ")
+        )
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +389,42 @@ mod tests {
             params,
             linkage: linkage.to_string(),
         })
+    }
+
+    #[test]
+    fn immutable_name_follows_the_optional_source_tail() {
+        for versioned in [false, true] {
+            let mut state = FnInfoState::default();
+            let facts = state.facts_mut("named");
+            facts.name = Some(RetainedName {
+                global: "name_bytes".into(),
+                byte_len: 5,
+            });
+            facts.source = Some(RetainedSource {
+                global: "source_bytes".into(),
+                offset: 0,
+                byte_len: 21,
+                is_non_strict_ordinary: false,
+            });
+            if versioned {
+                facts.versioned = Some(CloneTarget {
+                    symbol: "named_clone".into(),
+                    captures: 1,
+                    boxed_mask: 1,
+                });
+            }
+            let rendered = state
+                .render_globals(|_| defined(0, "internal"), [], true)
+                .join("\n");
+            assert!(rendered.contains("ptr @name_bytes"), "{rendered}");
+            assert!(rendered.ends_with("i32 5 }"), "{rendered}");
+            let tail_type = if versioned {
+                ", i32, i32, i32, i32 }"
+            } else {
+                ", i32, i32 }"
+            };
+            assert!(rendered.contains(tail_type), "{rendered}");
+        }
     }
 
     #[test]

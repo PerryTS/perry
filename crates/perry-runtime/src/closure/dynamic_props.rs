@@ -437,8 +437,9 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
     // Resolve its birth value before any inherited property lookup; once a
     // bag key exists, its value (including undefined) already won above.
     if prop == "name" && crate::object::has_own_helpers::closure_own_key_present(ptr, prop) {
-        let code = unsafe { (*(ptr as *const ClosureHeader)).code() } as usize;
-        let name = crate::builtins::function_name_for_ptr(code).unwrap_or_default();
+        let name =
+            unsafe { crate::builtins::function_name_for_closure(ptr as *const ClosureHeader) }
+                .unwrap_or_default();
         let name = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         return crate::value::js_nanbox_string(name as i64);
     }

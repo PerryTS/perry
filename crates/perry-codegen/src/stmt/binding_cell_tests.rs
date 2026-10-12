@@ -98,7 +98,7 @@ fn a_birth_below_its_declaration_trusts_the_root() {
         ],
     );
     assert!(
-        ir.contains("@js_closure_alloc_init_boxed("),
+        ir.contains("@js_closure_alloc_small("),
         "premise: the closure is born with a cell capture:\n{ir}"
     );
     assert_eq!(mint_blocks(&ir), 0, "dominated root needs no check:\n{ir}");
@@ -114,7 +114,7 @@ fn a_birth_capturing_a_boxed_parameter_trusts_the_root() {
         ],
     );
     assert!(
-        ir.contains("@js_closure_alloc_init_boxed("),
+        ir.contains("@js_closure_alloc_small("),
         "premise: the closure is born with a cell capture:\n{ir}"
     );
     assert_eq!(

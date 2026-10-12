@@ -394,14 +394,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
             // Fresh closures can install boxed and ordinary captures in bulk.
             // The runtime roots and refreshes every word on its collecting arm.
-            let bulk_fresh_init = !no_capture_singleton
-                && !captured_singleton
-                && total_caps > 0
-                && !captured_value_bits.is_empty();
-            let bulk_boxed_init = bulk_fresh_init
-                && auto_captures.iter().any(|cap_id| {
-                    ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id)
-                });
+            let bulk_fresh_init = !no_capture_singleton && !captured_singleton && total_caps > 0;
             // An `async function(){}` *expression* closure (one with no
             // `await` — bodies that await are rewritten to a state machine
             // upstream and arrive with `is_async: false`) is async in its
@@ -413,6 +406,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block()
                     .note_fn_info(&func_name, |facts| facts.set_async());
             }
+            // A small fresh birth passes the complete header image and its
+            // capture words in registers. The shared helper stores directly in
+            // the final payload; there is no per-site bump path or stack copy.
+            let small_fresh_birth = bulk_fresh_init && total_caps <= 3;
+            // Body-kind facts may be added after async/generator lowering.
+            // Read the immutable local info constant, rather than the rewritten
+            // expression flags. LLVM folds these operations into the birth
+            // immediate: no body classification is emitted at a creation site.
+            let shape = {
+                // The info may carry range tails in an enclosing struct. A
+                // byte GEP works for both layouts without asking the native IR
+                // reader to resolve the base struct as a standalone type.
+                let flags_offset = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+                    "8"
+                } else {
+                    "12"
+                };
+                let blk = ctx.block();
+                let flag_ptr = blk.gep(crate::types::I8, &info_ref, &[(I64, flags_offset)]);
+                let flags = blk.load(I32, &flag_ptr);
+                let shifted = blk.lshr(I32, &flags, "6");
+                let ordinary = blk.and(I32, &shifted, "1");
+                let generator = blk.and(I32, &flags, &crate::runtime_abi::FN_GENERATOR.to_string());
+                let generator = blk.icmp_ne(I32, &generator, "0");
+                let kind = blk.select(crate::types::I1, &generator, I32, "2", &ordinary);
+                let async_generator = blk.and(
+                    I32,
+                    &flags,
+                    &crate::runtime_abi::FN_ASYNC_GENERATOR.to_string(),
+                );
+                let async_generator = blk.icmp_ne(I32, &async_generator, "0");
+                let kind = blk.select(crate::types::I1, &async_generator, I32, "3", &kind);
+                blk.add(
+                    I32,
+                    &kind,
+                    &crate::runtime_abi::FUNCTION_SHAPE_BASE.to_string(),
+                )
+            };
+            let birth_header = {
+                let blk = ctx.block();
+                let shape = blk.zext(I32, &shape, I64);
+                let high = blk.shl(I64, &shape, "32");
+                blk.or(I64, &high, &cap_count_val.to_string())
+            };
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
                 blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info_ref)])
@@ -447,6 +484,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_alloc_with_captures_singleton",
                     &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
+            } else if small_fresh_birth {
+                let words: Vec<&str> = (0..3)
+                    .map(|i| {
+                        captured_value_bits.get(i).map(String::as_str).unwrap_or(
+                            if i < total_caps {
+                                crate::nanbox::TAG_UNDEFINED_I64
+                            } else {
+                                "0"
+                            },
+                        )
+                    })
+                    .collect();
+                ctx.block().call(
+                    I64,
+                    "js_closure_alloc_small",
+                    &[
+                        (PTR, &info_ref),
+                        (I64, &birth_header),
+                        (I64, words[0]),
+                        (I64, words[1]),
+                        (I64, words[2]),
+                    ],
+                )
             } else if bulk_fresh_init {
                 // Fresh (identity-carrying) closure with bulk captures:
                 // ONE runtime call does allocation + slots + layout instead of
@@ -470,19 +530,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 blk.call(
                     I64,
-                    if bulk_boxed_init {
-                        "js_closure_alloc_init_boxed"
-                    } else {
-                        "js_closure_alloc_init"
-                    },
-                    &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
+                    "js_closure_alloc_fixed",
+                    &[(PTR, &info_ref), (I64, &birth_header), (PTR, &buf)],
                 )
             } else {
                 let blk = ctx.block();
                 blk.call(
                     I64,
-                    "js_closure_alloc",
-                    &[(PTR, &info_ref), (I32, &cap_count)],
+                    "js_closure_alloc_empty",
+                    &[(PTR, &info_ref), (I32, &shape)],
                 )
             };
 

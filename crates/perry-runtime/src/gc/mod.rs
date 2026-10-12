@@ -1011,6 +1011,8 @@ pub fn gc_init() {
     if GC_INIT_DONE.with(|c| c.replace(true)) {
         return;
     }
+    // Publish this agent's intrinsic function layouts before any JS birth.
+    let _ = crate::state::state();
     crate::perf_hooks::init_time_origin();
     #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();

@@ -685,8 +685,8 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                     "source length must reuse the idle versioned-captures field: {info}"
                 );
                 assert!(
-                    !info.contains("constant { { ptr"),
-                    "ordinary source info must stay at the common ABI size: {info}"
+                    info.contains(&format!("constant {{ {}, i32, i32 }}", crate::fn_info::INFO_TYPE)),
+                    "ordinary source must reuse the base fields; only the name range follows: {info}"
                 );
             }
         } else {

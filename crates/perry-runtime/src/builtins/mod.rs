@@ -147,6 +147,8 @@ pub(crate) use console::{
 #[cfg(test)]
 pub(crate) use console::{test_console_instance_count, test_seed_console_instance};
 
+pub(crate) use fn_metadata::function_name_for_closure;
+
 pub use fn_metadata::{
     bundle_function_name_registry_entries, bundle_function_name_registry_len,
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
@@ -184,7 +186,6 @@ pub use globals::{
     js_unescape, restore_queued_microtask_contexts, scan_queued_microtask_roots,
     scan_queued_microtask_roots_mut,
 };
-
 
 pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pending};
 

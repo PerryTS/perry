@@ -50,15 +50,6 @@ pub(crate) enum FunctionProtoKind {
 }
 
 impl FunctionProtoKind {
-    fn serial(self) -> u64 {
-        match self {
-            FunctionProtoKind::Function => INTRINSIC_SERIAL_FUNCTION,
-            FunctionProtoKind::AsyncFunction => INTRINSIC_SERIAL_ASYNC_FUNCTION,
-            FunctionProtoKind::Generator => INTRINSIC_SERIAL_GENERATOR_FUNCTION,
-            FunctionProtoKind::AsyncGenerator => INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION,
-        }
-    }
-
     /// The body kind `info` records — the same bits
     /// `generator_function_proto_of` answers [[GetPrototypeOf]] from.
     pub(crate) fn of_body(info: &super::JsFunctionInfo) -> FunctionProtoKind {
@@ -113,15 +104,6 @@ pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::Runtime
     });
 }
 
-crate::perry_thread_local! {
-    /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
-    /// then the FunctionDictionary id (0 = not minted yet).
-    static BASE_SHAPES: std::cell::Cell<[u32; 8]> = const { std::cell::Cell::new([0; 8]) };
-    /// This agent's class-constructor ShapeId (0 = not minted yet). Its own
-    /// cell: the base-shape array is copied on every closure birth.
-    static CLASS_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
 /// The attribute summary a Function shape publishes. Its keys are not in a
 /// shared keys array, so the summary cannot be derived from them: the base
 /// shape describes the intrinsic `name`/`length`/`prototype`, none of which is
@@ -139,65 +121,49 @@ fn function_shape_summary(kind: ShapeObjectKind) -> u8 {
     }
 }
 
-#[cold]
-#[inline(never)]
-fn mint(kind: ShapeObjectKind, proto_id: u64) -> u32 {
-    let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_generation(
-        std::ptr::null(),
-        0,
-        0,
-        0,
-        kind,
-        proto_id,
-        shapes::ReceiverFacts::summary(function_shape_summary(kind)),
-    ));
-    // A keyless intrinsic shape: rooted for the agent's life, so the
-    // post-full-trace prune can never retire an id live closures carry.
-    // SAFETY: the descriptor was just published on this agent.
-    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
-    id
+/// Immutable intrinsic facts seeded in the shape table at agent creation.
+/// Index 0..3 names the four body kinds, 4 the dictionary, 5..7 the
+/// resolved bound layouts, and 8 the sticky class-constructor layout.
+pub(crate) fn intrinsic_shapes() -> impl Iterator<Item = (u32, ShapeObjectKind, u64, u8)> {
+    use ShapeObjectKind::*;
+    [
+        (Function, INTRINSIC_SERIAL_FUNCTION),
+        (Function, INTRINSIC_SERIAL_ASYNC_FUNCTION),
+        (Function, INTRINSIC_SERIAL_GENERATOR_FUNCTION),
+        (Function, INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION),
+        (FunctionDictionary, shapes::PROTO_ID_PER_OBJECT),
+        (FunctionBoundCall, INTRINSIC_SERIAL_FUNCTION),
+        (FunctionBoundApply, INTRINSIC_SERIAL_FUNCTION),
+        (FunctionBound, INTRINSIC_SERIAL_FUNCTION),
+        (
+            FunctionDictionary,
+            INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (kind, proto))| (base_slot(index), kind, proto, function_shape_summary(kind)))
 }
 
-#[inline]
-fn base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
-    // One element read in place: every closure birth and every function
-    // receiver test asks for one of these ids, and copying the whole array
-    // out of the cell per call showed up at ~3% of Zod.
-    // SAFETY: a plain `[u32; 8]` read through the agent's own cell; nothing
-    // else holds a reference into it.
-    let id = BASE_SHAPES.with(|c| unsafe { (*c.as_ptr())[index] });
-    if id != 0 {
-        return id;
+#[inline(always)]
+fn base_slot(index: usize) -> u32 {
+    if index == 4 {
+        crate::codegen_abi::FUNCTION_DICTIONARY_SHAPE
+    } else {
+        crate::codegen_abi::FUNCTION_SHAPE_BASE + index as u32
     }
-    mint_base_slot(index, kind, proto_id)
-}
-
-#[cold]
-#[inline(never)]
-fn mint_base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
-    let id = mint(kind, proto_id);
-    BASE_SHAPES.with(|c| {
-        let mut ids = c.get();
-        ids[index] = id;
-        c.set(ids);
-    });
-    id
 }
 
 /// The base ShapeId for a closure of `kind`'s bodies.
 #[inline]
 pub(crate) fn function_base_shape(kind: FunctionProtoKind) -> u32 {
-    base_slot(kind as usize, ShapeObjectKind::Function, kind.serial())
+    base_slot(kind as usize)
 }
 
 /// The shared FunctionDictionary ShapeId: "ask the object".
 #[inline]
 pub(crate) fn function_dictionary_shape() -> u32 {
-    base_slot(
-        4,
-        ShapeObjectKind::FunctionDictionary,
-        shapes::PROTO_ID_PER_OBJECT,
-    )
+    base_slot(4)
 }
 
 /// The ShapeId of every class function object (`object::class_value`): its
@@ -208,20 +174,7 @@ pub(crate) fn function_dictionary_shape() -> u32 {
 /// with that one compare.
 #[inline]
 pub(crate) fn function_class_shape() -> u32 {
-    let mut id = CLASS_SHAPE.with(std::cell::Cell::get);
-    if id == 0 {
-        id = mint(
-            ShapeObjectKind::FunctionDictionary,
-            INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
-        );
-        CLASS_SHAPE.with(|c| c.set(id));
-    }
-    debug_assert_ne!(
-        id,
-        function_dictionary_shape(),
-        "the class shape is its own id"
-    );
-    id
+    base_slot(8)
 }
 
 /// Is `info` the class function object info — i.e. is a closure carrying it a
@@ -240,20 +193,12 @@ pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
     // Ordinary bodies need one code admission, not both layout comparisons.
     if unsafe { info.as_ref() }.is_some_and(|body| body.code == super::BOUND_FUNCTION_FUNC_PTR) {
         if std::ptr::eq(info, &super::dispatch::bound_intrinsic::CALL_INFO) {
-            return base_slot(
-                5,
-                ShapeObjectKind::FunctionBoundCall,
-                INTRINSIC_SERIAL_FUNCTION,
-            );
+            return base_slot(5);
         }
         if std::ptr::eq(info, &super::dispatch::bound_intrinsic::APPLY_INFO) {
-            return base_slot(
-                6,
-                ShapeObjectKind::FunctionBoundApply,
-                INTRINSIC_SERIAL_FUNCTION,
-            );
+            return base_slot(6);
         }
-        return base_slot(7, ShapeObjectKind::FunctionBound, INTRINSIC_SERIAL_FUNCTION);
+        return base_slot(7);
     }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
@@ -414,17 +359,10 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     keyed_shape_verdict(id) & bit != 0
 }
 
-/// This agent's base `Function` ShapeId and its FunctionDictionary ShapeId,
-/// in one read of the cell. An id not minted yet reads 0, which no function
-/// object carries.
-#[inline]
+/// The intrinsic Function and dictionary ids: facts of their fixed layouts.
+#[inline(always)]
 pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
-    // SAFETY: a plain `[u32; 8]` read through the agent's own cell; nothing
-    // else holds a reference into it.
-    BASE_SHAPES.with(|c| unsafe {
-        let ids = &*c.as_ptr();
-        (ids[FunctionProtoKind::Function as usize], ids[4])
-    })
+    (base_slot(0), base_slot(4))
 }
 
 /// The verdict mask of a keyed ShapeId: whether it is a Function shape over
@@ -655,7 +593,35 @@ mod tests {
     .with_flags(crate::closure::FN_ASYNC);
 
     fn fresh(info: &'static crate::closure::JsFunctionInfo) -> *mut ClosureHeader {
+        let _ = crate::state::state();
         js_closure_alloc(info, 0)
+    }
+
+    #[test]
+    fn intrinsic_ids_are_seeded_and_canonical_in_each_agent() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        std::thread::spawn(|| {
+            let _ = crate::state::state();
+            for (id, kind, proto, summary) in intrinsic_shapes() {
+                let descriptor = shapes::shape_descriptor_by_id(id).unwrap();
+                assert_eq!(descriptor.object_kind, kind);
+                assert_eq!(descriptor.proto_id, proto);
+                assert_eq!(descriptor.logical_key_count, 0);
+                let interned =
+                    shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_generation(
+                        std::ptr::null(),
+                        0,
+                        0,
+                        0,
+                        kind,
+                        proto,
+                        shapes::ReceiverFacts::summary(summary),
+                    ));
+                assert_eq!(interned, id, "interning must use the seeded record");
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

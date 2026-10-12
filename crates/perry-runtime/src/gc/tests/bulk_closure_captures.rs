@@ -15,15 +15,27 @@ static BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of
 );
 
 #[test]
-fn bulk_boxed_birth_preserves_body_shape_flags_and_fresh_identity() {
+fn small_birth_preserves_body_shape_flags_and_fresh_identity() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let cell = crate::r#box::js_box_alloc_bits(17.0f64.to_bits() as i64);
     let captures = [ptr_bits(cell as usize), crate::value::TAG_UNDEFINED];
     let count = crate::closure::CAPTURES_THIS_FLAG | crate::closure::NO_THIS_REBIND_FLAG | 2;
     let expected_shape = crate::closure::shape::birth_shape_for_body(&BODY);
-    let first = crate::closure::js_closure_alloc_init_boxed(&BODY, count, captures.as_ptr());
-    let second = crate::closure::js_closure_alloc_init_boxed(&BODY, count, captures.as_ptr());
+    let first = crate::closure::js_closure_alloc_small(
+        &BODY,
+        (u64::from(expected_shape) << 32) | u64::from(count),
+        captures[0],
+        captures[1],
+        0,
+    );
+    let second = crate::closure::js_closure_alloc_small(
+        &BODY,
+        (u64::from(expected_shape) << 32) | u64::from(count),
+        captures[0],
+        captures[1],
+        0,
+    );
     assert_ne!(
         first, second,
         "each evaluation has its own function identity"
@@ -117,7 +129,7 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
 }
 
 #[test]
-fn bulk_boxed_birth_shades_captures_during_incremental_marking() {
+fn small_birth_shades_captures_during_incremental_marking() {
     let _guard = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
@@ -125,8 +137,13 @@ fn bulk_boxed_birth_shades_captures_during_incremental_marking() {
     let valid = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid);
     let captures = [ptr_bits(cell as usize)];
-    let closure =
-        crate::closure::js_closure_alloc_init_boxed(std::ptr::null(), 1, captures.as_ptr());
+    let closure = crate::closure::js_closure_alloc_small(
+        std::ptr::null(),
+        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        captures[0],
+        0,
+        0,
+    );
     assert_eq!(
         crate::closure::js_closure_get_capture_bits(closure, 0),
         ptr_bits(cell as usize)
@@ -136,7 +153,16 @@ fn bulk_boxed_birth_shades_captures_during_incremental_marking() {
 }
 
 #[test]
-fn bulk_boxed_birth_survives_collection_inside_allocation() {
+fn small_birth_survives_collection_inside_allocation() {
+    birth_survives_collection_inside_allocation(true);
+}
+
+#[test]
+fn larger_fixed_birth_survives_collection_inside_allocation() {
+    birth_survives_collection_inside_allocation(false);
+}
+
+fn birth_survives_collection_inside_allocation(small: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -149,15 +175,25 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
         ptr_bits(cell as usize),
         string_bits(child),
         42.0f64.to_bits(),
+        crate::value::TAG_UNDEFINED,
+        19.0f64.to_bits(),
     ];
+    let count = if small { 3 } else { captures.len() as u32 };
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
-    let closure = crate::closure::js_closure_alloc_init_boxed(
-        std::ptr::null(),
-        flags | captures.len() as u32,
-        captures.as_ptr(),
-    );
+    let header = (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | u64::from(flags | count);
+    let closure = if small {
+        crate::closure::js_closure_alloc_small(
+            std::ptr::null(),
+            header,
+            captures[0],
+            captures[1],
+            captures[2],
+        )
+    } else {
+        crate::closure::js_closure_alloc_fixed(std::ptr::null(), header, captures.as_ptr())
+    };
     // Inspect the installed words before a getter or another collection can
     // follow forwarding pointers and conceal a missing post-allocation reload.
     let installed = unsafe {
@@ -186,7 +222,7 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
         string_bits(moved_child as usize)
     );
     unsafe {
-        assert_eq!((*closure).capture_count, flags | 3);
+        assert_eq!((*closure).capture_count, flags | count);
         assert_eq!(
             (*header_from_user_ptr(closure as *const u8))._reserved & GC_LAYOUT_STATE_MASK,
             GC_LAYOUT_UNKNOWN,
@@ -195,8 +231,13 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     }
 
     let second_captures = [ptr_bits(moved_cell as usize)];
-    let second =
-        crate::closure::js_closure_alloc_init_boxed(std::ptr::null(), 1, second_captures.as_ptr());
+    let second = crate::closure::js_closure_alloc_small(
+        std::ptr::null(),
+        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        second_captures[0],
+        0,
+        0,
+    );
     assert_ne!(
         (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader,
         second,

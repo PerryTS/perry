@@ -344,6 +344,12 @@ pub(super) fn emit_string_pool(
                 minted
             }
         };
+        llmod.note_fn_info(wrapper_sym, |f| {
+            f.name = Some(crate::fn_info::RetainedName {
+                global: const_name.clone(),
+                byte_len,
+            });
+        });
         user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));
     }
 

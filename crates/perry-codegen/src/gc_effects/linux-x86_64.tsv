@@ -648,9 +648,12 @@ js_clear_immediate_value	Reenters
 js_clear_interval_value	Reenters
 js_clear_timeout_value	Reenters
 js_closure_alloc	Reenters
+js_closure_alloc_empty	Reenters
+js_closure_alloc_fixed	Reenters
 js_closure_alloc_init	Reenters
 js_closure_alloc_init_boxed	Reenters
 js_closure_alloc_singleton	Reenters
+js_closure_alloc_small	Reenters
 js_closure_alloc_with_captures_singleton	Reenters
 js_closure_call0	Reenters
 js_closure_call1	Reenters

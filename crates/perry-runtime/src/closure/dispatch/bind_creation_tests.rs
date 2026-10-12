@@ -13,9 +13,11 @@ static COMPILED: JsFunctionInfo =
 static ORDINARY: JsFunctionInfo =
     JsFunctionInfo::of(body as crate::codegen_abi::JsBody1<ClosureHeader>)
         .with_declared(1)
-        .with_flags(crate::codegen_abi::FN_COMPILED_BODY
-            | crate::codegen_abi::FN_PERMANENT_IMAGE
-            | crate::codegen_abi::FN_NON_STRICT_ORDINARY);
+        .with_flags(
+            crate::codegen_abi::FN_COMPILED_BODY
+                | crate::codegen_abi::FN_PERMANENT_IMAGE
+                | crate::codegen_abi::FN_NON_STRICT_ORDINARY,
+        );
 
 #[test]
 fn ordinary_object_receiver_uses_compact_birth() {
@@ -24,16 +26,23 @@ fn ordinary_object_receiver_uses_compact_birth() {
     let target = js_closure_alloc(&ORDINARY, 0);
     let receiver = crate::object::js_object_alloc(0, 0);
     let this = crate::value::js_nanbox_pointer(receiver as i64);
-    let bound = unsafe { js_function_bind(crate::value::js_nanbox_pointer(target as i64), &this, 1) };
+    let bound =
+        unsafe { js_function_bind(crate::value::js_nanbox_pointer(target as i64), &this, 1) };
     let bound = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
     unsafe {
         assert_eq!((*bound).capture_count, 3);
-        assert_eq!(js_closure_get_capture_f64(bound, 1).to_bits(), this.to_bits());
+        assert_eq!(
+            js_closure_get_capture_f64(bound, 1).to_bits(),
+            this.to_bits()
+        );
     }
 }
 
 #[test]
 fn immutable_bind_birth_has_three_slots_and_no_metadata_bag() {
+    // Production initializes the agent at js_gc_init, before closure births.
+    // A raw native allocation no longer initializes shape metadata as a side effect.
+    let _agent = crate::state::state();
     let _lock = crate::gc::global_side_table_test_lock();
     let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let target = js_closure_alloc(&COMPILED, 0);

@@ -286,7 +286,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let ir = ir_for_fn_body("release_nested_user_capture", body);
     let tracked_edges = ir
         .lines()
-        .filter(|line| line.contains("call i64 @js_closure_alloc_init_boxed("))
+        .filter(|line| line.contains("call i64 @js_closure_alloc_small("))
         .count();
     assert_eq!(
         tracked_edges, 1,

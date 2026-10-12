@@ -687,11 +687,10 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                                         configurable_default,
                                     ))
                                 } else {
-                                    let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
-                                        .code()
-                                        as usize;
-                                    let fname = crate::builtins::function_name_for_ptr(func_ptr)
-                                        .unwrap_or_default();
+                                    let fname = crate::builtins::function_name_for_closure(
+                                        ptr as *const crate::closure::ClosureHeader,
+                                    )
+                                    .unwrap_or_default();
                                     let s = crate::string::js_string_from_bytes(
                                         fname.as_ptr(),
                                         fname.len() as u32,

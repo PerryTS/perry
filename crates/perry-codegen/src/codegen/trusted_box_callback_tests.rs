@@ -195,7 +195,7 @@ fn escaped_boxed_closure_birth_uses_rooted_bulk_initializer() {
     for tdz in [false, true] {
         let ir = emit_with_tdz(false, tdz);
         let outer = function_body(&ir, "perry_fn_trusted_box_callback_ts__outer");
-        assert!(outer.contains("@js_closure_alloc_init_boxed"), "{outer}");
+        assert!(outer.contains("@js_closure_alloc_small"), "{outer}");
         assert!(
             !outer.contains("@js_closure_set_box_capture_ptr"),
             "{outer}"

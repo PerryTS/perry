@@ -126,8 +126,8 @@ pub(crate) unsafe fn bag_born_with_attrs(
                 } else if (*closure).code() == super::BOUND_FUNCTION_FUNC_PTR {
                     super::bound_function_lazy_name(ptr)
                 } else {
-                    let name = crate::builtins::function_name_for_ptr((*closure).code() as usize)
-                        .unwrap_or_default();
+                    let name =
+                        crate::builtins::function_name_for_closure(closure).unwrap_or_default();
                     let name =
                         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                     crate::value::js_nanbox_string(name as i64)

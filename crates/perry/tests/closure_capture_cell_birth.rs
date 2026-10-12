@@ -214,7 +214,8 @@ console.log("gc", gcBirth());
 
 // A closure whose body declares a function with cells of its own: the
 // closure's capture list names those cells, it has no storage for them, so its
-// birth mints them, two cells, the first held across the second's allocation.
+// birth mints them. They may share one scope allocation; separate cells hold
+// the first across the second's allocation.
 function mintTwo(seed: number) {
   const o = { v: seed };
   const f = () => {
@@ -333,25 +334,39 @@ fn assert_minting_birth_words_are_rooted(body: &[&str]) {
         .filter(|(_, l)| l.contains("@js_box_alloc_bits(") || l.contains("@js_scope_alloc("))
         .map(|(i, _)| i)
         .collect();
+    let shared_pair = body.iter().any(|l| l.contains("@js_scope_alloc(i32 2,"));
     assert!(
-        mints.len() >= 2,
-        "premise: the birth mints two cells:\n{text}"
+        mints.len() >= 2 || (mints.len() == 1 && shared_pair),
+        "premise: the birth mints two cells, separately or in one scope:\n{text}"
     );
     let last_mint = *mints.last().unwrap();
     let alloc = body[last_mint..]
         .iter()
-        .position(|l| l.contains("@js_closure_alloc_init_boxed("))
+        .position(|l| {
+            l.contains("@js_closure_alloc_small(") || l.contains("@js_closure_alloc_fixed(")
+        })
         .map(|i| i + last_mint)
         .unwrap_or_else(|| panic!("premise: a bulk boxed birth below the mints:\n{text}"));
-    let words: Vec<&str> = body[last_mint..alloc]
-        .iter()
-        .filter_map(|l| l.trim_start().strip_prefix("store i64 %"))
-        .map(|rest| rest.split(',').next().unwrap().trim())
-        .collect();
+    let words: Vec<&str> = if let Some(args) = body[alloc].split("@js_closure_alloc_small(").nth(1)
+    {
+        // The header is scalar metadata; the remaining registers are the
+        // actual capture words handed to the birth helper.
+        args.split(',')
+            .skip(2)
+            .filter_map(|arg| arg.trim().strip_prefix("i64 %"))
+            .map(|reg| reg.trim_end_matches(')').trim())
+            .collect()
+    } else {
+        body[last_mint..alloc]
+            .iter()
+            .filter_map(|l| l.trim_start().strip_prefix("store i64 %"))
+            .map(|rest| rest.split(',').next().unwrap().trim())
+            .collect()
+    };
     // `o`, both cells, and the inner closures' own capture names.
     assert!(
         words.len() >= 3,
-        "the capture words reach the buffer:\n{text}"
+        "the capture words reach the birth helper:\n{text}"
     );
     for w in words {
         let def = body

@@ -135,7 +135,7 @@ fn captured_reassigned_let_is_left_to_gc_at_every_return() {
         "premise: n is boxed\n{ir}"
     );
     assert!(
-        ir.contains("js_closure_alloc_init_boxed"),
+        ir.contains("js_closure_alloc_small"),
         "premise: the closure captures the shared box at birth\n{ir}"
     );
     let per_ret = releases_before_each_ret(&ir);
