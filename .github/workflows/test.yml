@@ -3787,7 +3787,11 @@ jobs:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
       - name: Build the archives and compare the committed table
+        # cargo-xwin runs OpenSSL's Windows Configure script with Linux Perl.
+        # OpenSSL's windows-checker rejects that host by default; CONFIGURE_INSIST
+        # is its explicit override for cross-host configurations.
         env:
+          CONFIGURE_INSIST: ${{ matrix.target == 'windows-x86_64' && '1' || '' }}
           GC_EFFECTS_FRESH_OUT: gc-effects/${{ matrix.target }}.tsv
           GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
