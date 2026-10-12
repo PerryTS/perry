@@ -5040,6 +5040,176 @@ def check_func_statepoints(module, f, want_moving_only=False,
 
             if hit is not None:
                 out.append(hit)
+
+    out.extend(_tracked_across_statepoint(module, f, def_of, tracked,
+                                          use_graph, idom, poll_reaching,
+                                          want_moving_only))
+    return out
+
+
+_AS1_BASE_CAST_RE = re.compile(
+    r"=\s*(?:inttoptr|bitcast|addrspacecast)\b(.*)\bto\s+ptr\s+addrspace\(1\)\s*$")
+_AS1_SELECT_RE = re.compile(r"=\s*select\s+[^,]+,\s*ptr\s+addrspace\(1\)\s+(\S+),"
+                            r"\s*ptr\s+addrspace\(1\)\s+(\S+)\s*$")
+
+
+def _constant_based(reg, def_of, memo, visiting=None):
+    """Is every base `reg` can carry a CONSTANT, so RS4GC never relocates it?
+
+    Followed through `phi`, `select`, `freeze`, a pointer cast and a `gep`'s
+    base, which are the forms RS4GC's own base-pointer search looks through.
+    A cast of a REGISTER into the tracked domain is a base of its own — the
+    raw-word re-entry — and answers False. Unreadable forms answer False, so
+    a gap here reports a hazard rather than hiding one. A phi cycle back to a
+    register still being resolved contributes nothing either way; only the
+    top-level answer is memoized, so no optimistic assumption leaks out.
+    """
+    if reg in memo:
+        return memo[reg]
+    top = visiting is None
+    if top:
+        visiting = set()
+    elif reg in visiting:
+        return True
+    visiting.add(reg)
+
+    def const(text):
+        text = text.strip()
+        if not text.startswith("%"):
+            return not operand_regs(text)
+        return _constant_based(text[1:], def_of, memo, visiting)
+
+    ins = def_of.get(reg)
+    ok = False
+    if ins is not None and ins.callee is None:
+        body = ins.text.split(" = ", 1)[-1].strip()
+        if body.startswith("phi "):
+            edges = phi_incoming(ins)
+            if edges and len(edges) == body.count("["):
+                ok = all(const(v) for v, _p in edges)
+        elif body.startswith("freeze "):
+            ok = all(const("%" + r) for r in operand_regs(ins.text))
+        elif body.startswith("getelementptr"):
+            m = re.search(r"ptr\s+addrspace\(1\)\s+(%[\w.$]+|[^%,\s][^,]*?),",
+                          body)
+            ok = m is not None and const(m.group(1))
+        else:
+            m = _AS1_SELECT_RE.search(ins.text)
+            if m:
+                ok = const(m.group(1)) and const(m.group(2))
+            else:
+                m = _AS1_BASE_CAST_RE.search(ins.text)
+                ok = m is not None and not operand_regs(m.group(1))
+    if top:
+        memo[reg] = ok
+    return ok
+
+
+def _tracked_across_statepoint(module, f, def_of, tracked, use_graph, idom,
+                               poll_reaching, want_moving_only):
+    """A `ptr addrspace(1)` register used, un-relocated, below a safepoint.
+
+    Everything above stops at the tracked line on the premise that "LLVM owns
+    it": RS4GC relocates a tracked register at every safepoint it is live
+    across and rewrites every use below to the `gc.relocate`. That premise is
+    a property of the IR, not of the type, so it is CHECKED here rather than
+    assumed. In conforming RS4GC output this finds nothing: the original
+    register's last use is at or above the safepoint, and everything below
+    names the relocation. A use of the ORIGINAL register below a safepoint is
+    a pointer the collector may have moved (or, outside the bundle, never
+    seen at all):
+
+      unrooted  the safepoint's "gc-live" bundle does not name it (or any
+                tracked register it was cast from), so nothing marks or
+                rewrites the object;
+      stale     the bundle names it, the object survives and is relocated,
+                but this use reads the pre-move register instead of the
+                relocate.
+
+    Without this, a raw word that RE-ENTERS the tracked domain
+    (`inttoptr ... to ptr addrspace(1)`) and is then used across a safepoint
+    is invisible: the untracked chain stops at the re-entry, and the tracked
+    register was taken on trust. That is the shape `--seeded-violations`
+    planted at `stack_guard.ok.1` in zod's classic/compat.ts and the gate
+    reported 39/40.
+
+    A phi operand is checked on its own incoming edge, the window ending at
+    that predecessor's terminator, as `_phi_edge_hazard` does.
+    """
+    statepoint_blocks = {b for b in f.blocks
+                         if any(i.is_statepoint for i in f.insns[b])}
+    if not statepoint_blocks:
+        return []
+    between_cache = {}
+
+    def window_statepoints(A, B):
+        if A.block == B.block:
+            return [c for c in f.insns[A.block]
+                    if c.is_statepoint and A.idx < c.idx < B.idx]
+        hits = [c for c in f.insns[A.block]
+                if c.is_statepoint and c.idx > A.idx]
+        hits += [c for c in f.insns[B.block]
+                 if c.is_statepoint and c.idx < B.idx]
+        key = (A.block, B.block)
+        mids = between_cache.get(key)
+        if mids is None:
+            mids = [c for m in between_blocks(f, A.block, B.block)
+                    if m in statepoint_blocks
+                    for c in f.insns[m] if c.is_statepoint]
+            between_cache[key] = mids
+        return hits + mids
+
+    users = defaultdict(list)
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            for r in operand_regs(ins.text):
+                if r in tracked:
+                    users[r].append(ins)
+
+    constant_memo = {}
+    out = []
+    for reg in sorted(users):
+        src = def_of.get(reg)
+        if src is None:
+            continue
+        if _constant_based(reg, def_of, constant_memo):
+            # RS4GC relocates a value through its BASE; a value whose every
+            # base is a constant (`null`, `inttoptr (i64 C to ptr
+            # addrspace(1))` — perry's NaN-boxed `undefined` or a number in
+            # pointer clothing) names no heap object and is never relocated.
+            continue
+        as1 = None
+        for use in users[reg]:
+            if use is src:
+                continue
+            if _is_phi(use):
+                ends = [Insn("", p, len(f.insns[p]))
+                        for v, p in phi_incoming(use)
+                        if v.strip() == "%" + reg and p in f.insns
+                        and dominates(idom, src.block, p)]
+            elif dominates(idom, src.block, use.block) and not (
+                    use.block == src.block and use.idx <= src.idx):
+                ends = [use]
+            else:
+                ends = []
+            for end in ends:
+                sps = window_statepoints(src, end)
+                if not sps:
+                    continue
+                if as1 is None:
+                    as1 = _cast_closure(use_graph, _back_closure(def_of, reg),
+                                        tracked, stop_at_tracked=False) & tracked
+                    as1.add(reg)
+                rooted = any(as1 & set(sp.live) for sp in sps)
+                v = StatepointHazard(module, f.name, src, "tracked", use, sps,
+                                     rooted, poll_reaching)
+                if want_moving_only and not v.moving:
+                    continue
+                out.append(v)
+                break
+            else:
+                continue
+            break
     return out
 
 
@@ -5657,6 +5827,92 @@ join.2:
 }
 """.replace("__SAFEPOINT__", _sp())
 
+# ★ A raw word that RE-ENTERS the tracked domain, in the stack-guard prologue
+# every perry function opens with — the shape `--seeded-violations` missed in
+# zod's classic/compat.ts (39/40). The parameter is laundered out through the
+# tied-register identity, boxed, and cast back IN with `inttoptr`; the
+# re-entered `ptr addrspace(1)` register is then used below a safepoint. The
+# untracked chain stops at the re-entry, so before `_tracked_across_statepoint`
+# nothing looked at the tracked register's own uses at all.
+#
+# `__SAFEPOINT__` / `__USE__` vary per arm:
+#   clean     no safepoint (the corpus's real shape: the seeder's subject)
+#   unrooted  a safepoint with an EMPTY bundle, the original register used
+#   stale     the bundle names it and relocates it, the ORIGINAL still used
+#   rooted    the bundle names it and the use reads the RELOCATION (control)
+_SELFTEST_SP_STACK_GUARD_REENTRY = """\
+define double @perry_fn_selftest__sp_stack_guard_reentry(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %lim = load ptr, ptr getelementptr inbounds nuw (i8, ptr @PERRY_AGENT_PTRS, i64 16), align 8
+  %spr = call i64 @llvm.read_register.i64(metadata !0)
+  %limw = ptrtoint ptr %lim to i64
+  %ovf = icmp ult i64 %spr, %limw
+  br i1 %ovf, label %stack_guard.overflow.2, label %stack_guard.ok.1
+
+stack_guard.ok.1:                                 ; preds = %entry.0
+  %w.rs4o = call i64 asm "", "=r,0"(ptr addrspace(1) %rs4gc.s1) #12
+  %w = bitcast i64 %w.rs4o to double
+  %rs4gc.b2 = bitcast double %w to i64
+  %rs4gc.s2 = inttoptr i64 %rs4gc.b2 to ptr addrspace(1)
+__SAFEPOINT__
+  %u.rs4o = call i64 asm "", "=r,0"(ptr addrspace(1) __USE__) #12
+  %r = call double @js_object_get_field_by_name_f64(i64 %u.rs4o, i64 0)
+  ret double %r
+
+stack_guard.overflow.2:                           ; preds = %entry.0
+  %tok.ovf = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 2882400000, i32 0, ptr elementtype(void ()) @js_stack_overflow, i32 0, i32 0, i32 0, i32 0)
+  unreachable
+}
+"""
+_SP_RELOC_S2 = ("\n  %rs4gc.s2.relocated = call coldcc ptr addrspace(1) "
+                "@llvm.experimental.gc.relocate.p1(token %tok, i32 0, i32 0)")
+
+
+def _stack_guard_reentry(arm):
+    sp, use = {
+        "clean": ("", "%rs4gc.s2"),
+        "unrooted": (_sp(), "%rs4gc.s2"),
+        "stale": (_sp(live=("rs4gc.s2",)) + _SP_RELOC_S2, "%rs4gc.s2"),
+        "rooted": (_sp(live=("rs4gc.s2",)) + _SP_RELOC_S2,
+                   "%rs4gc.s2.relocated"),
+    }[arm]
+    text = _SELFTEST_SP_STACK_GUARD_REENTRY.replace("__USE__", use)
+    if not sp:
+        return text.replace("__SAFEPOINT__\n", "")
+    return text.replace("__SAFEPOINT__", sp)
+
+
+# A tracked phi whose every incoming value is a CONSTANT (`inttoptr (i64 C to
+# ptr addrspace(1))`: perry's NaN-boxed `undefined`, a number) has no heap
+# base, so RS4GC never relocates it and its use below a safepoint is correct —
+# the shape test_gap_new_local_shadows_class's `main` produced the first time
+# `_tracked_across_statepoint` ran over the curated corpus. `__EDGE__` is the
+# second incoming value: a constant (clean) or a register re-entering the
+# tracked domain (a real base, so the use is an unrooted hazard).
+_SELFTEST_SP_CONSTANT_PHI = """\
+define double @perry_fn_selftest__sp_constant_phi(i1 %c, i64 %x) gc "statepoint-example" {
+entry.0:
+  br i1 %c, label %a.1, label %b.2
+
+a.1:                                              ; preds = %entry.0
+  br label %join.3
+
+b.2:                                              ; preds = %entry.0
+  %re = inttoptr i64 %x to ptr addrspace(1)
+  br label %join.3
+
+join.3:                                           ; preds = %b.2, %a.1
+  %k = phi ptr addrspace(1) [ inttoptr (i64 9222246136947933185 to ptr addrspace(1)), %a.1 ], [ __EDGE__, %b.2 ]
+__SAFEPOINT__
+  %w = call i64 asm "", "=r,0"(ptr addrspace(1) %k) #12
+  %r = bitcast i64 %w to double
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp())
+
+
 # A `define` whose name this parser cannot read must RAISE, not be skipped.
 _SELFTEST_SP_BAD_DEFINE = """\
 define double @<mangled>(double %a) {
@@ -5936,6 +6192,54 @@ def statepoint_self_test():
                   f"{[(h.kind_class, h.kind) for h in hits]}. If this is 0, "
                   "the false-positive fix above also deleted the mode's "
                   "ability to see a genuine phi-mediated hazard.",
+                  file=sys.stderr)
+            ok = False
+
+        # ★★ Re-entry into the tracked domain, in the stack-guard prologue
+        # (the 39/40 seeded miss in zod's classic/compat.ts). Four arms that
+        # differ only in the safepoint's bundle and which register the use
+        # reads, plus the real-corpus seeder run over the clean arm: it plants
+        # an unbundled safepoint between the re-entered register and its use,
+        # which the unfixed checker did not report.
+        sg = {}
+        for arm in ("clean", "unrooted", "stale", "rooted"):
+            p = os.path.join(td, f"sp_stack_guard_{arm}.ll")
+            Path(p).write_text(_stack_guard_reentry(arm))
+            sg[arm] = _scan_statepoints([p], moving_only=True)
+        for arm, want in (("clean", None), ("rooted", None),
+                          ("unrooted", "unrooted"), ("stale", "stale")):
+            got = [(h.kind_class, h.kind) for h in sg[arm]]
+            if (want is None and got) or (want is not None
+                                          and got != [(want, "tracked")]):
+                print(f"self-test FAIL: stack-guard re-entry arm {arm!r} must "
+                      f"report {[(want, 'tracked')] if want else []}, got "
+                      f"{got}. A `ptr addrspace(1)` register used below a "
+                      "safepoint without going through its relocation is "
+                      "a pointer the collector moved (stale) or never saw "
+                      "(unrooted); RS4GC's output never contains one, so "
+                      "trusting the type instead of checking the uses hides "
+                      "exactly the value that re-entered the tracked domain.",
+                      file=sys.stderr)
+                ok = False
+        for edge, want in (
+                ("inttoptr (i64 4621256167635550208 to ptr addrspace(1))", []),
+                ("%re", [("unrooted", "tracked")])):
+            p = os.path.join(td, "sp_constant_phi.ll")
+            Path(p).write_text(_SELFTEST_SP_CONSTANT_PHI.replace("__EDGE__", edge))
+            got = [(h.kind_class, h.kind)
+                   for h in _scan_statepoints([p], moving_only=True)]
+            if got != want:
+                print(f"self-test FAIL: a tracked phi over {edge!r} must report "
+                      f"{want}, got {got}. A value whose every base is a "
+                      "constant is never relocated, so its use below a "
+                      "safepoint is correct; one register base makes it a "
+                      "real pointer again.", file=sys.stderr)
+                ok = False
+        if seeded_statepoint_test(
+                [os.path.join(td, "sp_stack_guard_clean.ll")], True, 1):
+            print("self-test FAIL: a safepoint seeded between a re-entered "
+                  "tracked register and its use in the stack-guard block went "
+                  "unreported -- the zod classic/compat.ts 39/40 miss.",
                   file=sys.stderr)
             ok = False
 
