@@ -957,4 +957,46 @@ mod tests {
              and no import-emitted js_nm_install_buffer exists on the global-Buffer path"
         );
     }
+
+    /// #9202: `node:test`'s `run()` hands the caller a `node:stream` Readable,
+    /// so the runner must arm the stream attach bucket ITSELF instead of
+    /// inheriting it from a `node:stream` import the program may never make.
+    /// Pre-fix nothing armed it on that path, so `Readable.prototype` was built
+    /// without its method set and `for await (const e of run({ files: [] }))`
+    /// threw `TypeError: value is not iterable`. The node-suite twin
+    /// (`test/runner/api/run-empty`) covers the program shape end to end; this
+    /// is the per-PR gate. The same two resets the sibling test needs apply:
+    /// the bucket slot, else another test's arming lingers, and the `cfg(test)`
+    /// lazy install-all (RAII-suppressed), else the `nm_attach_lookup` inside
+    /// the runner self-heals the registry and the assertion cannot fail.
+    #[cfg(feature = "mod-node-test")]
+    #[test]
+    fn node_test_run_arms_the_stream_attach_bucket_itself() {
+        struct LazyInstallGuard;
+        impl Drop for LazyInstallGuard {
+            fn drop(&mut self) {
+                NM_TEST_DISABLE_LAZY_INSTALL.store(false, Ordering::Relaxed);
+            }
+        }
+        NM_TEST_DISABLE_LAZY_INSTALL.store(true, Ordering::Relaxed);
+        let _guard = LazyInstallGuard;
+
+        NM_ATTACH_REGISTRY[NmBucket::Stream as usize]
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        let _stream = crate::node_submodules::test::runner::thunk_test_run(
+            std::ptr::null(),
+            crate::closure::plain_call_receiver(),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+
+        assert!(
+            !NM_ATTACH_REGISTRY[NmBucket::Stream as usize]
+                .load(Ordering::Relaxed)
+                .is_null(),
+            "thunk_test_run() must arm the node:stream attach bucket: it hands \
+             the caller a node:stream Readable, and a program that imports only \
+             node:test emits no js_nm_install_stream of its own"
+        );
+    }
 }

@@ -7,6 +7,16 @@
 
 use super::*;
 
+// #9202: `js_nm_install_stream` registers the `node:stream` dispatch bucket
+// and, with it, the attach hook that installs `Readable.prototype`'s methods.
+// `object/mod.rs` re-exports the installers submodule helpers delegate to, but
+// not this one, so the runtime ABI symbol is declared here — same shape as
+// `timer.rs`'s `js_stdlib_has_active_handles` and as the declaration codegen
+// emits into every generated module that calls it.
+extern "C" {
+    fn js_nm_install_stream();
+}
+
 #[derive(Clone, Copy)]
 enum RegisteredNode {
     Test(usize),
@@ -899,6 +909,17 @@ pub(crate) extern "C" fn thunk_test_run(
     _this: crate::closure::JsThis,
     _options: f64,
 ) -> f64 {
+    // #9202: `run()` hands the caller a `node:stream` `Readable`, whose
+    // methods (including `Symbol.asyncIterator`, the `for await` entry point)
+    // are installed on the prototype by `js_nm_install_stream()`'s attach
+    // hook. A program that imports `node:test` but never `node:stream` never
+    // calls that install, so the stream it gets back here has no methods at
+    // all and `for await (const e of run(...))` threw `value is not iterable`.
+    // Same idiom as `js_nm_install_fs` / `_http` / `_tls`, which install
+    // `stream` before handing out their stream objects.
+    unsafe {
+        js_nm_install_stream();
+    }
     let mut array = crate::array::js_array_alloc(0);
     for _ in 0..10 {
         array = crate::array::js_array_push_f64(array, undefined_value());
