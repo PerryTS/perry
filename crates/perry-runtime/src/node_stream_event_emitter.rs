@@ -196,16 +196,6 @@ pub(super) extern "C" fn ns_off2(
     ns_remove_listener2(closure, this, event, cb)
 }
 
-pub(super) extern "C" fn ns_remove_all_listeners1(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    event: f64,
-) -> f64 {
-    let stream = super::this_value(closure, this);
-    remove_all_stream_listeners_for_event(stream, event);
-    stream
-}
-
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64 {
     let stream = super::stream_value_from_handle(stream_handle);
@@ -276,7 +266,10 @@ pub extern "C" fn js_node_stream_method_remove_all_listeners(
     if let Some(result) = crate::fs::utf8_stream_remove_all_value(stream, event) {
         return result;
     }
-    remove_all_stream_listeners_for_event(stream, event);
+    // The native 1-arg dispatch cannot observe `arguments.length`, so an
+    // `undefined` here is node's omitted type and keeps removing every event.
+    let all = is_undefined(event);
+    remove_all_stream_listeners(stream, event, all);
     stream
 }
 
@@ -912,14 +905,16 @@ fn once_wrap(target: f64, event: f64, listener: f64) -> f64 {
     let wrapper = scope.root_nanbox_f64(super::box_pointer(wrapper as *const u8));
     // `.listener` is observable through rawListeners(), so retain an ordinary
     // function property, born at its fixed slot instead of added afterward.
-    unsafe {
-        let installed = crate::closure::props::bag_born_with_attrs(
-            super::raw_ptr_from_value(wrapper.get_nanbox_f64()),
-            &[("listener", listener.get_nanbox_f64())],
-            &[],
-        );
-        debug_assert!(installed, "a fresh once wrapper has no property bag");
-    }
+    // It must go through the public birth entry point, which re-stamps the
+    // closure's ShapeId for its new bag: `props::bag_born_with_attrs` alone
+    // leaves the wrapper on its bag-less base shape, and a property read whose
+    // call site already saw that base shape (any plain listener in the same
+    // list) then answers "no such property" for the wrapper too.
+    let installed = crate::closure::closure_define_first_props(
+        super::raw_ptr_from_value(wrapper.get_nanbox_f64()),
+        &[("listener", listener.get_nanbox_f64())],
+    );
+    debug_assert!(installed, "a fresh once wrapper has no property bag");
     wrapper.get_nanbox_f64()
 }
 
@@ -1308,8 +1303,11 @@ pub(super) fn remove_stream_listener_for_event(stream: f64, event: f64, cb: f64)
     true
 }
 
-/// node's `removeAllListeners([type])`; `undefined` stands for "no argument".
-fn remove_all_stream_listeners_for_event(stream: f64, event: f64) {
+/// node's `removeAllListeners([type])`: `all` is `arguments.length === 0`, the
+/// only case that drains every event. With a `type` the name is used as given —
+/// coerced by the `_events` lookup like node's `events[type]` — so an explicit
+/// `undefined` removes the `"undefined"` key, not the whole emitter.
+pub(super) fn remove_all_stream_listeners(stream: f64, event: f64, all: bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(stream);
     let event = scope.root_nanbox_f64(event);
@@ -1317,7 +1315,6 @@ fn remove_all_stream_listeners_for_event(stream: f64, event: f64) {
         return;
     };
     let events = scope.root_nanbox_f64(events);
-    let all = is_undefined(event.get_nanbox_f64());
     if is_undefined(get_event_named(
         events.get_nanbox_f64(),
         crate::runtime_state_key!(b"removeListener"),
@@ -1399,7 +1396,7 @@ fn remove_all_via_method(target: f64, event: f64) {
     )
     .is_none()
     {
-        remove_all_stream_listeners_for_event(target, event);
+        remove_all_stream_listeners(target, event, false);
     }
 }
 

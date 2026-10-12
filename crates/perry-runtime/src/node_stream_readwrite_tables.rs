@@ -13,6 +13,29 @@ macro_rules! ns_info {
     };
 }
 
+/// `removeAllListeners([type])`: node branches on `arguments.length === 0`, so
+/// an OMITTED type removes every event while an explicit `undefined` is the
+/// coerced `"undefined"` key like any other name. Only the caller's argument
+/// slice can tell those apart, hence the native-arguments body.
+unsafe extern "C" fn ns_remove_all_listeners_args(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let stream = this_value(closure, this);
+    if len == 0 {
+        crate::node_stream::event_emitter::remove_all_stream_listeners(
+            stream,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            true,
+        );
+    } else if let Some(event) = args.as_ref() {
+        crate::node_stream::event_emitter::remove_all_stream_listeners(stream, *event, false);
+    }
+    stream
+}
+
 /// The stream method bodies' infos: one per body, shared by every table below.
 static NS_ON2_INFO: JsFunctionInfo = ns_info!(ns_on2, 2).with_declared(2);
 static NS_ONCE2_INFO: JsFunctionInfo = ns_info!(ns_once2, 2).with_declared(2);
@@ -23,7 +46,7 @@ static NS_PREPEND_ONCE_LISTENER2_INFO: JsFunctionInfo =
 static NS_OFF2_INFO: JsFunctionInfo = ns_info!(ns_off2, 2).with_declared(2);
 static NS_REMOVE_LISTENER2_INFO: JsFunctionInfo = ns_info!(ns_remove_listener2, 2).with_declared(2);
 static NS_REMOVE_ALL_LISTENERS1_INFO: JsFunctionInfo =
-    ns_info!(ns_remove_all_listeners1, 1).with_declared(1);
+    JsFunctionInfo::of_native_args(ns_remove_all_listeners_args, 1);
 static NS_EMIT_REST_INFO: JsFunctionInfo = JsFunctionInfo::of_native_args(ns_emit_args, 1);
 static NS_SET_MAX_LISTENERS_INFO: JsFunctionInfo =
     ns_info!(ns_set_max_listeners, 1).with_declared(1);

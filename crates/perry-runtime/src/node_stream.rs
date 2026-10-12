@@ -41,8 +41,8 @@ use event_emitter::{
     add_stream_listener_for_event, call_listener_args, emit_stream_event,
     emit_stream_event_from_array, is_callable_value, ns_event_names, ns_get_max_listeners,
     ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2, ns_prepend_listener2,
-    ns_prepend_once_listener2, ns_raw_listeners, ns_remove_all_listeners1, ns_remove_listener2,
-    ns_set_max_listeners, remove_stream_listener_for_event, stream_listener_count_for_event,
+    ns_prepend_once_listener2, ns_raw_listeners, ns_remove_listener2, ns_set_max_listeners,
+    remove_stream_listener_for_event, stream_listener_count_for_event,
 };
 pub(crate) use event_emitter::{emit_stream_event_rooted, RootedArgs};
 
