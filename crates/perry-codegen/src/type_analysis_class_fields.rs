@@ -17,7 +17,18 @@ use crate::type_analysis::receiver_class_name;
 
 pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -> Option<HirType> {
     let receiver_class = receiver_class_name(ctx, object)?;
-    if let Some(class) = ctx.classes.get(&receiver_class) {
+    class_declared_field_type(ctx, &receiver_class, field)
+}
+
+/// The declared type of `field` on class (or interface) `receiver_class`,
+/// walking the inheritance chain. A declaration, not a proof: callers use it to
+/// SELECT a lowering whose own run-time check proves the value.
+pub(crate) fn class_declared_field_type(
+    ctx: &FnCtx<'_>,
+    receiver_class: &str,
+    field: &str,
+) -> Option<HirType> {
+    if let Some(class) = ctx.classes.get(receiver_class) {
         if let Some(f) = class.fields.iter().find(|f| f.name == field) {
             return Some(f.ty.clone());
         }
@@ -40,7 +51,7 @@ pub(crate) fn declared_field_type(ctx: &FnCtx<'_>, object: &Expr, field: &str) -
         }
         return None;
     }
-    if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+    if let Some(iface) = ctx.interfaces.get(receiver_class) {
         if let Some(p) = iface.properties.iter().find(|p| p.name == field) {
             return Some(p.ty.clone());
         }

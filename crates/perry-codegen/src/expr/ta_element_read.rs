@@ -181,6 +181,9 @@ pub(crate) fn try_lower(
     index: &Expr,
     number_context: bool,
 ) -> Result<Option<String>> {
+    if !matches!(object, Expr::LocalGet(_)) {
+        return super::typed_element::try_lower_read(ctx, object, index, number_context);
+    }
     let Some(kind) = receiver_kind(ctx, object) else {
         return Ok(None);
     };

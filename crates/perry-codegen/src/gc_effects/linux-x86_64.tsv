@@ -3512,6 +3512,7 @@ js_typed_array_to_sorted_default	Reenters
 js_typed_array_to_sorted_with_comparator	Reenters
 js_typed_array_view	Reenters
 js_typed_array_with	Reenters
+js_typed_element_contract	Leaf
 js_typed_f64_arg_guard	Leaf
 js_typed_f64_arg_to_raw	Reenters
 js_typed_feedback_array_get_f64	Reenters

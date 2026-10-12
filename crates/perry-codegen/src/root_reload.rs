@@ -1032,7 +1032,7 @@ fn facts_of(inst: &LlInst, slots: &HashSet<String>) -> Facts {
             use_op(&mut uses, b);
             transparent = TRANSPARENT_BIN.contains(op);
         }
-        LlInst::FNeg { dst, a, .. } => {
+        LlInst::FNeg { dst, a, .. } | LlInst::Freeze { dst, a, .. } => {
             result = reg(dst);
             use_op(&mut uses, a);
         }
@@ -1381,7 +1381,7 @@ fn rename_operand(inst: &mut LlInst, from: &str, to: &str) {
             swap(a);
             swap(b);
         }
-        LlInst::FNeg { a, .. } => swap(a),
+        LlInst::FNeg { a, .. } | LlInst::Freeze { a, .. } => swap(a),
         LlInst::FCmp { a, b, .. } | LlInst::ICmp { a, b, .. } => {
             swap(a);
             swap(b);

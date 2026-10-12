@@ -16,6 +16,8 @@ pub use format::format_typed_array;
 
 mod access;
 mod construct;
+#[cfg(perry_gc_instruments)]
+mod element_contract;
 /// #8100: the element READ helpers against a receiver the static typed-array
 /// hint no longer describes — the shape codegen emits for a reassigned local.
 #[cfg(test)]

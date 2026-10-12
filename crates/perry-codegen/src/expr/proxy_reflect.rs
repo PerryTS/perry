@@ -1189,7 +1189,12 @@ fn is_numeric_string_key(key: &str) -> bool {
         && !(key.len() > 1 && key.starts_with('0'))
 }
 
-fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receiver: &Expr) -> bool {
+pub(crate) fn put_value_index_fast_path(
+    ctx: &FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    receiver: &Expr,
+) -> bool {
     // `PutValueSet` stores the assignment base in both `target` and `receiver`;
     // those two HIR trees describe one source evaluation, not two evaluations
     // that may be coalesced only when pure. Use the same structural-identity
@@ -1258,7 +1263,10 @@ fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receive
                 | "Float64Array"
         )
     );
-    (recv_unknown || recv_typed_array) && !key_is_static_string_or_symbol
+    // A field declared as a typed array takes `index_set::lower`'s declared
+    // element-kind store (expr/typed_element.rs).
+    let recv_declared_element = super::typed_element::declared_kind(ctx, target).is_some();
+    (recv_unknown || recv_typed_array || recv_declared_element) && !key_is_static_string_or_symbol
 }
 
 fn try_lower_process_env_put_value_set(

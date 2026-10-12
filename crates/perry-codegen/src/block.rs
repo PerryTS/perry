@@ -129,6 +129,9 @@ pub struct RegCounter {
     /// Dirty flags of the function's hoisted byte-cell access proofs. The same
     /// call-emission choke point sets them; the next byte access revalidates.
     byte_access_dirty_slots: RefCell<Vec<String>>,
+    /// Flags of the open class-guard run (`expr::class_guard_memo`). The
+    /// same choke point clears them; the run's end unregisters them.
+    guard_memo_slots: RefCell<Vec<String>>,
 }
 
 impl RegCounter {
@@ -143,6 +146,7 @@ impl RegCounter {
             null_guard_symbol: RefCell::new(None),
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
             byte_access_dirty_slots: RefCell::new(Vec::new()),
+            guard_memo_slots: RefCell::new(Vec::new()),
         }
     }
 
@@ -188,6 +192,18 @@ impl RegCounter {
 
     fn byte_access_dirty_slots(&self) -> Vec<String> {
         self.byte_access_dirty_slots.borrow().clone()
+    }
+
+    pub(crate) fn push_guard_memo_slot(&self, slot: String) {
+        self.guard_memo_slots.borrow_mut().push(slot);
+    }
+
+    pub(crate) fn clear_guard_memo_slots(&self) {
+        self.guard_memo_slots.borrow_mut().clear();
+    }
+
+    fn guard_memo_slots(&self) -> Vec<String> {
+        self.guard_memo_slots.borrow().clone()
     }
 
     /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
@@ -469,6 +485,9 @@ impl LlBlock {
         for slot in self.counter.byte_access_dirty_slots() {
             self.store(crate::types::I8, "0", &slot);
         }
+        for slot in self.counter.guard_memo_slots() {
+            self.store(crate::types::I8, "0", &slot);
+        }
     }
 
     pub fn next_reg(&self) -> String {
@@ -650,6 +669,17 @@ impl LlBlock {
             ty: "double",
             a: a.to_string(),
             b: b.to_string(),
+        });
+        r
+    }
+
+    /// `freeze <ty> a` (see [`crate::inst::LlInst::Freeze`]).
+    pub fn freeze(&mut self, ty: LlvmType, a: &str) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Freeze {
+            dst: r.clone(),
+            ty,
+            a: a.to_string(),
         });
         r
     }

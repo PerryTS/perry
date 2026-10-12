@@ -188,8 +188,9 @@ fn inline_number_site(
     let slow_label = ctx.block_label(slow);
     let join_label = ctx.block_label(join);
     let bits = ctx.block().bitcast_double_to_i64(receiver);
-    let (_, handle) = guard::emit_class_field_read_precheck(
+    let (_, handle) = guard::emit_class_field_read_precheck_for(
         ctx,
+        Some(object),
         &bits,
         &class_id,
         raw_f64,

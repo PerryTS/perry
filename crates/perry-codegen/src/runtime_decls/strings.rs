@@ -712,6 +712,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[PTR, I64, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // PERRY_CHECK_CONTRACTS: the witness of the declared-kind element proof.
+    module.declare_function("js_typed_element_contract", I32, &[DOUBLE, I32, I64]);
     module.declare_function("js_dyn_index_get_site", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
     module.declare_function(
         "js_region_holder_read",

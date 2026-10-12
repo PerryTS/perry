@@ -856,6 +856,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 return Ok(v);
             }
+            // A field declared as a typed array: the declared kind selects the
+            // inline owner-brand proof (expr/typed_element.rs).
+            if let Some(value) = super::typed_element::try_lower_read(ctx, object, index, false)? {
+                return Ok(value);
+            }
             // A declared array keeps its own tier order below.
             if !is_array_expr(ctx, object) {
                 if let Some(value) = lower_guard_proven_packed_read(ctx, object, index)? {

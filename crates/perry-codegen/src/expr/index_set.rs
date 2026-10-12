@@ -540,6 +540,15 @@ pub(crate) fn lower(
                 }
                 return Ok(result);
             }
+            // A field declared as a typed array (expr/typed_element.rs).
+            if let Some(result) =
+                super::typed_element::try_lower_store(ctx, object, index, value, assignment_strict)?
+            {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
+            }
             // Issue #611: `globalThis[<key>] = value` writes to the
             // persistent global-this singleton (see the matching IndexGet
             // arm above for context).

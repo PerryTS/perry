@@ -66,6 +66,13 @@ pub enum LlInst {
         pre: &'static str,
         a: String,
     },
+    /// `dst = freeze <ty> a`: a poison operand becomes an arbitrary fixed
+    /// value. Lets an `fptosi` round trip test exactness without UB.
+    Freeze {
+        dst: String,
+        ty: LlvmType,
+        a: String,
+    },
     FCmp {
         dst: String,
         pred: String,
@@ -197,6 +204,9 @@ impl LlInst {
             }
             LlInst::FNeg { dst, pre, a } => {
                 let _ = write!(out, "  {dst} = fneg {pre}double {a}");
+            }
+            LlInst::Freeze { dst, ty, a } => {
+                let _ = write!(out, "  {dst} = freeze {ty} {a}");
             }
             LlInst::FCmp {
                 dst,

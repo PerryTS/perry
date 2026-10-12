@@ -741,6 +741,8 @@ pub(super) fn compile_method(
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
+        typed_element_locals: std::collections::HashSet::new(),
+        class_guard_window: None,
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),

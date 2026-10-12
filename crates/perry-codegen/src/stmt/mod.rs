@@ -204,6 +204,8 @@ fn lower_stmts_from(
     // (`binding_cell::ReadyCellRoots`).
     ctx.ready_cell_roots.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    // A class-guard run never outlives its statement list.
+    crate::expr::class_guard_memo::close(ctx);
     ctx.ready_cell_roots.pop_list();
     lowered
 }
@@ -345,7 +347,10 @@ fn lower_stmts_list(
             }
             continue;
         }
-        lower_stmt(ctx, &stmts[i])?;
+        crate::expr::class_guard_memo::before_stmt(ctx, stmts, i);
+        let lowered = lower_stmt(ctx, &stmts[i]);
+        crate::expr::class_guard_memo::after_stmt(ctx);
+        lowered?;
         let declared = binding_cell::declared_cell_roots(ctx, &stmts[i]);
         ctx.ready_cell_roots.settle(declared);
         region_loop::after_stmt(ctx, &stmts[i]);
@@ -581,6 +586,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             mutable,
             ..
         } => {
+            if !*mutable
+                && init
+                    .as_ref()
+                    .is_some_and(|init| crate::expr::typed_element::yields_element(ctx, init))
+            {
+                ctx.typed_element_locals.insert(*id);
+            }
             lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);
             if ctx.suffix_cursor_locals.contains(id) {

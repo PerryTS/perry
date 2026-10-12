@@ -696,6 +696,54 @@ pub(crate) fn emit_class_field_read_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> (String, String) {
+    emit_class_field_read_precheck_for(
+        ctx,
+        None,
+        obj_bits,
+        expected_class_id,
+        require_raw_f64,
+        fast_label,
+        subclass_arms,
+        keys_global_name,
+    )
+}
+
+/// [`emit_class_field_read_precheck`] for a site that names its receiver
+/// expression. Inside a class-guard run (`class_guard_memo`) the first site of
+/// a receiver runs the full guard and, on a pass, sets the run's flag; a later
+/// site whose proof an earlier site already covers tests only that flag, and
+/// takes the unchanged guard call when a call has cleared it since.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_class_field_read_precheck_for(
+    ctx: &mut FnCtx,
+    receiver: Option<&perry_hir::Expr>,
+    obj_bits: &str,
+    expected_class_id: &str,
+    require_raw_f64: bool,
+    fast_label: &str,
+    subclass_arms: &[ClassFieldSubclassArm],
+    keys_global_name: &str,
+) -> (String, String) {
+    // The memo covers the plain declared-class compare only.
+    let memo = receiver
+        .filter(|_| subclass_arms.is_empty())
+        .and_then(|receiver| super::class_guard_memo::memo_for(ctx, receiver, require_raw_f64));
+    if let Some(super::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
+        let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
+        let guardcall_label = ctx.block_label(guardcall_idx);
+        let blk = ctx.block();
+        let biased = blk.sub(
+            I64,
+            obj_bits,
+            &(crate::expr::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        );
+        let handle = crate::expr::receiver_range::emit_handle(blk, &biased);
+        let flag = blk.load(I8, flag_slot);
+        let proven = blk.icmp_ne(I8, &flag, "0");
+        blk.cond_br(&proven, fast_label, &guardcall_label);
+        ctx.current_block = guardcall_idx;
+        return (guardcall_label, handle);
+    }
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -783,7 +831,19 @@ pub(crate) fn emit_class_field_read_precheck(
         // is emitted only for an `F64` lane of every compared id's birth rep
         // (`class_field_site_raw_f64`), so the identity compare alone proves
         // the slot holds a Number.
-        blk.cond_br(&ok, fast_label, &guardcall_label);
+        match &memo {
+            Some(super::class_guard_memo::Memo::Set(slots)) => {
+                let set_idx = ctx.new_block("class_field_inline.memo_set");
+                let set_label = ctx.block_label(set_idx);
+                ctx.block().cond_br(&ok, &set_label, &guardcall_label);
+                ctx.current_block = set_idx;
+                for slot in slots {
+                    ctx.block().store(I8, "1", slot);
+                }
+                ctx.block().br(fast_label);
+            }
+            _ => blk.cond_br(&ok, fast_label, &guardcall_label),
+        }
     }
 
     ctx.current_block = guardcall_idx;

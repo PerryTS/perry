@@ -254,6 +254,8 @@ mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
 #[cfg(test)]
+mod typed_element_tests;
+#[cfg(test)]
 mod write_pic_barrier_tests;
 // `pub(crate)` since #7615 slice 8: `rooting/temp_root.rs` binds a pooled
 // temp alloca through the same shadow-slot emission every named local uses,
@@ -1377,6 +1379,12 @@ pub(crate) struct FnCtx<'a> {
     /// is never written, its truthiness is tag identity. Empty in the generic
     /// body, in module init, in methods and in every closure.
     pub spec_bool_params: std::collections::HashSet<u32>,
+    /// Bindings initialized from a declared typed-array element read
+    /// (`typed_element::yields_element`). A selection hint for the relational
+    /// lowering, which is exact for any value.
+    pub typed_element_locals: std::collections::HashSet<u32>,
+    /// The open class-guard run (`class_guard_memo`).
+    pub class_guard_window: Option<class_guard_memo::Window>,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -3158,12 +3166,14 @@ pub(crate) mod suffix_cursor;
 #[cfg(test)]
 mod bigint_bitwise_tests;
 pub(crate) mod byte_cell;
+pub(crate) mod class_guard_memo;
 mod ptr_numarray_access;
 pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
 mod toint32;
 #[cfg(test)]
 mod toint32_tests;
+pub(crate) mod typed_element;
 pub(crate) mod u8_buffer_read;
 #[cfg(test)]
 mod unary_bigint_tests;
@@ -4105,6 +4115,22 @@ fn lower_compare_value(
     right: &Expr,
 ) -> Result<Option<LoweredValue>> {
     if let Some(lowered) = lower_async_i32_control_const_compare(ctx, op, left, right)? {
+        return Ok(Some(lowered));
+    }
+    if let Some(bit) = typed_element::try_lower_relational(ctx, op, left, right)? {
+        let lowered = LoweredValue::i1(bit);
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.typed_element_relational_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![format!("op={op:?}")],
+        );
         return Ok(Some(lowered));
     }
     // #5497 Lever E: Boolean relational operands already held as native i1 do

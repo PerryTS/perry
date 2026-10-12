@@ -1760,8 +1760,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // cross-crate guard call; on a miss it leaves the current
                         // block at the single-exit IC call below.
                         let (_guardcall_label, obj_handle) =
-                            crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
+                            crate::expr::class_field_inline_guard::emit_class_field_read_precheck_for(
                                 ctx,
+                                Some(object.as_ref()),
                                 &obj_bits,
                                 &expected_class_id_str,
                                 requires_raw_f64,

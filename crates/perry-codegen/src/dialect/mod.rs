@@ -1442,6 +1442,23 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 }
                 self.def(dst, out)
             }
+            I::Freeze { dst, ty, a } => {
+                let t = basic_type(self.ctx, ty)?;
+                let av = self.val(t, a)?;
+                let name = std::ffi::CString::new(dst.trim_start_matches('%'))?;
+                // SAFETY: the builder is positioned in this function's block
+                // and `av` is a value of the same context.
+                let raw = unsafe {
+                    llvm_sys::core::LLVMBuildFreeze(
+                        self.builder.as_mut_ptr(),
+                        inkwell::values::AsValueRef::as_value_ref(&av),
+                        name.as_ptr(),
+                    )
+                };
+                // SAFETY: freeze returns a first-class value of `av`'s type.
+                let out = unsafe { BasicValueEnum::new(raw) };
+                self.def(dst, out)
+            }
             // #10779: `ty` was hardcoded `"double"` here and in `inst.rs`.
             // Kept on one line: this file sits against the 2000-line gate.
             #[rustfmt::skip]

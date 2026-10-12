@@ -190,6 +190,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // is inclusion; the deliberate exclusions are listed in
     // `codegen_env_vars_are_build_cache_inputs` below.
     "PERRY_GC_MOVING_LOOP_POLLS",
+    // Emits the run-time witness call of every declared-kind element proof.
+    "PERRY_CHECK_CONTRACTS",
     "PERRY_CANONICAL_I32_LOCALS",
     "PERRY_CANONICAL_STR_LOCALS",
     "PERRY_NANBOX_CANON",

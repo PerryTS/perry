@@ -510,6 +510,8 @@ pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_VERIFY_CLASSIFIER",
     "PERRY_STACK_SYMBOLS",
     "PERRY_FIELD_REPR_VERIFY",
+    // Compile-time: codegen emits `js_typed_element_contract` calls.
+    "PERRY_CHECK_CONTRACTS",
 ];
 
 /// The first instrument knob set (non-empty) in the environment, if any.
