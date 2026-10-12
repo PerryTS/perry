@@ -243,29 +243,23 @@ fn method_inline_probe_enabled() -> bool {
 /// or `(0, 0)` wherever the probe would decline — a non-pointer, an address
 /// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
 /// descriptor-bearing / packed-numeric-proof header, a zero class id
-/// or a zero ShapeId. The chains only ever compare both words against
-/// compiler-published non-zero pairs, so the zero convention is preserved by
-/// two `select`s rather than extra blocks.
+/// or a zero ShapeId. The packed result is zero whenever either header
+/// field is zero, preserving the legacy probe's complete admission contract.
 ///
 /// The header word and the packed `class_id | ShapeId << 32` load are the
 /// ones [`emit_inline_direct_method_shape_guard`] already uses for the
 /// single-arm form; this is the same sequence without the comparison baked
 /// in. On the wolf-ecs cycle the runtime probe was 2.2–2.6% of self time on
 /// call, address classification and flag resolution for a few loads.
-pub(crate) fn emit_inline_direct_method_shape_probe(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-) -> (String, String) {
+fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -> (String, String) {
     let deref_idx = ctx.new_block("method_probe.deref");
     let read_idx = ctx.new_block("method_probe.read");
     let merge_idx = ctx.new_block("method_probe.merge");
     let deref_label = ctx.block_label(deref_idx);
     let read_label = ctx.block_label(read_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let heap_floor =
-        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
-    let heap_ceiling =
-        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let floor = crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple);
+    let ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple);
     let check_end = {
         let blk = ctx.block();
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
@@ -276,9 +270,14 @@ pub(crate) fn emit_inline_direct_method_shape_probe(
         // address form internal method ABIs carry.
         let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
         let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
-        let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
-        let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
-        let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
+        let in_heap_range = if packed {
+            let relative = blk.sub(I64, &recv_handle, &floor.to_string());
+            blk.icmp_ult(I64, &relative, &(ceiling - floor).to_string())
+        } else {
+            let above = blk.icmp_uge(I64, &recv_handle, &floor.to_string());
+            let below = blk.icmp_ult(I64, &recv_handle, &ceiling.to_string());
+            blk.and(I1, &above, &below)
+        };
         let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
         let can_deref = ptr_safe;
         blk.cond_br(&can_deref, &deref_label, &merge_label);
@@ -298,34 +297,63 @@ pub(crate) fn emit_inline_direct_method_shape_probe(
         blk.label.clone()
     };
     ctx.current_block = read_idx;
-    let (cid, shape_id, read_end) = {
+    let (first, second, read_end) = {
         let blk = ctx.block();
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
         let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let obj_ptr = blk.inttoptr(I64, &recv_handle);
-        // ObjectHeader: `class_id: u32` @0, authoritative ShapeId @4.
-        let class_id = blk.load(I32, &obj_ptr);
-        let shape_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
-        let shape_id = blk.load(I32, &shape_ptr);
-        let class_nonzero = blk.icmp_ne(I32, &class_id, "0");
-        let shape_nonzero = blk.icmp_ne(I32, &shape_id, "0");
-        let both = blk.and(I1, &class_nonzero, &shape_nonzero);
-        let cid = blk.select(I1, &both, I32, &class_id, "0");
-        let shape = blk.select(I1, &both, I32, &shape_id, "0");
+        let (first, second) = if packed {
+            // The method site's authoritative class_id | ShapeId << 32 encoding.
+            let word = blk.load(I64, &obj_ptr);
+            let cid = blk.trunc(I64, &word, I32);
+            let high = blk.lshr(I64, &word, "32");
+            let shape = blk.trunc(I64, &high, I32);
+            let cid_nonzero = blk.icmp_ne(I32, &cid, "0");
+            let shape_nonzero = blk.icmp_ne(I32, &shape, "0");
+            let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
+            (blk.select(I1, &both, I64, &word, "0"), String::new())
+        } else {
+            // Preserve the existing scalar emission for callers needing both fields.
+            let cid = blk.load(I32, &obj_ptr);
+            let shape_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+            let shape = blk.load(I32, &shape_ptr);
+            let cid_nonzero = blk.icmp_ne(I32, &cid, "0");
+            let shape_nonzero = blk.icmp_ne(I32, &shape, "0");
+            let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
+            (
+                blk.select(I1, &both, I32, &cid, "0"),
+                blk.select(I1, &both, I32, &shape, "0"),
+            )
+        };
         blk.br(&merge_label);
-        (cid, shape, blk.label.clone())
+        (first, second, blk.label.clone())
     };
     ctx.current_block = merge_idx;
     let blk = ctx.block();
-    let cid_out = blk.phi(
-        I32,
-        &[("0", &check_end), ("0", &deref_end), (&cid, &read_end)],
+    let first = blk.phi(
+        if packed { I64 } else { I32 },
+        &[("0", &check_end), ("0", &deref_end), (&first, &read_end)],
     );
-    let shape_out = blk.phi(
-        I32,
-        &[("0", &check_end), ("0", &deref_end), (&shape_id, &read_end)],
-    );
-    (cid_out, shape_out)
+    let second = if packed {
+        String::new()
+    } else {
+        blk.phi(
+            I32,
+            &[("0", &check_end), ("0", &deref_end), (&second, &read_end)],
+        )
+    };
+    (first, second)
+}
+
+fn emit_inline_direct_method_word_probe(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
+    emit_direct_method_probe(ctx, recv_box, true).0
+}
+
+pub(crate) fn emit_inline_direct_method_shape_probe(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+) -> (String, String) {
+    emit_direct_method_probe(ctx, recv_box, false)
 }
 
 /// Emit the exact ordinary-object `(class_id, ShapeId)` guard used by a
@@ -1014,7 +1042,8 @@ pub(super) fn emit_guarded_direct_method_call(
         super::holder_shape_guard::method_guard(ctx, receiver_class_name, property)
     };
     if multi_arm {
-        let (cid, shape_id) = emit_inline_direct_method_shape_probe(ctx, recv_box);
+        let receiver_word = emit_inline_direct_method_word_probe(ctx, recv_box);
+        let cid = ctx.block().trunc(I64, &receiver_word, I32);
         let mut holder_candidates = vec![(expected_class_id, receiver_class_name.to_string())];
         holder_candidates.extend(subclass_arms.iter().filter_map(|arm| {
             ctx.class_ids
@@ -1023,17 +1052,22 @@ pub(super) fn emit_guarded_direct_method_call(
                 .map(|(name, _)| (arm.class_id, name.clone()))
         }));
         let cid = super::holder_shape_guard::gate_class(ctx, &cid, property, &holder_candidates);
+        let holder_ok = ctx.block().icmp_ne(I32, &cid, "0");
+        let receiver_word = ctx.block().select(I1, &holder_ok, I64, &receiver_word, "0");
         {
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();
-            let cid_ok = blk.icmp_eq(I32, &cid, &expected_class_id_str);
-            let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+            let high = blk.zext(I32, &expected_shape_id, I64);
+            let high = blk.shl(I64, &high, "32");
+            let expected_word = blk.or(I64, &high, &expected_class_id_str);
+            let pass = crate::typed_shape::emit_compatible_class_shape_eq(
                 blk,
-                &shape_id,
+                &receiver_word,
+                &expected_class_id_str,
                 &expected_shape_id,
+                &expected_word,
                 &[],
             );
-            let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &fast_label, &next);
         }
         // The probe's `(0, 0)` decline never equals the word: it starts
@@ -1055,10 +1089,17 @@ pub(super) fn emit_guarded_direct_method_call(
             let class_id_str = arm.class_id.to_string();
             let arm_shape_id = subclass_shape_ids[i].clone();
             let blk = ctx.block();
-            let cid_ok = blk.icmp_eq(I32, &cid, &class_id_str);
-            let shape_ok =
-                crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &arm_shape_id, &[]);
-            let pass = blk.and(I1, &cid_ok, &shape_ok);
+            let high = blk.zext(I32, &arm_shape_id, I64);
+            let high = blk.shl(I64, &high, "32");
+            let expected_word = blk.or(I64, &high, &class_id_str);
+            let pass = crate::typed_shape::emit_compatible_class_shape_eq(
+                blk,
+                &receiver_word,
+                &class_id_str,
+                &arm_shape_id,
+                &expected_word,
+                &[],
+            );
             blk.cond_br(&pass, &case_label, &next);
         }
         if let (Some(idx), Some((word, _)), Some(label)) = (
@@ -1068,12 +1109,8 @@ pub(super) fn emit_guarded_direct_method_call(
         ) {
             ctx.current_block = idx;
             let blk = ctx.block();
-            let shape_wide = blk.zext(I32, &shape_id, I64);
-            let shape_high = blk.shl(I64, &shape_wide, "32");
-            let class_wide = blk.zext(I32, &cid, I64);
-            let packed = blk.or(I64, &shape_high, &class_wide);
             let learned = blk.load_atomic_monotonic(I64, word, 8);
-            let hit = blk.icmp_eq(I64, &packed, &learned);
+            let hit = blk.icmp_eq(I64, &receiver_word, &learned);
             blk.cond_br(&hit, label, &fallback_label);
         }
         ctx.current_block = guard_idx;

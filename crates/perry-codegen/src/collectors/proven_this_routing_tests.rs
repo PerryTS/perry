@@ -1743,6 +1743,34 @@ fn class_array_dispatch_consumes_own_subclass_shape_without_a_second_tower() {
 }
 
 #[test]
+fn class_dispatch_compares_the_authoritative_packed_word() {
+    let ir = emit_static(&polymorphic_array_site_module(), false);
+    let caller = function_body(&ir, "__probe(");
+    let tests: Vec<_> = blocks(&caller)
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("method_direct.subtest"))
+        .collect();
+    assert_eq!(tests.len(), 2);
+    for (_, body) in tests {
+        assert!(body.iter().any(|l| l.contains("icmp eq i64")));
+        assert!(!body.iter().any(|l| l.contains("icmp eq i32")));
+    }
+    assert!(!caller.contains("@js_object_get_own_field_or_undef("));
+    let read = blocks(&caller)
+        .into_iter()
+        .find(|(label, _)| label.starts_with("method_probe.read"))
+        .expect("receiver word must be read only after admission");
+    assert_eq!(
+        read.1.iter().filter(|l| l.contains("icmp ne i32")).count(),
+        2
+    );
+    assert!(read
+        .1
+        .iter()
+        .any(|l| l.contains("select i1") && l.ends_with("i64 0")));
+}
+
+#[test]
 fn class_array_annotation_is_only_a_guard_candidate() {
     let mut m = polymorphic_array_site_module();
     m.functions[0].params[0].ty = Type::Array(Box::new(Type::Any));
