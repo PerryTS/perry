@@ -1,0 +1,1 @@
+Proven string-literal locals and guarded parameters now expose `.length` as numeric to addition lowering. The proof is limited to stable runtime-derived string facts; generic values, annotation-only claims, and reassigned locals keep dynamic addition semantics.

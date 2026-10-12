@@ -42,6 +42,19 @@ pub(crate) fn is_typed_array_expr(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 }
 
 pub(crate) fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    // A LocalGet's declared hint is only a candidate, but a stable initializer
+    // proof is runtime-derived evidence. String literals have a numeric
+    // length just like widened strings; consult that proof directly so a
+    // literal-typed binding does not fall back to a dynamic `+` consumer.
+    if let Expr::LocalGet(id) = object {
+        if matches!(
+            ctx.stable_local_type_proof(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ) {
+            return true;
+        }
+    }
+
     match static_type_of(ctx, object) {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
         Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),

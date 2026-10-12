@@ -32,6 +32,68 @@ fn root_slots(ir: &str) -> usize {
 }
 
 #[test]
+fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body() {
+    let mut module = Module::new("literal_length_guard_ts");
+    module.functions.push(Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 10,
+            name: "label".to_string(),
+            ty: Type::StringLiteral("abc".to_string()),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(10)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            }),
+            right: Box::new(Expr::Integer(1)),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::String("abc".to_string())],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let specialized = function_ir(&ir, "probe$spec_");
+    let generic = function_ir(&ir, "probe$generic(");
+    assert!(
+        specialized.contains("fadd double")
+            && !specialized.contains("js_dynamic_string_or_number_add"),
+        "the call-site-proven literal parameter must lower `.length` numerically:\n{specialized}"
+    );
+    assert!(
+        generic.contains("call double @js_dynamic_string_or_number_add("),
+        "the fallback body must keep generic `+` semantics:\n{generic}"
+    );
+}
+
+#[test]
 fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     let payload = Type::Object(ObjectType {
         name: Some("Payload".to_string()),

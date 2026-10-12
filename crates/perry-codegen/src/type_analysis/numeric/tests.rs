@@ -155,6 +155,102 @@ fn mul(left: Expr, right: Expr) -> Expr {
     }
 }
 
+fn length_plus_one(object: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::PropertyGet {
+            object: Box::new(object),
+            property: "length".to_string(),
+            byte_offset: 0,
+        }),
+        right: Box::new(Expr::Integer(1)),
+    }
+}
+
+fn probe_ir(ir: &str) -> &str {
+    let start = ir
+        .find("define double @perry_fn_")
+        .expect("probe function definition");
+    let end = start + ir[start..].find("\n}").expect("probe function end");
+    &ir[start..end]
+}
+
+#[test]
+fn proven_string_literal_length_is_numeric_but_annotations_are_not_proofs() {
+    let literal_local = emitted_ir(probe_module(
+        "literal_length_proof_unit.ts",
+        Vec::new(),
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "label".to_string(),
+                ty: Type::StringLiteral("abc".to_string()),
+                mutable: false,
+                init: Some(Expr::String("abc".to_string())),
+            },
+            Stmt::Return(Some(length_plus_one(Expr::LocalGet(10)))),
+        ],
+    ));
+    let literal_local = probe_ir(&literal_local);
+    assert!(
+        literal_local.contains("fadd double")
+            && !literal_local.contains("js_dynamic_string_or_number_add"),
+        "a stable string-literal initializer proves `.length` numeric:\n{literal_local}"
+    );
+
+    let generic_receiver = emitted_ir(probe_module(
+        "generic_length_receiver_unit.ts",
+        vec![typed_param(2, "value", Type::Any)],
+        vec![Stmt::Return(Some(length_plus_one(Expr::LocalGet(2))))],
+    ));
+    let generic_receiver = probe_ir(&generic_receiver);
+    assert!(
+        generic_receiver.contains("call double @js_dynamic_string_or_number_add("),
+        "an unconstrained receiver must keep generic JS `+` semantics:\n{generic_receiver}"
+    );
+
+    let false_annotation = emitted_ir(probe_module(
+        "false_literal_annotation_length_unit.ts",
+        vec![typed_param(2, "source", Type::Any)],
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "label".to_string(),
+                ty: Type::StringLiteral("abc".to_string()),
+                mutable: false,
+                init: Some(Expr::LocalGet(2)),
+            },
+            Stmt::Return(Some(length_plus_one(Expr::LocalGet(10)))),
+        ],
+    ));
+    let false_annotation = probe_ir(&false_annotation);
+    assert!(
+        false_annotation.contains("call double @js_dynamic_string_or_number_add("),
+        "a literal annotation over an unconstrained value is not a proof:\n{false_annotation}"
+    );
+
+    let reassigned_local = emitted_ir(probe_module(
+        "reassigned_literal_length_unit.ts",
+        vec![typed_param(2, "source", Type::Any)],
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "label".to_string(),
+                ty: Type::StringLiteral("abc".to_string()),
+                mutable: true,
+                init: Some(Expr::String("abc".to_string())),
+            },
+            Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::LocalGet(2)))),
+            Stmt::Return(Some(length_plus_one(Expr::LocalGet(10)))),
+        ],
+    ));
+    let reassigned_local = probe_ir(&reassigned_local);
+    assert!(
+        reassigned_local.contains("call double @js_dynamic_string_or_number_add("),
+        "a reassigned string local must not retain its initializer proof:\n{reassigned_local}"
+    );
+}
+
 #[test]
 fn math_result_multiply_stays_inline_fmul() {
     // The #6511 repro's accumulator-loop shape, with a call-free MathSin
