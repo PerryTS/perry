@@ -11,6 +11,21 @@ pub(crate) unsafe fn array_property_bag(
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return array_property_bag(clean_arr_ptr(arr));
     }
+    array_property_bag_resolved(arr)
+}
+
+/// Read the property bag without entering the general array resolver.
+///
+/// # Safety
+/// `arr` is a live, non-forwarded ordinary array, with no intervening
+/// allocation or safepoint since that proof (as for array_object_flags_resolved).
+#[inline(always)]
+pub(crate) unsafe fn array_property_bag_resolved(
+    arr: *const ArrayHeader,
+) -> *mut crate::object::ObjectHeader {
+    let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
+    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_FORWARDED, 0);
     if (*header)._reserved & crate::gc::GC_ARRAY_NAMED_PROPS == 0 {
         return std::ptr::null_mut();
     }

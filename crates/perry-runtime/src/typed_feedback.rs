@@ -1137,6 +1137,8 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
 
 #[path = "typed_feedback/guards.rs"]
 mod guards;
+#[cfg(test)]
+pub(crate) use guards::js_class_field_get_ic_fast;
 pub use guards::{
     js_closure_exact_func_guard, js_object_own_method_cache_miss,
     js_typed_feedback_class_field_get_guard, js_typed_feedback_class_field_set_guard,

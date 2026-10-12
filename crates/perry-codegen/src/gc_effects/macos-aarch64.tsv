@@ -316,6 +316,7 @@ js_aux_has_active	Reenters
 js_await_any_promise	Leaf
 js_await_js_promise	Reenters
 js_await_loop_tick_timers	Reenters
+js_back_hot_text	Leaf
 js_bcrypt_compare	Reenters
 js_bcrypt_compare_sync	Reenters
 js_bcrypt_gen_salt	Reenters
@@ -629,6 +630,7 @@ js_class_static_field_put	Reenters
 js_class_static_method_call	Reenters
 js_class_static_value_call_guard	Reenters
 js_class_value	Reenters
+js_class_value_super_construct_site	Reenters
 js_clear_exception	Leaf
 js_clear_immediate_value	Reenters
 js_clear_interval_value	Reenters
@@ -1021,6 +1023,7 @@ js_domain_remove	Reenters
 js_domain_run	Reenters
 js_drain_queued_microtasks	Reenters
 js_dyn_index_get	Reenters
+js_dyn_index_get_site	Reenters
 js_dyn_index_set	Reenters
 js_dyn_index_set_strict	Reenters
 js_dynamic_add	Reenters
@@ -1336,7 +1339,7 @@ js_gc_collect	Reenters
 js_gc_enter_unsafe_zone	Leaf
 js_gc_exit_unsafe_zone	Leaf
 js_gc_forget_object_layout	Leaf
-js_gc_init	Leaf
+js_gc_init	Reenters
 js_gc_loop_safepoint	Reenters
 js_gc_memory_pressure	Reenters
 js_gc_module_collect	Reenters
@@ -1363,8 +1366,8 @@ js_ge	Reenters
 js_generator_attach_closure_prototype	Reenters
 js_generator_attach_prototype	Reenters
 js_generator_create	Reenters
-js_generator_set_slot	Reenters
 js_generator_result	Reenters
+js_generator_set_slot	Reenters
 js_get_async_iterator	Reenters
 js_get_cjs_main_module	Leaf
 js_get_current_step_closure	Leaf
@@ -1488,6 +1491,9 @@ js_iter_result_set_f64	Leaf
 js_iter_result_set_i1	Leaf
 js_iter_result_set_i32	Leaf
 js_iterator_close_if_not_done	Reenters
+js_iterator_close_on_throw	Reenters
+js_iterator_delegate_return	Reenters
+js_iterator_delegate_throw	Reenters
 js_iterator_from	Reenters
 js_iterator_next_method	Reenters
 js_iterator_next_result	Reenters
@@ -1676,6 +1682,7 @@ js_method_direct_shape_guard	Leaf
 js_method_site_call_split	Reenters
 js_method_site_call_value	Reenters
 js_method_site_call_value_apply	Reenters
+js_method_site_chain_value	Leaf
 js_method_site_lookup	Reenters
 js_method_site_miss	Reenters
 js_method_site_prepare	Reenters
@@ -1800,6 +1807,7 @@ js_navstack_register_route	Reenters
 js_net_callback_ptr	Leaf
 js_net_create_server_handle_stub	Leaf
 js_net_normalize_args	Reenters
+js_net_socket_address_parse_value	Reenters
 js_net_throw_invalid_address	ThrowOnly
 js_net_validate_block_list_prefix	Reenters
 js_net_validate_connect_port	ThrowOnly
@@ -1807,13 +1815,13 @@ js_net_validate_create_server_options	Reenters
 js_net_validate_default_auto_select_family	Reenters
 js_net_validate_default_auto_select_family_attempt_timeout	Reenters
 js_net_validate_listen_port	ThrowOnly
+js_net_validate_socket_address_parse_input	Reenters
 js_net_validate_socket_timeout	Reenters
 js_net_validate_tos	Reenters
 js_new_from_handle	Leaf
 js_new_function_construct	Reenters
 js_new_function_construct_apply	Reenters
 js_new_function_construct_site	Reenters
-js_class_value_super_construct_site	Reenters
 js_new_function_construct_with_new_target	Reenters
 js_new_instance	Reenters
 js_new_target_get	Leaf
@@ -2053,6 +2061,7 @@ js_object_alloc_class_with_keys	Reenters
 js_object_alloc_fast	Reenters
 js_object_alloc_fast_with_parent	Reenters
 js_object_alloc_null_proto	Reenters
+js_object_alloc_plain	Reenters
 js_object_alloc_with_parent	Reenters
 js_object_alloc_with_shape	Reenters
 js_object_array_keytable_write_guard	Reenters
@@ -2086,6 +2095,7 @@ js_object_freeze	Reenters
 js_object_from_entries	Reenters
 js_object_get_class_id	Leaf
 js_object_get_field	Leaf
+js_object_get_field_by_key_site	Reenters
 js_object_get_field_by_name	Reenters
 js_object_get_field_by_name_boxed	Reenters
 js_object_get_field_by_name_f64	Reenters
@@ -2128,8 +2138,6 @@ js_object_literal_infer_computed_function_name	AllocOnly
 js_object_literal_set_computed	Reenters
 js_object_literal_set_prototype	Reenters
 js_object_literal_spread	Reenters
-js_object_spread_fresh	Reenters
-js_object_spread_fresh_leading	Reenters
 js_object_literal_to_property_key	Reenters
 js_object_live_slot_count	Leaf
 js_object_lookup_getter	Reenters
@@ -2160,6 +2168,8 @@ js_object_shape_id_for_class_keys	Reenters
 js_object_shape_id_for_class_keys_live	Reenters
 js_object_shape_id_for_class_keys_static	Reenters
 js_object_shape_id_for_keys	Reenters
+js_object_spread_fresh	Reenters
+js_object_spread_fresh_leading	Reenters
 js_object_super_call	Reenters
 js_object_super_get	Reenters
 js_object_super_put_value_set	Reenters
@@ -2192,6 +2202,7 @@ js_os_user_info	Reenters
 js_os_user_info_buffer	Reenters
 js_os_user_info_options	Reenters
 js_os_version	AllocOnly
+js_packed_add_chain_valid	Leaf
 js_packed_arraylike_index_get	Reenters
 js_packed_arraylike_loop_guard	Reenters
 js_packed_arraylike_loop_guard_live	Reenters
@@ -2686,12 +2697,13 @@ js_regexp_exec_get_groups	Leaf
 js_regexp_exec_get_index	Leaf
 js_regexp_get_flags	Reenters
 js_regexp_get_source	Reenters
-js_regexp_new	Reenters
 js_regexp_literal	Reenters
+js_regexp_new	Reenters
 js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters
 js_region_guard_prime	Reenters
+js_region_holder_read	Leaf
 js_region_loop_pack	Leaf
 js_region_loop_prime	Leaf
 js_register_agent_aux_pump	Leaf
@@ -2819,7 +2831,6 @@ js_request_new_from_init	Reenters
 js_request_new_from_input	Reenters
 js_request_subclass_init	Reenters
 js_request_text	Reenters
-js_region_holder_read	Leaf
 js_require_json_disk	Reenters
 js_require_object_coercible	ThrowOnly
 js_require_path_module	Reenters
@@ -3833,6 +3844,7 @@ perry_app_group_suite_name	Leaf
 perry_arkts_register_text_id	Reenters
 perry_arkts_set_text	Reenters
 perry_arkts_show_toast	Reenters
+perry_class_value_dir_cell	Leaf
 perry_cluster_compute_key_id	Leaf
 perry_cluster_is_worker	Leaf
 perry_cluster_worker_listening	Reenters
@@ -3986,14 +3998,3 @@ perry_updater_verify_signature_v2	Reenters
 perry_updater_write_sentinel	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
-js_net_socket_address_parse_value	Reenters
-js_net_validate_socket_address_parse_input	Reenters
-js_iterator_close_on_throw	Reenters
-js_iterator_delegate_return	Reenters
-js_iterator_delegate_throw	Reenters
-perry_class_value_dir_cell	Leaf
-js_object_alloc_plain	Reenters
-js_method_site_chain_value	Leaf
-js_dyn_index_get_site	Reenters
-js_object_get_field_by_key_site	Reenters
-js_packed_add_chain_valid	Leaf

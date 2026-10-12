@@ -118,8 +118,9 @@ pub use self::concat_reverse::{
     js_array_fill_range, js_array_reverse, js_array_reverse_value,
 };
 pub(crate) use self::element_shape::{
-    forget_element_shape, forget_element_shape_after_full_prune, invalidate_all_element_shapes, note_element_store,
-    note_element_store_resolved_flags, prune_dead_element_shape_owners, transfer_element_shape,
+    forget_element_shape, forget_element_shape_after_full_prune, invalidate_all_element_shapes,
+    note_element_store, note_element_store_resolved_flags, prune_dead_element_shape_owners,
+    transfer_element_shape,
 };
 pub use self::element_shape::{
     js_array_element_shape_check, js_array_element_shape_class, js_array_element_shape_epoch,
@@ -329,8 +330,9 @@ pub(crate) use self::named_props::{
     array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
     array_named_property_set, array_named_props_reserve, array_named_props_slot,
-    array_property_bag, array_property_bag_ensure, carry_named_props_reserve,
-    ensure_named_props_slot, prune_dead_full_array_named_property_owners, store_named_props_word,
+    array_property_bag, array_property_bag_ensure, array_property_bag_resolved,
+    carry_named_props_reserve, ensure_named_props_slot,
+    prune_dead_full_array_named_property_owners, store_named_props_word,
     transfer_full_array_named_props_owner, visit_array_named_props_slots,
 };
 

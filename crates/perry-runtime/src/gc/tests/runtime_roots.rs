@@ -20,6 +20,7 @@ mod interned_string_caches;
 mod iter_result_keys;
 mod iterator_helper_roots;
 mod json_construction;
+mod json_ic_leaf;
 mod json_key_lifetime;
 mod json_record_output;
 mod json_shape_template;

@@ -10,11 +10,17 @@ const FUNCTION_TOKEN: u64 = PIC_ID_TOKEN_BIT | (1 << 34);
 /// Array.prototype's bag supplies both the token and the holder shape.
 unsafe fn array_facts(recv: *const ObjectHeader) -> Option<(i64, *const ObjectHeader)> {
     let header = crate::value::addr_class::try_read_gc_header(recv as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
         return None;
     }
-    let arr = crate::array::clean_arr_ptr(recv.cast());
-    if arr.is_null() || !crate::array::array_has_plain_shape_resolved(arr) {
+    // The header is the layout authority. A lazy JSON header or a growth
+    // forwarding stub must take the collecting continuation, never the
+    // general array resolver (which can materialize JSON). The live ordinary
+    // array needs only its shape flags; no resolution or allocation is needed.
+    let arr = recv.cast();
+    if !crate::array::array_has_plain_shape_resolved(arr) {
         return None;
     }
     let proto = crate::array::array_prototype_addr_if_resolved();
@@ -25,7 +31,9 @@ unsafe fn array_facts(recv: *const ObjectHeader) -> Option<(i64, *const ObjectHe
     if crate::array::array_object_flags_resolved(proto) & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
         return None;
     }
-    let bag = crate::array::array_property_bag(proto);
+    // The intrinsic cache heals forwarding before returning its Array head.
+    // Reading its bag is a load, not another general array resolution.
+    let bag = crate::array::array_property_bag_resolved(proto);
     if bag.is_null() {
         return None;
     }
@@ -176,7 +184,9 @@ pub(crate) unsafe fn prime_array_read(
 /// intrinsic deletion markers otherwise require the generic read.
 pub(super) unsafe fn function_token(closure: usize) -> Option<i64> {
     let c = closure as *const crate::closure::ClosureHeader;
-    if (*c).shape_id != crate::closure::shape::function_dictionary_shape()
+    // Fixed at agent creation: reading the intrinsic id never mints metadata.
+    let dictionary = crate::closure::shape::function_dictionary_shape();
+    if (*c).shape_id != dictionary
         || (*c).info.is_null()
         || (*(*c).info).code == crate::closure::BOUND_METHOD_FUNC_PTR
         || crate::closure::shape::FunctionProtoKind::of_body(&*(*c).info)
@@ -292,13 +302,26 @@ mod tests {
             );
             assert_eq!(prime_array_read(recv.cast(), key, &mut slot), Some(17.0));
             assert_eq!(front(recv.cast(), &mut slot), 17.0f64.to_bits());
-            let grown = crate::array::js_array_push_f64(recv, 1.0);
-            let grown = crate::array::js_array_push_f64(grown, 2.0);
+            let mut grown = recv;
+            for value in 0..32 {
+                grown = crate::array::js_array_push_f64(grown, value as f64);
+            }
+            assert_ne!(grown, recv, "the control must create a forwarding alias");
             assert_eq!(front(grown.cast(), &mut slot), 17.0f64.to_bits());
             assert_eq!(
                 front(recv.cast(), &mut slot),
-                17.0f64.to_bits(),
-                "growth aliases resolve before admission"
+                crate::value::TAG_HOLE,
+                "growth aliases decline to the collecting continuation"
+            );
+            assert_eq!(
+                crate::object::js_object_get_field_ic_slow(
+                    recv as i64,
+                    key,
+                    &mut slot,
+                    &std::sync::atomic::AtomicU64::new(0xFFFF_FFFF),
+                ),
+                17.0,
+                "the shared slow path resolves the growth alias"
             );
             crate::object::js_object_set_field_by_name(grown.cast(), key, 23.0);
             assert_eq!(

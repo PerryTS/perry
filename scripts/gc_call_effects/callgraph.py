@@ -1279,11 +1279,30 @@ TABLE_HEADER = """\
 """
 
 
+NATIVE_OBJECT_STEMS = frozenset(
+    os.path.splitext(filename)[0]
+    for crate in ("perry-runtime", "perry-stdlib")
+    for _, _, filenames in os.walk(os.path.join(ROOT, "crates", crate, "src"))
+    for filename in filenames
+    if os.path.splitext(filename)[1] in (".c", ".cc", ".cpp", ".S")
+)
+NATIVE_MEMBER = re.compile(r"^[0-9a-f]+-(.+)\.(?:o|obj)$")
+
+
 def perry_member(obj: str, name: str) -> bool:
-    """Only symbols from Perry's own crates are tabled; C dependencies
-    (mimalloc, zstd, ...) are never called by codegen by name."""
+    """Table exports owned by Perry, including cc-built native sources.
+
+    Native ownership is derived from source filenames, not symbol names or
+    effects. Their bodies go through the same graph analysis as Rust bodies;
+    dependency objects (mimalloc, zstd, ...) remain outside the table.
+    """
     crate = crate_of(obj)
-    if crate is None or not crate.startswith("perry"):
+    if crate is None:
+        member = obj.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        native = NATIVE_MEMBER.fullmatch(member)
+        if native is None or native.group(1) not in NATIVE_OBJECT_STEMS:
+            return False
+    elif not crate.startswith("perry"):
         return False
     return not name.startswith(("_R", "_ZN", "_Z", "__")) and not temp_label(name)
 

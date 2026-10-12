@@ -47,7 +47,7 @@ fn emitted(target: &str, agent_strings_tls: bool) -> String {
 }
 
 #[test]
-fn executable_image_handles_are_boxed_at_runtime_only_for_apple_targets() {
+fn executable_image_handles_are_boxed_at_runtime_for_relocation_limited_targets() {
     for target in [
         "arm64-apple-macosx15.0.0",
         "x86_64-apple-darwin",
@@ -55,6 +55,8 @@ fn executable_image_handles_are_boxed_at_runtime_only_for_apple_targets() {
         "arm64-apple-tvos",
         "arm64-apple-watchos",
         "arm64-apple-xros",
+        "wasm32-wasip2",
+        "wasm32-unknown-unknown",
     ] {
         let ir = emitted(target, false);
         assert!(
@@ -103,11 +105,7 @@ fn runtime_boxed_image_handles_and_ready_guard_follow_agent_tls_mode() {
     assert!(single_agent.contains("@__perry_agent_strings_ready_probe = internal global i8 0"));
 
     let worker_agent = emitted("arm64-apple-macosx15.0.0", true);
-    assert!(
-        worker_agent.contains("@probe_.str.0.handle = internal thread_local global double 0.0")
-    );
-    assert!(
-        worker_agent
-            .contains("@__perry_agent_strings_ready_probe = internal thread_local global i8 0")
-    );
+    assert!(worker_agent.contains("@probe_.str.0.handle = internal thread_local global double 0.0"));
+    assert!(worker_agent
+        .contains("@__perry_agent_strings_ready_probe = internal thread_local global i8 0"));
 }

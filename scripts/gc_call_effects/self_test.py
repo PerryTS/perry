@@ -39,6 +39,7 @@ extern int unknown_external(int);
 extern void *memcpy(void *, const void *, unsigned long);
 
 int leaf_helper(int x) { PLANT return x * 3 + 1; }
+int js_back_hot_text(int x) { PLANT return x; }
 int alloc_helper(int x) { fixture_collect(); return x + 2; }
 int throw_helper(int x) { if (x > 100) js_throw(); return x; }
 int reenter_helper(int x) { return js_proxy_get(x) + 3; }
@@ -81,6 +82,7 @@ extern regex ^memcpy$ -- libc memory primitive, no callbacks
 """
 
 EXPECTED = {
+    "js_back_hot_text": "Leaf",
     "leaf_helper": "Leaf",
     "libc_helper": "Leaf",
     "switch_helper": "Leaf",
@@ -105,7 +107,8 @@ def build_archive(tmp: str, triple: str, tag: str, plant: bool) -> str:
     src = os.path.join(tmp, f"fixture_{tag}.c")
     with open(src, "w", encoding="utf-8") as fh:
         fh.write(FIXTURE.replace("PLANT", "x = js_proxy_get(x);" if plant else ""))
-    obj = os.path.join(tmp, f"fixture_{tag}.o")
+    # cc::Build's native member convention, as used for src/hot_text.c.
+    obj = os.path.join(tmp, "8a1b2c3d-hot_text.o")
     lib = os.path.join(tmp, f"libfixture_{tag}.a")
     subprocess.run([clang, "-target", triple, "-O2", "-ffunction-sections", "-fno-inline",
                     "-fno-builtin", "-c", src, "-o", obj], check=True)
@@ -119,6 +122,21 @@ def classify(lib: str, rules: list) -> dict:
     g = cg.build_graph([lib])
     res = cg.classify(g, rules)
     return g, res
+
+
+def classify_native_hot_text(tmp: str, triple: str, tag: str) -> str | None:
+    """Analyze the production C body, including the non-Linux no-op body."""
+    obj = os.path.join(tmp, "9abcdef0-hot_text.o")
+    lib = os.path.join(tmp, f"libhot_text_{tag}.a")
+    subprocess.run([cg.find_tool("clang"), "-target", triple, "-ffreestanding",
+                    "-O3", "-ffunction-sections", "-c",
+                    os.path.join(cg.ROOT, "crates", "perry-runtime", "src", "hot_text.c"),
+                    "-o", obj], check=True)
+    subprocess.run([cg.find_tool("llvm-ar"), "rcs", lib, obj], check=True)
+    graph = cg.build_graph([lib])
+    result = cg.classify(graph, cg.load_rules(os.path.join(HERE, "seeds.txt")),
+                         table_filter=cg.perry_member)
+    return result.cls.get("js_back_hot_text")
 
 
 def load_rules_text(tmp: str, text: str) -> list:
@@ -145,8 +163,15 @@ def main() -> int:
             failures.append("a folded unrelated alias inherited an audited exemption")
         per_format = {}
         for tag, triple in TARGETS.items():
+            if classify_native_hot_text(tmp, triple, tag) != "Leaf":
+                failures.append(f"{tag}: production js_back_hot_text is not a tabled Leaf")
             lib = build_archive(tmp, triple, tag, plant=False)
             g, res = classify(lib, rules)
+            native = cg.classify(g, rules, table_filter=cg.perry_member)
+            if native.cls.get("js_back_hot_text") != "Leaf":
+                failures.append(f"{tag}: repository-owned C export missing from table")
+            if cg.perry_member("8a1b2c3d-mimalloc.o", "js_back_hot_text"):
+                failures.append(f"{tag}: a dependency inherited native ownership by name")
             got = {k: res.cls.get(k, "(missing)") for k in EXPECTED}
             per_format[tag] = got
             for sym, want in EXPECTED.items():
@@ -162,6 +187,10 @@ def main() -> int:
             # SABOTAGE: plant the #11522 shape into the Leaf helper.
             planted = build_archive(tmp, triple, tag + "-planted", plant=True)
             g2, res2 = classify(planted, rules)
+            native_planted = cg.classify(g2, rules, table_filter=cg.perry_member)
+            unsafe_native, _ = cg.compare(native.cls, native_planted.cls)
+            if not any(n == "js_back_hot_text" for n, _, _ in unsafe_native):
+                failures.append(f"{tag}: collecting native export was not UNSAFE drift")
             if res2.cls.get("leaf_helper") != "Reenters":
                 failures.append(f"{tag}: planted js_proxy_get call left leaf_helper "
                                 f"{res2.cls.get('leaf_helper')} -- the checker cannot fail")

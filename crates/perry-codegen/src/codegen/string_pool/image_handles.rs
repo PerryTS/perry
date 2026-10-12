@@ -1,13 +1,16 @@
 use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringEntry;
-use crate::types::{DOUBLE, I8, I64, VOID};
+use crate::types::{DOUBLE, I64, I8, VOID};
 
 pub(super) fn target_uses_runtime_boxed_images(triple: &str) -> bool {
-    matches!(
-        crate::codegen::target_os_of(triple),
-        Some("macos" | "ios" | "tvos" | "watchos" | "visionos")
-    )
+    // wasm32 cannot encode a tagged i64 pointer relocation in static data.
+    // Form the handle in the existing literal-preparation function instead.
+    triple.starts_with("wasm32-")
+        || matches!(
+            crate::codegen::target_os_of(triple),
+            Some("macos" | "ios" | "tvos" | "watchos" | "visionos")
+        )
 }
 
 pub(super) fn add_mutable_string_handle(

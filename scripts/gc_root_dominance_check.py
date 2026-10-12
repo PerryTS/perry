@@ -158,7 +158,7 @@ _CONTINUATION_HEAD_RE = re.compile(
 CALL_RE = re.compile(r"\b(?:call|invoke)\s+[^@]*@([\w.$]+)\(")
 BIND_RE = re.compile(r"call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
 CLEAR_RE = re.compile(r"call void @js_shadow_slot_set\(i32 (\d+), i64 0\)")
-STORE_RE = re.compile(r"^\s*store\s+([\w\[\]x* ]+?)\s+([^,]+),\s*ptr %([\w.$]+)")
+STORE_RE = re.compile(r"^\s*store\s+(?:volatile\s+)?([\w\[\]x* ]+?)\s+([^,]+),\s*ptr %([\w.$]+)")
 # All CFG-edge readers use the same token grammar as LABEL_RE. A narrower
 # branch regex drops the edge rather than failing, which makes reachable blocks
 # look dead and can turn a real dominance violation into a clean result.
@@ -2900,7 +2900,7 @@ GLOBAL_ROOT_RE = re.compile(r"@perry_global_[\w.$]+")
 #
 # One definition, both modes, so the next reader cannot re-derive half of it.
 REWRITTEN_LOAD_RE = re.compile(
-    r"load\s+\S+,\s*ptr\s+@(?:"
+    r"load\s+(?:volatile\s+)?\S+,\s*ptr\s+@(?:"
     r"(?P<strhandle>[\w.$]*_\.str\.\d+\.handle)"   # string-literal handles
     r"|(?P<global>perry_global_[\w.$]+)"           # module-level variables
     r"|(?P<classkeys>perry_class_keys_[\w.$]+)"    # class keys (old-gen, C4b movable)
@@ -3030,7 +3030,7 @@ def heap_source_kind(ins, slot_of_alloca):
         kind = rewritten_load_kind(ins.text)
         if kind is not None:
             return kind
-        m = re.search(r"load\s+(?:i64|double)\s*,\s*ptr %([\w.$]+)", ins.text)
+        m = re.search(r"load\s+(?:volatile\s+)?(?:i64|double)\s*,\s*ptr %([\w.$]+)", ins.text)
         if m and m.group(1) in slot_of_alloca:
             return "slotload"
     return None
@@ -3702,9 +3702,9 @@ def _is_heap_source(ins, **kw):
 # whose address escapes leaves the report standing. The self-test plants each.
 FLAG_SEARCH_BUDGET = 400_000
 _FLAG_LOAD_RE = re.compile(
-    r"^\s*%([\w.$]+)\s*=\s*load\s+i1,\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
+    r"^\s*%([\w.$]+)\s*=\s*load\s+(?:volatile\s+)?i1,\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
 _FLAG_STORE_RE = re.compile(
-    r"^\s*store\s+i1\s+([^,]+),\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
+    r"^\s*store\s+(?:volatile\s+)?i1\s+([^,]+),\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
 _I1_LOGIC_RE = re.compile(
     r"^\s*%[\w.$]+\s*=\s*(and|or|xor)\s+i1\s+([^,\s]+),\s*([^,\s]+)\s*$")
 
@@ -6383,6 +6383,22 @@ entry.0:
                   file=sys.stderr)
             ok = False
 
+        # Production shadow roots are volatile stores. The qualifier is
+        # not the LLVM value type: swallowing it as the type made the value
+        # parse as "ptr %obj" and silently skipped both planted hazards.
+        for name, fixture, expected in (
+            ("volatile_planted", _SELFTEST_PLANTED, 2),
+            ("volatile_clean", _SELFTEST_CLEAN, 0),
+        ):
+            path = os.path.join(td, name + ".ll")
+            with open(path, "w") as fh:
+                fh.write(fixture.replace("store ptr ", "store volatile ptr "))
+            hits, _ = _scan([path], True, "alloc")
+            if len(hits) != expected:
+                print(f"self-test FAIL: {name}: {len(hits)} violations, "
+                      f"expected {expected}", file=sys.stderr)
+                ok = False
+
         # --- #11604: phi edges that REPLACE the value, both directions ------
         #
         # The safe join must clear, and the refinement that clears it must
@@ -6940,6 +6956,15 @@ entry.0:
             ("flag_refresh_not_cleared", _SELFTEST_FLAG_REFRESH_NOT_CLEARED, 1),
             ("flag_refresh_escaped", _SELFTEST_FLAG_REFRESH_ESCAPED, 1),
             ("flag_refresh_inverted", _SELFTEST_FLAG_REFRESH_INVERTED, 1),
+        )
+        # Volatile accesses do not expose a local flag's address. Apply
+        # the same safe, sabotaged and fail-closed controls to production's
+        # volatile spelling, including the derived base's stores and loads.
+        fl_cases += tuple(
+            ("volatile_" + name,
+             text.replace("store ", "store volatile ").replace("= load ", "= load volatile "),
+             want)
+            for name, text, want in fl_cases
         )
         for name, text, want in fl_cases:
             fp = os.path.join(td, name + ".ll")
