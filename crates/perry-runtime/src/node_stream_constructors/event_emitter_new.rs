@@ -359,17 +359,19 @@ pub extern "C" fn js_event_emitter_async_resource_object_new(options: f64) -> f6
     js_event_emitter_async_resource_subclass_init(instance, options.get_nanbox_f64())
 }
 
-/// node: `validateString(options.name, 'options.name')` for an options object
-/// (a string `options` is the name itself, and an absent name defaults to
-/// `new.target.name`).
+/// node's constructor body for a DIRECT `new EventEmitterAsyncResource(opts)`:
+/// `validateString(options?.name, 'options.name')`. A string `options` is the
+/// name itself and never reaches here; for every other shape the property must
+/// be a string, so a missing name (`undefined`, `{}`, `null`) throws too — the
+/// `new.target.name` default applies only to subclasses, which enter through
+/// `js_event_emitter_async_resource_subclass_init`.
 fn validate_async_resource_name(options: f64) {
     let obj = super::object_ptr_from_value(options);
     let name = match obj {
         Some(obj) => unsafe { crate::runtime_state_key!(b"name").read_object(obj) },
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     };
-    let name_value = JSValue::from_bits(name.to_bits());
-    if name_value.is_undefined() || name_value.is_any_string() {
+    if JSValue::from_bits(name.to_bits()).is_any_string() {
         return;
     }
     let message = format!(

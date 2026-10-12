@@ -325,12 +325,17 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     result
 }
 
+/// node's `EventEmitterAsyncResource.prototype.emitDestroy` is
+/// `emitDestroy() { this.#asyncResource.emitDestroy(); }` — it discards the
+/// inner result, so the method returns `undefined` (`AsyncResource`'s own
+/// `emitDestroy` is the one that returns its receiver).
 extern "C" fn ns_ee_async_resource_destroy(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    crate::async_hooks::js_async_resource_emit_destroy(resource)
+    crate::async_hooks::js_async_resource_emit_destroy(resource);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
