@@ -1,0 +1,1 @@
+Keep inherited `toString` behavior consistent for `ArrayBuffer`, `SharedArrayBuffer`, and `DataView` when dispatched through Buffer helpers. These views now return their object tags without interpreting or coercing encoding and range arguments, including short strings, while Buffer encoding behavior is preserved.
