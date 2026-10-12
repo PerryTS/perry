@@ -62,6 +62,43 @@ function control(o: Control) { return o.other(5); }
 console.log('control', control(new Control()));
 "#;
 
+const GAPS: &str = r#"
+class Base {
+  scale: number;
+  constructor(n: number) { this.scale = n; }
+  step(x: number) { return this.scale * x; }
+}
+class Sub extends Base { step(x: number) { return super.step(x) + 100; } }
+class Other { step(x: number) { return x + 500; } }
+function callAt(xs: any[], i: number) { return xs[i].step(3); }
+const c = new Base(2);
+(c as any).extra = 42;
+const xs: any[] = [c, new Other()];
+console.log('first', callAt(xs, 0));
+// Prove the foreign subclass edge while both declaration holders are pristine.
+Object.setPrototypeOf(c, Sub.prototype);
+console.log('subclass-edge', callAt(xs, 0));
+Object.setPrototypeOf(c, Base.prototype);
+console.log('restored', callAt(xs, 0));
+// Same prototype object, new method value AFTER the site has run.
+Base.prototype.step = function(x: number) { return this.scale + x + 20; };
+console.log('in-place', callAt(xs, 0));
+// A foreign intermediary with an own override must outrank Base.prototype.
+const intermediate = Object.create(Base.prototype);
+intermediate.step = function(x: number) { return this.scale + x + 200; };
+Object.setPrototypeOf(c, intermediate);
+console.log('created-edge-own', callAt(xs, 0));
+// Also exercise an Object.create receiver with its own method.
+const created = Object.create(Base.prototype);
+created.scale = 7;
+created.step = function(x: number) { return this.scale + x + 300; };
+console.log('created-own', callAt([created], 0));
+// An ordinary subclass birth with extra fields remains correct too.
+const sub = new Sub(4);
+(sub as any).extra = 43;
+console.log('subclass-birth', callAt([sub], 0));
+"#;
+
 fn compile(dir: &Path, source: &str) -> PathBuf {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
@@ -118,23 +155,39 @@ fn instance_explicit_prototype_method_and_shape_miss_ir() {
     let binary = compile(dir.path(), GAP);
     assert_eq!(run(&binary), "104\n");
     let ir = read_ir(&dir.path().join(".perry-trace/llvm"));
-    // Check the actual fallback edge, not just a generic call elsewhere.
-    let own_probe = ir.split("\n").collect::<Vec<_>>();
-    let probe = own_probe
+    // The no-own miss checks the encoded live edge before choosing the tower.
+    let lines: Vec<_> = ir.lines().collect();
+    let probe = lines
         .iter()
         .position(|line| line.contains("call double @js_object_get_own_field_or_undef("))
         .expect("fixture must exercise the tower's own probe");
-    let branch = own_probe[probe..]
+    let branch = lines[probe..]
         .iter()
         .find(|line| line.contains("br i1 "))
         .unwrap();
+    assert!(branch.contains("label %idisp.prototype"), "{branch}");
+    let proto = ir
+        .split("\nidisp.prototype")
+        .nth(1)
+        .expect("live edge block");
+    let proto = proto.split("\n\n").next().unwrap();
     assert!(
-        branch.contains("label %idispatch.default"),
-        "shape miss must use the generic operation: {branch}"
+        !proto.contains("call ") && proto.matches("load ").count() == 1,
+        "edge comparison adds only one header load: {proto}"
     );
     assert!(
-        !branch.contains("label %idisp.dispatch"),
-        "shape miss revived the nominal class method"
+        proto.contains("and i8") && proto.contains(", 48")
+            || proto.contains("and i32") && proto.contains("3145728"),
+        "compare the encoded prototype edge: {proto}"
+    );
+    let branch = proto.lines().find(|line| line.contains("br i1 ")).unwrap();
+    assert!(
+        branch.contains("label %idisp.dispatch"),
+        "nominal edge: {branch}"
+    );
+    assert!(
+        branch.contains("label %idispatch.default"),
+        "foreign edge: {branch}"
     );
     assert!(
         ir.contains("call double @js_native_call_method_by_id("),
@@ -153,4 +206,11 @@ fn class_dispatch_mutations_inheritance_and_negative_controls() {
     let binary = compile(dir.path(), MUTATIONS);
     assert_eq!(run(&binary),
         "birth 7 14 19 36\ndata 19 36\nown 105\ndelete 7\nreplace 207 221\ngetter 307 321 2\ndefine 357 371\nedge 405 19\nrestore 7\nplain 503\ncontrol 6\n");
+}
+
+#[test]
+fn prototype_replacement_after_first_call_subclass_edge_and_created_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = compile(dir.path(), GAPS);
+    assert_eq!(run(&binary), "first 6\nsubclass-edge 106\nrestored 6\nin-place 25\ncreated-edge-own 205\ncreated-own 310\nsubclass-birth 127\n");
 }

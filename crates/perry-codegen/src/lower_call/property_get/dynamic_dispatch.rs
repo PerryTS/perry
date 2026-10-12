@@ -483,15 +483,8 @@ pub(crate) fn try_lower_instance_method_call(
             // each case block builds its own per-arity args below.
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
 
-            // Issue #628 followup (#620 in dynamic-dispatch shape): probe
-            // own-property override BEFORE the class-id switch tower. The
-            // tower hard-codes the static method body for each known
-            // class id; when a user mutates `this.method = X` inside
-            // a method body (hono's SmartRouter rebinds itself on first
-            // call), the second call's dispatch must invoke the stored
-            // override, not the original method. The static-class fast
-            // path got this in v0.5.716 (#620). The dynamic-dispatch
-            // path needs the parallel fix.
+            // Own overrides precede the class tower; canonical shapes can
+            // exclude them without a keys-array scan (#620, #628, #8406).
             let key_idx_probe = ctx.strings.intern(property);
             let probe_entry = ctx.strings.entry(key_idx_probe);
             let probe_bytes_global = format!("@{}", probe_entry.bytes_global);
@@ -536,11 +529,7 @@ pub(crate) fn try_lower_instance_method_call(
                 } else {
                     Vec::new()
                 };
-            // The receiver probe runs for every tower, wide or not: its class
-            // id is what sends a receiver no implementor claims to the method
-            // site below (#10507), and a wide tower or a class whose layout may
-            // hold `property` must not demote those receivers to the by-name
-            // default arm.
+            // Every tower probes its receiver; unclaimed classes use the method site (#10507).
             let shape_probe_cid: Option<String>;
             let site_arm: Option<(String, String)>;
             {
@@ -638,9 +627,28 @@ pub(crate) fn try_lower_instance_method_call(
             let own_bits_probe = ctx.block().bitcast_double_to_i64(&own_method_probe);
             let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
             let is_undef_probe = ctx.block().icmp_eq(I64, &own_bits_probe, &undef_bits_str);
-            // #12466: an unproven shape must resolve the live prototype, even without an own method.
+            let proto_idx = ctx.new_block("idisp.prototype");
+            let proto_label = ctx.block_label(proto_idx);
             ctx.block()
-                .cond_br(&is_undef_probe, &default_label, &probe_override_label);
+                .cond_br(&is_undef_probe, &proto_label, &probe_override_label);
+            ctx.current_block = proto_idx;
+            // #12466: PLAIN kind plus class admission proves the nominal edge;
+            // foreign/subclass/null edges are WORD/NULL. Reload after the leaf
+            // own probe. On x86, bits 20–21 occupy bits 4–5 at header byte 6;
+            // the byte read keeps the immediate and emitted guard small.
+            let handle = unbox_to_i64(ctx.block(), &recv_box);
+            let ptr = ctx.block().inttoptr(I64, &handle);
+            let (offset, ty, mask) = if ctx.target_triple.starts_with("x86_64") {
+                ("6", crate::types::I8, "48")
+            } else {
+                ("4", I32, "3145728")
+            };
+            let at = ctx.block().gep(crate::types::I8, &ptr, &[(I64, offset)]);
+            let shape = ctx.block().load(ty, &at);
+            let kind = ctx.block().and(ty, &shape, mask);
+            let nominal = ctx.block().icmp_eq(ty, &kind, "0");
+            ctx.block()
+                .cond_br(&nominal, &probe_dispatch_label, &default_label);
             // Override path: pack user args (skip recv at slot 0) and
             // invoke via js_native_call_value. The stored value is
             // typically an arrow function or `.bind()` closure whose
@@ -769,12 +777,7 @@ pub(crate) fn try_lower_instance_method_call(
                 .enumerate()
             {
                 ctx.current_block = case_idx;
-                // #1758: a `perry_static_*` implementor is a STATIC method on a
-                // class-object receiver. Route it through the runtime
-                // `js_class_static_method_call` (binds `this`, walks the
-                // class_id parent chain, applies static arity/rest) instead of
-                // the instance-style direct call, which would pass recv as
-                // arg0 and leave `this` unset (#1787 broken-tower behavior).
+                // Static implementors retain their receiver binding and runtime arity.
                 let v = if fname.starts_with("perry_static_") {
                     let n = static_user_args.len();
                     let (sa_ptr, sa_len) = if n == 0 {
