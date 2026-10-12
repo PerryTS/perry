@@ -1036,6 +1036,37 @@ pub(crate) unsafe fn array_named_property_names(
     }
 }
 
+/// [`array_named_property_names`] for an own-key ENUMERATOR, minus the
+/// canonical indices the caller's element scan already reported.
+///
+/// An array's per-index descriptor/attribute record lives in the array's own
+/// property bag (`descriptor_state::HolderEdit` → `array_property_bag_ensure`),
+/// so `Object.defineProperty(arr, "1", …)` files the key `"1"` there. Read back
+/// through [`array_named_property_names`] that record looks like a NAMED
+/// property, and every enumerator that emits the present elements itself then
+/// reports the index twice: `Object.keys([1,2,3])` after a non-configurable
+/// define on index 1 printed `0|1|2|1` where Node prints `0|1|2` (#9202).
+/// A canonical index in the bag is a fact about the ELEMENT, so the scan that
+/// reaches it owns it.
+///
+/// `covered` is the exclusive upper bound the caller's element scan reached;
+/// an index at or beyond it is kept, because nothing reported it. The bare
+/// [`array_named_property_names`] keeps them: `array::push_pop`'s sparse-index
+/// sweep reads those very records out of it deliberately.
+pub(crate) unsafe fn array_named_property_enumeration_names(
+    arr: *const ArrayHeader,
+    enumerable_only: bool,
+    covered: u32,
+) -> Vec<String> {
+    array_named_property_names(arr, enumerable_only)
+        .into_iter()
+        .filter(|name| match crate::object::canonical_array_index(name) {
+            Some(index) => index >= covered,
+            None => true,
+        })
+        .collect()
+}
+
 pub(crate) unsafe fn array_named_property_delete(
     arr: *const ArrayHeader,
     key: *const crate::StringHeader,

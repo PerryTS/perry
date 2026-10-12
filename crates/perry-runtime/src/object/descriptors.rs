@@ -1273,7 +1273,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     }
                     let lk = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                     crate::array::js_array_push(result, JSValue::string_ptr(lk));
-                    let named = crate::array::array_named_property_names(ap, false);
+                    let named = crate::array::array_named_property_enumeration_names(ap, false, n);
                     for name in &named {
                         let k =
                             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

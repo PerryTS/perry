@@ -201,3 +201,81 @@ mod lazy_shadow_tests {
         assert_eq!(lazy, vec!["shown".to_string()]);
     }
 }
+
+/// Own-key strings of a key array, in order.
+fn own_key_strings(arr: *mut ArrayHeader) -> Vec<String> {
+    let mut out = Vec::new();
+    let n = crate::array::js_array_length(arr);
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..n {
+        let kv = crate::array::js_array_get(arr, i);
+        if let Some(b) = unsafe { crate::string::js_string_key_bytes(kv, &mut scratch) } {
+            if let Ok(t) = std::str::from_utf8(b) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// #9202: an array's per-index descriptor record is an ELEMENT fact, so its
+/// own-key enumerators report the index once.
+///
+/// Descriptor and attribute records for an array live in the array's own
+/// property bag, which is also where its named keys come from. A
+/// `Object.defineProperty(arr, "1", …)` therefore filed `"1"` as a bag key,
+/// and the bag-backed enumeration then reported the index a second time after
+/// the element scan had already emitted it: `Object.keys` returned
+/// `0|1|2|1` where node returns `0|1|2`. Keys, values and entries each reach
+/// the bag separately, so all three are asserted.
+#[test]
+fn a_defined_index_is_an_element_fact_not_a_named_key() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let mut arr = crate::array::js_array_alloc(3);
+    for v in [1.0, 2.0, 3.0] {
+        arr = crate::array::js_array_push_f64(arr, v);
+    }
+    unsafe {
+        let descriptor = crate::object::js_object_alloc(0, 0);
+        for (name, value) in [
+            ("value", 2.0),
+            ("writable", 1.0),
+            ("enumerable", 1.0),
+            ("configurable", 0.0),
+        ] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(descriptor, key, value);
+        }
+        let index_key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+        crate::object::object_ops::js_object_define_property(
+            crate::value::js_nanbox_pointer(arr as i64),
+            f64::from_bits(JSValue::string_ptr(index_key).bits()),
+            crate::value::js_nanbox_pointer(descriptor as i64),
+        );
+    }
+    // The duplicate only exists once the index owns a bag record, so prove the
+    // fixture before asserting on it.
+    assert_eq!(
+        crate::object::get_property_attrs(arr as usize, "1").map(|a| a.configurable()),
+        Some(false),
+        "fixture must start proven: the index carries a non-configurable record"
+    );
+
+    let keys = own_key_strings(unsafe { js_object_keys(arr as *const ObjectHeader) });
+    assert_eq!(keys, ["0", "1", "2"], "Object.keys");
+
+    let values = unsafe { js_object_values(arr as *const ObjectHeader) };
+    assert_eq!(crate::array::js_array_length(values), 3, "Object.values count");
+
+    let entries = unsafe { js_object_entries(arr as *const ObjectHeader) };
+    assert_eq!(crate::array::js_array_length(entries), 3, "Object.entries count");
+
+    let names = unsafe {
+        crate::value::js_nanbox_get_pointer(
+            crate::object::js_object_get_own_property_names(crate::value::js_nanbox_pointer(
+                arr as i64,
+            )),
+        )
+    } as *mut ArrayHeader;
+    assert_eq!(own_key_strings(names), ["0", "1", "2", "length"], "getOwnPropertyNames");
+}

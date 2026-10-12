@@ -962,8 +962,9 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         // trigger a GC that rekeys the side table to the moved array's new
         // address — after which a lookup by this (stale) address would miss
         // them. They sort AFTER the integer indices in [[OwnPropertyKeys]] order.
-        let expandos: Vec<(String, f64)> = crate::array::array_named_property_names(arr, true)
-            .into_iter()
+        let expandos: Vec<(String, f64)> =
+            crate::array::array_named_property_enumeration_names(arr, true, n)
+                .into_iter()
             .filter_map(|name| {
                 crate::array::array_named_property_get_by_name(arr, &name).map(|v| (name, v))
             })
