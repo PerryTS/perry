@@ -618,7 +618,7 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0,
     return sym
 
 
-def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
+def _idiom(insns: list[Insn], i: int, arch: str, fmt: str = "") -> str | None:
     """Name a recognized compiler/std indirect-call idiom at insns[i].
 
     io_os_functions: a call through `core::io::error::os_functions::
@@ -629,7 +629,10 @@ def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
     io_error_drop: dropping a `std::io::Error` whose bit-packed repr holds a
     custom payload (tag 0b01). std stores the payload's owner drop function in
     the box; the inlined drop is `leaq -1(%r), %rdi ; call *0x17(%r)` behind
-    an `and $3` tag test. Its only targets are
+    an `and $3` tag test. The Win64 ABI passes the box in %rcx, and
+    x86_64-pc-windows-msvc code spells the untag `movq %r, %rcx ; decq %rcx`
+    right before the call: that exact form is recognized in COFF objects only
+    (under SysV %rcx is the fourth argument, never the box). Its only targets are
     `alloc::io::error::custom_owner_from_box::drop_box_raw::<T>`; the rule
     for it in seeds.txt makes those the callees instead of seeding.
     """
@@ -642,6 +645,12 @@ def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
             untag = any((w.mn.startswith("lea") and w.ops.startswith("-0x1(%"))
                         or (w.mn.startswith("dec") and w.ops == "%rdi") for w in window[-4:])
             tagtest = any(w.mn.startswith("and") and w.ops.startswith("$0x3,") for w in window)
+            if not untag and fmt.startswith("coff") and len(window) >= 2:
+                # Win64: `movq %r, %rcx ; decq %rcx ; callq *0x17(%r)`, the box
+                # (tagged pointer - 1) in the first Win64 argument register.
+                mov, dec = window[-2], window[-1]
+                untag = (mov.mn.startswith("mov") and mov.ops == f"%{r}, %rcx"
+                         and dec.mn.startswith("dec") and dec.ops == "%rcx")
             if untag and tagtest:
                 return "io_error_drop"
         if re.match(r"^\*0x[0-9a-f]+\(%\w+\)$", ins.ops) and any(
@@ -727,7 +736,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
                         continue
             if i in switch_at:
                 continue
-            idiom = _idiom(insns, i, arch)
+            idiom = _idiom(insns, i, arch, fmt)
             if idiom is not None:
                 node.idioms.add(idiom)
                 continue
@@ -755,7 +764,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
                 continue
             if i in switch_at:
                 continue
-            idiom = _idiom(insns, i, arch)
+            idiom = _idiom(insns, i, arch, fmt)
             if idiom is not None:
                 node.idioms.add(idiom)
                 continue

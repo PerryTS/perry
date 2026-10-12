@@ -170,7 +170,7 @@ trusted regex ^perry_(parser|diagnostics)$ -- the SWC wrapper and diagnostics cr
 # Indirect-call idioms the parser recognizes structurally (callgraph._idiom);
 # each names the only functions the idiom can land on, which become callees.
 idiom io_os_functions => regex ^std::sys::(io::error|pal)::\w+::(decode_error_kind|error_string|is_interrupted) -- the OS_FUNCTIONS table only ever holds std's own errno helpers
-idiom io_error_drop => regex ^alloc::io::error::custom_owner_from_box::drop_box_raw -- dropping an io::Error's custom payload calls the owner-drop fn std stored in the box: always a drop_box_raw::<T> instantiation
+idiom io_error_drop => regex ^alloc::io::error::custom_owner_from_box::drop_box_raw -- dropping an io::Error's custom payload calls the owner-drop fn std stored in the box: always a drop_box_raw::<T> instantiation. Same bit-packed repr on every 64-bit target; on x86_64-pc-windows-msvc the box is passed in %rcx (`movq %r, %rcx ; decq %rcx ; callq *0x17(%r)`), which covers the stdio / fs / child-process result drops of js_console_*, js_checkpoint and the tui writers (#12479)
 #
 # Perry's own dispatch.
 indirect regex ^<perry_runtime::tls_hot::HotKey<.*>>::resolve_and_cache => regex ^perry_\w+::.*::[A-Z][A-Z0-9_]*::(resolve|arm_guard)$ -- a HotKey calls only the `resolve` / `arm_guard` fns its perry_thread_local! declaration generates (made callees here), which resolve that thread-local and run its initializer

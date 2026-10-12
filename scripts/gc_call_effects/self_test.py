@@ -146,6 +146,49 @@ def load_rules_text(tmp: str, text: str) -> list:
     return cg.load_rules(path)
 
 
+def io_error_drop_cases() -> list[str]:
+    """The io::Error custom-payload drop idiom in its Win64 spelling (#12479).
+
+    The exact instructions are js_checkpoint's on x86_64-pc-windows-msvc (the
+    `Stderr::write_fmt` result drop): tag dispatch on the low two bits, then
+    `movq %rax, %rcx ; decq %rcx ; callq *0x17(%rax)`. In a COFF object that
+    is the idiom (its targets come from the `idiom io_error_drop` rule); every
+    near miss stays a seeded indirect call."""
+    failures = []
+
+    def site(fmt, mov="movq %rax, %rcx", dec="decq %rcx", call="*0x17(%rax)", tag=True):
+        body = [("testq", "%rax, %rax"), ("je", "0x68"), ("movl", "%eax, %ecx")]
+        if tag:
+            body.append(("andl", "$0x3, %ecx"))
+        body += [("leal", "-0x2(%rcx), %edx"), ("cmpl", "$0x2, %edx"), ("jb", "0x68"),
+                 ("testq", "%rcx, %rcx"), ("je", "0x68"),
+                 tuple(mov.split(" ", 1)), tuple(dec.split(" ", 1)), ("callq", call),
+                 ("retq", "")]
+        insns = [cg.Insn(0x48 + 4 * k, mn, ops, ops) for k, (mn, ops) in enumerate(body)]
+        node = cg.Node(0, "fixture.o", ".text", 0, fmt)
+        node.names = ["io_drop_site"]
+        cg.analyze_node(node, insns, "x86")
+        return node
+
+    n = site("coff-x86-64")
+    if n.idioms != {"io_error_drop"} or n.indirect_calls:
+        failures.append(f"Win64 io::Error drop not recognized: idioms={n.idioms} "
+                        f"indirect={n.indirect_calls}")
+    near_misses = {
+        "ELF (dec %rcx is not the SysV box register)": site("elf64-x86-64"),
+        "no `and $3` tag test": site("coff-x86-64", tag=False),
+        "%rcx copied from another register": site("coff-x86-64", mov="movq %rbx, %rcx"),
+        "untag in a non-argument register": site("coff-x86-64", mov="movq %rax, %rdx",
+                                                 dec="decq %rdx"),
+        "a slot other than the owner-drop fn": site("coff-x86-64", call="*0x1f(%rax)"),
+    }
+    for why, n in near_misses.items():
+        if n.idioms or n.indirect_calls != 1:
+            failures.append(f"io_error_drop near miss ({why}) was not a seed: "
+                            f"idioms={n.idioms} indirect={n.indirect_calls}")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gc-call-effects-selftest-") as tmp:
@@ -182,6 +225,7 @@ def main() -> int:
         node.names = [audited, "_ZN4core3ptr$u20$x17h0123456789abcdefE"]
         if cg._match_indirect(alias_rule, graph, 0) is not None:
             failures.append("a $u20$ Rust alias was dropped instead of blocking the exemption")
+        failures += io_error_drop_cases()
         per_format = {}
         for tag, triple in TARGETS.items():
             if classify_native_hot_text(tmp, triple, tag) != "Leaf":
