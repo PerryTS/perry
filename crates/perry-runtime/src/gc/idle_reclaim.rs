@@ -559,6 +559,7 @@ fn drive_active_cycle(deadline_ms: u64) -> ParkVerdict {
             // the difference between RSS falling by ~4 MB and by the ~22 MB
             // the sweep actually deallocated.
             let _ = super::cycle_malloc_trim::run_malloc_trim(GcProgressKind::NormalIncremental);
+            let _ = super::cycle_malloc_trim::run_allocator_purge(true);
             POST_PURGES.fetch_add(1, Ordering::Relaxed);
             return ParkVerdict::Resume;
         }

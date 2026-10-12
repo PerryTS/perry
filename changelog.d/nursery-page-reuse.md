@@ -1,0 +1,3 @@
+Remove the hidden native allocator purge from system trim. Nonmoving minor collections now retain reusable collector pages, and full collections purge the native heap once through the existing major-only helper. Idle reclaim and idle compaction use that same helper after dropping collection scratch. This deletes the duplicate purge path without changing nursery allocation, GC scanning, or helper threads.
+
+A deterministic runtime witness distinguishes system trim from native purge, with a minor negative control and a real full-collection check. The full serial runtime suites, faults/RSS attribution, and per-program A/B instruction and emitted text measurements are recorded in the lane report.

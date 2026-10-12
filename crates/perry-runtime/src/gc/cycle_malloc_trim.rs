@@ -1,5 +1,5 @@
-//! `malloc_trim` maintenance for a collection cycle, split out of
-//! `cycle.rs` for the 2000-line cap. Unchanged; only its home moved.
+//! System trim and major-only native allocator purge. Idle hooks use the same
+//! native purge after collection scratch has been dropped.
 
 use super::*;
 
@@ -81,6 +81,7 @@ fn record_test_malloc_trim_executed() {
 /// every free the way the `MIMALLOC_PURGE_DELAY=0` knob would.
 ///
 /// Kill switch: `PERRY_GC_MALLOC_PURGE=0` (also `off`/`false`).
+#[inline(never)]
 pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
     if !major {
         return MallocTrimOutcome {
@@ -103,6 +104,8 @@ pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
         // takes no pointer from us and is safe to call at any time from a
         // thread that allocates; the collector owns the heap here, and this
         // touches allocator metadata only, never a JS object.
+        #[cfg(test)]
+        TEST_MIMALLOC_PURGES.with(|c| c.set(c.get().saturating_add(1)));
         unsafe {
             libmimalloc_sys::mi_collect(true);
         }
@@ -159,10 +162,9 @@ pub(super) fn run_malloc_trim(_progress_kind: GcProgressKind) -> MallocTrimOutco
     record_test_malloc_trim_call();
 
     let trim_start = Instant::now();
-    // Only the no-platform-trim arm below reads the flag; glibc and Darwin
-    // report `Executed` from their own primitive.
-    #[cfg_attr(any(target_env = "gnu", target_os = "macos"), allow(unused_variables))]
-    let purged_mimalloc = purge_mimalloc_cache();
+    // Native pages belong to run_allocator_purge, which is major-only.
+    // Purging them here discards reusable GC scratch on nonmoving minors
+    // and purges the same heap twice on full collections.
 
     #[cfg(target_env = "gnu")]
     {
@@ -203,18 +205,10 @@ pub(super) fn run_malloc_trim(_progress_kind: GcProgressKind) -> MallocTrimOutco
 
     #[cfg(not(any(target_env = "gnu", target_os = "macos")))]
     {
-        if purged_mimalloc {
-            MallocTrimOutcome {
-                status: AllocatorMaintenanceStatus::Executed,
-                reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
-                elapsed_us: trim_start.elapsed().as_micros() as u64,
-            }
-        } else {
-            MallocTrimOutcome {
-                status: AllocatorMaintenanceStatus::Unsupported,
-                reason: AllocatorMaintenanceReason::NotSupported,
-                elapsed_us: 0,
-            }
+        MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Unsupported,
+            reason: AllocatorMaintenanceReason::NotSupported,
+            elapsed_us: 0,
         }
     }
 }
@@ -242,46 +236,6 @@ pub(crate) fn reset_test_mimalloc_purge_count() {
 #[cfg(test)]
 pub(crate) const fn mimalloc_purge_available() -> bool {
     cfg!(all(target_pointer_width = "64", feature = "alloc-mimalloc"))
-}
-
-/// Return the pages mimalloc is holding for us to the OS.
-///
-/// The global allocator is mimalloc on every 64-bit build with the default
-/// `alloc-mimalloc` feature, and neither glibc's `malloc_trim` nor Darwin's
-/// `malloc_zone_pressure_relief` reaches memory mimalloc owns: they trim the
-/// system allocator, which holds almost nothing of ours. Every 1 MiB arena
-/// block the sweep just deallocated therefore sat in mimalloc's segment cache
-/// waiting for its delayed purge — a purge mimalloc only performs when the
-/// thread next allocates or frees through it, which is exactly what an idle
-/// program does not do. Measured on the idle-reclaim fixture before this call
-/// existed: `heapUsed` 47 MB -> 18 MB with RSS unchanged at 115 MB.
-///
-/// `mi_collect(true)` is mimalloc's own trim: it frees deferred and
-/// thread-delayed blocks, purges every free page of the calling thread's heap
-/// and of abandoned segments back to the OS (decommit / `MADV_DONTNEED`, or
-/// `MADV_FREE_REUSABLE` on Darwin, so the footprint accounting moves too), and
-/// returns. Bounded allocator maintenance, same placement as the platform trim.
-fn purge_mimalloc_cache() -> bool {
-    #[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc"))]
-    {
-        // Declared here rather than through `libmimalloc_sys`: that crate is a
-        // dependency on Apple targets only (it carries the Instruments memory
-        // tag), while the `mimalloc` global allocator links the C library on
-        // every target, so the symbol is always present under this feature.
-        unsafe extern "C" {
-            fn mi_collect(force: bool);
-        }
-        #[cfg(test)]
-        TEST_MIMALLOC_PURGES.with(|c| c.set(c.get().saturating_add(1)));
-        unsafe {
-            mi_collect(true);
-        }
-        true
-    }
-    #[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
-    {
-        false
-    }
 }
 
 /// Apple GC blocks are their own regions (`arena/region/apple.rs`), so block
@@ -378,5 +332,46 @@ mod region_growth_purge_tests {
             crate::arena::release_test_block_backing(data, crate::arena::BLOCK_SIZE);
         }
         assert_eq!(test_region_growth_purge_checks(), before + 1);
+    }
+}
+
+#[cfg(test)]
+mod reclaim_purge_tests {
+    use super::*;
+
+    #[test]
+    fn system_trim_does_not_purge_native_pages_between_minor_cycles() {
+        reset_test_mimalloc_purge_count();
+        let _ = run_malloc_trim(GcProgressKind::NormalIncremental);
+        assert_eq!(
+            test_mimalloc_purge_count(),
+            0,
+            "system trim must leave the GC allocator's reusable pages resident"
+        );
+    }
+
+    #[test]
+    fn minor_native_purge_is_a_negative_control() {
+        reset_test_mimalloc_purge_count();
+        let outcome = run_allocator_purge(false);
+        assert_eq!(outcome.status, AllocatorMaintenanceStatus::Skipped);
+        assert_eq!(outcome.reason, AllocatorMaintenanceReason::MinorCollection);
+        assert_eq!(test_mimalloc_purge_count(), 0);
+    }
+
+    #[test]
+    fn a_real_full_collection_reaches_one_native_purge() {
+        std::thread::spawn(|| {
+            // Initialize the providers, then count the next real collection.
+            crate::gc::js_gc_collect();
+            reset_test_mimalloc_purge_count();
+            crate::gc::js_gc_collect();
+            assert_eq!(
+                test_mimalloc_purge_count(),
+                usize::from(mimalloc_purge_available())
+            );
+        })
+        .join()
+        .unwrap();
     }
 }
