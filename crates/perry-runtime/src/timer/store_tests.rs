@@ -393,6 +393,165 @@ fn purging_an_agent_drops_its_partition() {
     assert!(with_current_existing(|t| t.any_pending()).is_none());
 }
 
+#[test]
+fn freed_range_cleanup_only_removes_primary_entries_and_republishes_counters() {
+    reset_for_test();
+    let base = Instant::now();
+    let freed = crate::arena::thread_exit::FreedRanges::new(&[(0x1000, 0x2000)]);
+    let worker = 17;
+    {
+        let mut primary = AgentTimers::default();
+        let mut callback_dead = entry_at(1, Class::Timeout, base, 5);
+        callback_dead.callback = 0x1100;
+        primary.insert_timer(callback_dead);
+
+        let mut argument_dead = entry_at(2, Class::Immediate, base, 0);
+        argument_dead.args = vec![f64::from_bits(0x7FFD_0000_0000_1200)];
+        primary.insert_check(argument_dead);
+
+        let mut timer_live = entry_at(3, Class::Timeout, base, 10);
+        timer_live.callback = 0x5000;
+        primary.insert_timer(timer_live);
+
+        let mut check_live = entry_at(4, Class::Immediate, base, 0);
+        check_live.callback = 0x6000;
+        primary.insert_check(check_live);
+
+        let mut worker_timers = AgentTimers::default();
+        let mut worker_entry = entry_at(5, Class::Timeout, base, 1);
+        worker_entry.callback = 0x1100;
+        worker_timers.insert_timer(worker_entry);
+
+        let mut store = STORE.lock().unwrap();
+        store.agents.insert(crate::agent::PRIMARY_AGENT, primary);
+        store.agents.insert(worker, worker_timers);
+        publish_primary(
+            store
+                .agents
+                .get(&crate::agent::PRIMARY_AGENT)
+                .expect("primary fixture was inserted"),
+        );
+    }
+    assert_eq!(PRIMARY_REFED_TIMERS.load(Ordering::Acquire), 2);
+    assert_eq!(PRIMARY_REFED_CHECK.load(Ordering::Acquire), 2);
+    assert_eq!(PRIMARY_CHECK_PENDING.load(Ordering::Acquire), 1);
+    assert_eq!(PRIMARY_ANY_PENDING.load(Ordering::Acquire), 1);
+
+    let removed = take_primary_entries_in_freed_ranges(&freed);
+    assert_eq!(
+        removed.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![1, 2],
+        "the primary callback and argument in the freed arena must be removed"
+    );
+    assert!(
+        matches!(STORE.try_lock(), Ok(_)),
+        "the store lock must be available while removed entries are still alive"
+    );
+
+    let store = STORE.lock().unwrap();
+    let primary = store
+        .agents
+        .get(&crate::agent::PRIMARY_AGENT)
+        .expect("the primary partition remains present");
+    assert_eq!(primary.refed_timers(), 1);
+    assert_eq!(primary.refed_non_timer(), 1);
+    assert!(primary.any_pending());
+    assert_eq!(PRIMARY_REFED_TIMERS.load(Ordering::Acquire), 1);
+    assert_eq!(PRIMARY_REFED_CHECK.load(Ordering::Acquire), 1);
+    assert_eq!(PRIMARY_CHECK_PENDING.load(Ordering::Acquire), 1);
+    assert_eq!(PRIMARY_ANY_PENDING.load(Ordering::Acquire), 1);
+    assert_eq!(
+        store.agents.get(&worker).unwrap().refed_timers(),
+        1,
+        "a matching worker entry belongs to that worker's whole-partition retirement"
+    );
+    drop(store);
+    assert!(has_refed_timers());
+    assert!(has_refed_check());
+    assert!(check_pending());
+    assert!(any_pending());
+
+    let final_primary_ranges = crate::arena::thread_exit::FreedRanges::new(&[(0x5000, 0x6001)]);
+    let removed_last = take_primary_entries_in_freed_ranges(&final_primary_ranges);
+    assert_eq!(
+        removed_last
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+    assert_eq!(PRIMARY_REFED_TIMERS.load(Ordering::Acquire), 0);
+    assert_eq!(PRIMARY_REFED_CHECK.load(Ordering::Acquire), 0);
+    assert_eq!(PRIMARY_CHECK_PENDING.load(Ordering::Acquire), 0);
+    assert_eq!(PRIMARY_ANY_PENDING.load(Ordering::Acquire), 0);
+    assert!(!has_refed_timers());
+    assert!(!has_refed_check());
+    assert!(!check_pending());
+    assert!(!any_pending());
+    assert_eq!(
+        STORE
+            .lock()
+            .unwrap()
+            .agents
+            .get(&worker)
+            .unwrap()
+            .refed_timers(),
+        1,
+        "primary cleanup still leaves worker state to retire_agent"
+    );
+    drop(removed);
+    drop(removed_last);
+}
+
+#[test]
+fn absent_primary_partition_is_not_created_or_scanned_through_workers() {
+    reset_for_test();
+    let base = Instant::now();
+    let freed = crate::arena::thread_exit::FreedRanges::new(&[(0x1000, 0x2000)]);
+    let worker = 18;
+    {
+        let mut timers = AgentTimers::default();
+        let mut entry = entry_at(1, Class::Timeout, base, 1);
+        entry.callback = 0x1100;
+        timers.insert_timer(entry);
+        STORE.lock().unwrap().agents.insert(worker, timers);
+    }
+
+    assert!(take_primary_entries_in_freed_ranges(&freed).is_empty());
+    let store = STORE.lock().unwrap();
+    assert!(
+        !store.agents.contains_key(&crate::agent::PRIMARY_AGENT),
+        "a missing primary partition must remain absent"
+    );
+    assert_eq!(store.agents.get(&worker).unwrap().refed_timers(), 1);
+}
+
+#[test]
+fn freed_range_cleanup_recovers_poisoned_store_and_returns_entries_unlocked() {
+    let base = Instant::now();
+    let freed = crate::arena::thread_exit::FreedRanges::new(&[(0x1000, 0x2000)]);
+    let mut timers = AgentTimers::default();
+    let mut entry = entry_at(1, Class::Timeout, base, 1);
+    entry.callback = 0x1100;
+    timers.insert_timer(entry);
+    let mut store = Store::new();
+    store.agents.insert(crate::agent::PRIMARY_AGENT, timers);
+    let store = Mutex::new(store);
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = store.lock().unwrap();
+        panic!("poison the isolated fixture mutex");
+    }));
+    assert!(poisoned.is_err());
+
+    let removed = take_primary_entries_from_store(&store, &freed);
+    assert_eq!(removed.len(), 1);
+    assert!(
+        matches!(store.try_lock(), Err(std::sync::TryLockError::Poisoned(_))),
+        "poison recovery must release the mutex before removed entries are dropped"
+    );
+    drop(removed);
+}
+
 /// `clearImmediate` + a `setTimeout` reusing its slot used to panic "heap index is live".
 #[test]
 fn stale_check_placeholder_does_not_steal_a_reused_slab_slot() {

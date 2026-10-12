@@ -861,12 +861,12 @@ per_test_global!(pub(super) static STORE: Mutex<Store> = Mutex::new(Store::new()
 // mutex plus a map lookup per question is what the P0 counters existed to
 // avoid. Worker agents take the lock (there are at most a handful of them and
 // they do not run the generated loop's liveness disjunction).
-per_test_global!(
+per_test_global! {
     static PRIMARY_REFED_TIMERS: AtomicUsize = AtomicUsize::new(0);
     static PRIMARY_REFED_CHECK: AtomicUsize = AtomicUsize::new(0);
     static PRIMARY_CHECK_PENDING: AtomicUsize = AtomicUsize::new(0);
     static PRIMARY_ANY_PENDING: AtomicUsize = AtomicUsize::new(0);
-);
+}
 
 fn publish_primary(timers: &AgentTimers) {
     PRIMARY_REFED_TIMERS.store(timers.refed_timers(), Ordering::Release);
@@ -931,30 +931,46 @@ pub(crate) fn release_entries_in_freed_ranges(freed: &crate::arena::thread_exit:
     // Under `cfg(test)` the store is per thread and dies with its thread.
     #[cfg(not(test))]
     {
-        let dead: Vec<Entry> = {
-            let mut store = STORE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut dead = Vec::new();
-            for (agent, timers) in store.agents.iter_mut() {
-                let removed = timers.remove_where(|entry| entry_in_freed_ranges(freed, entry));
-                if removed.is_empty() {
-                    continue;
-                }
-                dead.extend(removed);
-                if *agent == PRIMARY_AGENT {
-                    publish_primary(timers);
-                }
-            }
-            dead
-        };
+        let dead = take_primary_entries_in_freed_ranges(freed);
         drop(dead);
     }
     #[cfg(test)]
     let _ = freed;
 }
 
-#[cfg(not(test))]
+/// Remove matching entries from the existing primary partition only.
+///
+/// A thread with no worker agent queues its entries in PRIMARY_AGENT even when
+/// its own arena is exiting. Worker-owned partitions are purged as a whole by
+/// `retire_agent` before their arenas are dropped, so they do not belong in
+/// this address-range cleanup path. Returning the removed entries lets their
+/// ref-state pins drop only after the store lock has been released.
+fn take_primary_entries_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) -> Vec<Entry> {
+    take_primary_entries_from_store(&STORE, freed)
+}
+
+fn take_primary_entries_from_store(
+    store: &Mutex<Store>,
+    freed: &crate::arena::thread_exit::FreedRanges,
+) -> Vec<Entry> {
+    let dead = {
+        let mut store = store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(timers) = store.agents.get_mut(&PRIMARY_AGENT) else {
+            return Vec::new();
+        };
+        let dead = timers.remove_where(|entry| entry_in_freed_ranges(freed, entry));
+        if !dead.is_empty() {
+            publish_primary(timers);
+        }
+        dead
+    };
+    dead
+}
+
 fn entry_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges, entry: &Entry) -> bool {
     freed.contains(entry.promise as usize)
         || freed.holds_i64(entry.callback)
