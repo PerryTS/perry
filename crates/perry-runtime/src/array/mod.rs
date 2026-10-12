@@ -50,6 +50,9 @@ mod jsvalue_api;
 mod named_props;
 #[cfg(test)]
 mod named_props_tests;
+#[cfg(test)]
+#[path = "tagged_template_tests.rs"]
+mod tagged_template_tests;
 mod numeric_range;
 mod prototype_addr;
 mod push_pop;

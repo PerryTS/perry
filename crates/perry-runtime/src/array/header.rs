@@ -237,7 +237,16 @@ unsafe fn install_template_raw_property(
         "raw".to_string(),
         crate::object::PropertyAttrs::new(false, false, false),
     );
-    cooked
+    // `set_property_attrs` materializes the array's property reserve
+    // (`array_property_bag_ensure` → `materialize_inline`), and that move leaves
+    // a forwarding stub at `cooked`. Return the LIVE head, which is what the
+    // doc above already promises: the caller keys the cooked/raw pair on this
+    // pointer, hands it to the tag, and freezes and caches it, while the read
+    // path (`js_template_raw` → `clean_arr_ptr`) resolves the receiver before
+    // the lookup. A stub key therefore never matches the resolved receiver, and
+    // `strings.raw` came back `undefined` even though the own `raw` property
+    // resolved fine (node-suite `globals/tagged-template-cache-freeze`, #9202).
+    clean_arr_ptr_mut(cooked)
 }
 
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
