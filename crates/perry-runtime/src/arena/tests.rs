@@ -1500,10 +1500,6 @@ fn deferred_registration_flush_sites() {
              flush-free sweep writer obligation and reader-side flush",
         ),
         (
-            "old_page_account_promoted_object",
-            "as old_page_account_swept_object — per-object, same argument",
-        ),
-        (
             "old_page_account_dirty_slots",
             "touches only dirty_slots/epoch, which no registration contributes to. \
              The batched form of the above: the dirty scan walks ascending \
@@ -1858,6 +1854,52 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
         assert!(
             !visited_now(&pages).contains(&headers[2]),
             "unregister_old_block_pages must flush first (#7624)"
+        );
+    });
+}
+
+/// A copying minor's promotion owes its pages the live (and pinned) accounting
+/// as well as the registration; both ride one deferred entry. The flush must
+/// count every promoted object live on every page it overlaps — a
+/// re-registered (hole-reused) address included, whose registration the dedup
+/// skips — and leave plain old-gen births out of the live counts.
+#[test]
+fn promoted_deferral_applies_live_and_pinned_page_accounting() {
+    run_with_fresh_arenas(|| {
+        let headers = synthetic_old_headers(64);
+        let page = generation_page_for_addr(headers[0]);
+        register_old_object_pages(headers[0], 64);
+
+        defer_promoted_old_object_page_registration(headers[0], 64, false);
+        defer_promoted_old_object_page_registration(headers[1], 64, true);
+        defer_promoted_old_object_page_registration(headers[2], 64, false);
+        defer_old_object_page_registration(headers[3], 64);
+        let meta = old_page_meta_for_tests(page).expect("page registered");
+        assert_eq!(
+            meta.object_count, 4,
+            "registration is unchanged by the marks"
+        );
+        assert_eq!(meta.allocated_bytes, 4 * 64);
+        assert_eq!(
+            (meta.live_object_count, meta.live_bytes),
+            (3, 3 * 64),
+            "every promoted entry, the re-registered one included, counts live; \
+             the plain birth does not"
+        );
+        assert_eq!((meta.pinned_object_count, meta.pinned_bytes), (1, 64));
+
+        // An object spanning a page boundary counts live on both pages.
+        let last = *headers.last().unwrap();
+        let next_page_start =
+            generation_page_base(generation_page_for_addr(last)) + GENERATION_PAGE_SIZE;
+        let straddler = next_page_start - 32;
+        defer_promoted_old_object_page_registration(straddler, 64, false);
+        let lower = old_page_meta_for_tests(generation_page_for_addr(straddler)).unwrap();
+        let upper = old_page_meta_for_tests(generation_page_for_addr(next_page_start));
+        assert!(lower.live_bytes >= 32);
+        assert_eq!(
+            upper.map(|m| (m.live_object_count, m.live_bytes)),
+            Some((1, 32))
         );
     });
 }

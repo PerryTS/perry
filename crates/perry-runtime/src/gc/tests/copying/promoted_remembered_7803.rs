@@ -61,6 +61,20 @@ fn young_padded_closure_capturing(bits: u64) -> usize {
 
 #[test]
 fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
+    drain_promoted_parent_edge(false);
+}
+
+/// Mutation control: the drain forgets to remember the promoted parent's
+/// edge. Since the post-drain pass walks only weak storage, the drain's
+/// remembering is what carries the edge, and the test-build cross-check of
+/// that pass must catch the loss on the promoting minor itself.
+#[test]
+#[should_panic(expected = "the drain left")]
+fn drain_promoted_parent_edge_is_lost_when_the_drain_forgets_to_remember() {
+    drain_promoted_parent_edge(true);
+}
+
+fn drain_promoted_parent_edge(forget_remembering: bool) {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _tenuring =
         crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
@@ -111,7 +125,7 @@ fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
     // Give the parent a FRESH young child while the parent itself is still
     // young: a store to a young parent creates no remembered-set entry, so
     // the only thing that can carry this edge across the parent's promotion
-    // is the promoted-object rebuild under test.
+    // is the drain's remembering of the promoted parent, under test.
     let second_child = young_leaf();
     let expected_bytes = unsafe {
         let s = second_child as *const crate::StringHeader;
@@ -131,7 +145,11 @@ fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
     // The promoting minor: intermediate (rooted) moves in the root walk;
     // parent moves — to Old — in the drain; the child (age 1) is copied to
     // survivor space. Subject-liveness asserts, not assumptions:
-    let _ = gc_collect_minor();
+    {
+        let _forget = forget_remembering
+            .then(crate::gc::copying_parent_facts::copy_hoist_sabotage::RememberingGuard::arm);
+        let _ = gc_collect_minor();
+    }
     let parent_old = parent_now();
     assert!(
         crate::arena::pointer_in_old_gen(parent_old),

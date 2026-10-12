@@ -1204,12 +1204,43 @@ pub(crate) const DEFERRED_OLD_PAGE_REGISTRATION_CAP: usize = 8_192;
 /// for why this is invisible to every consumer of the index.
 #[inline]
 pub(crate) fn defer_old_object_page_registration(header_addr: usize, total_size: usize) {
+    defer_old_page_entry(header_addr, total_size, 0);
+}
+
+/// A deferred entry's header word carries the promotion facts in its low bits
+/// (old-gen headers are 8-byte aligned): the copying minor's promotion owes
+/// the page its live (and pinned) accounting as well as the registration, and
+/// both are applied by the same flush, with one page lookup per run.
+const DEFERRED_PROMOTED_LIVE: usize = 1;
+const DEFERRED_PROMOTED_PINNED: usize = 2;
+const DEFERRED_MARKS: usize = 7;
+
+/// [`defer_old_object_page_registration`] for an object the copying minor
+/// promoted: the flush also counts it live on its pages (and pinned), which
+/// is what the per-object eager accounting used to do at the move.
+#[inline]
+pub(crate) fn defer_promoted_old_object_page_registration(
+    header_addr: usize,
+    total_size: usize,
+    pinned: bool,
+) {
+    let marks = DEFERRED_PROMOTED_LIVE | if pinned { DEFERRED_PROMOTED_PINNED } else { 0 };
+    defer_old_page_entry(header_addr, total_size, marks);
+}
+
+#[inline]
+fn defer_old_page_entry(header_addr: usize, total_size: usize, marks: usize) {
     if header_addr == 0 || total_size == 0 {
         return;
     }
+    debug_assert_eq!(
+        header_addr & DEFERRED_MARKS,
+        0,
+        "old-gen header is not 8-aligned"
+    );
     let full = DEFERRED_OLD_PAGE_REGISTRATIONS.with(|buf| {
         let mut buf = buf.borrow_mut();
-        buf.push((header_addr, total_size));
+        buf.push((header_addr | marks, total_size));
         buf.len() >= DEFERRED_OLD_PAGE_REGISTRATION_CAP
     });
     if full {
@@ -1257,10 +1288,17 @@ fn flush_deferred_old_page_registrations_batch() {
         OLD_GEN_PAGE_META.with(|meta| {
             let mut meta = meta.borrow_mut();
             // Entries arrive in allocation order, so consecutive ones share a
-            // page; cache that page's pre-batch length across the run.
+            // page: resolve that page's object list (and, when needed, its
+            // metadata) once per run, and cache its pre-batch length. Both
+            // maps box their page chunks and nothing is removed during the
+            // flush, so the cached entries stay put while other pages insert.
             let mut run_page: Option<usize> = None;
             let mut run_base_len: usize = 0;
-            for &(header_addr, total_size) in &pending {
+            let mut run_headers: *mut compact::PageObjects = std::ptr::null_mut();
+            let mut run_meta: *mut compact::StoredPageMeta = std::ptr::null_mut();
+            for &(word, total_size) in &pending {
+                let marks = word & DEFERRED_MARKS;
+                let header_addr = word & !DEFERRED_MARKS;
                 let object_end = header_addr + total_size;
                 let first_page = generation_page_for_addr(header_addr);
                 let last_page = generation_page_for_addr(object_end - 1);
@@ -1272,22 +1310,42 @@ fn flush_deferred_old_page_registrations_batch() {
                     if overlap_start >= overlap_end {
                         continue;
                     }
-                    let headers = index.get_or_insert(page);
                     if run_page != Some(page) {
                         run_page = Some(page);
-                        run_base_len = headers.len();
+                        run_headers = index.get_or_insert(page);
+                        run_meta = std::ptr::null_mut();
+                        // SAFETY: just resolved from the map for this page.
+                        run_base_len = unsafe { (*run_headers).len() };
                     }
-                    if headers.contains_prefix(page, header_addr, run_base_len) {
+                    // SAFETY: `run_headers` names this page's boxed entry; see
+                    // the run comment above.
+                    let headers = unsafe { &mut *run_headers };
+                    let bytes = page_count(overlap_end - overlap_start);
+                    let fresh = !headers.contains_prefix(page, header_addr, run_base_len);
+                    if !fresh && marks == 0 {
                         continue;
                     }
-                    headers.push(page, header_addr);
-                    // Identical to `update_old_page_meta_for_object(.., true)`
-                    // for this one page, applied here so no staging Vec exists.
-                    let page_meta = meta.get_or_insert(page);
-                    page_meta.allocated_bytes = page_meta
-                        .allocated_bytes
-                        .saturating_add(page_count(overlap_end - overlap_start));
-                    page_meta.object_count = page_meta.object_count.saturating_add(1);
+                    if run_meta.is_null() {
+                        run_meta = meta.get_or_insert(page);
+                    }
+                    // SAFETY: as `run_headers`.
+                    let page_meta = unsafe { &mut *run_meta };
+                    if fresh {
+                        headers.push(page, header_addr);
+                        // Identical to `update_old_page_meta_for_object(.., true)`
+                        // for this one page, applied here so no staging Vec exists.
+                        page_meta.allocated_bytes = page_meta.allocated_bytes.saturating_add(bytes);
+                        page_meta.object_count = page_meta.object_count.saturating_add(1);
+                    }
+                    if marks & DEFERRED_PROMOTED_LIVE != 0 {
+                        page_meta.live_bytes = page_meta.live_bytes.saturating_add(bytes);
+                        page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
+                        if marks & DEFERRED_PROMOTED_PINNED != 0 {
+                            page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(bytes);
+                            page_meta.pinned_object_count =
+                                page_meta.pinned_object_count.saturating_add(1);
+                        }
+                    }
                     page_meta.refresh_policy_bits();
                 }
             }
@@ -1512,33 +1570,6 @@ pub(crate) fn old_page_account_swept_object(
             } else {
                 page_meta.dead_bytes = page_meta.dead_bytes.saturating_add(page_count(bytes));
                 page_meta.dead_object_count = page_meta.dead_object_count.saturating_add(1);
-            }
-            page_meta.refresh_policy_bits();
-        }
-    });
-}
-
-pub(crate) fn old_page_account_promoted_object(
-    header_addr: usize,
-    total_size: usize,
-    pinned: bool,
-) {
-    if header_addr == 0 || total_size == 0 {
-        return;
-    }
-    let overlaps = old_object_page_overlaps(header_addr, total_size);
-    if overlaps.is_empty() {
-        return;
-    }
-    OLD_GEN_PAGE_META.with(|meta| {
-        let mut meta = meta.borrow_mut();
-        for (page, bytes) in overlaps {
-            let page_meta = meta.get_or_insert(page);
-            page_meta.live_bytes = page_meta.live_bytes.saturating_add(page_count(bytes));
-            page_meta.live_object_count = page_meta.live_object_count.saturating_add(1);
-            if pinned {
-                page_meta.pinned_bytes = page_meta.pinned_bytes.saturating_add(page_count(bytes));
-                page_meta.pinned_object_count = page_meta.pinned_object_count.saturating_add(1);
             }
             page_meta.refresh_policy_bits();
         }

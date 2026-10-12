@@ -80,7 +80,8 @@ pub(crate) use block::{
     reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
-    address_span_overlaps_pages, defer_old_object_page_registration, page_class_table_report,
+    address_span_overlaps_pages, defer_old_object_page_registration,
+    defer_promoted_old_object_page_registration, page_class_table_report,
     register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
@@ -110,7 +111,7 @@ pub use allocators::{
 };
 pub(crate) use allocators::{
     arena_alloc_gc_no_collect, arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages,
-    arena_alloc_gc_survivor,
+    arena_alloc_gc_promoted, arena_alloc_gc_survivor,
 };
 
 // walk.rs
@@ -178,12 +179,12 @@ pub(crate) use page_meta::{
     old_arena_headers_on_pages, old_arena_movable_block_ranges, old_arena_page_index_remove_object,
     old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
     old_object_single_page, old_page_account_dirty_slot, old_page_account_dirty_slots,
-    old_page_account_promoted_object, old_page_account_swept_object, old_page_account_swept_tally,
-    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
-    uniform_heap_generation, unregister_old_object_pages, unregister_old_objects_batch,
-    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
-    OldPageSummary, OldPageSweepTally, RegionOwnership,
+    old_page_account_swept_object, old_page_account_swept_tally, old_page_clear_dirty,
+    old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
+    old_pages_reset_sweep_accounting, record_arena_object_start, uniform_heap_generation,
+    unregister_old_object_pages, unregister_old_objects_batch, HeapGeneration, HeapSpace,
+    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    OldPageSweepTally, RegionOwnership,
 };
 
 #[cfg(test)]

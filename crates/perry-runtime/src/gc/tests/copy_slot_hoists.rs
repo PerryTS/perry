@@ -5,13 +5,13 @@
 //! hoisted value back, and paired with a sabotaged twin that forgets the fact,
 //! so the hoist is shown to be load-bearing rather than merely present.
 //!
-//! The parent's remembering fact (`ParentRemembering`) is hoisted too, but its
-//! witness is NOT a collection: no sabotage of it could be made to fail that
-//! way, because sticky dirty-page coverage carries an old→young edge
-//! independently of the remembered-set re-insertion the fact controls
-//! (#10388). It is pinned instead against the predicate it replaces,
+//! The parent's remembering fact (`ParentRemembering`) is hoisted too. It is
+//! pinned here against the predicate it replaces,
 //! `barrier_parent_needs_remembering`, over every parent kind that predicate
-//! distinguishes — with a sabotaged twin that must disagree.
+//! distinguishes — with a sabotaged twin that must disagree. Since the
+//! copying minor stopped re-walking every promoted object after the drain,
+//! the drain's remembering also has a collection witness:
+//! `copying::promoted_remembered_7803`'s mutation control.
 
 use super::super::*;
 use super::support::*;

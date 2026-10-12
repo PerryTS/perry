@@ -99,6 +99,35 @@ impl StickyRememberedSet {
         old_missing + external_missing
     }
 
+    /// Test/debug check of the copying minor's post-drain pass: every entry
+    /// of this set (the full walk over the moved objects) must already be in
+    /// `drained` (what the drain remembered) or `walked` (the pass's own
+    /// weak-storage walk).
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn assert_covered_by(&self, drained: &Self, walked: &Self) {
+        let missing_old = self
+            .old_pages
+            .iter()
+            .filter(|page| !drained.old_pages.contains(page) && !walked.old_pages.contains(page))
+            .count();
+        let covered: std::collections::HashSet<&(usize, usize)> = drained
+            .external_pages
+            .iter()
+            .chain(walked.external_pages.iter())
+            .collect();
+        let missing_external = self
+            .external_pages
+            .iter()
+            .filter(|entry| !covered.contains(entry))
+            .count();
+        assert!(
+            missing_old == 0 && missing_external == 0,
+            "copying minor: the drain left {missing_old} old page(s) and {missing_external} \
+             external page(s) of promoted parents unremembered that the full post-drain \
+             walk would remember"
+        );
+    }
+
     pub(super) fn extend(&mut self, other: StickyRememberedSet) {
         self.old_pages.extend(other.old_pages);
         self.external_pages.extend(other.external_pages);
