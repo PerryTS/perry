@@ -28,6 +28,11 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     let create_require_aliases = collect_create_require_aliases(source);
     let mut require_aliases =
         collect_create_require_aliases_from_decls(source, &create_require_aliases);
+    // #9202: `const require = createRequire(import.meta.url)` binds a
+    // module-relative alias, not the ambient global — it must not take the
+    // bare-global JSON replacement below (whose whole point is that a global
+    // `require` has NO module-relative base to resolve against).
+    let require_is_create_require_bound = require_aliases.contains("require");
     if !require_is_shadowed_by_non_create_require(source, &require_aliases) {
         require_aliases.insert("require".to_string());
     }
@@ -150,7 +155,17 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
                 // importing module. The JSON loader's default export is the
                 // same cached object a static require returns, so use that
                 // binding directly for unwrapped ESM modules.
+                // #9202: only the AMBIENT global takes this shortcut. A
+                // `createRequire`-derived alias already carries the
+                // module-relative base into the runtime `require` closure, so
+                // its JSON call must go through the runtime loader — the sole
+                // owner of `require.cache` (`module_require.rs`'s
+                // `cache_exports`/`require_path`). Replacing it with a static
+                // import left `require.cache[resolved]` undefined and made the
+                // fixture's own `cache!.exports` read throw.
                 if replace_json_requires
+                    && alias == "require"
+                    && !require_is_create_require_bound
                     && target.extension().and_then(|extension| extension.to_str()) == Some("json")
                 {
                     let binding = unique_temp_name(source, &mut next_id);
@@ -823,6 +838,54 @@ export const version = require("../../../package.json").version + marker;
         );
         assert!(got.contains("export const version = __perry_static_require_0.version + marker;"));
         assert!(!got.contains(r#"require("../../../package.json")"#));
+    }
+
+    /// #9202: the SAME resolved JSON require, reached through a
+    /// `createRequire`-derived alias, must keep its runtime call. The alias's
+    /// closure already resolves module-relative, and the runtime loader is the
+    /// only owner of `require.cache` — replacing the call with a static import
+    /// left `require.cache[resolved]` undefined, so the fixture's own
+    /// `cache!.exports` read threw `TypeError`.
+    #[test]
+    fn leaves_json_require_on_a_create_require_alias_for_the_runtime_loader() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let module_dir = dir.path().join("src/cmap/handshake");
+        std::fs::create_dir_all(&module_dir).expect("create nested module dir");
+        let package_json = dir.path().join("package.json");
+        std::fs::write(&package_json, r#"{"version":"7.5.0"}"#).expect("write package.json");
+        let source = r#"
+import { createRequire } from "node:module";
+const req = createRequire(import.meta.url);
+const cached = req.cache[req.resolve("../../../package.json")];
+console.log(cached.exports.version, req("../../../package.json").version);
+"#;
+
+        let got = transform_static_literal_requires_with_bunfs(
+            source,
+            &HashSet::new(),
+            &module_dir,
+            None,
+            true,
+        );
+
+        assert!(
+            got.contains(r#"req("../../../package.json")"#),
+            "a createRequire alias must keep its runtime require call, got:\n{got}"
+        );
+        assert!(
+            got.contains(&format!(
+                "from {:?};",
+                package_json
+                    .canonicalize()
+                    .expect("canonicalize package.json")
+                    .to_string_lossy()
+            )),
+            "the JSON must still join the AOT graph via a side-effect import, got:\n{got}"
+        );
+        assert!(
+            !got.contains("__perry_static_require_"),
+            "no static JSON import may replace the alias call, got:\n{got}"
+        );
     }
 
     #[test]
