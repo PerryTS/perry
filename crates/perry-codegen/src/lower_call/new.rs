@@ -459,7 +459,66 @@ fn lower_new_impl_inner<'a>(
 
     // #7615 slice 8: the field-count computation and the three-arm instance
     // allocation moved verbatim to `new_alloc.rs` (see its header for why).
-    let alloc = super::new_alloc::emit_instance_alloc(ctx, class_name, class);
+    // Complete parameter constructors permit a compact birth. Boxed-only
+    // constructors can write their final values immediately; raw-f64 lanes
+    // retain the existing post-allocation representation guard and stores.
+    let declared_layout = super::typed_shape_init::layout_declared_at_allocation(ctx, class_name);
+    let birth_plan = if std::env::var_os("PERRY_INLINE_CTOR").is_none()
+        && local_constructor_symbol_exists(ctx, class)
+        && class.fields.len() <= 4
+        && (class.is_literal_shape() || declared_layout)
+    {
+        super::ctor_prologue_stores::prologue_store_plan(
+            ctx,
+            class_name,
+            class,
+            lowered_args.len(),
+            true,
+        )
+    } else {
+        None
+    };
+    // Replace an existing inline prologue, or a literal's constant image.
+    // Dynamic boxed arguments in newly admitted literals lengthen live ranges
+    // across the cold statepoint and grow each site; retain their shared fill.
+    let literal_constant_image = class.is_literal_shape()
+        && birth_plan.as_ref().is_some_and(|plan| {
+            plan.iter().all(|store| {
+                matches!(
+                    args.get(store.arg_index),
+                    Some(
+                        Expr::Bool(_)
+                            | Expr::Integer(_)
+                            | Expr::Number(_)
+                            | Expr::Null
+                            | Expr::Undefined
+                    )
+                )
+            })
+        });
+    let constructor_birth = birth_plan
+        .as_ref()
+        .filter(|_| declared_layout || literal_constant_image)
+        .map(|plan| {
+            let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
+                plan.iter()
+                    .map(|store| {
+                        let value = store.numeric_addend.map_or_else(
+                            || lowered_args[store.arg_index].clone(),
+                            |addend| {
+                                ctx.block()
+                                    .fadd(&lowered_args[store.arg_index], &double_literal(addend))
+                            },
+                        );
+                        (store.slot, ctx.block().bitcast_double_to_i64(&value))
+                    })
+                    .collect()
+            });
+            super::new_alloc::ConstructorBirth { fields }
+        });
+    let alloc =
+        super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
+    let fields_written = alloc.fields_written;
     let obj_handle = alloc.handle;
     // #7154: root the instance for the duration of the constructor body.
     //
@@ -482,8 +541,11 @@ fn lower_new_impl_inner<'a>(
     //
     // The slot is released by the scope cut in `lower_new_impl`, which covers
     // all ~20 return paths below.
-    let constructor_layout_ready = alloc.constructor_stores_ready
-        && super::typed_shape_init::layout_declared_at_allocation(ctx, class_name);
+    // A literal's allocation supplies its complete shape contract. The store
+    // plan below proves constructor elision independently of whether old GC
+    // masks would have been worth declaring (boolean-only literals have none).
+    let constructor_layout_ready =
+        alloc.constructor_stores_ready && (declared_layout || literal_constant_image);
     let instance = {
         let protected = construction_runs_user_code(ctx, class_name);
         Instance {
@@ -616,10 +678,29 @@ fn lower_new_impl_inner<'a>(
             } else {
                 None
             };
+        assert!(
+            fields_written.is_none() || prologue_plan.is_some(),
+            "a complete compact birth must retain its constructor-store plan"
+        );
         // `(merge block, fast-arm predecessor label)` when the diamond was
         // emitted; the slow arm is the current block from here on.
         let mut prologue_merge: Option<(usize, String)> = None;
-        if let Some(plan) = prologue_plan.as_ref() {
+        if let Some(written) = fields_written.as_ref() {
+            // The nursery arm already wrote the complete constructor image.
+            // Every slow allocation uses the existing constructor symbol; do
+            // not duplicate its guarded stores and barriers at this site.
+            let fast_idx = ctx.new_block("ctor_prologue.fast");
+            let slow_idx = ctx.new_block("ctor_prologue.slow");
+            let merge_idx = ctx.new_block("ctor_prologue.merge");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(written, &fast_label, &slow_label);
+            ctx.current_block = fast_idx;
+            ctx.block().br(&merge_label);
+            prologue_merge = Some((merge_idx, fast_label));
+            ctx.current_block = slow_idx;
+        } else if let Some(plan) = prologue_plan.as_ref() {
             // Pure derived values are safe to compute before the diamond. A
             // non-finite result selects the ordinary constructor below, which
             // recomputes the same `fadd` before taking its guarded slow store.
@@ -745,6 +826,13 @@ fn lower_new_impl_inner<'a>(
             // lookup (empty slice) in that case.
             let writeback_args = if caps_absent_from_args { &[][..] } else { args };
             emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args)?;
+            if fields_written.is_some() {
+                // The complete-store proof admits no return statement, heritage,
+                // defaults or capture writes. Both arms leave the instance as
+                // their result; its slow-arm relocation above still applies.
+                // Avoid a second collecting side exit for an impossible override.
+                return Ok(obj_box);
+            }
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()

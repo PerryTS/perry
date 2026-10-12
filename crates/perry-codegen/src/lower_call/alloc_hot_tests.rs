@@ -525,7 +525,7 @@ fn birth_initialization_is_shared_and_fast_calls_cannot_collect() {
         .unwrap();
     assert!(
         !caller.contains("load volatile i8"),
-        "color belongs in the shared routine"
+        "color belongs in the shared routine for non-complete constructors"
     );
     assert!(!caller.contains("call ptr @js_inline_arena_slow_alloc("));
     assert!(!caller.contains("call void @js_gc_note_black_birth("));

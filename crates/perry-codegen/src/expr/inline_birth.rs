@@ -4,6 +4,8 @@ use crate::types::{I64, I8, PTR};
 
 mod shared;
 pub(crate) use shared::{class, empty_array};
+mod fixed;
+pub(crate) use fixed::{compact_slots, fixed_class};
 
 /// A codegen ABI fact, shared by definitions, split declarations and calls.
 /// PreserveMost moves register saves into the shared slow/color routine.

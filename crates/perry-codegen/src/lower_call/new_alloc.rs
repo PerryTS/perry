@@ -162,6 +162,13 @@ pub(super) struct InstanceAlloc {
     /// allocator provide the structural proof needed by constructor-free
     /// field initialization.
     pub(super) constructor_stores_ready: bool,
+    /// True only on the arm that already wrote every constructor field.
+    pub(super) fields_written: Option<String>,
+}
+
+pub(super) struct ConstructorBirth {
+    /// None keeps the existing finite-number guard and constructor stores.
+    pub(super) fields: Option<Vec<(u32, String)>>,
 }
 
 /// The number of distinct static keys the constructor chain of `class` stores
@@ -342,12 +349,22 @@ pub(super) fn emit_instance_alloc(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     class: &Class,
+    constructor_birth: Option<&ConstructorBirth>,
 ) -> InstanceAlloc {
     let mut constructor_stores_ready = false;
-    let handle = emit_instance_alloc_inner(ctx, class_name, class, &mut constructor_stores_ready);
+    let mut fields_written = None;
+    let handle = emit_instance_alloc_inner(
+        ctx,
+        class_name,
+        class,
+        &mut constructor_stores_ready,
+        constructor_birth,
+        &mut fields_written,
+    );
     InstanceAlloc {
         handle,
         constructor_stores_ready,
+        fields_written,
     }
 }
 
@@ -356,6 +373,8 @@ fn emit_instance_alloc_inner(
     class_name: &str,
     class: &Class,
     constructor_stores_ready: &mut bool,
+    constructor_birth: Option<&ConstructorBirth>,
+    fields_written: &mut Option<String>,
 ) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
@@ -745,6 +764,23 @@ fn emit_instance_alloc_inner(
                 }
                 crate::expr::HeaderImageSource::EntryValue(value) => value,
             };
+            let complete_birth = constructor_birth.filter(|_| !deferred_keys);
+            let compact_slots =
+                complete_birth.and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
+            let fits = if compact_slots.is_some() {
+                // Live color is a slow case too: the shared helper stamps and
+                // seeds black births after initializing every capacity slot.
+                let flags = crate::expr::inline_birth::flags(ctx, &state_ptr);
+                let idle = ctx.block().icmp_eq(I64, &flags, "0");
+                // A zero limit rejects every positive-size birth. Select the
+                // bound instead of materializing two booleans and ANDing them.
+                let limit = ctx
+                    .block()
+                    .select(crate::types::I1, &idle, I64, &size_val, "0");
+                ctx.block().icmp_ule(I64, &new_offset, &limit)
+            } else {
+                fits
+            };
             let fast_idx = ctx.new_block("alloc.fast");
             let slow_idx = ctx.new_block("alloc.slow");
             let merge_idx = ctx.new_block("alloc.merge");
@@ -758,19 +794,25 @@ fn emit_instance_alloc_inner(
             blk.store(I64, &new_offset, &offset_field_ptr);
             let data_ptr = blk.load(PTR, &state_ptr);
             let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            // GC_STORE_AUDIT(INIT): unpublished base header. The shared
-            // routine composes live color before publication or a GC call.
-            ctx.block().emit_raw(format!(
-                "store <2 x i64> {header_image}, ptr {raw_fast}, align 8"
-            ));
-            let fast_handle = crate::expr::inline_birth::class(
-                ctx,
-                &raw_fast,
-                &state_ptr,
-                &header_image,
-                birth_rep,
-                true,
-            );
+            let fast_handle = if let Some(slots) = compact_slots {
+                crate::expr::inline_birth::fixed_class(
+                    ctx,
+                    &raw_fast,
+                    &header_image,
+                    birth_rep,
+                    slots,
+                    complete_birth.unwrap().fields.as_deref(),
+                )
+            } else {
+                crate::expr::inline_birth::class(
+                    ctx,
+                    &raw_fast,
+                    &state_ptr,
+                    &header_image,
+                    birth_rep,
+                    true,
+                )
+            };
             let fast_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = slow_idx;
@@ -785,6 +827,12 @@ fn emit_instance_alloc_inner(
             let slow_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = merge_idx;
+            if compact_slots.is_some() && complete_birth.unwrap().fields.is_some() {
+                *fields_written = Some(ctx.block().phi(
+                    crate::types::I1,
+                    &[("true", &fast_pred), ("false", &slow_pred)],
+                ));
+            }
             ctx.block().phi(
                 I64,
                 &[(&fast_handle, &fast_pred), (&slow_handle, &slow_pred)],

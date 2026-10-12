@@ -71,10 +71,7 @@ fn the_inline_allocation_fills_exactly_the_minted_f64_lanes() {
             .lines()
             .filter(|l| l.contains("call preserve_mostcc i64 @perry_birth_class("))
             .collect();
-        assert!(
-            calls.len() >= 2,
-            "both fast and slow birth arms must be live"
-        );
+        assert!(!calls.is_empty(), "the shared slow birth must be live");
         for call in calls {
             let args = call.split_once(')').unwrap().0;
             assert_eq!(args.rsplit_once(", ").unwrap().1, expected, "{call}");
@@ -103,7 +100,10 @@ fn a_store_to_a_reservation_can_observe_later_defaults_through_a_setter() {
         }),
     );
     let ir = emit(&m);
-    assert_eq!(mint_rep(&ir, "js_object_shape_id_for_class_keys_live"), "i64 0");
+    assert_eq!(
+        mint_rep(&ir, "js_object_shape_id_for_class_keys_live"),
+        "i64 0"
+    );
 }
 
 #[test]
@@ -132,4 +132,100 @@ fn numeric_reservations_keep_the_completed_contract_after_constructor_observatio
         }),
         "the reservation birth must stay keyless and Any"
     );
+}
+
+fn check_compact_birth(ir: &str, defaults: &str) {
+    let mut checked = 0;
+    for function in ir.split("\ndefine ").skip(1) {
+        let defs: std::collections::HashMap<_, _> = function
+            .lines()
+            .filter_map(|line| line.trim().split_once(" = "))
+            .collect();
+        for tail in function.split("\nalloc.fast.").skip(1) {
+            let label = format!("alloc.fast.{}", tail.split_once(':').unwrap().0);
+            let branch = function
+                .lines()
+                .find(|line| line.contains(&format!("label %{label},")))
+                .unwrap();
+            let condition = branch
+                .trim()
+                .strip_prefix("br i1 ")
+                .unwrap()
+                .split(',')
+                .next()
+                .unwrap();
+            let compare = defs[condition].strip_prefix("icmp ule i64 ").unwrap();
+            let limit = compare.split_once(", ").unwrap().1;
+            let select = defs[limit]
+                .strip_prefix("select i1 ")
+                .expect("color selects the allocation bound");
+            assert!(
+                select.ends_with(", i64 0"),
+                "active color must reject the birth"
+            );
+            let idle = select.split_once(", ").unwrap().0;
+            let color = defs[idle]
+                .strip_prefix("icmp eq i64 ")
+                .unwrap()
+                .strip_suffix(", 0")
+                .unwrap();
+            let flag = defs[color]
+                .strip_prefix("zext i8 ")
+                .unwrap()
+                .strip_suffix(" to i64")
+                .unwrap();
+            assert!(
+                defs[flag].starts_with("load volatile i8, ptr "),
+                "idle proof must use live color"
+            );
+            let body = tail.split_once(':').unwrap().1;
+            let body = body
+                .lines()
+                .take_while(|line| line.is_empty() || line.starts_with(' '))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!body.contains("call "), "compact fast birth must be leaf");
+            assert!(
+                body.contains("store <2 x i64> %"),
+                "missing birth shape/header"
+            );
+            assert!(body.contains("store i64 0, ptr "), "missing null metadata");
+            assert!(
+                body.contains(defaults),
+                "missing exact capacity defaults: {body}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "compact birth subject must be live");
+    assert!(
+        ir.contains("load volatile i8"),
+        "live color must gate the fast arm"
+    );
+}
+
+#[test]
+fn compact_birth_has_no_call_and_initializes_any_and_numeric_capacity_slots() {
+    let undefined = crate::nanbox::TAG_UNDEFINED_I64;
+    for (ty, rhs, defaults) in [
+        (
+            Type::Number,
+            Expr::Integer(2),
+            "store <2 x i64> <i64 0, i64 0>".into(),
+        ),
+        (
+            Type::String,
+            Expr::String("s".into()),
+            format!("store <2 x i64> <i64 0, i64 {undefined}>"),
+        ),
+    ] {
+        let ir = emit(&loop_new_module("Compact", ty, rhs));
+        check_compact_birth(&ir, &defaults);
+        let broken = ir.replace(&defaults, "; removed capacity initialization");
+        assert_ne!(broken, ir, "negative control must alter a real birth store");
+        assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
+        let broken = ir.replace("select i1 ", "missing idle select ");
+        assert_ne!(broken, ir, "negative control must revoke the idle guard");
+        assert!(std::panic::catch_unwind(|| check_compact_birth(&broken, &defaults)).is_err());
+    }
 }

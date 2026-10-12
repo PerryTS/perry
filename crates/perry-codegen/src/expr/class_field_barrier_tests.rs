@@ -246,6 +246,29 @@ pub(super) fn ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// Five boxed fields exceed the compact birth budget. Their constructor-free
+/// stores must still exercise the ordinary value/generation barrier tier.
+pub(super) fn wide_prologue_ir() -> String {
+    let mut module = probe_module();
+    let class = &mut module.classes[0];
+    for i in 1..5 {
+        let name = format!("v{i}");
+        class.fields.push(field(&name, Type::Any));
+        class
+            .constructor
+            .as_mut()
+            .unwrap()
+            .body
+            .push(Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: name,
+                value: Box::new(Expr::LocalGet(PARAM_ID)),
+            }));
+    }
+    String::from_utf8(compile_module(&module, ir_opts()).expect("wide module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 #[test]
 fn constructor_reservations_use_current_shape_store_ic_in_both_modes() {
     for strict in [false, true] {

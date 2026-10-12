@@ -120,6 +120,12 @@ pub(super) fn comes_from_call(body: &str, value: &str, callee: &str, depth: usiz
     if rhs.contains(&format!("@{callee}(")) {
         return true;
     }
+    // Native root reloads launder bits through a tied, non-collecting asm
+    // operand. Its result aliases that operand; it is not an unrelated call.
+    if let Some(operand) = rhs.strip_prefix("call i64 asm \"\", \"=r,0\"(ptr addrspace(1) ") {
+        let value = operand.split(')').next().unwrap();
+        return comes_from_call(body, value, callee, depth - 1);
+    }
     if rhs.contains("@llvm.experimental.gc.result.") {
         let token = rhs.split_once("(token ").unwrap().1.trim_end_matches(')');
         return defs
@@ -216,6 +222,64 @@ fn assert_relocated(body: &str, callee: &str, minimum: usize) {
 }
 
 #[test]
+fn complete_birth_writes_final_fields_and_relocates_slow_arguments() {
+    let mut module = fixture(true);
+    module.classes[0].fields.remove(0); // remove the observable field initializer
+    module.classes[0].name = "__AnonShape_native_birth".into();
+    if let Stmt::Expr(Expr::New { class_name, .. }) = &mut module.init[0] {
+        *class_name = module.classes[0].name.clone();
+    }
+    assert!(module.classes[0].is_literal_shape());
+    for target in NATIVE_TARGETS {
+        let ir = native_ir(&module, target, true);
+        let body = function_slice(&ir, "main");
+        assert_eq!(
+            body.matches("call preserve_mostcc i64 @perry_birth_class(")
+                .count(),
+            1,
+            "{body}"
+        );
+        let fast = body
+            .split("\nalloc.fast.")
+            .nth(1)
+            .expect("fast birth must be live");
+        let fast = fast.split("\nalloc.slow.").next().unwrap();
+        assert!(!fast.contains("call "), "{fast}");
+        assert_eq!(
+            fast.matches("store <2 x i64>").count(),
+            2,
+            "header and final fields: {fast}"
+        );
+        assert_eq!(fast.matches("insertelement <2 x i64>").count(), 2, "{fast}");
+        let rewritten =
+            crate::inprocess::statepoint_rewritten_ir(&ir, target, "complete_birth").unwrap();
+        let body = function_slice(&rewritten, "main");
+        assert_relocated(body, "perry_birth_class", 2);
+        assert!(
+            body.contains("ctor_prologue.slow."),
+            "slow constructor must stay live"
+        );
+    }
+    // One field still reserves two slots: the spare Any slot must be seeded.
+    module.classes[0].fields.pop();
+    let ctor = module.classes[0].constructor.as_mut().unwrap();
+    ctor.params.pop();
+    ctor.body.pop();
+    if let Stmt::Expr(Expr::New { args, .. }) = &mut module.init[0] {
+        args.pop();
+    }
+    let ir = native_ir(&module, NATIVE_TARGETS[0], true);
+    let body = function_slice(&ir, "main");
+    assert!(
+        body.contains(&format!(
+            ", i64 {}, i32 1",
+            crate::nanbox::TAG_UNDEFINED_I64
+        )),
+        "unused floor slot must be undefined: {body}"
+    );
+}
+
+#[test]
 fn class_birth_slow_arm_relocates_arguments_and_constructor_relocates_instance() {
     for target in NATIVE_TARGETS {
         let args_ir = native_ir(&fixture(true), target, true);
@@ -253,7 +317,7 @@ fn class_birth_slow_arm_relocates_arguments_and_constructor_relocates_instance()
         assert_eq!(
             calls.len(),
             2,
-            "fast/slow class birth must be live:\n{body}"
+            "non-complete constructor keeps shared fast and slow births:\n{body}"
         );
         assert_eq!(
             calls
@@ -283,7 +347,7 @@ fn class_birth_slow_arm_relocates_arguments_and_constructor_relocates_instance()
                 |l| l.contains("call preserve_mostcc i64 @perry_birth_class(")
                     && !l.contains("ptr null,")
             ),
-            "the fast gc-leaf call must survive the rewrite"
+            "the non-complete birth must retain its shared leaf initializer"
         );
 
         // The object allocation is the inline field initializer. Its
