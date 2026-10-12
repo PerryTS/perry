@@ -262,13 +262,14 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if meta.is_null() {
         return None;
     }
-    if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
-        // I1 (`gc::never_move`): a prototype is what site memos name, so it
-        // is promoted at its next survival and never moves once old. The bit
-        // travels with the object if the transition below moves it.
-        crate::gc::never_move::request_never_move(object as usize);
-    }
     if (*meta).flags & flag == 0 && flag != crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER {
+        if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+            // I1 (`gc::never_move`): a prototype is what site memos name, so
+            // it is promoted at its next survival and never moves once old.
+            // Requested once, at the first mark (the bit is set-only and
+            // travels with the object if the transition below moves it).
+            crate::gc::never_move::request_never_move(object as usize);
+        }
         // An exotic read receiver needs no private lineage: its caller
         // restamps the [[Prototype]] identity to `PROTO_ID_PER_OBJECT`, a
         // value no ordinary receiver's shape carries, so every shape a marked

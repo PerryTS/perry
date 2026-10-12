@@ -190,9 +190,17 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
     }
 
     // Inline room for `constructor` and every declared member (see
-    // `class_decl_prototype_value`).
+    // `class_decl_prototype_value`). Born old and never-move like a declared
+    // class prototype (O3, `gc::never_move`): this is a class expression's
+    // FIRST evaluation, once per class id. Born young, every site memo that
+    // answers through it is refused until a copying minor promotes it, and a
+    // program with no minor after that point reads through it on the slow
+    // path for the rest of its run.
     let members = super::super::class_registry::class_prototype_member_names(class_id).len() as u32;
-    let proto = scope.root_raw_mut_ptr(js_object_alloc(class_id, members + 1));
+    let proto = scope.root_raw_mut_ptr(crate::object::object_alloc_prototype_old(
+        class_id,
+        members + 1,
+    ));
     CLASS_EVALUATION_PROTOTYPES_MATERIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Symbol aliases resolve method values lazily. Their lexical evaluation

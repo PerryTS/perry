@@ -165,6 +165,36 @@ fn later_evaluations_are_born_in_the_template_shapes() {
     }
 }
 
+/// A class expression's first evaluation is born with its prototype old and
+/// never-move, like a declared class prototype, so a site memo admits it
+/// before any minor has run.
+#[test]
+fn a_first_evaluation_prototype_is_born_old_and_never_move() {
+    let cid = 0x6E03;
+    register(cid);
+    unsafe {
+        crate::object::js_register_class_name(cid, b"Old".as_ptr(), 3);
+        crate::object::js_register_class_length(cid, 0);
+    }
+    let cell = cell(64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class =
+        scope.root_raw_mut_ptr(js_class_evaluation_object(cid, 6, 0, cell) as *mut ObjectHeader);
+    let proto = class.with_mut_ptr::<ObjectHeader, _>(|c| unsafe {
+        super::class_object_props::class_object_prototype_value(c)
+    });
+    assert!(proto.is_pointer(), "a prototype object");
+    let addr = proto.as_pointer::<u8>() as usize;
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    // Never-move from birth (asked before the memo rule, which would mark
+    // it), and admitted by that rule: old.
+    assert!(unsafe { crate::gc::never_move::is_never_move(header) });
+    assert!(
+        unsafe { crate::gc::never_move::stable_memo_referent(addr) },
+        "the first evaluation's prototype is young"
+    );
+}
+
 /// The template's memo lives in its own cell, and only the thread that
 /// recorded it reads it: ShapeIds name one agent's shape records, so another
 /// thread must take the ordinary path. A cell too short for a record refuses
