@@ -333,7 +333,7 @@ pub(crate) fn string(
         // property path they were most of a short `replace` (#10518).
         if all && !global {
             return Err(EngineError::Type(
-                "String.prototype.replaceAll requires a global RegExp",
+                "String.prototype.replaceAll called with a non-global RegExp argument",
             ));
         }
         return regexp(search, receiver, replacement);
@@ -351,7 +351,7 @@ pub(crate) fn string(
             let flags = text(&scope, &flags)?;
             if !scan_flags(&flags, &mut budget)?.0 {
                 return Err(EngineError::Type(
-                    "String.prototype.replaceAll requires a global RegExp",
+                    "String.prototype.replaceAll called with a non-global RegExp argument",
                 ));
             }
         }
