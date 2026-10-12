@@ -1,0 +1,1 @@
+Remove the unused `perry-ext-streams` crate and its duplicate Web Streams implementations. Web Streams remain provided by `perry-stdlib` through the native `streams` module, with the minimal `bundled-streams` feature retained for focused builds.
