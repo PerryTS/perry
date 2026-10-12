@@ -64,6 +64,39 @@ fn resolved_native_addon(
     Some((target, format!("{package}/{relative}")))
 }
 
+/// Resolve a literal CommonJS require to the target that its shim should use
+/// for cache and deferred-module bookkeeping. Bare packages are eligible only
+/// when the caller opted them into `compilePackages`; builtins, native
+/// facades, and addons stay on their dedicated runtime paths.
+fn resolve_compiled_require_target(
+    specifier: &str,
+    source_path: &Path,
+    compile_packages: Option<&HashSet<String>>,
+) -> Option<PathBuf> {
+    if let Some(target) =
+        super::super::resolve::resolve_relative_import_path(specifier, source_path)
+    {
+        return Some(target);
+    }
+    if is_watcher_facade(specifier)
+        || perry_hir::is_node_builtin_module(specifier.strip_prefix("node:").unwrap_or(specifier))
+        || perry_hir::is_bare_prefix_only_builtin(specifier)
+    {
+        return None;
+    }
+    let packages = compile_packages?;
+    let (package, _) = super::super::resolve::parse_package_specifier(specifier);
+    if !packages.contains("*") && !packages.contains(&package) {
+        return None;
+    }
+    let target = source_path.parent().and_then(|module_dir| {
+        super::super::collect_modules::static_require_transform::resolve_static_require(
+            module_dir, specifier, None,
+        )
+    })?;
+    (target.extension().and_then(|extension| extension.to_str()) != Some("node")).then_some(target)
+}
+
 /// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
 /// bare identifier at runtime)? Used only to decide whether a CJS named export
 /// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
@@ -599,7 +632,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
                 );
             }
             let resolved_target =
-                super::super::resolve::resolve_relative_import_path(spec, source_path);
+                resolve_compiled_require_target(spec, source_path, compile_packages);
             let link_child = resolved_target
                 .as_ref()
                 .map(|target| {
@@ -737,7 +770,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
             // slot; an unresolvable target keeps the plain binding return and
             // would otherwise carry a check nothing can ever satisfy.
             lazy_specs.contains(*spec)
-                && super::super::resolve::resolve_relative_import_path(spec, source_path).is_some()
+                && resolve_compiled_require_target(spec, source_path, compile_packages).is_some()
         })
         .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()

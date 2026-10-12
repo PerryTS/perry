@@ -71,6 +71,50 @@ fn cjs_bare_require_uses_package_require_export_condition() {
     );
 }
 
+/// Issue #12279: lazy requires of compiled-in bare packages must keep the
+/// compile-time resolved target in the runtime path registry. The binary may
+/// run after its source `node_modules` tree has been removed.
+#[test]
+fn lazy_require_of_compiled_package_uses_resolved_path_after_sources_are_removed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("node_modules/lazy-pkg");
+    fs::create_dir_all(&package).expect("create package");
+    fs::write(
+        package.join("package.json"),
+        r#"{"name":"lazy-pkg","main":"index.js"}"#,
+    )
+    .expect("write package.json");
+    fs::write(package.join("index.js"), "module.exports = 42;").expect("write package entry");
+
+    let entry = dir.path().join("entry.cjs");
+    let wrapped = wrap_commonjs_for_target(
+        "module.exports = function load() { return require('lazy-pkg'); };\n",
+        &entry,
+        None,
+        false,
+        Some(&HashSet::from(["lazy-pkg".to_string()])),
+    );
+    let target = package
+        .join("index.js")
+        .canonicalize()
+        .expect("canonical target");
+    let target = serde_json::to_string(&target.to_string_lossy()).unwrap();
+    assert!(
+        wrapped.contains(&format!("__perry_require_path_module({target})")),
+        "lazy compiled-package require must resolve through its compiled path after source removal:\n{wrapped}"
+    );
+    assert!(
+        wrapped.contains(&format!("let _lazyreq_0__rec;")),
+        "lazy compiled-package require needs a resolved-record memo:\n{wrapped}"
+    );
+
+    fs::remove_dir_all(dir.path().join("node_modules")).expect("remove source package tree");
+    assert!(
+        !package.exists(),
+        "regression fixture must model a deployed binary without its source tree"
+    );
+}
+
 #[test]
 fn require_resolve_static_files_return_canonical_filenames() {
     let dir = tempfile::tempdir().unwrap();
