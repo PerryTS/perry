@@ -810,7 +810,9 @@ def emit_wasm_abi(rust_files: dict[str, str]) -> str:
         lines.append(f"{name}\t{ret}\t{','.join(toks)}")
     if len(lines) == 3:
         raise ValueError("no WASI runtime ABI symbols found; refusing to emit an empty table")
-    return "\n".join(lines) + "\n"
+    table = "\n".join(lines) + "\n"
+    validate_wasm_abi_table(table)
+    return table
 
 
 TOKEN_IR = {
@@ -818,6 +820,20 @@ TOKEN_IR = {
     "i16s": "i16", "i16u": "i16", "i8s": "i8", "i8u": "i8", "bool": "i1",
     "ptr": "ptr", "usize": "i32", "isize": "i32", "void": "void",
 }
+
+
+def validate_wasm_abi_table(table: str) -> None:
+    """Reject tokens the wasm lowering cannot parse before writing the table."""
+    for line in table.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        columns = line.split("\t")
+        if len(columns) != 3:
+            raise ValueError(f"runtime_abi.tsv: malformed generated line {line!r}")
+        name, ret, params = columns
+        for token in (ret, *(params.split(",") if params else ())):
+            if token not in TOKEN_IR:
+                raise ValueError(f"runtime_abi.tsv: unsupported token {token!r} for {name}")
 IR_CALL_RE = re.compile(
     r"(?:^|\s)(?:(?:tail|musttail|notail) )?(?:call|invoke) (?:[a-z_]+cc |cc \d+ )?(\S+) @([\w.$]+)\("
 )
@@ -1008,6 +1024,11 @@ def self_test() -> int:
         "stub_signature": {"stubbed"},
     }
     failures = []
+    try:
+        validate_wasm_abi_table("probe\ti32\ti32\n")
+        failures.append("unparseable wasm ABI tokens must fail table validation")
+    except ValueError:
+        pass
     for cat in CATEGORIES:
         got = {e["symbol"] for e in rep.entries.get(cat, [])}
         if got != expect.get(cat, set()):
