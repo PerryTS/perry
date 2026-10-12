@@ -197,12 +197,6 @@ lib = "perry_ext_http"
 tracking = "#577"
 node-builtin = true
 
-[bindings.streams]
-crate = "perry-ext-streams"
-lib = "perry_ext_streams"
-tracking = "#466"
-node-builtin = true
-
 # `@perryts/google-auth` is no longer bundled — extracted to a
 # standalone repo (https://github.com/PerryTS/google-auth) and
 # published as an npm package starting v0.5.1015. The previous

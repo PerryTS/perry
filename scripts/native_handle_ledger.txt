@@ -27,7 +27,6 @@
 1 2 crates/perry-ext-parcel-watcher/src/lib.rs
 2 1 crates/perry-ext-pdf/src/lib.rs
 0 22 crates/perry-ext-sharp/src/lib.rs
-6 8 crates/perry-ext-streams/src/lib.rs
 0 2 crates/perry-ext-typescript/src/bun.rs
 0 3 crates/perry-ext-undici/src/lib.rs
 3 1 crates/perry-ext-ws/src/lib.rs

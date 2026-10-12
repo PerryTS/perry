@@ -17,7 +17,7 @@ df -h /
 taskset -c 0-55 cargo build --release -j 8 \
     -p perry -p perry-runtime -p perry-runtime-static -p perry-stdlib-static \
     -p perry-ext-zlib -p perry-ext-http -p perry-ext-net -p perry-ext-ethers \
-    -p perry-ext-sharp -p perry-ext-streams -p perry-ext-ws \
+    -p perry-ext-sharp -p perry-ext-ws \
     --features perry-stdlib/external-zlib-pump,perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump \
     > "$hostdir/logs/$arm-coherent-build.log" 2>&1
 echo "$arm coherent build: PASS"

@@ -699,7 +699,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     class("fetch", "Response"),
     class("fetch", "Blob"),
     class("fetch", "FormData"),
-    // --- streams — Web Streams API umbrella (perry-ext-streams). ---
+    // --- streams — Web Streams API umbrella (perry-stdlib). ---
     class("streams", "ReadableStream"),
     class("streams", "WritableStream"),
     class("streams", "TransformStream"),

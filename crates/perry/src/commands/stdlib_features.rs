@@ -29,8 +29,8 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
     match normalized {
         // ── HTTP server (Hyper) ───────────────────────────────────────
         // ── Web Streams API ──────────────────────────────────────────
-        // Per-binding gate `bundled-streams` (v0.5.572) — the
-        // well-known flip routes `import 'streams'` to perry-ext-streams.
+        // Per-binding gate `bundled-streams` — stream APIs are provided by
+        // perry-stdlib's canonical implementation.
         // `node:stream/web` imports are normalized to `stream/web` before
         // the resolver records the known-submodule key `stream_web`; both
         // spellings need the same feature for auto-optimized stdlib builds.

@@ -130,7 +130,6 @@ RESERVE_CALL = re.compile(
 PRODUCER_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("crates/perry-stdlib/src/fetch/", re.compile(r"\balloc_fetch_handle_id\s*\(")),
     ("crates/perry-stdlib/src/streams", re.compile(r"\bnext_stream_id\s*\(")),
-    ("crates/perry-ext-streams/src/lib.rs", re.compile(r"\bnext_id\s*\(\s*&NEXT_")),
     ("crates/perry-stdlib/src/zlib.rs", re.compile(r"\bcreate_zlib_stream\s*\(")),
     ("crates/perry-stdlib/src/tls", re.compile(r"\bnext_tls_handle_id\s*\(")),
     ("crates/perry-ext-net/src/", re.compile(r"\bnext_id_or_throw\s*\(")),

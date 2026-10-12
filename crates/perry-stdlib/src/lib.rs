@@ -168,10 +168,8 @@ pub mod fetch_blob;
 pub use fetch_blob::*;
 
 // === Web Streams API (issue #237) ===
-// Per-binding gate (v0.5.572): `bundled-streams` is the only flag
-// that toggles `pub mod streams`. The well-known flip strips
-// `bundled-streams` to route to perry-ext-streams without
-// duplicate-symbol risk. `http-client` callers still get streams
+// `bundled-streams` is the only flag that toggles `pub mod streams`.
+// `http-client` callers still get streams
 // transitively because the umbrella pulls in `bundled-streams`
 // (declared in this crate's Cargo.toml). Default-on through
 // `default = ["full"]` and through `--features http-client`,

@@ -1077,7 +1077,7 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     property("dns/promises", "ADDRGETNETWORKPARAMS"),
     property("dns/promises", "CANCELLED"),
     // --- stream (Web Streams API + Node stream classes — see
-    //     perry-stdlib/src/streams.rs and perry-ext-streams) ---
+    //     perry-stdlib/src/streams.rs) ---
     class("stream", "Readable"),
     class("stream", "Writable"),
     class("stream", "Duplex"),

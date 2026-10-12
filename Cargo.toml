@@ -35,7 +35,6 @@ members = [
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
-    "crates/perry-ext-streams",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
     "crates/perry-ext-parcel-watcher",
@@ -612,7 +611,6 @@ perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }
-perry-ext-streams = { path = "crates/perry-ext-streams" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
 perry-ext-parcel-watcher = { path = "crates/perry-ext-parcel-watcher" }

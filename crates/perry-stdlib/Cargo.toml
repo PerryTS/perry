@@ -70,9 +70,9 @@ turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-
 web-fetch = ["async-bridge", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
-# Web Streams API (issue #237). Per-binding gate v0.5.572 — the
-# well-known flip routes `import 'streams'` to perry-ext-streams
-# by stripping this feature. Default-on through `default = ["full"]`
+# Web Streams API (issue #237). The implementation is bundled here;
+# `bundled-streams` controls whether it is included in minimal builds.
+# Default-on through `default = ["full"]`
 # and through the `http-client` umbrella for legacy callers.
 # The WHATWG `CompressionStream`/`DecompressionStream` Brotli codec is split
 # out of `bundled-streams`: `web-fetch` implies `bundled-streams` for

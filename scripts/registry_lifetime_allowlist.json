@@ -28,30 +28,6 @@
       "why": "Keyed by runtime server handle; take_pending pops the deque but never removes the key, leaving one entry per created server after close"
     },
     {
-      "file": "crates/perry-ext-streams/src/lib.rs",
-      "name": "TRANSFORM_PAIRS",
-      "verdict": "open_leak",
-      "why": "writable_id -> transform_id, inserted per TransformStream creation; production only reads it, never removes"
-    },
-    {
-      "file": "crates/perry-ext-streams/src/lib.rs",
-      "name": "TRANSFORM_STREAMS",
-      "verdict": "open_leak",
-      "why": "Keyed by NEXT_TS_ID, one entry per new TransformStream; removed only in test code, so its callbacks stay rooted forever"
-    },
-    {
-      "file": "crates/perry-ext-streams/src/lib.rs",
-      "name": "WRITABLE_STREAMS",
-      "verdict": "open_leak",
-      "why": "Keyed by NEXT_WS_ID per WritableStream (and a transform's writable side); the only .remove() is in the #[cfg(test)] module"
-    },
-    {
-      "file": "crates/perry-ext-streams/src/lib.rs",
-      "name": "WRITERS",
-      "verdict": "open_leak",
-      "why": "Keyed by NEXT_WRITER_ID per getWriter(); releaseLock only sets locked=false and the only remove is in #[cfg(test)]"
-    },
-    {
       "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "ASYMMETRIC_KEY_REGISTRY",
       "verdict": "open_leak",

@@ -152,8 +152,10 @@ ACCESSOR_RETURN = re.compile(
 
 # Floors: "the extraction still works" assertions, not budgets.
 # Phase A deletes 24 net/HTTP/TLS maps without adding any (main 249 -> 225).
-# Keep the parser liveness floor below that new, audited population.
-MIN_REGISTRIES = 220
+# Removing perry-ext-streams drops six currently enumerated registries (224 ->
+# 218). Preserve the four-entry parser-liveness margin by lowering the floor
+# from 220 to 214.
+MIN_REGISTRIES = 214
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
 MIN_REMOVING = 140
 

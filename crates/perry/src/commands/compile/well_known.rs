@@ -377,6 +377,12 @@ mod tests {
     }
 
     #[test]
+    fn web_streams_use_the_native_module_path_without_a_wrapper_row() {
+        assert!(lookup_well_known("streams").is_none());
+        assert!(perry_hir::is_native_module("streams"));
+    }
+
+    #[test]
     fn pg_and_mysql2_have_no_well_known_row() {
         // optimized_libs/driver.rs used to select perry-stdlib's tokio
         // `async-runtime` for `pg` / `mysql2` by module name (the feature

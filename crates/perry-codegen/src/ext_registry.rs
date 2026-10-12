@@ -119,12 +119,10 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ext_http_nm_install",                      OwnerKind::WellKnown("http")),
     ("js_ext_zlib_nm_install",                      OwnerKind::WellKnown("zlib")),
     // ── #835: Web Streams ────────────────────────────────────────────
-    // `perry-stdlib::streams` owns the canonical implementations.
-    // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`
-    // lives only in `perry-stdlib`, so the safe blanket fix is `Stdlib`
-    // — codegen-emitted Stream FFIs always pull in libperry_stdlib.a
-    // regardless of which front-end (effect, custom subclass, plain
-    // `new ReadableStream`) emitted them.
+    // `perry-stdlib::streams` owns the only implementation. Codegen-emitted
+    // Stream FFIs always pull in libperry_stdlib.a regardless of which
+    // front-end (effect, custom subclass, plain `new ReadableStream`) emitted
+    // them.
     //
     // Feature `bundled-streams` gates `pub mod streams` in perry-stdlib
     // (`crates/perry-stdlib/Cargo.toml`). Without it the auto-optimize

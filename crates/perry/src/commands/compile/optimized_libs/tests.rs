@@ -482,6 +482,25 @@ fn net_cobuilds_with_stdlib() {
     assert!(binding_cobuilds_with_stdlib("net"));
 }
 
+#[test]
+fn web_streams_remain_bundled_when_well_known_wrappers_are_enabled() {
+    let _guard = env_lock();
+    let old_disable_well_known = std::env::var("PERRY_DISABLE_WELL_KNOWN").ok();
+    set_env_var("PERRY_DISABLE_WELL_KNOWN", None);
+    let routing = native_routing();
+    set_env_var(
+        "PERRY_DISABLE_WELL_KNOWN",
+        old_disable_well_known.as_deref(),
+    );
+
+    assert_eq!(routing.wrapper("streams"), None);
+    assert!(!routing.unprovided("streams"));
+    assert!(
+        crate::commands::stdlib_features::module_to_features("streams")
+            .contains(&"bundled-streams")
+    );
+}
+
 /// The final tokio lane deleted perry-stdlib's `async-runtime` feature (the
 /// tokio current-thread runtime) and tokio with it. No import may select it
 /// again: not through the module → feature table, and not through the

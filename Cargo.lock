@@ -5208,14 +5208,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-streams"
-version = "0.5.1659"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
-]
-
-[[package]]
 name = "perry-ext-typescript"
 version = "0.5.1659"
 dependencies = [
