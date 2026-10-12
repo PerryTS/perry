@@ -159,7 +159,7 @@ pub unsafe extern "C" fn js_object_record_set_by_bytes(
 ///
 /// The getter runs user code, so the caller must not hold GC values across
 /// this call.
-pub(crate) unsafe fn own_property_get_by_bytes(
+pub unsafe fn own_property_get_by_bytes(
     obj: *const ObjectHeader,
     key: &[u8],
     receiver: f64,

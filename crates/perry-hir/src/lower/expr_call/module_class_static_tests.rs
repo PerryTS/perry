@@ -126,3 +126,31 @@ fn named_native_function_members_are_value_receivers() {
         "{h}"
     );
 }
+
+#[test]
+fn named_data_exports_dispatch_their_own_members() {
+    for (module, export, method) in [
+        ("worker_threads", "parentPort", "close"),
+        ("worker_threads", "parentPort", "hasRef"),
+        ("worker_threads", "parentPort", "listenerCount"),
+        ("worker_threads", "parentPort", "unknownMethod"),
+        ("http", "METHODS", "map"),
+        ("http", "STATUS_CODES", "hasOwnProperty"),
+    ] {
+        for prefix in ["", "node:"] {
+            for receiver in [
+                export.to_string(),
+                format!("({export} as any)"),
+                format!("{export}!"),
+            ] {
+                let src = format!(
+                    "import {{ {export} }} from '{prefix}{module}'; {receiver}.{method}();"
+                );
+                let h = hir(&src);
+                assert!(!h.contains("not implemented in Perry"), "{src}: {h}");
+                assert!(!h.contains(&format!("method: \"{method}\"")), "{src}: {h}");
+                assert!(h.contains(&format!("property: \"{method}\"")), "{src}: {h}");
+            }
+        }
+    }
+}

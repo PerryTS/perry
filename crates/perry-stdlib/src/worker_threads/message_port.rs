@@ -196,12 +196,11 @@ fn port_add_node_listener(
     callback: f64,
     once: bool,
 ) -> f64 {
-    let port_id = port_id_from_closure(closure);
+    add_node_listener(port_id_from_closure(closure), event, callback, once)
+}
+
+pub(super) fn add_node_listener(port_id: u64, event: f64, callback: f64, once: bool) -> f64 {
     let event_name = string_value_to_string(event).unwrap_or_default();
-    if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-        return js_worker_threads_on(event.to_bits() as i64, callback_ptr);
-    }
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
     };
@@ -225,6 +224,7 @@ fn port_add_node_listener(
                         state.message_cbs.push(EventListener {
                             callback_bits: cb_bits,
                             once,
+                            global_event: false,
                         });
                         if first_listener {
                             state.refed = true;
@@ -242,6 +242,7 @@ fn port_add_node_listener(
                         state.close_cbs.push(EventListener {
                             callback_bits: cb_bits,
                             once,
+                            global_event: false,
                         });
                     }
                 }
@@ -261,14 +262,6 @@ extern "C" fn port_off(
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
-    if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        match event_name.as_str() {
-            "message" => MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None),
-            "close" => CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None),
-            _ => {}
-        }
-        return js_undefined();
-    }
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
     };
@@ -332,7 +325,22 @@ extern "C" fn port_add_event_listener(
     callback: f64,
     options: f64,
 ) -> f64 {
-    let port_id = port_id_from_closure(closure);
+    add_event_listener(
+        port_id_from_closure(closure),
+        event,
+        callback,
+        options,
+        false,
+    )
+}
+
+pub(super) fn add_event_listener(
+    port_id: u64,
+    event: f64,
+    callback: f64,
+    options: f64,
+    global_event: bool,
+) -> f64 {
     let event_name = string_value_to_string(event).unwrap_or_default();
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
@@ -354,6 +362,7 @@ extern "C" fn port_add_event_listener(
                         state.message_event_cbs.push(EventListener {
                             callback_bits: cb_bits,
                             once: listener_once(options),
+                            global_event,
                         });
                         if first_listener {
                             state.refed = true;
@@ -369,6 +378,7 @@ extern "C" fn port_add_event_listener(
                         state.close_event_cbs.push(EventListener {
                             callback_bits: cb_bits,
                             once: listener_once(options),
+                            global_event,
                         });
                     }
                 }
@@ -386,7 +396,10 @@ extern "C" fn port_remove_event_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
-    let port_id = port_id_from_closure(closure);
+    remove_event_listener(port_id_from_closure(closure), event, callback)
+}
+
+pub(super) fn remove_event_listener(port_id: u64, event: f64, callback: f64) -> f64 {
     let event_name = string_value_to_string(event).unwrap_or_default();
     let Some(cb_bits) = callback_bits_from_value(callback) else {
         return js_undefined();
@@ -478,6 +491,10 @@ extern "C" fn port_has_ref(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
+    js_bool(port_is_refed(port_id))
+}
+
+pub(super) fn port_is_refed(port_id: u64) -> bool {
     let has_handler = MESSAGE_PORTS.with(|ports| {
         let ports = ports.borrow();
         ports
@@ -495,7 +512,7 @@ extern "C" fn port_has_ref(
         }
         !state.closed && state.refed
     });
-    js_bool(refed)
+    refed
 }
 
 /// port.close() — mark closed and queue `close` events on both ends (#3157).
@@ -503,7 +520,10 @@ extern "C" fn port_close(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    let port_id = port_id_from_closure(closure);
+    close_port(port_id_from_closure(closure))
+}
+
+pub(super) fn close_port(port_id: u64) -> f64 {
     let peer_id = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.peer));
     MESSAGE_PORTS.with(|ports| {
         let mut ports = ports.borrow_mut();
@@ -526,6 +546,6 @@ extern "C" fn port_close(
             }
         }
     });
-    js_worker_threads_channels_process_pending();
+    perry_runtime::event_pump::js_notify_main_thread();
     js_undefined()
 }

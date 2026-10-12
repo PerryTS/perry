@@ -4,8 +4,7 @@
 //! and is waiting for exactly the message that would let it continue. The
 //! worker loop (`js_worker_threads_worker_new`) receives everything else.
 
-use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, TryRecvError};
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use super::*;
 
@@ -32,14 +31,6 @@ pub(super) fn install(rx: Receiver<WorkerCommand>) {
     INBOX.with(|inbox| *inbox.borrow_mut() = Some(rx));
 }
 
-/// Whether the worker registered a Node-style, EventTarget-style or
-/// property-style message consumer.
-pub(super) fn has_message_consumer() -> bool {
-    MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
-        || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty())
-        || worker_surface::web_worker_global_handler("onmessage").is_some()
-}
-
 fn held() -> Option<WorkerCommand> {
     HELD.with(|held| held.borrow_mut().pop_front())
 }
@@ -54,26 +45,6 @@ pub(super) fn try_recv() -> Result<WorkerCommand, TryRecvError> {
     })
 }
 
-pub(super) fn recv_timeout(budget: Duration) -> Result<WorkerCommand, RecvTimeoutError> {
-    if let Some(command) = held() {
-        return Ok(command);
-    }
-    INBOX.with(|inbox| match inbox.borrow().as_ref() {
-        Some(rx) => rx.recv_timeout(budget),
-        None => Err(RecvTimeoutError::Disconnected),
-    })
-}
-
-pub(super) fn recv() -> Result<WorkerCommand, RecvError> {
-    if let Some(command) = held() {
-        return Ok(command);
-    }
-    INBOX.with(|inbox| match inbox.borrow().as_ref() {
-        Some(rx) => rx.recv(),
-        None => Err(RecvError),
-    })
-}
-
 /// Per-agent pump: deliver the messages already waiting in this worker's
 /// inbox. A no-op on any thread that is not a worker.
 extern "C" fn deliver_waiting_messages() -> i32 {
@@ -84,7 +55,7 @@ extern "C" fn deliver_waiting_messages() -> i32 {
         let command = INBOX.with(|inbox| inbox.borrow().as_ref().map(Receiver::try_recv));
         match command {
             Some(Ok(WorkerCommand::Message(message))) => {
-                worker_pump::deliver_parent_port_message(&message);
+                worker_pump::deliver_parent_port_message(message);
             }
             Some(Ok(WorkerCommand::DirectMessage {
                 message,
@@ -109,5 +80,11 @@ extern "C" fn deliver_waiting_messages() -> i32 {
 /// a message it listens for: a send wakes this agent's loop.
 extern "C" fn expects_messages() -> i32 {
     let worker = INBOX.with(|inbox| inbox.borrow().is_some());
-    i32::from(worker && (has_message_consumer() || HELD.with(|held| !held.borrow().is_empty())))
+    i32::from(
+        worker
+            && ((!parent_port::is_closed()
+                && (message_port::port_is_refed(PARENT_PORT_HANDLE as u64)
+                    || worker_surface::web_worker_global_handler("onmessage").is_some()))
+                || HELD.with(|held| !held.borrow().is_empty())),
+    )
 }

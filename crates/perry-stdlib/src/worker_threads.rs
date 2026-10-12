@@ -30,6 +30,8 @@ mod entry_table;
 mod inbox;
 mod message_port;
 mod parent_port;
+#[cfg(test)]
+mod parent_port_tests;
 mod thread_values;
 mod worker_options;
 #[cfg(test)]
@@ -82,15 +84,6 @@ extern "C" {
 const PARENT_PORT_HANDLE: i64 = 1;
 
 thread_local! {
-    /// Callback closure for 'message' events
-    static MESSAGE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
-    /// Web-style `parentPort.addEventListener("message", fn)` listeners. These
-    /// receive a `MessageEvent` wrapper (with `.data`) rather than the raw
-    /// payload that the Node-style `MESSAGE_CALLBACK` listener gets. Stored as
-    /// raw closure pointers (i64), like `MESSAGE_CALLBACK`.
-    static MESSAGE_EVENT_CALLBACKS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
-    /// Callback closure for 'close' events
-    static CLOSE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
     /// Queue of pending messages (raw JSON strings) from stdin
     static PENDING_MESSAGES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Whether the stdin reader has been started
@@ -130,7 +123,6 @@ thread_local! {
     // The mutable-root scanner registry is thread-local, so these latches must be too.
     static ENVIRONMENT_DATA_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
     static WORKER_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
-    static PARENT_PORT_EVENT_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// workerData is received once. Its adopted JS value is rooted by the existing
@@ -198,15 +190,14 @@ struct BroadcastChannelState {
 struct EventListener {
     callback_bits: u64,
     once: bool,
+    /// Web Worker global listeners receive an event targeted at `self`;
+    /// MessagePort EventTarget listeners receive one targeted at the port.
+    global_event: bool,
 }
 
 static NEXT_WORKER_ID: AtomicU64 = AtomicU64::new(1);
 static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-/// turnloop P0: `#{WorkerRecord : alive && refed}`, maintained under the
-/// `WORKERS` lock by `WorkerRecord::set_liveness` (records are never removed,
-/// only marked dead), so the per-turn keep-alive check is an atomic load.
-static LIVE_REFED_WORKERS: AtomicU64 = AtomicU64::new(0);
 /// Worker → parent events, each tagged with the agent that created the Worker
 /// (#11433). Every agent's pump reaches `js_worker_threads_process_pending` —
 /// a Worker's own await loop included — so an untagged queue let a Worker drain
@@ -274,22 +265,10 @@ struct WorkerRecord {
 }
 
 impl WorkerRecord {
-    /// Change `alive`/`refed` and move `LIVE_REFED_WORKERS` with them. Call with
-    /// the `WORKERS` lock held; a fresh record enters the count at insert.
+    /// Update the state queried by the owning agent's liveness check.
     fn set_liveness(&mut self, alive: bool, refed: bool) {
-        let before = self.alive && self.refed;
         self.alive = alive;
         self.refed = refed;
-        match (before, alive && refed) {
-            (false, true) => {
-                LIVE_REFED_WORKERS.fetch_add(1, Ordering::AcqRel);
-            }
-            (true, false) => {
-                let previous = LIVE_REFED_WORKERS.fetch_sub(1, Ordering::AcqRel);
-                debug_assert!(previous > 0, "live worker count underflow");
-            }
-            _ => {}
-        }
     }
 }
 
@@ -389,7 +368,7 @@ fn ensure_worker_thread_exit_hook_registered() {
 /// Thread-exit hook (#11471): drop every Worker record whose JS values live in
 /// the exiting thread's arena. Such a record belongs to the dying thread (the
 /// only one that can observe that Worker), so the whole record goes: its
-/// `LIVE_REFED_WORKERS` share is released first, and dropping its command
+/// liveness state is released first, and dropping its command
 /// `Sender` disconnects the child's receive loop, which ends it as a parent
 /// exit should. Runs in a TLS destructor: one process-global lock, no JS.
 fn release_worker_records_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
@@ -702,13 +681,6 @@ fn listener_once(options: f64) -> bool {
     perry_runtime::value::js_is_truthy(get_object_field(options, "once")) != 0
 }
 
-extern "C" fn worker_threads_noop0(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-) -> f64 {
-    js_undefined()
-}
-
 /// Build a closure that captures a single f64 (the port id) in capture slot 0.
 /// The bound extern fn reads it back via `js_closure_get_capture_f64`.
 fn port_bound_closure(info: *const perry_runtime::closure::JsFunctionInfo, port_id: u64) -> f64 {
@@ -772,6 +744,7 @@ fn pump_worker_microtasks() {
         // fetch's response lands here once a turn of the worker's own loop
         // collects it, and nothing else ever settles it.
         ran += crate::worker_threads::async_shim::js_stdlib_process_pending();
+        ran += js_worker_threads_channels_process_pending();
         // Extension events this worker made (its zlib streams): their queues
         // are per agent, and only this thread may deliver them.
         ran += unsafe { js_run_agent_pumps() };
@@ -782,48 +755,6 @@ fn pump_worker_microtasks() {
     // The microtask checkpoint: a rejection nothing handled is reported here.
     // In a worker it ends the worker (see `run_worker_body`).
     perry_runtime::promise::js_promise_report_unhandled_rejections();
-}
-
-/// Upper bound on one park in the worker's own loop while it has I/O in
-/// flight. Completions and sends wake the park early; this only bounds how
-/// stale an unrelated check (a close request) can get.
-const WORKER_IO_PARK_MS: u64 = 1000;
-
-/// How long the worker may block waiting for its next command.
-///
-/// `None` means "nothing pending anywhere, block until a command arrives", so an
-/// idle worker costs exactly what it did before #10854. Otherwise the wait is
-/// bounded so a continuation waiting on a timer still gets a turn: the timer
-/// itself is run by whichever thread owns the event loop, but when it resolves a
-/// promise this worker awaits, the continuation lands in THIS thread's microtask
-/// queue and only a turn here can run it.
-///
-/// The timer queues are process-global (see `pump_worker_microtasks`), so this
-/// also sees other threads' timers. That only costs an extra wake-up, and the
-/// drain has an empty fast path — it must never be used to RUN those timers.
-fn worker_wait_budget() -> Option<std::time::Duration> {
-    let pending = perry_runtime::timer::js_timer_has_pending() != 0
-        || perry_runtime::timer::js_callback_timer_has_pending() != 0
-        || perry_runtime::timer::js_interval_timer_has_pending() != 0;
-    if !pending {
-        return None;
-    }
-    let mut soonest: Option<f64> = None;
-    for ms in [
-        perry_runtime::timer::js_timer_next_deadline(),
-        perry_runtime::timer::js_callback_timer_next_deadline(),
-        perry_runtime::timer::js_interval_timer_next_deadline(),
-    ] {
-        if ms >= 0.0 {
-            soonest = Some(soonest.map_or(ms, |best: f64| best.min(ms)));
-        }
-    }
-    // Floor at 5ms so a 60fps main loop cannot turn this into a spin — the
-    // queues are global, so a TUI's own render timers would otherwise wake this
-    // worker ~1000x/s for the life of the process. Cap at 25ms so a far-off
-    // deadline still leaves the worker responsive.
-    let ms = soonest.unwrap_or(25.0).clamp(5.0, 25.0) as u64;
-    Some(std::time::Duration::from_millis(ms))
 }
 
 fn queue_worker_threads_microtask() {
@@ -866,12 +797,26 @@ fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
     }
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let target_h = scope.root_nanbox_f64(target);
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let obj = perry_runtime::value::js_nanbox_get_pointer(target_h.get_nanbox_f64())
         as *const perry_runtime::object::ObjectHeader;
     if obj.is_null() {
         return None;
     }
+    // Most event slots are own data fields. The existing shape-aware byte
+    // lookup also invokes own getters, without allocating a key string.
+    if let Some(value) = unsafe {
+        perry_runtime::object::own_property_get_by_bytes(
+            obj,
+            name.as_bytes(),
+            target_h.get_nanbox_f64(),
+        )
+    } {
+        return callback_bits_from_value(f64::from_bits(value.bits()));
+    }
+    // Missing own fields still need the normal prototype lookup.
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj = perry_runtime::value::js_nanbox_get_pointer(target_h.get_nanbox_f64())
+        as *const perry_runtime::object::ObjectHeader;
     callback_bits_from_value(perry_runtime::object::js_object_get_field_by_name_f64(
         obj, key,
     ))
@@ -1493,60 +1438,31 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                     if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
                         return;
                     }
-                    // Keep the worker thread alive to service main→worker messages
-                    // only if it registered a message consumer.
-                    if !inbox::has_message_consumer() {
-                        return;
-                    }
                     loop {
-                        // #10854: a continuation may be waiting on a timer another
-                        // thread owns, so bound the wait when anything is pending.
-                        // A worker with I/O in flight (a fetch, a socket) must turn
-                        // its own loop: only a turn on THIS thread completes that
-                        // I/O, and blocking on the channel instead left every
-                        // fetch in a worker pending forever (OpenCode's TUI server
-                        // timed out fetching models.dev and never finished its
-                        // bootstrap). A send wakes the turn (`WorkerSender::send`),
-                        // and the notification latches, so a message that arrives
-                        // after `try_recv` and before the park is not missed.
-                        let received =
-                            if perry_runtime::event_pump::agent_loop_has_outstanding_work() {
-                                match inbox::try_recv() {
-                                    Ok(command) => Ok(command),
-                                    Err(mpsc::TryRecvError::Empty) => {
-                                        let budget_ms = worker_wait_budget()
-                                            .map_or(WORKER_IO_PARK_MS, |budget| {
-                                                budget.as_millis() as u64
-                                            });
-                                        perry_runtime::event_pump::js_loop_turn_bounded(budget_ms);
-                                        pump_worker_microtasks();
-                                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                                            return;
-                                        }
-                                        continue;
-                                    }
-                                    Err(mpsc::TryRecvError::Disconnected) => {
-                                        Err(std::sync::mpsc::RecvError)
-                                    }
-                                }
-                            } else {
-                                match worker_wait_budget() {
-                                    Some(budget) => match inbox::recv_timeout(budget) {
-                                        Ok(command) => Ok(command),
-                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                            pump_worker_microtasks();
-                                            continue;
-                                        }
-                                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                            Err(std::sync::mpsc::RecvError)
-                                        }
-                                    },
-                                    None => inbox::recv(),
-                                }
-                            };
+                        // Re-evaluate after every callback/checkpoint. A consumed
+                        // once listener no longer references its MessagePort;
+                        // timers and native completions still keep this agent alive.
+                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get)
+                            || perry_runtime::event_pump::perry_has_work() == 0
+                        {
+                            return;
+                        }
+                        let received = match inbox::try_recv() {
+                            Ok(command) => Ok(command),
+                            Err(mpsc::TryRecvError::Empty) => {
+                                // The agent's normal park observes its timers,
+                                // native work and notifications from the parent.
+                                perry_runtime::event_pump::js_wait_for_event();
+                                pump_worker_microtasks();
+                                continue;
+                            }
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                Err(std::sync::mpsc::RecvError)
+                            }
+                        };
                         match received {
                             Ok(WorkerCommand::Message(message)) => {
-                                deliver_parent_port_message(&message);
+                                deliver_parent_port_message(message);
                                 // #10854: let the handler's continuations run before
                                 // parking again, so an `async` handler can reply.
                                 pump_worker_microtasks();
@@ -1555,9 +1471,9 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                                 }
                             }
                             Ok(WorkerCommand::Reload) => {
-                                MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
-                                MESSAGE_EVENT_CALLBACKS.with(|cbs| cbs.borrow_mut().clear());
-                                CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+                                MESSAGE_PORTS.with(|ports| {
+                                    ports.borrow_mut().remove(&(PARENT_PORT_HANDLE as u64));
+                                });
                                 CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
                                 worker_surface::install_web_worker_globals();
                                 continue 'reload;
@@ -1702,6 +1618,9 @@ pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
 pub extern "C" fn js_worker_threads_post_message(data: f64, transfer: f64) -> f64 {
     let worker_id = CURRENT_WORKER_ID.with(|id| id.get());
     if worker_id != 0 {
+        if parent_port::is_closed() {
+            return js_undefined();
+        }
         let message = clone_message(data, transfer);
         let parent = CURRENT_PARENT_AGENT.with(Cell::get);
         push_parent_event(parent, WorkerEvent::Message(worker_id, message));
@@ -1723,139 +1642,19 @@ pub extern "C" fn js_worker_threads_post_message(data: f64, transfer: f64) -> f6
     js_undefined()
 }
 
-/// parentPort.on(event, callback) - Register event callback
+/// Legacy native entry: use the same listener state as MessagePort methods.
 #[no_mangle]
 pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
-    // Extract event name
-    let event_name = {
-        let raw_ptr =
-            perry_runtime::value::js_get_string_pointer_unified(f64::from_bits(event_ptr as u64));
-        if raw_ptr == 0 {
-            String::new()
-        } else {
-            let str_ptr = raw_ptr as *const StringHeader;
-            unsafe {
-                let len = (*str_ptr).byte_len as usize;
-                let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let slice = std::slice::from_raw_parts(data_ptr, len);
-                String::from_utf8_lossy(slice).into_owned()
-            }
-        }
-    };
-
-    // The stored closure is only a raw pointer: without the root scanner a
-    // collection in the worker moves or frees it, and the next message calls
-    // a stale pointer ("value is not a function").
-    ensure_parent_port_event_gc_scanner();
-    match event_name.as_str() {
-        "message" => {
-            MESSAGE_CALLBACK.with(|cb| {
-                *cb.borrow_mut() = Some(callback);
-            });
-            if CURRENT_WORKER_ID.with(|id| id.get()) == 0 {
-                // Start the stdin reader if not already started.
-                start_stdin_reader();
-            }
-        }
-        "close" => {
-            CLOSE_CALLBACK.with(|cb| {
-                *cb.borrow_mut() = Some(callback);
-            });
-        }
-        _ => {}
+    parent_port::worker_parent_port_object();
+    if CURRENT_WORKER_ID.with(Cell::get) == 0 {
+        start_stdin_reader();
     }
-
-    js_undefined()
-}
-
-/// `parentPort.addEventListener("message", fn)` / `removeEventListener`.
-/// Web-style registration on the in-worker parent port. `add` adds the
-/// listener; otherwise removes it.
-fn parent_port_event_listener(event_ptr: i64, callback: i64, add: bool) -> f64 {
-    let event_name = string_value_to_string(f64::from_bits(event_ptr as u64)).unwrap_or_default();
-    if event_name != "message" || callback == 0 {
-        return js_undefined();
-    }
-    MESSAGE_EVENT_CALLBACKS.with(|cbs| {
-        let mut cbs = cbs.borrow_mut();
-        if add {
-            if !cbs.contains(&callback) {
-                cbs.push(callback);
-            }
-        } else {
-            cbs.retain(|c| *c != callback);
-        }
-    });
-    js_undefined()
-}
-
-/// `parentPort.addEventListener("message", fn)` — called from parent_port.rs.
-/// Registers the worker-side GC scanner for the listener closures.
-pub(super) fn js_worker_threads_parent_port_event_add(event_ptr: i64, callback: i64) -> f64 {
-    ensure_parent_port_event_gc_scanner();
-    parent_port_event_listener(event_ptr, callback, true)
-}
-
-/// `parentPort.removeEventListener("message", fn)` — called from parent_port.rs.
-pub(super) fn js_worker_threads_parent_port_event_remove(event_ptr: i64, callback: i64) -> f64 {
-    parent_port_event_listener(event_ptr, callback, false)
-}
-
-fn ensure_parent_port_event_gc_scanner() {
-    PARENT_PORT_EVENT_GC_REGISTERED.with(|registered| {
-        if registered.get() {
-            return;
-        }
-        perry_runtime::gc::gc_register_mutable_root_scanner_named(
-            "stdlib:worker_threads:parentPortEventListeners",
-            scan_parent_port_event_roots_mut,
-        );
-        registered.set(true);
-    });
-}
-
-/// Visit one raw closure pointer stored as `i64`.
-///
-/// Factored out because this scanner covers three sibling slots and three
-/// copies of the box/visit/unbox dance is how the fourth one gets forgotten —
-/// which is precisely what happened to `MESSAGE_CALLBACK` and `CLOSE_CALLBACK`
-/// (#7231).
-fn visit_raw_closure_i64(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>, cb: &mut i64) {
-    // Box it into a NaN-boxed pointer slot so the GC can visit + relocate it,
-    // then unbox.
-    let mut boxed = perry_runtime::value::js_nanbox_pointer(*cb).to_bits();
-    visitor.visit_nanbox_u64_slot(&mut boxed);
-    *cb = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(boxed));
-}
-
-/// Root + rewrite every `parentPort` listener closure.
-///
-/// **#7231: this scanner used to walk one of three sibling slots.**
-/// `MESSAGE_EVENT_CALLBACKS`, `MESSAGE_CALLBACK` and `CLOSE_CALLBACK` are
-/// declared in the same `thread_local!` block and all hold the same thing — a
-/// raw `ClosureHeader*` as `i64`, the only reference to a closure the user
-/// passed to `parentPort.on(...)` / `.addEventListener(...)`. Only the first
-/// was visited, so the Node-style `on('message')` and `on('close')` handlers
-/// were reclaimed or relocated by the next collection inside a worker.
-///
-/// A partially-correct scanner is worse than an absent one: it reads as
-/// covered.
-fn scan_parent_port_event_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    MESSAGE_EVENT_CALLBACKS.with(|cbs| {
-        for cb in cbs.borrow_mut().iter_mut() {
-            visit_raw_closure_i64(visitor, cb);
-        }
-    });
-    MESSAGE_CALLBACK.with(|cb| {
-        if let Some(ptr) = cb.borrow_mut().as_mut() {
-            visit_raw_closure_i64(visitor, ptr);
-        }
-    });
-    CLOSE_CALLBACK.with(|cb| {
-        if let Some(ptr) = cb.borrow_mut().as_mut() {
-            visit_raw_closure_i64(visitor, ptr);
-        }
-    });
+    message_port::add_node_listener(
+        PARENT_PORT_HANDLE as u64,
+        f64::from_bits(event_ptr as u64),
+        perry_runtime::value::js_nanbox_pointer(callback),
+        false,
+    )
 }
 
 // `#[used]` keepalive anchors (#3157/#3159) — these `#[no_mangle]` entry points

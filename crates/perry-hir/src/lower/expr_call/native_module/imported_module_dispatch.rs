@@ -19,6 +19,15 @@ pub(super) fn try_imported_module_dispatch(
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let Some((module_name, imported_method)) = ctx.lookup_native_module(obj_name) {
+        // A named data export is a value with its own fields, not the module
+        // namespace. Classify the receiver by the export's declared kind:
+        // method lookup and missing-method errors belong to that value's shape.
+        if imported_method
+            .and_then(|name| perry_api_manifest::module_has_symbol(module_name, name))
+            .is_some_and(|entry| matches!(entry.kind, perry_api_manifest::ApiKind::Property))
+        {
+            return Ok(Err(args));
+        }
         // `Buffer.concat(...lists)` through the import: the generic native
         // module call below takes `args` positionally, so a spread operand
         // reached `Buffer.from` / `concat` as the one argument holding the

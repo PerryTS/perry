@@ -348,10 +348,10 @@ extern "C" fn web_worker_add_event_listener(
     _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
-    _options: f64,
+    options: f64,
 ) -> f64 {
-    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-    js_worker_threads_parent_port_event_add(event.to_bits() as i64, callback_ptr)
+    parent_port::worker_parent_port_object();
+    message_port::add_event_listener(PARENT_PORT_HANDLE as u64, event, callback, options, true)
 }
 
 extern "C" fn web_worker_remove_event_listener(
@@ -360,8 +360,7 @@ extern "C" fn web_worker_remove_event_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
-    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-    js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
+    message_port::remove_event_listener(PARENT_PORT_HANDLE as u64, event, callback)
 }
 
 extern "C" fn web_worker_close(

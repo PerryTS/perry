@@ -4307,10 +4307,6 @@
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "PARENT_PORT_EVENT_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "PENDING_MESSAGES"
     },
     {

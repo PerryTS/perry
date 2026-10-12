@@ -1,121 +1,25 @@
-use perry_runtime::closure::ClosureHeader;
-
-use super::{
-    closure_value, js_undefined, js_worker_threads_on, js_worker_threads_parent_port_event_add,
-    js_worker_threads_parent_port_event_remove, js_worker_threads_post_message, set_object_field,
-    string_value_to_string, worker_threads_noop0, CLOSE_CALLBACK, MESSAGE_CALLBACK,
-};
+//! The worker's parent port uses the same state and surface as MessageChannel.
+use super::*;
 
 pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectHeader {
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_field(
-        obj,
-        "postMessage",
-        closure_value(
-            perry_runtime::fn_info!(worker_parent_port_post_message, 2; with_declared(1)),
-        ),
-    );
-    set_object_field(
-        obj,
-        "on",
-        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
-    );
-    set_object_field(
-        obj,
-        "addListener",
-        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
-    );
-    set_object_field(
-        obj,
-        "once",
-        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
-    );
-    set_object_field(
-        obj,
-        "off",
-        closure_value(perry_runtime::fn_info!(worker_parent_port_off, 2; with_declared(2))),
-    );
-    set_object_field(
-        obj,
-        "removeListener",
-        closure_value(perry_runtime::fn_info!(worker_parent_port_off, 2; with_declared(2))),
-    );
-    set_object_field(
-        obj,
-        "addEventListener",
-        closure_value(
-            perry_runtime::fn_info!(worker_parent_port_add_event_listener, 2; with_declared(2)),
-        ),
-    );
-    set_object_field(
-        obj,
-        "removeEventListener",
-        closure_value(
-            perry_runtime::fn_info!(worker_parent_port_remove_event_listener, 2; with_declared(2)),
-        ),
-    );
-    set_object_field(
-        obj,
-        "ref",
-        closure_value(perry_runtime::fn_info!(worker_threads_noop0, 0; with_declared(0))),
-    );
-    set_object_field(
-        obj,
-        "unref",
-        closure_value(perry_runtime::fn_info!(worker_threads_noop0, 0; with_declared(0))),
-    );
-    obj
-}
-
-extern "C" fn worker_parent_port_add_event_listener(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    callback: f64,
-) -> f64 {
-    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-    js_worker_threads_parent_port_event_add(event.to_bits() as i64, callback_ptr)
-}
-
-extern "C" fn worker_parent_port_remove_event_listener(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    callback: f64,
-) -> f64 {
-    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-    js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
-}
-
-extern "C" fn worker_parent_port_post_message(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    value: f64,
-    transfer: f64,
-) -> f64 {
-    js_worker_threads_post_message(value, transfer)
-}
-
-extern "C" fn worker_parent_port_on(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    callback: f64,
-) -> f64 {
-    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
-    js_worker_threads_on(event.to_bits() as i64, callback_ptr)
-}
-
-extern "C" fn worker_parent_port_off(
-    _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
-    event: f64,
-    _callback: f64,
-) -> f64 {
-    match string_value_to_string(event).unwrap_or_default().as_str() {
-        "message" => MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None),
-        "close" => CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None),
-        _ => {}
+    let id = PARENT_PORT_HANDLE as u64;
+    let existing = MESSAGE_PORTS.with(|ports| ports.borrow().get(&id).map(|p| p.object_bits));
+    if let Some(bits) = existing {
+        return perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(bits))
+            as *mut perry_runtime::object::ObjectHeader;
     }
-    js_undefined()
+    ensure_environment_data_gc_scanner();
+    MESSAGE_PORTS.with(|ports| {
+        ports.borrow_mut().insert(id, MessagePortState::default());
+    });
+    message_port::message_port_object(id)
+}
+
+pub(super) fn is_closed() -> bool {
+    MESSAGE_PORTS.with(|ports| {
+        ports
+            .borrow()
+            .get(&(PARENT_PORT_HANDLE as u64))
+            .is_some_and(|p| p.closed)
+    })
 }

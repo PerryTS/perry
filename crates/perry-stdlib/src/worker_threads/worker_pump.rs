@@ -9,67 +9,18 @@
 
 use super::*;
 
-/// Deliver one main→worker message to the in-worker `parentPort` listeners.
-/// Fires the Node-style `MESSAGE_CALLBACK` with the raw payload AND any
-/// Web-style `addEventListener("message", fn)` listeners with a `MessageEvent`.
-/// Runs on the worker's own thread (its arena), so the value is deserialized
-/// here and any event wrapper is allocated in this thread's arena.
-pub(super) fn deliver_parent_port_message(message: &SerializedValue) {
-    let bits = unsafe { deserialize_nanbox_on_current_thread(message) };
-    let value = f64::from_bits(bits);
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let value_h = scope.root_nanbox_f64(value);
-    let global_value = perry_runtime::object::js_get_global_this();
-    let global_h = scope.root_nanbox_f64(global_value);
-    let property_handler = worker_surface::web_worker_global_handler("onmessage")
-        .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-
-    if let Some(callback_ptr) = MESSAGE_CALLBACK.with(|cb| *cb.borrow()) {
-        let closure = callback_ptr as *const ClosureHeader;
-        perry_runtime::closure::js_closure_call1(
-            closure,
-            perry_runtime::closure::plain_call_receiver(),
-            value_h.get_nanbox_f64(),
-        );
-    }
-
-    // Root the listener closures BEFORE allocating the `MessageEvent`: that
-    // allocation can trigger a moving GC, which rewrites the canonical
-    // `MESSAGE_EVENT_CALLBACKS` storage via the registered root scanner but
-    // would leave a plain `clone()` of the raw pointers stale.
-    let event_cbs = MESSAGE_EVENT_CALLBACKS.with(|cbs| {
-        cbs.borrow()
-            .iter()
-            .map(|&callback_ptr| {
-                scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(callback_ptr))
-            })
-            .collect::<Vec<_>>()
+/// Put the transport payload through the common MessagePort dispatch. The
+/// port consumes once listeners before calling JS and folds that into ref state.
+pub(super) fn deliver_parent_port_message(message: SerializedValue) {
+    parent_port::worker_parent_port_object();
+    MESSAGE_PORTS.with(|ports| {
+        let mut ports = ports.borrow_mut();
+        let state = ports.get_mut(&(PARENT_PORT_HANDLE as u64)).unwrap();
+        if !state.closed {
+            state.inbox.push_back(message);
+        }
     });
-    if !event_cbs.is_empty() || property_handler.is_some() {
-        let event = event_object(
-            "message",
-            global_h.get_nanbox_f64().to_bits(),
-            Some(value_h.get_nanbox_f64()),
-        );
-        let event_h = scope.root_nanbox_f64(event);
-        if let Some(callback_h) = property_handler {
-            call_callback1(
-                callback_h.get_nanbox_f64().to_bits(),
-                global_h.get_nanbox_f64().to_bits(),
-                event_h.get_nanbox_f64(),
-            );
-        }
-        for callback_h in event_cbs {
-            let callback_ptr =
-                perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
-            let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call1(
-                closure,
-                perry_runtime::closure::plain_call_receiver(),
-                event_h.get_nanbox_f64(),
-            );
-        }
-    }
+    js_worker_threads_channels_process_pending();
 }
 
 /// Start the background stdin reader thread
@@ -185,39 +136,18 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
         q.drain(..).collect()
     });
 
-    let callback = MESSAGE_CALLBACK.with(|cb| *cb.borrow());
-
-    if let Some(callback_ptr) = callback {
-        for msg in messages {
-            // JSON-parse the message string
-            let str_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let bits = unsafe { js_json_parse(str_ptr) };
-            let parsed = f64::from_bits(bits);
-
-            // Call the message callback with the parsed value
-            let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call1(
-                closure,
-                perry_runtime::closure::plain_call_receiver(),
-                parsed,
-            );
-            processed += 1;
-        }
+    for msg in messages {
+        let str_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let bits = unsafe { js_json_parse(str_ptr) };
+        deliver_parent_port_message(unsafe {
+            perry_runtime::thread::serialize_nanbox_for_thread(bits)
+        });
+        processed += 1;
     }
 
-    // Check for EOF and fire close callback
-    let is_eof = STDIN_EOF.with(|eof| *eof.borrow());
-    if is_eof {
-        let close_cb = CLOSE_CALLBACK.with(|cb| cb.borrow_mut().take());
-        if let Some(callback_ptr) = close_cb {
-            let closure = callback_ptr as *const ClosureHeader;
-            perry_runtime::closure::js_closure_call0(
-                closure,
-                perry_runtime::closure::plain_call_receiver(),
-            );
-        }
+    if STDIN_EOF.with(|eof| *eof.borrow()) && !parent_port::is_closed() {
+        message_port::close_port(PARENT_PORT_HANDLE as u64);
     }
-
     processed
 }
 
@@ -252,20 +182,20 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
         .unwrap()
         .iter()
         .any(|(parent, _)| *parent == agent);
-    // turnloop P0: O(1) (`LIVE_REFED_WORKERS`); debug builds re-derive it.
-    let has_live_refed_worker = LIVE_REFED_WORKERS.load(Ordering::Acquire) != 0;
-    #[cfg(debug_assertions)]
-    {
-        let workers = WORKERS.lock().unwrap();
-        let expected = workers.values().filter(|w| w.alive && w.refed).count() as u64;
-        debug_assert_eq!(
-            LIVE_REFED_WORKERS.load(Ordering::Acquire),
-            expected,
-            "live worker count drifted from WORKERS"
-        );
-    }
+    // The record's owner is authoritative on every agent. Counting the
+    // parent's record on the child keeps the child itself alive forever;
+    // counting nested children on the primary defeats Worker.unref().
+    let has_live_refed_worker = WORKERS
+        .lock()
+        .unwrap()
+        .values()
+        .any(|w| w.owner_agent == agent && w.alive && w.refed);
 
-    if has_messages || has_worker_events || has_live_refed_worker || (started && !eof) {
+    if has_messages
+        || has_worker_events
+        || has_live_refed_worker
+        || (started && !eof && message_port::port_is_refed(PARENT_PORT_HANDLE as u64))
+    {
         1
     } else {
         0

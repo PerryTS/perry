@@ -86,6 +86,7 @@ extern "C" fn broadcast_add_event_listener(
                 state.message_event_cbs.push(EventListener {
                     callback_bits: cb_bits,
                     once: listener_once(options),
+                    global_event: false,
                 });
             }
         }
