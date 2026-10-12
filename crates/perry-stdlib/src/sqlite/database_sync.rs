@@ -747,7 +747,7 @@ extern "C" fn db_exec_thunk(_c: *const ClosureHeader, this: JsThis, sql: f64) ->
         let scope = RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this.as_f64());
         let raw = db_payload(this.get_nanbox_f64()).raw;
-        let sql = string_from_value(sql, "sql");
+        let sql = sql_text_from_value(sql, "sql");
         let Ok(c_sql) = CString::new(sql) else {
             throw_sqlite_error_ext("SQL string must not contain null bytes", ffi::SQLITE_MISUSE);
         };
@@ -824,7 +824,7 @@ extern "C" fn db_prepare_thunk(
         if !value_from_f64(sql_value).is_any_string() {
             throw_type("The \"sql\" argument must be of type string");
         }
-        let sql = string_from_value(sql_value, "sql");
+        let sql = sql_text_from_value(sql_value, "sql");
         let flags = parse_statement_options(defaults, options_value);
         let Ok(c_sql) = CString::new(sql) else {
             throw_sqlite_error("SQL string must not contain null bytes");

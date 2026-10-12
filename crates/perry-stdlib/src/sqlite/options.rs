@@ -108,14 +108,7 @@ pub(crate) unsafe fn node_sqlite_exec_batch(
 }
 
 pub(crate) unsafe fn string_from_value(value: f64, name: &str) -> String {
-    let js = value_from_f64(value);
-    if !js.is_any_string() {
-        throw_type(&format!("The \"{}\" argument must be of type string", name));
-    }
-    let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
-    let s = string_from_header(ptr).unwrap_or_else(|| {
-        throw_type(&format!("The \"{}\" argument must be of type string", name))
-    });
+    let s = string_from_value_verbatim(value, name);
     if s.as_bytes().contains(&0) {
         throw_type(&format!(
             "The \"{}\" argument must not contain null bytes",
@@ -123,6 +116,31 @@ pub(crate) unsafe fn string_from_value(value: f64, name: &str) -> String {
         ));
     }
     s
+}
+
+/// The string-argument check alone, without the null-byte validation.
+pub(crate) unsafe fn string_from_value_verbatim(value: f64, name: &str) -> String {
+    let js = value_from_f64(value);
+    if !js.is_any_string() {
+        throw_type(&format!("The \"{}\" argument must be of type string", name));
+    }
+    let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
+    string_from_header(ptr).unwrap_or_else(|| {
+        throw_type(&format!("The \"{}\" argument must be of type string", name))
+    })
+}
+
+/// SQL text (`DatabaseSync#prepare` / `#exec`). Node hands the bytes straight
+/// to SQLite, which reads up to the first null byte and raises its own
+/// `ERR_SQLITE_ERROR` when that cuts a statement short (`SELECT\0 1` is
+/// "incomplete input", while a trailing NUL is accepted) — validating the
+/// argument here would report `ERR_INVALID_ARG_TYPE` instead (#9202).
+pub(crate) unsafe fn sql_text_from_value(value: f64, name: &str) -> String {
+    let sql = string_from_value_verbatim(value, name);
+    match sql.find('\0') {
+        Some(end) => sql[..end].to_string(),
+        None => sql,
+    }
 }
 
 pub(crate) fn is_object_like(value: f64) -> bool {
@@ -334,4 +352,33 @@ pub(crate) unsafe fn parse_node_sqlite_options(options_value: f64) -> NodeSqlite
     }
 
     options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sql_value(text: &str) -> f64 {
+        let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    }
+
+    /// Node hands the SQL text to SQLite, which reads up to the first null
+    /// byte, so `SELECT\0 1` reaches the compiler as `SELECT` (and a trailing
+    /// null byte leaves a complete, accepted statement) (#9202).
+    #[test]
+    fn sql_text_stops_at_the_first_null_byte() {
+        assert_eq!(
+            unsafe { sql_text_from_value(sql_value("SELECT\0 1"), "sql") },
+            "SELECT"
+        );
+        assert_eq!(
+            unsafe { sql_text_from_value(sql_value("SELECT 1\0"), "sql") },
+            "SELECT 1"
+        );
+        assert_eq!(
+            unsafe { sql_text_from_value(sql_value("SELECT 1; SELECT 2"), "sql") },
+            "SELECT 1; SELECT 2"
+        );
+    }
 }
