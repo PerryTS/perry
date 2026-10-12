@@ -1,0 +1,4 @@
+### Fixed
+
+- `ArrayBuffer.prototype.slice()` with a default `end` no longer returns an empty buffer for a typed array's `.buffer`. That buffer is a lazy length-tracking alias view whose stored length is 0, and the fused `slice`/`subarray` dispatch read that raw field as the default `end`; it now reads the resolved byte length, so `new Uint8Array(bytes.buffer.slice(0))` keeps its bytes and `node-suite/sqlite/binding/typed-array-views` matches node.
+- `node:sqlite` `DatabaseSync#prepare` and `#exec` no longer reject a SQL string containing a NUL byte with `ERR_INVALID_ARG_TYPE`. The text up to the first NUL now reaches SQLite, which raises its own `ERR_SQLITE_ERROR` for a statement cut short (`SELECT\0 1`) and accepts a trailing NUL, matching the node 26.5.1 oracle. Every other string argument keeps its existing null-byte validation. Fixes `node-suite/sqlite/statements/prepare-validation` and takes the `sqlite` module sweep to 47/47.
