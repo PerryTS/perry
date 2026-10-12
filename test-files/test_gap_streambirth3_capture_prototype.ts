@@ -1,39 +1,52 @@
 import { EventEmitter } from "node:events";
+let printing = true;
+let sink = 0;
+function log(...args: any[]) {
+  const text = args.map((a) => String(a)).join(" ") + "#" + sink;
+  sink = (sink + text.length) % 9973;
+  if (printing) console.log(...args);
+}
 function witness() {
 const E: any = EventEmitter;
 const original = E.prototype;
 const key = Object.getOwnPropertySymbols(original)[0];
-console.log(String(key), E.captureRejections);
+log(String(key), E.captureRejections);
 E.captureRejections = true;
-console.log(E.captureRejections);
+log(E.captureRejections);
 new E();
 E.prototype = {};
-console.log(E.captureRejections);
+log(E.captureRejections);
 new E();
 E.captureRejections = true;
-console.log(E.captureRejections);
+log(E.captureRejections);
 E.prototype = original;
-console.log(E.captureRejections);
+log(E.captureRejections);
 original[key] = false;
-console.log(E.captureRejections);
+log(E.captureRejections);
 new E();
 E.prototype = Object.create(original);
-console.log(E.captureRejections);
+log(E.captureRejections);
 E.captureRejections = true;
-console.log(E.captureRejections, original[key]);
+log(E.captureRejections, original[key]);
 new E();
 E.prototype = null;
-try { console.log(E.captureRejections); } catch (error: any) { console.log(error.name); }
-try { new E(); console.log("constructed"); } catch (error: any) { console.log(error.name); }
+try { log(E.captureRejections); } catch (error: any) { log(error.name); }
+try { new E(); log("constructed"); } catch (error: any) { log(error.name); }
 E.prototype = original;
 let gets = 0;
 try {
   Object.defineProperty(E, "captureRejections", {
     configurable: true, get() { gets++; return true; }
   });
-} catch (error: any) { console.log(error.name); }
+} catch (error: any) { log(error.name); }
 new E();
 new E();
-console.log(gets);
+log(gets);
 }
-for (let run = 0; run < 2; run++) witness();
+for (let run = 0; run < 52; run++) {
+  printing = run < 2;
+  const junk: any[] = [];
+  for (let i = 0; i < 20; i++) junk.push({ i, s: "x" + i + run });
+  sink = (sink + junk.length) % 9973;
+  witness();
+}
