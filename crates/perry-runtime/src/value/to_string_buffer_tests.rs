@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn text(ptr: *mut crate::string::StringHeader) -> String {
+fn text(ptr: *const crate::string::StringHeader) -> String {
     unsafe { crate::object::has_own_helpers::str_from_string_header(ptr) }
         .expect("string conversion returns UTF-8")
         .to_string()
@@ -106,8 +106,12 @@ fn buffer_dispatch_to_string_uses_object_tags_for_non_indexed_views() {
             let argument = encoding.get_nanbox_f64();
             let result =
                 unsafe { crate::object::dispatch_buffer_method(addr, "toString", &argument, 1) };
+            let result = scope.root_nanbox_f64(result);
             assert_eq!(
-                text(crate::value::js_get_string_pointer_unified(result)),
+                text(
+                    crate::value::js_get_string_pointer_unified(result.get_nanbox_f64())
+                        as *const _
+                ),
                 expected
             );
         }
@@ -127,8 +131,9 @@ fn buffer_dispatch_to_string_uses_object_tags_for_non_indexed_views() {
     let addr = JSValue::from_bits(current.to_bits()).as_pointer::<u8>() as usize;
     let argument = short_hex.get_nanbox_f64();
     let result = unsafe { crate::object::dispatch_buffer_method(addr, "toString", &argument, 1) };
+    let result = scope.root_nanbox_f64(result);
     assert_eq!(
-        text(crate::value::js_get_string_pointer_unified(result)),
+        text(crate::value::js_get_string_pointer_unified(result.get_nanbox_f64()) as *const _),
         "6869"
     );
 }
