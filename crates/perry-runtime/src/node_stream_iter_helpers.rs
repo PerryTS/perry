@@ -1479,7 +1479,7 @@ mod take_tests {
     }
 
     #[test]
-    fn take_does_not_return_source_that_finished_naturally() {
+    fn take_closes_source_that_finished_naturally() {
         let methods = [
             ("next", &SOURCE_NEXT_INFO as StubFn),
             ("return", &SOURCE_RETURN_INFO as StubFn),
@@ -1498,7 +1498,7 @@ mod take_tests {
         assert!(!stream_destroyed(stream));
         assert_eq!(pull(iterator), (false, 1.0));
         assert!(pull(iterator).0);
-        assert!(!has_truthy_hidden(
+        assert!(has_truthy_hidden(
             source,
             crate::runtime_state_key!(b"returned")
         ));

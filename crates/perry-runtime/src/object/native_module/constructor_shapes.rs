@@ -688,6 +688,62 @@ extern "C" fn default_max_listeners_set(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+pub(crate) extern "C" fn capture_rejections_get(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    let key = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
+    let proto = scope.root_nanbox_f64(
+        crate::node_stream::own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(|| {
+            crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
+        }),
+    );
+    capture_property_get(proto.get_nanbox_f64(), key.get_nanbox_f64())
+}
+pub(crate) fn capture_property_get(proto: f64, key: f64) -> f64 {
+    if proto.to_bits() == crate::value::TAG_NULL || proto.to_bits() == crate::value::TAG_UNDEFINED {
+        crate::collection_iter::throw_type_error(
+            "Cannot read capture property of null or undefined",
+        );
+    }
+    unsafe { crate::object::js_object_get_property_key(proto, key) }
+}
+extern "C" fn capture_rejections_set(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    if value.to_bits() != crate::value::TAG_TRUE && value.to_bits() != crate::value::TAG_FALSE {
+        crate::fs::validate::throw_type_error_with_code(
+            &format!(
+                "The \"captureRejections\" property must be of type boolean. Received {}",
+                crate::fs::validate::describe_received(value)
+            ),
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 0));
+    let key = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
+    let proto = scope.root_nanbox_f64(
+        crate::node_stream::own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(|| {
+            crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
+        }),
+    );
+    let result = crate::proxy::reflect_ordinary_set_with_receiver(
+        proto.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value,
+        proto.get_nanbox_f64(),
+    );
+    if result.to_bits() == crate::value::TAG_FALSE {
+        crate::collection_iter::throw_type_error("Cannot assign to read only capture property");
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(value);
@@ -712,7 +768,6 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     for (name, val) in [
         ("EventEmitter", ctor.get_nanbox_f64()),
         ("usingDomains", f64::from_bits(crate::value::TAG_FALSE)),
-        ("captureRejections", f64::from_bits(crate::value::TAG_FALSE)),
     ] {
         crate::closure::closure_set_dynamic_prop(
             crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
@@ -765,60 +820,111 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         },
         crate::object::PropertyAttrs::new(false, true, true),
     );
-    let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(default_max_listeners_get, 0; with_declared(0)),
-        1,
-    ));
-    get.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, 10.0));
-    get.with_mut_ptr(|p| {
-        callable_exports::set_bound_native_closure_name(p, "get defaultMaxListeners")
-    });
-    get.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
-        callable_exports::set_builtin_closure_non_constructable(p as usize)
-    });
-    let set = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(default_max_listeners_set, 1; with_declared(1)),
-        1,
-    ));
-    set.with_mut_ptr(|p| {
-        callable_exports::set_bound_native_closure_name(p, "set defaultMaxListeners")
-    });
-    set.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
-        callable_exports::set_builtin_closure_non_constructable(p as usize)
-    });
-    set.with_mut_ptr(|p| {
-        crate::closure::js_closure_set_capture_f64(
-            p,
-            0,
-            get.with_mut_ptr(|g: *mut crate::closure::ClosureHeader| {
-                crate::value::js_nanbox_pointer(g as i64)
-            }),
-        )
-    });
-    let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
-    // The accessor pair lives in the constructor's own property shape.
-    crate::closure::closure_set_dynamic_prop(
-        addr,
-        "defaultMaxListeners",
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-    );
-    crate::object::set_builtin_accessor_descriptor(
-        addr,
-        "defaultMaxListeners".to_string(),
-        crate::object::AccessorDescriptor {
-            get: get
-                .with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
-                    crate::value::js_nanbox_pointer(p as i64)
-                })
-                .to_bits(),
-            set: set
-                .with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
-                    crate::value::js_nanbox_pointer(p as i64)
-                })
-                .to_bits(),
-        },
-        crate::object::PropertyAttrs::new(false, true, true),
-    );
+    for (name, initial, setter) in [
+        (
+            "defaultMaxListeners",
+            10.0,
+            crate::fn_info!(default_max_listeners_set, 1; with_declared(1)),
+        ),
+        (
+            "captureRejections",
+            f64::from_bits(crate::value::TAG_FALSE),
+            crate::fn_info!(capture_rejections_set, 1; with_declared(1)),
+        ),
+    ] {
+        let capture_key = if name == "captureRejections" {
+            let description = crate::string::intern_ascii_literal(b"kCapture");
+            Some(scope.root_nanbox_f64(unsafe {
+                crate::symbol::js_symbol_new(f64::from_bits(
+                    JSValue::string_ptr(description as *mut _).bits(),
+                ))
+            }))
+        } else {
+            None
+        };
+        let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            if name == "captureRejections" {
+                crate::fn_info!(capture_rejections_get, 0; with_declared(0))
+            } else {
+                crate::fn_info!(default_max_listeners_get, 0; with_declared(0))
+            },
+            if capture_key.is_some() { 2 } else { 1 },
+        ));
+        get.with_mut_ptr(|p| {
+            crate::closure::js_closure_set_capture_f64(
+                p,
+                0,
+                if capture_key.is_some() {
+                    ctor.get_nanbox_f64()
+                } else {
+                    initial
+                },
+            );
+            if let Some(key) = &capture_key {
+                crate::closure::js_closure_set_capture_f64(p, 1, key.get_nanbox_f64());
+            }
+        });
+        get.with_mut_ptr(|p| {
+            callable_exports::set_bound_native_closure_name(p, &format!("get {name}"))
+        });
+        get.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+            callable_exports::set_builtin_closure_non_constructable(p as usize)
+        });
+        let set = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            setter,
+            if name == "captureRejections" { 2 } else { 1 },
+        ));
+        set.with_mut_ptr(|p| {
+            if let Some(key) = &capture_key {
+                crate::closure::js_closure_set_capture_f64(p, 0, ctor.get_nanbox_f64());
+                crate::closure::js_closure_set_capture_f64(p, 1, key.get_nanbox_f64());
+            } else {
+                crate::closure::js_closure_set_capture_f64(
+                    p,
+                    0,
+                    get.with_mut_ptr(|g: *mut crate::closure::ClosureHeader| {
+                        crate::value::js_nanbox_pointer(g as i64)
+                    }),
+                );
+            }
+        });
+        let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
+        // The accessor pair lives in the constructor's own property shape.
+        crate::closure::closure_set_dynamic_prop(
+            addr,
+            name,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        crate::object::set_builtin_accessor_descriptor(
+            addr,
+            name.to_string(),
+            crate::object::AccessorDescriptor {
+                get: get
+                    .with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+                        crate::value::js_nanbox_pointer(p as i64)
+                    })
+                    .to_bits(),
+                set: set
+                    .with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+                        crate::value::js_nanbox_pointer(p as i64)
+                    })
+                    .to_bits(),
+            },
+            crate::object::PropertyAttrs::new(false, true, false),
+        );
+        if let Some(key) = &capture_key {
+            let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+                ctor.get_nanbox_f64(),
+            ));
+            unsafe {
+                crate::object::js_object_set_property_key(
+                    proto.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    initial,
+                );
+            }
+        }
+    }
     ctor.get_nanbox_f64()
 }
 

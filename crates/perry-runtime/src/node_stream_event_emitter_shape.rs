@@ -272,7 +272,12 @@ pub(super) fn state_get(target: f64, key: crate::runtime_state_key::NamedStateKe
 /// `target.<state key> = value`: an overwrite of its own slot when the shape
 /// holds it and the receiver is not frozen, else `[[Set]]`.
 pub(super) fn state_set(target: f64, key: crate::runtime_state_key::NamedStateKey, value: f64) {
-    key.write_value(target, value);
+    if let Some(obj) = crate::object::field_get_set::runtime_read_site::object_receiver(target) {
+        if unsafe { key.write_existing(obj, value) } {
+            return;
+        }
+    }
+    super::super::constructors::birth::ordinary_birth_set(target, key, value);
 }
 
 /// `target[key] = value` answered by `target`'s shape: an overwrite of an
@@ -564,6 +569,9 @@ mod method_body_tests {
         let _no_move = crate::gc::GcSuppressScope::new();
         let target = crate::node_stream::js_node_stream_readable_new(undefined_value());
         init_event_emitter_state(target);
+        // Node inherits its initial zero count. Give this storage witness an
+        // own count before asking the two-own-slot reset helper to accept it.
+        state_set(target, crate::runtime_state_key!(EVENTS_COUNT_KEY), 0.0);
         let (obj, _, _) = state_slot(target, &EVENTS_SLOT, EVENTS_KEY).unwrap();
         assert!(unsafe { crate::object::object_live_slot_count(obj) } <= 2);
         let events = new_events_object();

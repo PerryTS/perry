@@ -110,23 +110,26 @@ fn stream_max_listeners(stream: f64) -> f64 {
 /// the `EventEmitter` export exists nothing can have reassigned it, so a
 /// stream-only program reads the default without minting it.
 fn default_max_listeners() -> f64 {
+    let number = number_of(emitter_constructor_property("defaultMaxListeners"));
+    if number.is_nan() {
+        DEFAULT_MAX_LISTENERS
+    } else {
+        number
+    }
+}
+/// Mutable constructor properties live in the constructor's existing property
+/// bag. No process flag can stand in for that observable source of truth.
+fn emitter_constructor_property(name: &str) -> f64 {
     let Some(ctor) =
         crate::object::native_module::minted_native_callable_export("events\0EventEmitter")
     else {
-        return DEFAULT_MAX_LISTENERS;
+        return undefined_value();
     };
     let jsval = JSValue::from_bits(ctor.to_bits());
     if jsval.is_pointer() {
-        let value = crate::closure::closure_get_dynamic_prop(
-            jsval.as_pointer::<u8>() as usize,
-            "defaultMaxListeners",
-        );
-        let number = number_of(value);
-        if !number.is_nan() {
-            return number;
-        }
+        return crate::closure::closure_get_dynamic_prop(jsval.as_pointer::<u8>() as usize, name);
     }
-    DEFAULT_MAX_LISTENERS
+    undefined_value()
 }
 
 pub(super) extern "C" fn ns_on2(
@@ -711,6 +714,15 @@ fn events_of(target: f64) -> Option<f64> {
 /// `_maxListeners`. Run by `super()` of a class extending EventEmitter and by
 /// `EventEmitter.call(this)`.
 pub(crate) fn init_event_emitter_state(target: f64) {
+    init_event_emitter_state_with_presence(target, None);
+}
+/// The constructor's scalar presence proof replaces this same ordinary Get;
+/// getters refuse that proof and keep the original shared initialization body.
+#[inline(never)]
+pub(crate) fn init_event_emitter_state_with_presence(
+    target: f64,
+    birth: Option<super::constructors::birth_memo::Input>,
+) {
     if !is_object_value(target) {
         return;
     }
@@ -736,40 +748,50 @@ pub(crate) fn init_event_emitter_state(target: f64) {
         is_undefined(events.get_nanbox_f64()) || {
             let proto = crate::object::js_object_get_prototype_of(target.get_nanbox_f64());
             is_object_value(proto)
-                && get_named(proto, crate::runtime_state_key!(EVENTS_KEY)).to_bits()
+                && super::constructors::birth_memo::read_field(
+                    proto,
+                    crate::runtime_state_key!(EVENTS_KEY),
+                    birth,
+                )
+                .to_bits()
                     == events.get_nanbox_f64().to_bits()
         }
     };
     if reset {
         reset_events(target.get_nanbox_f64());
     }
-    let max = state_get(
-        target.get_nanbox_f64(),
-        crate::runtime_state_key!(MAX_LISTENERS_KEY),
-    );
-    let max = if crate::value::js_is_truthy(max) != 0 {
-        max
-    } else {
-        undefined_value()
-    };
-    state_set(
-        target.get_nanbox_f64(),
-        crate::runtime_state_key!(MAX_LISTENERS_KEY),
-        max,
-    );
+    let assign_max = birth.map(|p| p.own_max()).unwrap_or_else(|| {
+        crate::value::js_is_truthy(state_get(
+            target.get_nanbox_f64(),
+            crate::runtime_state_key!(MAX_LISTENERS_KEY),
+        )) == 0
+    });
+    if assign_max {
+        state_set(
+            target.get_nanbox_f64(),
+            crate::runtime_state_key!(MAX_LISTENERS_KEY),
+            undefined_value(),
+        );
+    }
 }
 
 /// The data properties node's `EventEmitter.prototype` carries ahead of its
 /// methods: `_events: undefined`, `_eventsCount: 0`, `_maxListeners: undefined`.
 pub(crate) fn install_event_emitter_prototype_state(proto: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
     set_named(
-        proto,
+        proto.get_nanbox_f64(),
         crate::runtime_state_key!(EVENTS_KEY),
         undefined_value(),
     );
-    set_named(proto, crate::runtime_state_key!(EVENTS_COUNT_KEY), 0.0);
     set_named(
-        proto,
+        proto.get_nanbox_f64(),
+        crate::runtime_state_key!(EVENTS_COUNT_KEY),
+        0.0,
+    );
+    set_named(
+        proto.get_nanbox_f64(),
         crate::runtime_state_key!(MAX_LISTENERS_KEY),
         undefined_value(),
     );
@@ -1555,16 +1577,47 @@ fn bool_value(value: bool) -> f64 {
     })
 }
 
+#[path = "node_stream_event_emitter_capture.rs"]
+mod capture_default;
+#[cfg(test)]
+pub(crate) use capture_default::emitter_capture_default;
+
 /// node's `EventEmitter.init(opts)` capture step: a truthy
 /// `opts.captureRejections` must be a boolean, and turns capture on.
 pub(crate) fn init_event_emitter_capture(target: f64, options: f64) {
-    if !is_object_value(options) || !is_object_value(target) {
+    if !is_object_value(target) {
         return;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
-    let value = get_named(options, crate::runtime_state_key!(b"captureRejections"));
+    let options = scope.root_nanbox_f64(options);
+    init_capture_rooted(&target, &options, None);
+}
+pub(crate) fn init_newborn_emitter_capture(
+    target: &crate::gc::RuntimeHandle<'_>,
+    options: &crate::gc::RuntimeHandle<'_>,
+    birth: Option<(f64, f64)>,
+) {
+    init_capture_rooted(target, options, birth);
+}
+#[inline(never)]
+fn init_capture_rooted(
+    target: &crate::gc::RuntimeHandle<'_>,
+    options: &crate::gc::RuntimeHandle<'_>,
+    birth: Option<(f64, f64)>,
+) {
+    let known_absent = birth.is_some();
+    let options = options.get_nanbox_f64();
+    let value = if is_object_value(options) {
+        get_named(options, crate::runtime_state_key!(b"captureRejections"))
+    } else {
+        undefined_value()
+    };
     if crate::value::js_is_truthy(value) == 0 {
+        let enabled = capture_default::emitter_capture_default_with_birth(birth);
+        if enabled || (!known_absent && capture_rejections_enabled(target.get_nanbox_f64())) {
+            set_capture_rejections(target.get_nanbox_f64(), enabled);
+        }
         return;
     }
     if value.to_bits() != super::TAG_TRUE {

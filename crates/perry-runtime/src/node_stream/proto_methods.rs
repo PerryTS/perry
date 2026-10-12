@@ -14,9 +14,9 @@
 //! prototype. A subclass override shadows the inherited method by ordinary
 //! lookup, and `super.m()` reaches the base body on the chain.
 //!
-//! Instances therefore own only their state, which the runtime defines
-//! non-enumerable (`set_hidden_value`), so `Object.keys`, `JSON.stringify`
-//! and `for…in` skip it structurally, with no key filter.
+//! Instances own Node's enumerable state and optional option-supplied hooks.
+//! The private record adds no string keys, so reflection and JSON use the
+//! same ordinary shape and own-property order.
 
 use super::*;
 use crate::object::ObjectHeader;
@@ -92,6 +92,7 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
             })
         });
     }
+    install_stream_property_accessors(proto.get_raw_mut_ptr::<ObjectHeader>(), kind);
     let proto_value = proto
         .with_mut_ptr::<ObjectHeader, _>(|proto| crate::value::js_nanbox_pointer(proto as i64));
     let proto_value = scope.root_nanbox_f64(proto_value);
@@ -145,9 +146,22 @@ pub(crate) fn stream_prototype_value(name: &str) -> f64 {
 
 /// `Object.create(stream.<name>.prototype)`: a direct instance, which owns
 /// only the state its init defines.
-pub(super) fn alloc_stream_instance(name: &str, side: &[&str]) -> f64 {
+pub(super) fn alloc_stream_instance(
+    opts: f64,
+    kind: super::constructors::birth::Kind,
+) -> (f64, Option<super::constructors::birth_memo::Input>) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(stream_prototype_value(name));
+    let opts = scope.root_nanbox_f64(opts);
+    let (name, native_key) = kind.constructor();
+    let ctor = scope.root_nanbox_f64(
+        crate::object::native_module::minted_native_callable_export(native_key)
+            .unwrap_or_else(|| crate::object::bound_native_callable_export_value("stream", name)),
+    );
+    let proto = scope.root_nanbox_f64(
+        super::constructors::own_prototype_by_bag(ctor.get_nanbox_f64()).unwrap_or_else(|| {
+            crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64())
+        }),
+    );
     if !JSValue::from_bits(proto.get_nanbox_u64()).is_pointer() {
         // The writable constructor `.prototype` can be replaced by a
         // primitive. Keep the ordinary fallback prototype while still
@@ -159,7 +173,15 @@ pub(super) fn alloc_stream_instance(name: &str, side: &[&str]) -> f64 {
             ordinary.get_nanbox_f64(),
         ));
     }
-    super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64(), side)
+    let (stream, proof) =
+        super::constructors::birth_memo::alloc(proto.get_nanbox_f64(), opts.get_nanbox_f64(), kind);
+    if let Some(stream) = stream {
+        return (stream, proof);
+    }
+    (
+        super::constructors::alloc_initialized_stream_shell(proto.get_nanbox_f64(), kind),
+        proof,
+    )
 }
 
 /// Does `value`'s prototype chain reach `stream.<name>.prototype`? (node's
@@ -199,4 +221,110 @@ extern "C" fn ns_transform3(
     _callback: f64,
 ) -> f64 {
     throw_missing_stream_method("The _transform() method is not implemented")
+}
+
+// Stream flags are inherited getters, as in Node. Their backing slots are
+// runtime-owned record fields, never extra string keys on the instance.
+const READABLE_PROPERTIES: &[(&str, Slot)] = &[
+    ("destroyed", Slot::Destroyed),
+    ("closed", Slot::Closed),
+    ("readableAborted", Slot::ReadableAborted),
+    ("readableLength", Slot::ReadableBuffered),
+    ("readableHighWaterMark", Slot::ReadableHwm),
+    ("readableObjectMode", Slot::ReadableObjectMode),
+    ("readableFlowing", Slot::ReadableFlowing),
+    ("readable", Slot::Readable),
+    ("readableEnded", Slot::ReadableEnded),
+    ("readableDidRead", Slot::Disturbed),
+    ("readableEncoding", Slot::ReadableEncoding),
+];
+const WRITABLE_PROPERTIES: &[(&str, Slot)] = &[
+    ("destroyed", Slot::Destroyed),
+    ("closed", Slot::Closed),
+    ("writableObjectMode", Slot::WritableObjectMode),
+    ("writableHighWaterMark", Slot::WritableHwm),
+    ("writableLength", Slot::WritableLength),
+    ("writableNeedDrain", Slot::WritableNeedDrain),
+    ("writableCorked", Slot::WritableCorked),
+    ("writable", Slot::Writable),
+    ("writableEnded", Slot::WritableEnded),
+    ("writableFinished", Slot::WritableFinished),
+];
+
+extern "C" fn stream_property_get(c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let index = js_closure_get_capture_f64(c, 0) as usize;
+    let properties = if index < 64 {
+        READABLE_PROPERTIES
+    } else {
+        WRITABLE_PROPERTIES
+    };
+    let Some((_, slot)) = properties.get(index % 64) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    read_slot(this.as_f64(), *slot).unwrap_or(f64::from_bits(TAG_UNDEFINED))
+}
+extern "C" fn stream_property_set(
+    c: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    v: f64,
+) -> f64 {
+    let index = js_closure_get_capture_f64(c, 0) as usize;
+    let properties = if index < 64 {
+        READABLE_PROPERTIES
+    } else {
+        WRITABLE_PROPERTIES
+    };
+    if let Some((_, slot)) = properties.get(index % 64) {
+        write_slot(this.as_f64(), *slot, v);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+fn install_stream_property_accessors(proto: *mut ObjectHeader, kind: StreamProto) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
+    let sets: &[(&[(&str, Slot)], usize)] = match kind {
+        StreamProto::Readable => &[(READABLE_PROPERTIES, 0)],
+        StreamProto::Writable => &[(WRITABLE_PROPERTIES, 64)],
+        StreamProto::Duplex => &[(WRITABLE_PROPERTIES, 64)],
+        StreamProto::Transform => &[],
+    };
+    for &(properties, base) in sets {
+        for (i, &(name, _)) in properties.iter().enumerate() {
+            let get = scope
+                .root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_get, 0), 1));
+            get.with_mut_ptr::<ClosureHeader, _>(|c| {
+                js_closure_set_capture_f64(c, 0, (base + i) as f64)
+            });
+            let set_bits = if matches!(
+                properties[i].1,
+                Slot::Destroyed | Slot::Readable | Slot::ReadableFlowing | Slot::Writable
+            ) {
+                let set = scope
+                    .root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(stream_property_set, 1), 1));
+                set.with_mut_ptr::<ClosureHeader, _>(|c| {
+                    js_closure_set_capture_f64(c, 0, (base + i) as f64)
+                });
+                box_pointer(set.get_raw_mut_ptr::<ClosureHeader>().cast()).to_bits()
+            } else {
+                TAG_UNDEFINED
+            };
+            let key = scope
+                .root_string_ptr(crate::string::intern_ascii_literal(name.as_bytes()) as *mut _);
+            unsafe {
+                crate::object::ensure_key_in_keys_array(
+                    proto.get_raw_mut_ptr::<ObjectHeader>(),
+                    key.get_raw_const_ptr::<crate::StringHeader>(),
+                );
+            }
+            crate::object::install_fresh_accessor_property(
+                proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
+                name.to_owned(),
+                crate::object::AccessorDescriptor {
+                    get: box_pointer(get.get_raw_mut_ptr::<ClosureHeader>().cast()).to_bits(),
+                    set: set_bits,
+                },
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
 }

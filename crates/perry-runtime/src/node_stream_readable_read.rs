@@ -259,11 +259,7 @@ fn set_readable_buffer_values(
     );
     let remaining = byte_len as f64;
     set_hidden_value(stream.get_nanbox_f64(), hidden_buffered_key(), remaining);
-    set_hidden_value(
-        stream.get_nanbox_f64(),
-        crate::runtime_state_key!(b"readableLength"),
-        remaining,
-    );
+    set_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered, remaining);
     sync_pending_readable_chunks_to_buffer(stream);
 }
 
@@ -346,7 +342,7 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
     let chunk = scope.root_nanbox_f64(crate::array::js_array_shift_f64(arr));
     let s = || stream.get_nanbox_f64();
     set_hidden_value(s(), hidden_buffered_key(), remaining);
-    set_hidden_value(s(), crate::runtime_state_key!(b"readableLength"), remaining);
+    set_hidden_value(s(), Slot::ReadableBuffered, remaining);
     mark_disturbed(s());
     sync_pending_readable_chunks_to_buffer(&stream);
     if stream_hidden_ended(s()) && remaining == 0.0 {

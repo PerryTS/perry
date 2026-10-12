@@ -1269,26 +1269,20 @@ fn readable_options_read_callback_this_is_rebound_to_stream() {
 #[test]
 fn stream_json_stringify_uses_node_state_shape() {
     let readable = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
-    let mut readable_json = String::new();
-    unsafe {
-        assert!(try_stringify_node_stream_json(
-            raw_ptr_from_value(readable) as *const u8,
-            &mut readable_json,
-        ));
-    }
+    let json_value = unsafe { crate::json::js_json_stringify(readable, 0) };
+    let readable_json = crate::fs::validate::read_js_string_pub(f64::from_bits(
+        JSValue::string_ptr(json_value).bits(),
+    ));
     assert_eq!(
         readable_json,
         r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"pipes":[],"awaitDrainWriters":null}}"#
     );
 
     let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
-    let mut writable_json = String::new();
-    unsafe {
-        assert!(try_stringify_node_stream_json(
-            raw_ptr_from_value(writable) as *const u8,
-            &mut writable_json,
-        ));
-    }
+    let json_value = unsafe { crate::json::js_json_stringify(writable, 0) };
+    let writable_json = crate::fs::validate::read_js_string_pub(f64::from_bits(
+        JSValue::string_ptr(json_value).bits(),
+    ));
     assert_eq!(
         writable_json,
         r#"{"_events":{},"_writableState":{"highWaterMark":65536,"length":0,"corked":0,"writelen":0,"bufferedIndex":0,"pendingcb":0}}"#

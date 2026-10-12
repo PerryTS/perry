@@ -925,9 +925,12 @@ fn z7_payload_stream_owns_only_state_and_its_fields_in_constructor_order() {
         own_keys(rot.get_nanbox_f64()),
         [
             "_rotPre",
+            "_events",
             "_readableState",
             "_writableState",
             "allowHalfOpen",
+            "_maxListeners",
+            "_eventsCount",
             "_rotPost"
         ],
         "node's own keys, in constructor order; no method, no runtime state"
@@ -958,7 +961,14 @@ fn z7_payload_stream_owns_only_state_and_its_fields_in_constructor_order() {
     let t = scope.root_nanbox_f64(js_node_stream_transform_new(f64::from_bits(TAG_UNDEFINED)));
     assert_eq!(
         own_keys(t.get_nanbox_f64()),
-        ["_readableState", "_writableState", "allowHalfOpen"]
+        [
+            "_events",
+            "_readableState",
+            "_writableState",
+            "allowHalfOpen",
+            "_maxListeners",
+            "_eventsCount"
+        ]
     );
 }
 

@@ -724,6 +724,60 @@
       "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
     },
     {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "R_SHELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "W_SHELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "D_SHELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "T_SHELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "P_SHELL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a monotonic ShapeId returned by object_shape_stamp. Every birth consults the current shape directory and validates prototype identity and layout facts after allocation. There are no heap addresses or NaN-boxed values in this memo."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
+      "name": "SITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "BirthWriteSite contains Cell<Option<BirthWrite>>. BirthWrite contains only u32 predecessor/successor ShapeIds, a u32 slot index, eight u32 prototype ShapeIds and a usize chain length. No field stores a heap pointer or JS value; the exact receiver and complete prototype ShapeIds are validated on every replay."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_state_view.rs",
+      "name": "READABLE_BIRTH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a ShapeId returned by object_shape_stamp for a state birth. The allocator consults the live descriptor directory and revalidates prototype identity, kind, key count, inline width, holes and descriptor facts after allocation. The memo carries no heap address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_state_view.rs",
+      "name": "WRITABLE_BIRTH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u32> stores only a ShapeId returned by object_shape_stamp for a state birth. The allocator consults the live descriptor directory and revalidates prototype identity, kind, key count, inline width, holes and descriptor facts after allocation. The memo carries no heap address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/birth_memo.rs",
+      "name": "E_EXISTING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Constructor transition memo stores only input/output ShapeIds, prototype-chain ShapeIds, hook-presence bits, slot count and inline count. No heap address or JS value; every replay validates the current input and live shape authority."
+    },
+    {
       "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
       "name": "PLAIN_PROTOTYPE",
       "verdict": "not_a_gc_pointer",
@@ -4286,6 +4340,12 @@
     {
       "file": "crates/perry-runtime/src/box/activation.rs",
       "name": "NEXT_ASYNC_BOX_ACTIVATION_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_capture.rs",
+      "name": "CAPTURE_DEFAULT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<Option<CaptureSite>> contains only four u32 layout facts: the bound EventEmitter export bag ShapeId, current prototype ShapeId, data slot index and live inline count. No heap pointer or NaN-boxed value. A miss proves the native getter and ordinary symbol data descriptor; every use reloads the prototype and compares both shape stamps before loading its live value. Mutable stores are observed directly and descriptor edits invalidate the proof."
     }
   ]
 }

@@ -155,7 +155,11 @@ fn stream_event_names_raw_listeners_and_prepend_chainability() {
     assert_eq!(crate::array::js_array_length(native_raw), 0);
     let native_names =
         js_node_stream_method_event_names(handle) as *const crate::array::ArrayHeader;
-    assert_eq!(crate::array::js_array_length(native_names), 0);
+    assert_eq!(crate::array::js_array_length(native_names), 1);
+    assert!(string_value_eq(
+        crate::array::js_array_get_f64(native_names, 0),
+        b"prefinish"
+    ));
     assert_eq!(
         js_node_stream_method_prepend_listener(handle, string_value("data"), cb).to_bits(),
         native.to_bits()
@@ -307,13 +311,17 @@ fn pipe_and_unpipe_emit_destination_events_with_source() {
     };
     assert_eq!(ret.to_bits(), dest.to_bits());
     assert_eq!(
-        js_object_get_field_by_name_f64(dest_obj, readable_flowing_key()).to_bits(),
+        js_object_get_field_by_name_f64(
+            dest_obj,
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
+        )
+        .to_bits(),
         TAG_NULL
     );
     assert_eq!(
         js_object_get_field_by_name_f64(
             raw_ptr_from_value(src) as *const ObjectHeader,
-            readable_flowing_key()
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
         )
         .to_bits(),
         TAG_TRUE
@@ -429,7 +437,7 @@ fn readable_from_pipe_chain_ends_tail_destination() {
     assert_eq!(
         js_object_get_field_by_name_f64(
             raw_ptr_from_value(middle) as *const ObjectHeader,
-            readable_flowing_key()
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
         )
         .to_bits(),
         TAG_TRUE
@@ -455,7 +463,11 @@ fn pause_resume_track_readable_flowing_and_events() {
     let is_paused = bound_method(stream, b"isPaused");
 
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        js_object_get_field_by_name_f64(
+            obj,
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
+        )
+        .to_bits(),
         TAG_NULL
     );
     assert_eq!(
@@ -483,7 +495,11 @@ fn pause_resume_track_readable_flowing_and_events() {
     let _ = js_node_stream_method_on(handle, string_value("data"), data);
 
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        js_object_get_field_by_name_f64(
+            obj,
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
+        )
+        .to_bits(),
         TAG_TRUE
     );
     let ret = unsafe {
@@ -496,7 +512,11 @@ fn pause_resume_track_readable_flowing_and_events() {
     };
     assert_eq!(ret.to_bits(), stream.to_bits());
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        js_object_get_field_by_name_f64(
+            obj,
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
+        )
+        .to_bits(),
         TAG_FALSE
     );
     assert_eq!(
@@ -523,7 +543,11 @@ fn pause_resume_track_readable_flowing_and_events() {
     };
     assert_eq!(ret.to_bits(), stream.to_bits());
     assert_eq!(
-        js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
+        js_object_get_field_by_name_f64(
+            obj,
+            crate::string::js_string_from_bytes(b"readableFlowing".as_ptr(), 15)
+        )
+        .to_bits(),
         TAG_TRUE
     );
     assert_eq!(
@@ -824,7 +848,7 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
     let readable_obj = raw_ptr_from_value(readable) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(readable_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_UNDEFINED
+        TAG_FALSE
     );
     assert_eq!(
         js_node_stream_method_readable_object_mode(raw_ptr_from_value(readable) as i64).to_bits(),
@@ -849,7 +873,7 @@ fn stream_object_mode_fields_reflect_defaults_and_options() {
     assert_eq!(
         js_object_get_field_by_name_f64(object_readable_obj, hidden_key(b"readableObjectMode"))
             .to_bits(),
-        TAG_UNDEFINED
+        TAG_TRUE
     );
     assert_eq!(
         js_node_stream_method_readable_object_mode(raw_ptr_from_value(object_readable) as i64)

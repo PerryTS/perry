@@ -52,6 +52,17 @@ stream_slots! {
     /// traced record encoding) when the stream is also an aliased native
     /// construction: one `native_state` word, one owner.
     NativeAlias,
+    Destroyed,
+    Closed,
+    ReadableAborted,
+    ReadableFlowing,
+    Readable,
+    ReadableEnded,
+    ReadableEncoding,
+    WritableHwm,
+    Writable,
+    WritableEnded,
+    WritableFinished,
     ReadableFlag,
     WritableFlag,
     /// A Transform (direct, subclass, PassThrough, or a native-payload family).
@@ -92,6 +103,8 @@ stream_slots! {
     ReadableLivePush,
     CloseEmitted,
     Construct,
+    ConstructEvent,
+    ConstructPending,
     Destroy,
     WritableWrite,
     WritableWritev,
@@ -108,6 +121,9 @@ stream_slots! {
     WritableFinal,
     WritableFinalInvoked,
     WritableFinalPending,
+    WritableOption,
+    WritableWriteLen,
+    WritableWriteCallback,
     WritableWriting,
     WritableSync,
     WritableBufferProcessing,
@@ -142,7 +158,7 @@ stream_slots! {
 /// `stream`'s record, when it has one. Never allocates.
 #[inline]
 fn record_of(stream: f64) -> Option<*mut ArrayHeader> {
-    let obj = object_ptr_from_value(stream)?;
+    let obj = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
     // SAFETY: a live ordinary object (checked above).
     let meta = unsafe { (*obj).meta };
     if meta.is_null() {
@@ -224,17 +240,81 @@ pub(crate) fn store_record_payload_cell(native_state: u64, cell_word: u64) -> bo
     true
 }
 
+/// Public data lives in the state's own shape; the runtime's record holds
+/// only private flags and continuations. The constructor's normalization
+/// stores precede publication of that side's state object.
+fn state_data_key(
+    slot: Slot,
+) -> Option<(
+    crate::runtime_state_key::NamedStateKey,
+    crate::runtime_state_key::NamedStateKey,
+)> {
+    let (side, field) = match slot {
+        Slot::ReadableHwm => (
+            crate::runtime_state_key!(b"_readableState"),
+            crate::runtime_state_key!(b"highWaterMark"),
+        ),
+        Slot::ReadableChunks => (
+            crate::runtime_state_key!(b"_readableState"),
+            crate::runtime_state_key!(b"buffer"),
+        ),
+        Slot::ReadableBuffered => (
+            crate::runtime_state_key!(b"_readableState"),
+            crate::runtime_state_key!(b"length"),
+        ),
+        Slot::Pipes => (
+            crate::runtime_state_key!(b"_readableState"),
+            crate::runtime_state_key!(b"pipes"),
+        ),
+        Slot::WritableHwm => (
+            crate::runtime_state_key!(b"_writableState"),
+            crate::runtime_state_key!(b"highWaterMark"),
+        ),
+        Slot::WritableLength => (
+            crate::runtime_state_key!(b"_writableState"),
+            crate::runtime_state_key!(b"length"),
+        ),
+        Slot::WritableWriteLen => (
+            crate::runtime_state_key!(b"_writableState"),
+            crate::runtime_state_key!(b"writelen"),
+        ),
+        Slot::WritableCorked => (
+            crate::runtime_state_key!(b"_writableState"),
+            crate::runtime_state_key!(b"corked"),
+        ),
+        _ => return None,
+    };
+    Some((side, field))
+}
+fn state_data_object(
+    stream: f64,
+    side: crate::runtime_state_key::NamedStateKey,
+) -> Option<*mut ObjectHeader> {
+    let object = crate::object::field_get_set::runtime_read_site::object_receiver(stream)?;
+    let value = side.memo.with(|site| unsafe {
+        site.read_own_inline(object)
+            .or_else(|| side.read_own(object))
+    })?;
+    crate::object::field_get_set::runtime_read_site::object_receiver(value)
+}
 /// The value in `slot`, `None` when absent (`undefined`) or when `stream`
 /// has no record.
-#[inline]
+#[inline(never)]
 pub(crate) fn read_slot(stream: f64, slot: Slot) -> Option<f64> {
+    if let Some((side, field)) = state_data_key(slot) {
+        if let Some(state) = state_data_object(stream, side) {
+            let value = super::state_view::read_birth_data(state, slot)
+                .unwrap_or_else(|| unsafe { field.read_object(state) });
+            return (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value);
+        }
+    }
     let record = record_of(stream)?;
     // SAFETY: `slot` indexes the record's fixed span.
     let bits = unsafe { *crate::array::array_elements_ptr(record).add(slot as usize) };
     (bits != crate::value::TAG_UNDEFINED).then(|| f64::from_bits(bits))
 }
 
-#[inline]
+#[inline(never)]
 fn store(record: *mut ArrayHeader, slot: Slot, value: f64) {
     #[cfg(test)]
     if super::native_hooks::stream_sabotage("record_barrier") {
@@ -243,7 +323,16 @@ fn store(record: *mut ArrayHeader, slot: Slot, value: f64) {
         return;
     }
     // The array store: string aliasing, layout note and write barrier.
-    crate::array::js_array_set_f64(record, slot as u32, value);
+    crate::string::js_string_addref_if_heap_string(value);
+    // SAFETY: record_of/ensure_record proved this caller-owned plain array,
+    // and Slot indexes its exact fixed span. Keep the canonical slot store,
+    // numeric-layout note, string aliasing and complete write barrier. The
+    // traced edge was reloaded below the last collection; no safepoint occurs
+    // between record_of/ensure_record and the live header flag read.
+    unsafe {
+        let flags = (*crate::gc::header_from_trusted_user_ptr(record.cast()))._reserved;
+        crate::array::store_array_slot_resolved(record, slot as usize, value, flags);
+    };
 }
 
 /// Store `value` in `slot`, giving `stream` a record first if it has none.
@@ -251,6 +340,12 @@ fn store(record: *mut ArrayHeader, slot: Slot, value: f64) {
 /// non-stream payload, a timer id, …) cannot carry stream state; the store
 /// is dropped there, as a store to a non-object always was.
 pub(crate) fn write_slot(stream: f64, slot: Slot, value: f64) {
+    if let Some((side, field)) = state_data_key(slot) {
+        if let Some(state) = state_data_object(stream, side) {
+            field.write_value(box_pointer(state.cast()), value);
+            return;
+        }
+    }
     #[cfg(test)]
     if super::native_hooks::stream_sabotage("enumerable_state") {
         enumerable_state_sabotage(stream, slot, value);
@@ -270,6 +365,38 @@ pub(crate) fn write_slot(stream: f64, slot: Slot, value: f64) {
     if let Some(record) = record_of(stream.get_nanbox_f64()) {
         store(record, slot, value.get_nanbox_f64());
     }
+}
+
+/// Constructor normalization fills one already-owned record through its
+/// slots, without re-resolving the receiver for every field.
+pub(crate) fn initialize_slots(stream: f64, values: &[(Slot, f64)]) {
+    let Some(record) = record_of(stream) else {
+        return;
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    for &(slot, value) in values {
+        #[cfg(test)]
+        if super::native_hooks::stream_sabotage("enumerable_state") {
+            enumerable_state_sabotage(stream, slot, value);
+        }
+        #[cfg(test)]
+        if super::native_hooks::stream_sabotage("record_barrier") {
+            store(record, slot, value);
+            continue;
+        }
+        crate::string::js_string_addref_if_heap_string(value);
+        // The canonical bulk-fill protocol keeps the layout note and every
+        // born-old remembered edge. The receiver's owned record is resolved
+        // once, and the scope prevents any safepoint across this fill.
+        unsafe {
+            crate::array::note_array_slot_layout_only(record, slot as usize, value.to_bits());
+        }
+    }
+}
+pub(crate) fn constructor_slot(stream: f64, slot: Slot) -> Option<f64> {
+    let record = record_of(stream)?;
+    let bits = unsafe { *crate::array::array_elements_ptr(record).add(slot as usize) };
+    (bits != crate::value::TAG_UNDEFINED).then_some(f64::from_bits(bits))
 }
 
 /// Give a stream being constructed its record: a fixed array of

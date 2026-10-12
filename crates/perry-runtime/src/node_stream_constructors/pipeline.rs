@@ -22,11 +22,7 @@ fn attach_duplex_readable_source(duplex: f64, source: f64) -> Result<(), f64> {
         arr.get_nanbox_f64(),
     );
     set_hidden_value(duplex.get_nanbox_f64(), hidden_buffered_key(), len);
-    set_hidden_value(
-        duplex.get_nanbox_f64(),
-        crate::runtime_state_key!(b"readableLength"),
-        len,
-    );
+    set_hidden_value(duplex.get_nanbox_f64(), Slot::ReadableBuffered, len);
     Ok(())
 }
 

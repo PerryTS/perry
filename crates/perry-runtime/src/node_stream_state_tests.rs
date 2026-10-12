@@ -96,7 +96,7 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
     let default_obj = raw_ptr_from_value(default_transform) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(default_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_UNDEFINED
+        TAG_FALSE
     );
     assert_eq!(
         js_object_get_field_by_name_f64(default_obj, hidden_key(b"writableObjectMode")).to_bits(),
@@ -118,7 +118,7 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
     let duplex_obj = raw_ptr_from_value(duplex) as *const ObjectHeader;
     assert_eq!(
         js_object_get_field_by_name_f64(duplex_obj, hidden_key(b"readableObjectMode")).to_bits(),
-        TAG_UNDEFINED
+        TAG_TRUE
     );
     assert_eq!(
         js_object_get_field_by_name_f64(duplex_obj, hidden_key(b"writableObjectMode")).to_bits(),
@@ -255,16 +255,13 @@ fn readable_state_view_reads_live_stream_state() {
     mark_disturbed(stream);
     assert_eq!(read(b"dataEmitted").to_bits(), TAG_TRUE);
 
-    let mut json = String::new();
-    unsafe {
-        assert!(try_stringify_node_stream_json(
-            view_obj as *const u8,
-            &mut json
-        ));
-    }
+    let json_value = unsafe { crate::json::js_json_stringify(view, 0) };
+    let json = crate::fs::validate::read_js_string_pub(f64::from_bits(
+        JSValue::string_ptr(json_value).bits(),
+    ));
     assert_eq!(
         json,
-        r#"{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":3,"pipes":[],"awaitDrainWriters":null}"#
+        r#"{"highWaterMark":65536,"buffer":[{"type":"Buffer","data":[97,98,99]}],"bufferIndex":0,"length":3,"pipes":[],"awaitDrainWriters":null}"#
     );
 }
 
@@ -385,4 +382,75 @@ fn mode_reread_sabotage_reddens_resolved_mode_witness() {
         .unwrap();
     assert!(!out.status.success(), "mode reread sabotage must fail");
     assert!(String::from_utf8_lossy(&out.stderr).contains("mode option must be read once"));
+}
+
+#[test]
+fn birth_state_reads_follow_value_descriptor_and_replacement_changes() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
+    let key = crate::runtime_state_key!(b"_readableState");
+    let state = scope.root_nanbox_f64(key.read_value(stream.get_nanbox_f64()));
+    assert_eq!(
+        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        Some(0.0)
+    );
+    crate::runtime_state_key!(b"length").write_value(state.get_nanbox_f64(), 17.0);
+    assert_eq!(
+        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        Some(17.0)
+    );
+    crate::runtime_state_key!(b"extra").write_value(state.get_nanbox_f64(), 1.0);
+    assert_eq!(
+        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        Some(17.0)
+    );
+    let replacement = scope.root_raw_mut_ptr(crate::object::js_object_alloc_plain(1));
+    let replacement = scope.root_nanbox_f64(box_pointer(
+        replacement.get_raw_mut_ptr::<ObjectHeader>().cast(),
+    ));
+    crate::runtime_state_key!(b"length").write_value(replacement.get_nanbox_f64(), 23.0);
+    key.write_value(stream.get_nanbox_f64(), replacement.get_nanbox_f64());
+    assert_eq!(
+        get_hidden_value(stream.get_nanbox_f64(), Slot::ReadableBuffered),
+        Some(23.0)
+    );
+}
+
+#[test]
+fn capture_default_memo_follows_native_setter_and_symbol_value_changes() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(super::constructors::event_emitter_constructor_value(
+        "EventEmitter",
+    ));
+    let addr = || crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
+    let accessor = crate::object::get_accessor_descriptor(addr(), "captureRejections").unwrap();
+    let getter = scope.root_nanbox_f64(f64::from_bits(accessor.get));
+    let key = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(
+        crate::value::js_nanbox_get_pointer(getter.get_nanbox_f64()) as *const ClosureHeader,
+        1,
+    ));
+    let proto = scope.root_nanbox_f64(super::constructors::event_emitter_prototype_value(
+        "EventEmitter",
+    ));
+    for enabled in [true, false, true, false] {
+        crate::closure::closure_set_dynamic_prop(
+            addr(),
+            "captureRejections",
+            f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
+        );
+        assert_eq!(super::event_emitter::emitter_capture_default(), enabled);
+        assert_eq!(super::event_emitter::emitter_capture_default(), enabled);
+    }
+    for enabled in [true, false] {
+        unsafe {
+            crate::object::js_object_set_property_key(
+                proto.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+                f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
+            );
+        }
+        assert_eq!(super::event_emitter::emitter_capture_default(), enabled);
+    }
+    let attrs = crate::object::get_property_attrs(addr(), "captureRejections").unwrap();
+    assert_eq!(attrs.bits & 4, 0);
 }

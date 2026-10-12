@@ -2,6 +2,7 @@ use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
+use crate::node_stream::Slot;
 use crate::value::JSValue;
 
 use super::{
@@ -66,14 +67,10 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
         }
         return;
     }
-    if has_truthy_hidden(stream, crate::runtime_state_key!(b"destroyed")) {
+    if has_truthy_hidden(stream, Slot::Destroyed) {
         return;
     }
-    set_hidden_value(
-        stream,
-        crate::runtime_state_key!(b"destroyed"),
-        f64::from_bits(TAG_TRUE),
-    );
+    set_hidden_value(stream, Slot::Destroyed, f64::from_bits(TAG_TRUE));
     super::refresh_readable_aborted_flag(stream);
     // A native-payload stream releases its codec now, before any event is
     // queued: the native memory returns at once, not at the next sweep, and
@@ -122,8 +119,7 @@ pub(super) extern "C" fn ns_destroy1(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_destroyed(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    get_hidden_value(stream, crate::runtime_state_key!(b"destroyed"))
-        .unwrap_or(f64::from_bits(TAG_FALSE))
+    get_hidden_value(stream, Slot::Destroyed).unwrap_or(f64::from_bits(TAG_FALSE))
 }
 
 #[no_mangle]

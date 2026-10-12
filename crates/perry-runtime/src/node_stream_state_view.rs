@@ -6,36 +6,14 @@
 //! its constructor and reads `endEmitted` / `closeEmitted` / `ended` /
 //! `destroyed` / `errored` / `encoding` / `length` / `buffer` as live state.
 //!
-//! Perry keeps stream state in hidden fields on the stream object itself, so
-//! the state object here is a VIEW, not a copy: one small object per stream
-//! side, carrying only a back-pointer to its stream (under an internal key
-//! that is non-enumerable), whose prototype is a per-thread
-//! `ReadableState` / `WritableState` prototype holding one accessor pair per
-//! field. Every getter reads the stream's own hidden state at call time, so
-//! nothing can drift out of sync with `push()` / `read()` / `end()` /
-//! `destroy()`. This mirrors Node's own layout, where almost all of these
-//! fields are accessors on `ReadableState.prototype` over a bit field.
-//!
-//! Setters: `dataEmitted` writes through to the stream. It is the same flag
-//! that backs `readableDidRead` and `stream.isDisturbed()` (Node's
-//! `readableDidRead` getter returns `_readableState.dataEmitted`), set when a
-//! chunk reaches a consumer. Every other field accepts
-//! and ignores a write, so a library poking at state (common in stream
-//! helpers) can neither throw in strict mode nor desynchronize the stream.
-//!
-//! GC: the two prototypes are cached per thread and reported to the collector
-//! through a registered mutable root scanner (they are runtime-side caches of
-//! heap pointers). Each view reaches its stream through an ordinary object
-//! field, so it is traced like any other edge.
+//! Public data fields are own properties on the state's validated birth
+//! shape. Private flags remain in the stream's existing traced state record.
+//! A state's traced native_state edge names its stream; no hidden string key
+//! affects reflection or JSON. Prototype accessors project the private flags.
 use super::*;
 use crate::object::{AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use std::cell::{Cell, RefCell};
 
-/// Internal back-pointer from a state view to its stream. Installed
-/// non-enumerable, so `Object.keys` / `for…in` / `util.inspect` skip it, and
-/// the stream JSON hook serializes a view as Node's state shape instead of
-/// following it.
-pub(super) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
 pub(super) const STREAM_CLOSE_EMITTED_KEY: Slot = Slot::CloseEmitted;
 
 const READABLE_KIND: usize = 0;
@@ -44,11 +22,6 @@ const WRITABLE_KIND: usize = 1;
 /// `ReadableState` fields, in Node's prototype order where it has them.
 const READABLE_FIELDS: &[&str] = &[
     "objectMode",
-    "highWaterMark",
-    "buffer",
-    "bufferIndex",
-    "length",
-    "pipes",
     "pipesCount",
     "flowing",
     "ended",
@@ -69,9 +42,6 @@ const READABLE_FIELDS: &[&str] = &[
 /// `WritableState` fields.
 const WRITABLE_FIELDS: &[&str] = &[
     "objectMode",
-    "highWaterMark",
-    "length",
-    "corked",
     "finalCalled",
     "needDrain",
     "ending",
@@ -86,6 +56,7 @@ const WRITABLE_FIELDS: &[&str] = &[
     "closeEmitted",
     "errored",
     "defaultEncoding",
+    "writable",
 ];
 
 crate::perry_thread_local! {
@@ -123,7 +94,13 @@ fn bool_bits(value: bool) -> f64 {
 /// The stream a state view belongs to, from the accessor's receiver.
 fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
     let this = this.as_f64();
-    get_hidden_value(this, crate::runtime_state_key!(STREAM_STATE_OWNER_KEY))
+    let obj = object_ptr_from_value(this)?;
+    let meta = unsafe { (*obj).meta };
+    if meta.is_null() {
+        return None;
+    }
+    let owner = unsafe { (*meta).native_state };
+    crate::native_payload::is_payload_state_word(owner).then_some(f64::from_bits(owner))
 }
 
 fn hidden_array_or_empty(stream: f64, key: impl StateKey) -> f64 {
@@ -155,10 +132,7 @@ fn readable_field(stream: f64, field: &str) -> f64 {
         "flowing" => readable_flowing_value(stream),
         // `ended` is "EOF was pushed"; `readableEnded` is the readable side's
         // own flag (a Duplex's writable `end()` must not set it).
-        "ended" => bool_bits(has_truthy_hidden(
-            stream,
-            crate::runtime_state_key!(b"readableEnded"),
-        )),
+        "ended" => bool_bits(has_truthy_hidden(stream, Slot::ReadableEnded)),
         "endEmitted" => bool_bits(has_truthy_hidden(stream, hidden_end_emitted_key())),
         "readableListening" => bool_bits(
             stream_listener_count_for_event(stream, literal_string_value(b"readable")) > 0,
@@ -173,10 +147,11 @@ fn readable_field(stream: f64, field: &str) -> f64 {
 
 fn writable_field(stream: f64, field: &str) -> f64 {
     match field {
+        "writable" => super::state_record::read_slot(stream, Slot::WritableOption)
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
         "objectMode" => bool_bits(has_truthy_hidden(stream, hidden_writable_object_mode_key())),
         "highWaterMark" => {
-            get_hidden_value(stream, crate::runtime_state_key!(b"writableHighWaterMark"))
-                .unwrap_or_else(|| default_hwm(false))
+            get_hidden_value(stream, Slot::WritableHwm).unwrap_or_else(|| default_hwm(false))
         }
         "length" => writable_length(stream),
         "corked" => writable_corked_count(stream),
@@ -185,10 +160,7 @@ fn writable_field(stream: f64, field: &str) -> f64 {
             hidden_writable_final_invoked_key(),
         )),
         "needDrain" => bool_bits(writable_need_drain(stream)),
-        "ending" | "ended" => bool_bits(has_truthy_hidden(
-            stream,
-            crate::runtime_state_key!(b"writableEnded"),
-        )),
+        "ending" | "ended" => bool_bits(has_truthy_hidden(stream, Slot::WritableEnded)),
         "finished" => bool_bits(has_truthy_hidden(stream, hidden_finish_emitted_key())),
         "decodeStrings" => get_hidden_value(stream, hidden_writable_decode_strings_key())
             .unwrap_or_else(|| bool_bits(true)),
@@ -203,10 +175,7 @@ fn writable_field(stream: f64, field: &str) -> f64 {
 fn common_field(stream: f64, field: &str) -> f64 {
     match field {
         "destroyed" => bool_bits(stream_destroyed(stream)),
-        "closed" => bool_bits(has_truthy_hidden(
-            stream,
-            crate::runtime_state_key!(b"closed"),
-        )),
+        "closed" => bool_bits(has_truthy_hidden(stream, Slot::Closed)),
         "closeEmitted" => bool_bits(has_truthy_hidden(stream, STREAM_CLOSE_EMITTED_KEY)),
         "errored" => readable_hidden_error(stream).unwrap_or(f64::from_bits(TAG_NULL)),
         "errorEmitted" => bool_bits(readable_hidden_error(stream).is_some()),
@@ -342,32 +311,186 @@ fn state_proto(kind: usize) -> f64 {
     f64::from_bits(STATE_PROTOS.with(|protos| protos.borrow()[kind]))
 }
 
-/// Attach a fresh `_readableState` / `_writableState` view to `stream`.
+thread_local! {
+    static READABLE_BIRTH: Cell<u32> = const { Cell::new(0) };
+    static WRITABLE_BIRTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Internal reads use the very shape that birthed the public state. A changed
+/// descriptor, deletion, key addition or replacement stops this proof; the
+/// caller then performs the same ordinary Get through its existing read site.
+#[inline]
+pub(super) fn read_birth_data(obj: *const ObjectHeader, slot: Slot) -> Option<f64> {
+    let (birth, index) = match slot {
+        Slot::ReadableHwm => (&READABLE_BIRTH, 0),
+        Slot::ReadableChunks => (&READABLE_BIRTH, 1),
+        Slot::ReadableBuffered => (&READABLE_BIRTH, 3),
+        Slot::Pipes => (&READABLE_BIRTH, 4),
+        Slot::WritableHwm => (&WRITABLE_BIRTH, 0),
+        Slot::WritableLength => (&WRITABLE_BIRTH, 1),
+        Slot::WritableCorked => (&WRITABLE_BIRTH, 2),
+        Slot::WritableWriteLen => (&WRITABLE_BIRTH, 4),
+        _ => return None,
+    };
+    let shape = birth.with(Cell::get);
+    // SAFETY: the caller validated this live ordinary state receiver.
+    if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
+        return None;
+    }
+    // A recorded birth always has the same two inline slots and canonical
+    // spill buffer; the shape match proves the slot and its data descriptor.
+    let bits = unsafe {
+        if index < 2 {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            *fields.add(index)
+        } else {
+            let spill = (*(*obj).meta).spill as *const crate::array::ArrayHeader;
+            *crate::array::array_elements_ptr(spill).add(index)
+        }
+    };
+    Some(f64::from_bits(bits))
+}
+
+/// Node's own data properties are the state shape. Its owner is a traced
+/// native_state edge, so reflection needs no hidden-key filter.
 fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_key::NamedStateKey) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(state_proto(kind));
-    // The owner and its attributes are one birth layout, shared through the
-    // existing canonical keys trie. No per-view key-add or descriptor edit.
-    let view = {
+    let site = if kind == READABLE_KIND {
+        &READABLE_BIRTH
+    } else {
+        &WRITABLE_BIRTH
+    };
+    let readable = [
+        "highWaterMark",
+        "buffer",
+        "bufferIndex",
+        "length",
+        "pipes",
+        "awaitDrainWriters",
+    ];
+    let writable = [
+        "highWaterMark",
+        "length",
+        "corked",
+        "onwrite",
+        "writelen",
+        "bufferedIndex",
+        "pendingcb",
+    ];
+    let names = if kind == READABLE_KIND {
+        &readable[..]
+    } else {
+        &writable[..]
+    };
+    let view = if let Some(obj) = crate::object::object_alloc_recorded_birth(
+        site.with(Cell::get),
+        proto.get_nanbox_u64(),
+        names.len() as u32,
+        2,
+        false,
+    ) {
+        scope.root_nanbox_f64(box_pointer(obj.cast()))
+    } else {
         let _no_move = crate::gc::GcSuppressScope::new();
-        let attrs = crate::object::key_attrs::attr_bits_to_entry(
-            PropertyAttrs::new(true, false, true).bits,
-        );
-        let view = unsafe {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(
-                &[("__perry_stream_state_owner", stream.get_nanbox_f64())],
-                &[attrs],
+        let entries: Vec<_> = names
+            .iter()
+            .map(|&n| (n, f64::from_bits(TAG_UNDEFINED)))
+            .collect();
+        let obj = unsafe {
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs_and_inline(
+                &entries,
+                &[],
+                2,
             )
         };
         crate::object::prototype_chain::object_link_created_prototype(
-            view as usize,
+            obj as usize,
             proto.get_nanbox_u64(),
         );
-        scope.root_nanbox_f64(box_pointer(view as *const u8))
+        site.with(|memo| memo.set(unsafe { crate::object::shapes::object_shape_stamp(obj) }));
+        scope.root_nanbox_f64(box_pointer(obj.cast()))
     };
-    // node's own enumerable `_readableState` / `_writableState`.
-    set_visible_own_value(stream.get_nanbox_f64(), property, view.get_nanbox_f64());
+    let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
+    unsafe { crate::object::object_meta_ensure(obj) };
+    let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
+    let meta = unsafe { (*obj).meta };
+    let owner = stream.get_nanbox_u64();
+    // The existing MetaOnly visitor traces every pointer-tagged native_state.
+    unsafe {
+        (*meta).native_state = owner;
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            std::ptr::addr_of_mut!((*meta).native_state) as usize,
+            owner,
+        );
+    }
+    let mut values = Vec::new();
+    if kind == READABLE_KIND {
+        let buffer = scope.root_nanbox_f64(box_pointer(crate::array::js_array_alloc(0).cast()));
+        set_hidden_value(
+            stream.get_nanbox_f64(),
+            Slot::ReadableChunks,
+            buffer.get_nanbox_f64(),
+        );
+        values.extend([
+            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::ReadableHwm)
+                .unwrap_or(default_hwm(false)),
+            buffer.get_nanbox_f64(),
+            0.0,
+            0.0,
+            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::Pipes)
+                .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+            f64::from_bits(TAG_NULL),
+        ]);
+    } else {
+        let callback =
+            scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(state_onwrite, 1), 1));
+        callback.with_mut_ptr::<ClosureHeader, _>(|c| {
+            js_closure_set_capture_f64(c, 0, stream.get_nanbox_f64())
+        });
+        values.extend([
+            super::state_record::constructor_slot(stream.get_nanbox_f64(), Slot::WritableHwm)
+                .unwrap_or(default_hwm(false)),
+            0.0,
+            0.0,
+            box_pointer(callback.get_raw_mut_ptr::<ClosureHeader>().cast()),
+            0.0,
+            0.0,
+            0.0,
+        ]);
+    }
+    let values = scope.root_nanbox_f64_slice(&values);
+    let words: Vec<f64> = values.iter().map(|v| v.get_nanbox_f64()).collect();
+    unsafe {
+        crate::object::object_fill_recorded_birth(
+            object_ptr_from_value(view.get_nanbox_f64()).unwrap(),
+            &words,
+        );
+    }
+    super::constructors::birth::stream_birth_field!(
+        stream.get_nanbox_f64(),
+        property,
+        view.get_nanbox_f64()
+    );
+}
+
+extern "C" fn state_onwrite(c: *const ClosureHeader, _: crate::closure::JsThis, err: f64) -> f64 {
+    let stream = js_closure_get_capture_f64(c, 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let err = scope.root_nanbox_f64(err);
+    let len = get_hidden_value(stream.get_nanbox_f64(), Slot::WritableWriteLen).unwrap_or(0.0);
+    let callback = get_hidden_value(stream.get_nanbox_f64(), Slot::WritableWriteCallback)
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    super::write_state::complete_writable_write(
+        stream.get_nanbox_f64(),
+        len,
+        callback,
+        err.get_nanbox_f64(),
+    );
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 pub(super) fn install_readable_state_view(stream: f64) {

@@ -99,7 +99,10 @@ fn write_or_buffer(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
             return;
         }
     }
-    if writable_writing(stream) || writable_corked_count(stream) > 0.0 {
+    if writable_writing(stream)
+        || writable_corked_count(stream) > 0.0
+        || has_truthy_hidden(stream, Slot::ConstructPending)
+    {
         buffer_writable_write(stream, chunk, enc, len, callback);
         return;
     }
@@ -153,6 +156,12 @@ pub(super) fn complete_writable_write(stream: f64, len: f64, callback: f64, err:
     let sync = writable_sync(s.get_nanbox_f64());
     set_flag(s.get_nanbox_f64(), WRITABLE_WRITING_KEY, false);
     subtract_writable_length(s.get_nanbox_f64(), len);
+    set_hidden_value(s.get_nanbox_f64(), Slot::WritableWriteLen, 0.0);
+    set_hidden_value(
+        s.get_nanbox_f64(),
+        Slot::WritableWriteCallback,
+        f64::from_bits(TAG_UNDEFINED),
+    );
     let e = err.get_nanbox_f64();
     if e.to_bits() != TAG_UNDEFINED && e.to_bits() != TAG_NULL {
         if is_callable_value(callback.get_nanbox_f64()) {
@@ -211,7 +220,7 @@ fn after_write(stream: f64, callback: f64) {
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_stream_pipe_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_finishing_key())
-            && !has_truthy_hidden(s.get_nanbox_f64(), crate::runtime_state_key!(b"destroyed"));
+            && !has_truthy_hidden(s.get_nanbox_f64(), Slot::Destroyed);
         set_writable_need_drain(s.get_nanbox_f64(), false);
         if should_emit_drain {
             let _ = emit_stream_event(s.get_nanbox_f64(), literal_string_value(b"drain"), &[]);
@@ -243,6 +252,7 @@ fn buffered_record_count(stream: f64) -> u32 {
 /// Several records and a `_writev` go out as one `writev`.
 pub(super) fn clear_buffer(stream: f64) {
     if writable_corked_count(stream) > 0.0
+        || has_truthy_hidden(stream, Slot::ConstructPending)
         || stream_destroyed(stream)
         || flag(stream, WRITABLE_BUFFER_PROCESSING_KEY)
         || writable_writing(stream)
@@ -436,7 +446,7 @@ fn transform_write_done(stream: f64, len: f64, callback: f64, length_before: f64
     let st = s.get_nanbox_f64();
     let rlen = readable_buffered_length(st);
     let hwm = get_hidden_value(st, hidden_hwm_key()).unwrap_or_else(|| default_hwm(false));
-    if has_truthy_hidden(st, crate::runtime_state_key!(b"readableEnded")) {
+    if has_truthy_hidden(st, Slot::ReadableEnded) {
         // `push(null)` ran in the transform: node delays the callback a tick
         // so the new state propagates first.
         let held = js_closure_alloc(crate::fn_info!(ns_transform_held_callback, 0), 3);

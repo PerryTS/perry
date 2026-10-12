@@ -2,36 +2,45 @@
 use super::*;
 
 pub(in crate::node_stream) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
-    if has_truthy_hidden(stream, hidden_finish_emitted_key())
-        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
-        || has_truthy_hidden(stream, hidden_writable_final_pending_key())
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let callback = scope.root_nanbox_f64(callback.unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+    let st = || stream.get_nanbox_f64();
+    let cb = || {
+        let value = callback.get_nanbox_f64();
+        is_callable_value(value).then_some(value)
+    };
+    if has_truthy_hidden(st(), hidden_finish_emitted_key())
+        || has_truthy_hidden(st(), hidden_finish_scheduled_key())
+        || has_truthy_hidden(st(), hidden_writable_final_pending_key())
     {
         return;
     }
-    if let Some(final_callback) = writable_hidden_final(stream) {
-        if !has_truthy_hidden(stream, hidden_writable_final_invoked_key()) {
+    if let Some(final_callback) = writable_hidden_final(st()) {
+        let final_callback = scope.root_nanbox_f64(final_callback);
+        if !has_truthy_hidden(st(), hidden_writable_final_invoked_key()) {
             set_hidden_value(
-                stream,
+                st(),
                 hidden_writable_final_invoked_key(),
                 f64::from_bits(TAG_TRUE),
             );
             set_hidden_value(
-                stream,
+                st(),
                 hidden_writable_final_pending_key(),
                 f64::from_bits(TAG_TRUE),
             );
-            let cb = js_closure_alloc(crate::fn_info!(ns_writable_final_callback_done, 1), 2);
-            js_closure_set_capture_f64(cb, 0, stream);
+            let done = js_closure_alloc(crate::fn_info!(ns_writable_final_callback_done, 1), 2);
+            js_closure_set_capture_f64(done, 0, st());
             js_closure_set_capture_f64(
-                cb,
+                done,
                 1,
-                callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
+                cb().unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
             );
-            let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
+            let cb_value = f64::from_bits(JSValue::pointer(done as *const u8).bits());
             unsafe {
                 let _ = crate::closure::native_call_value_this(
-                    final_callback,
-                    crate::closure::JsThis::from_f64(stream),
+                    final_callback.get_nanbox_f64(),
+                    crate::closure::JsThis::from_f64(st()),
                     [cb_value].as_ptr(),
                     1,
                 );
@@ -40,21 +49,20 @@ pub(in crate::node_stream) fn schedule_writable_finish(stream: f64, callback: Op
         }
     }
     set_hidden_value(
-        stream,
+        st(),
         hidden_finish_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
     let closure = js_closure_alloc(crate::fn_info!(ns_writable_finish_microtask, 0), 2);
-    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
+    js_closure_set_capture_ptr(closure, 0, st().to_bits() as i64);
     js_closure_set_capture_ptr(
         closure,
         1,
-        callback
-            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+        cb().unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
             .to_bits() as i64,
     );
-    if has_truthy_hidden(stream, hidden_writable_final_invoked_key())
-        && crate::node_stream::native_hooks::hooks_of(stream)
+    if has_truthy_hidden(st(), hidden_writable_final_invoked_key())
+        && crate::node_stream::native_hooks::hooks_of(st())
             .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
     {
         // A deferred binding whose _final has completed queues writable
@@ -70,27 +78,35 @@ pub(in crate::node_stream) fn schedule_writable_finish_then_transform_end(
     stream: f64,
     callback: Option<f64>,
 ) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let callback = scope.root_nanbox_f64(callback.unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+    let st = || stream.get_nanbox_f64();
+    let cb = || {
+        let value = callback.get_nanbox_f64();
+        is_callable_value(value).then_some(value)
+    };
     // node's Transform `final` pushes `null` (queueing the readable `end`)
     // before its callback lets `finish` go, so `end` is queued first when no
     // user `_final` stands in between.
-    if is_transform_stream(stream)
-        && !has_truthy_hidden(stream, hidden_transform_finishing_key())
-        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
-        && (writable_hidden_final(stream).is_none()
-            || has_truthy_hidden(stream, hidden_writable_final_invoked_key()))
+    if is_transform_stream(st())
+        && !has_truthy_hidden(st(), hidden_transform_finishing_key())
+        && !has_truthy_hidden(st(), hidden_writable_final_pending_key())
+        && (writable_hidden_final(st()).is_none()
+            || has_truthy_hidden(st(), hidden_writable_final_invoked_key()))
     {
-        schedule_readable_end(stream);
+        schedule_readable_end(st());
     }
-    schedule_writable_finish(stream, callback);
-    let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
-        || has_truthy_hidden(stream, hidden_finish_emitted_key());
-    let final_pending = has_truthy_hidden(stream, hidden_writable_final_pending_key());
-    if is_transform_stream(stream)
+    schedule_writable_finish(st(), cb());
+    let finish_ready = has_truthy_hidden(st(), hidden_finish_scheduled_key())
+        || has_truthy_hidden(st(), hidden_finish_emitted_key());
+    let final_pending = has_truthy_hidden(st(), hidden_writable_final_pending_key());
+    if is_transform_stream(st())
         && finish_ready
         && !final_pending
-        && !has_truthy_hidden(stream, hidden_transform_finishing_key())
+        && !has_truthy_hidden(st(), hidden_transform_finishing_key())
     {
-        schedule_readable_end(stream);
+        schedule_readable_end(st());
     }
 }
 
@@ -131,6 +147,7 @@ pub(in crate::node_stream) fn schedule_pending_writable_finish_if_ready(stream: 
         return;
     }
     if !stream_hidden_ended(stream)
+        || has_truthy_hidden(stream, Slot::ConstructPending)
         || writable_length(stream) > 0.0
         || has_truthy_hidden(stream, hidden_finish_emitted_key())
         || has_truthy_hidden(stream, hidden_finish_scheduled_key())
