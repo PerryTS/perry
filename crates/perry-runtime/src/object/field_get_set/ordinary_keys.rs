@@ -42,14 +42,18 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
         let keys = crate::object::object_keys_from_shape_record(obj, record);
         let order = ecma_own_key_order(keys);
         let count = keys.count();
-        // Allocation can move the receiver and its shape's key backing. Root
-        // the receiver and acquire the current list only after that allocation.
+        // Only the key backing is needed after allocation. The shape supplies
+        // its immutable prefix count; no user code runs while the fresh result
+        // is allocated. Root that backing directly instead of keeping the
+        // receiver alive and looking up its shape again.
+        let filter_internal = (*obj).class_id != 0;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_raw_const_ptr(obj);
+        let backing = scope.root_raw_const_ptr(keys.arr());
         let out = crate::array::js_array_alloc(count);
-        receiver.with_const_ptr::<ObjectHeader, _>(|obj| {
-            let keys = crate::object::object_keys(obj);
-            let (source, available) = keys.dense_slots();
+        backing.with_const_ptr::<ArrayHeader, _>(|keys| {
+            // A live shape supplied a resolved backing, and collection rewrites
+            // this root before we read it. No grow or safepoint intervenes.
+            let (source, available) = crate::object::keys_array_dense_slots_resolved(keys);
             let dest = crate::array::array_elements_ptr(out) as *mut f64;
             let mut written = 0;
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -63,7 +67,7 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
                 if !JSValue::from_bits(value.to_bits()).is_any_string() {
                     continue;
                 }
-                if (*obj).class_id != 0
+                if filter_internal
                     && crate::string::js_string_key_bytes(
                         JSValue::from_bits(value.to_bits()),
                         &mut scratch,
@@ -79,7 +83,11 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
                 written += 1;
             }
             (*out).length = written as u32;
-            crate::array::rebuild_array_layout(out);
+            // This array is fresh and unpublished: initialize its exact slot
+            // layout using the same helper as fresh canonical key lists. A bulk
+            // mutation rebuild would revoke element-shape metadata it never had.
+            // The helper retains numeric reclassification and old-parent barriers.
+            crate::object::gc_slots::rebuild_array_layout_from_slots(out);
         });
         Some(out)
     }
