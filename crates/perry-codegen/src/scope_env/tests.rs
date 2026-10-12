@@ -449,3 +449,41 @@ fn pointer_scope_stores_use_the_shared_inline_barrier_filter() {
     assert!(ir.contains("call void @js_write_barrier_slot_validated_parent("));
     assert!(!ir.contains("call void @js_write_barrier("));
 }
+
+#[test]
+fn an_inner_activation_is_not_retained_by_an_outer_capture() {
+    let mut module = module_with(vec![
+        let_num(1, 0.0),
+        Stmt::Expr(mutating_closure(100, &[1])),
+        Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: vec![let_num(2, 7.0), Stmt::Expr(mutating_closure(101, &[1, 2]))],
+            else_branch: None,
+        },
+    ]);
+    group_scope_boxes(&mut module);
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
+    let map = ScopeMap::build(&module, &boxed, &Default::default());
+    let outer = map.slot(1).expect("outer scoped");
+    let inner = map.slot(2).expect("inner scoped");
+    assert_ne!(outer.rep, inner.rep);
+    assert_eq!(map.members(outer.rep), &[1]);
+    assert_eq!(map.members(inner.rep), &[2]);
+    assert_eq!(map.collapse_captures(vec![1]), vec![outer.rep]);
+    assert_eq!(
+        map.collapse_captures(vec![1, 2]),
+        vec![outer.rep, inner.rep]
+    );
+    // Negative control: the old flattened shape really does merge them.
+    let mut flat = module_with(vec![
+        let_num(1, 0.0),
+        Stmt::Expr(mutating_closure(100, &[1])),
+        let_num(2, 7.0),
+        Stmt::Expr(mutating_closure(101, &[1, 2])),
+    ]);
+    group_scope_boxes(&mut flat);
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&flat);
+    let map = ScopeMap::build(&flat, &boxed, &Default::default());
+    assert_eq!(map.slot(1).unwrap().rep, map.slot(2).unwrap().rep);
+    assert_eq!(map.members(map.slot(1).unwrap().rep), &[1, 2]);
+}

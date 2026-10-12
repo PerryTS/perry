@@ -101,13 +101,14 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
         ast::Stmt::If(if_stmt) => {
             result.extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
             // #2277: `typeof x === "string"` narrowing — see typeof_narrow.rs.
-            let stmt = typeof_narrow::lower_if_with_narrowing(ctx, if_stmt, lower_body_stmt)?;
+            let stmt =
+                typeof_narrow::lower_if_with_narrowing(ctx, if_stmt, lower_control_body_stmt)?;
             result.push(stmt);
         }
         ast::Stmt::Block(block) => {
             // Bare block: introduce a lexical scope so let/const shadow
             // without leaking into the enclosing scope.
-            result.extend(lower_block_stmt_scoped(ctx, block)?);
+            result.push(lower_bare_block_stmt(ctx, block)?);
         }
         ast::Stmt::Expr(expr_stmt) => {
             result.extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
@@ -740,17 +741,17 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let condition = lower_expr(ctx, &while_stmt.test)?;
             // While body introduces its own lexical scope.
             let body = if matches!(*while_stmt.body, ast::Stmt::Block(_)) {
-                lower_body_stmt(ctx, &while_stmt.body)?
+                lower_control_body_stmt(ctx, &while_stmt.body)?
             } else {
                 let mark = ctx.push_block_scope();
-                let stmts = lower_body_stmt(ctx, &while_stmt.body)?;
+                let stmts = lower_control_body_stmt(ctx, &while_stmt.body)?;
                 ctx.pop_block_scope(mark);
                 stmts
             };
             result.push(Stmt::While { condition, body });
         }
         ast::Stmt::DoWhile(do_while_stmt) => {
-            let body = lower_body_stmt(ctx, &do_while_stmt.body)?;
+            let body = lower_control_body_stmt(ctx, &do_while_stmt.body)?;
             let condition = lower_expr(ctx, &do_while_stmt.test)?;
             result.push(Stmt::DoWhile { body, condition });
         }
@@ -1035,7 +1036,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 .as_ref()
                 .map(|e| lower_expr(ctx, e))
                 .transpose()?;
-            let body = lower_body_stmt(ctx, &for_stmt.body)?;
+            let body = lower_control_body_stmt(ctx, &for_stmt.body)?;
             // `for (i = 0; i < holder.arr.length; i++) … holder.arr[i] …`
             // repeats a by-name property lookup every iteration AND keeps the
             // loop out of the packed-array machinery entirely, since that

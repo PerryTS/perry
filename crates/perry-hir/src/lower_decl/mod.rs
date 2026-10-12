@@ -19,6 +19,7 @@ mod enum_decl;
 mod fn_decl;
 mod helpers;
 mod interface_decl;
+mod lexical_block;
 mod private_members;
 mod static_init;
 mod type_alias;
@@ -70,6 +71,7 @@ pub(crate) use helpers::{
 pub(crate) use interface_decl::{
     enter_interface_scope, exit_interface_scope, lower_interface_decl,
 };
+pub(crate) use lexical_block::{lower_bare_block_stmt, lower_control_body_stmt};
 pub(crate) use private_members::{
     build_private_scope, lower_private_getter, lower_private_method, lower_private_prop,
     lower_private_setter,

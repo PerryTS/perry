@@ -1523,10 +1523,7 @@ pub(crate) fn lower_stmt(
         ast::Stmt::Block(block) => {
             // Bare block: introduce a lexical scope so inner let/const shadow
             // without leaking into the enclosing module scope.
-            let stmts = lower_block_stmt_scoped(ctx, block)?;
-            for stmt in stmts {
-                module.init.push(stmt);
-            }
+            module.init.push(lower_bare_block_stmt(ctx, block)?);
         }
         ast::Stmt::Try(try_stmt) => {
             // try body is its own lexical scope
