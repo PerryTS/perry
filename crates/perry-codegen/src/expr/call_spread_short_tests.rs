@@ -172,6 +172,13 @@ fn every_short_packed_arity_calls_reset_directly_without_apply() {
         invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
         "the class/shape probe must be inline:\n{invoke}"
     );
+    let packed_probe = named_block(invoke, "method_probe.read");
+    assert!(
+        packed_probe
+            .lines()
+            .any(|line| line.contains("and i32") && line.ends_with("3145728")),
+        "pre-split packed dispatch must reject linked/null ShapeId kinds before exposing the word:\n{packed_probe}"
+    );
     let fast_prefix = &invoke[..invoke
         .find("\nshort_spread.method_probe")
         .expect("method-probe block")];

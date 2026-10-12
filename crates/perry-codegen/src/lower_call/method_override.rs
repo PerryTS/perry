@@ -310,7 +310,13 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
             let shape = blk.trunc(I64, &high, I32);
             let cid_nonzero = blk.icmp_ne(I32, &cid, "0");
             let shape_nonzero = blk.icmp_ne(I32, &shape, "0");
+            // Linked/null ShapeIds encode a live [[Prototype]] edge that
+            // class-id/ShapeId dispatch does not model. Only plain identity
+            // shapes may enter the direct class-method tower.
+            let shape_kind = blk.and(I32, &shape, "3145728"); // 3 << 20
+            let plain_shape = blk.icmp_eq(I32, &shape_kind, "0");
             let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
+            let both = blk.and(I1, &both, &plain_shape);
             (blk.select(I1, &both, I64, &word, "0"), String::new())
         } else {
             // Preserve the existing scalar emission for callers needing both fields.
@@ -319,7 +325,12 @@ fn emit_direct_method_probe(ctx: &mut FnCtx<'_>, recv_box: &str, packed: bool) -
             let shape = blk.load(I32, &shape_ptr);
             let cid_nonzero = blk.icmp_ne(I32, &cid, "0");
             let shape_nonzero = blk.icmp_ne(I32, &shape, "0");
+            // Match the packed probe above: only plain ShapeIds are safe for
+            // direct class dispatch; linked and null shapes must stay dynamic.
+            let shape_kind = blk.and(I32, &shape, "3145728"); // 3 << 20
+            let plain_shape = blk.icmp_eq(I32, &shape_kind, "0");
             let both = blk.and(I1, &cid_nonzero, &shape_nonzero);
+            let both = blk.and(I1, &both, &plain_shape);
             (
                 blk.select(I1, &both, I32, &cid, "0"),
                 blk.select(I1, &both, I32, &shape, "0"),

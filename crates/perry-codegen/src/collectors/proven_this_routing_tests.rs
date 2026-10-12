@@ -1764,6 +1764,18 @@ fn class_dispatch_compares_the_authoritative_packed_word() {
         read.1.iter().filter(|l| l.contains("icmp ne i32")).count(),
         2
     );
+    assert!(
+        read.1.iter().any(|l| l.contains("and i32") && l.ends_with("3145728")),
+        "the class tower must reject linked/null ShapeId kinds before exposing the packed word\n{:?}",
+        read.1
+    );
+    assert!(
+        read.1
+            .iter()
+            .any(|l| l.contains("icmp eq i32") && l.ends_with("0")),
+        "only kind-plain ShapeIds may reach direct class dispatch\n{:?}",
+        read.1
+    );
     assert!(read
         .1
         .iter()

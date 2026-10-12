@@ -1,0 +1,1 @@
+Direct class-method dispatch now declines receivers with linked or null ShapeIds and uses dynamic lookup, preserving per-instance prototype changes. Adds regression coverage for `Object.setPrototypeOf` on a typed base-class array.
