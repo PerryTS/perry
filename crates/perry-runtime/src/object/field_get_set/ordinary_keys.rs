@@ -42,18 +42,19 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
         let keys = crate::object::object_keys_from_shape_record(obj, record);
         let order = ecma_own_key_order(keys);
         let count = keys.count();
-        // Only the key backing is needed after allocation. The shape supplies
-        // its immutable prefix count; no user code runs while the fresh result
-        // is allocated. Root that backing directly instead of keeping the
-        // receiver alive and looking up its shape again.
+        // Keep the shape's immutable key prefix across result allocation, which
+        // may collect or reenter. Root its backing directly; neither the receiver
+        // nor a borrowed shape record is needed afterwards. The prefix count and
+        // class-key filter are scalar snapshots of the selected key list.
         let filter_internal = (*obj).class_id != 0;
         let scope = crate::gc::RuntimeHandleScope::new();
         let backing = scope.root_raw_const_ptr(keys.arr());
         let out = crate::array::js_array_alloc(count);
         backing.with_const_ptr::<ArrayHeader, _>(|keys| {
-            // A live shape supplied a resolved backing, and collection rewrites
-            // this root before we read it. No grow or safepoint intervenes.
-            let (source, available) = crate::object::keys_array_dense_slots_resolved(keys);
+            // Reacquire the rooted backing after allocation, retaining the
+            // generic grow/forward resolution of an ObjectKeys view.
+            let keys = crate::object::ObjectKeys::new(keys.cast_mut(), count);
+            let (source, available) = keys.dense_slots();
             let dest = crate::array::array_elements_ptr(out) as *mut f64;
             let mut written = 0;
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
