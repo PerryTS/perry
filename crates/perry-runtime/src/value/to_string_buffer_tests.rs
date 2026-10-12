@@ -62,22 +62,30 @@ fn buffer_dispatch_to_string_uses_object_tags_for_non_indexed_views() {
     let scope = RuntimeHandleScope::new();
     let ab = scope.root_nanbox_f64(boxed(crate::buffer::js_array_buffer_new(2)));
     crate::buffer::bytes::no_gc(|scope| {
-        crate::buffer::bytes::bytes_mut(
-            crate::value::js_nanbox_pointer(ab.get_nanbox_f64().to_bits() as i64),
-            scope,
-        )
-        .unwrap()
-        .copy_from_slice(b"hi");
+        // SAFETY: this test owns the rooted byte view and no other view can
+        // access its bytes during this no-GC borrow.
+        unsafe {
+            crate::buffer::bytes::bytes_mut(
+                crate::value::js_nanbox_pointer(ab.get_nanbox_f64().to_bits() as i64),
+                scope,
+            )
+            .unwrap()
+            .copy_from_slice(b"hi");
+        }
     });
 
     let sab = scope.root_nanbox_f64(boxed(crate::buffer::js_shared_array_buffer_new(2)));
     crate::buffer::bytes::no_gc(|scope| {
-        crate::buffer::bytes::bytes_mut(
-            crate::value::js_nanbox_pointer(sab.get_nanbox_f64().to_bits() as i64),
-            scope,
-        )
-        .unwrap()
-        .copy_from_slice(b"hi");
+        // SAFETY: this test owns the rooted shared view and no other thread
+        // or view accesses its bytes during this no-GC borrow.
+        unsafe {
+            crate::buffer::bytes::bytes_mut(
+                crate::value::js_nanbox_pointer(sab.get_nanbox_f64().to_bits() as i64),
+                scope,
+            )
+            .unwrap()
+            .copy_from_slice(b"hi");
+        }
     });
 
     let value = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, b"hi");
@@ -120,12 +128,16 @@ fn buffer_dispatch_to_string_uses_object_tags_for_non_indexed_views() {
     // Control: Buffer.toString continues to consume the same short encoding.
     let buffer = scope.root_nanbox_f64(boxed(crate::buffer::js_buffer_alloc(2, 0)));
     crate::buffer::bytes::no_gc(|scope| {
-        crate::buffer::bytes::bytes_mut(
-            crate::value::js_nanbox_pointer(buffer.get_nanbox_f64().to_bits() as i64),
-            scope,
-        )
-        .unwrap()
-        .copy_from_slice(b"hi");
+        // SAFETY: this test owns the rooted Buffer and no other view can
+        // access its bytes during this no-GC borrow.
+        unsafe {
+            crate::buffer::bytes::bytes_mut(
+                crate::value::js_nanbox_pointer(buffer.get_nanbox_f64().to_bits() as i64),
+                scope,
+            )
+            .unwrap()
+            .copy_from_slice(b"hi");
+        }
     });
     let current = buffer.get_nanbox_f64();
     let addr = JSValue::from_bits(current.to_bits()).as_pointer::<u8>() as usize;
