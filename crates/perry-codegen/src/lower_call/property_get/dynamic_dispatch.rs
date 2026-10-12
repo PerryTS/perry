@@ -632,21 +632,15 @@ pub(crate) fn try_lower_instance_method_call(
             ctx.block()
                 .cond_br(&is_undef_probe, &proto_label, &probe_override_label);
             ctx.current_block = proto_idx;
-            // #12466: PLAIN kind plus class admission proves the nominal edge;
-            // foreign/subclass/null edges are WORD/NULL. Reload after the leaf
-            // own probe. On x86, bits 20–21 occupy bits 4–5 at header byte 6;
-            // the byte read keeps the immediate and emitted guard small.
+            // #12466: read the full ShapeId field used by object_prototype_word.
+            // PLAIN kind plus class admission proves the nominal edge;
+            // foreign/subclass/null edges are WORD/NULL. Reload after the own probe.
             let handle = unbox_to_i64(ctx.block(), &recv_box);
             let ptr = ctx.block().inttoptr(I64, &handle);
-            let (offset, ty, mask) = if ctx.target_triple.starts_with("x86_64") {
-                ("6", crate::types::I8, "48")
-            } else {
-                ("4", I32, "3145728")
-            };
-            let at = ctx.block().gep(crate::types::I8, &ptr, &[(I64, offset)]);
-            let shape = ctx.block().load(ty, &at);
-            let kind = ctx.block().and(ty, &shape, mask);
-            let nominal = ctx.block().icmp_eq(ty, &kind, "0");
+            let at = ctx.block().gep(crate::types::I8, &ptr, &[(I64, "4")]);
+            let shape = ctx.block().load(I32, &at);
+            let kind = ctx.block().and(I32, &shape, "3145728");
+            let nominal = ctx.block().icmp_eq(I32, &kind, "0");
             ctx.block()
                 .cond_br(&nominal, &probe_dispatch_label, &default_label);
             // Override path: pack user args (skip recv at slot 0) and

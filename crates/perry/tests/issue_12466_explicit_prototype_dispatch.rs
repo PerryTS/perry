@@ -176,9 +176,12 @@ fn instance_explicit_prototype_method_and_shape_miss_ir() {
         "edge comparison adds only one header load: {proto}"
     );
     assert!(
-        proto.contains("and i8") && proto.contains(", 48")
-            || proto.contains("and i32") && proto.contains("3145728"),
-        "compare the encoded prototype edge: {proto}"
+        proto.contains("load i32")
+            && proto.contains("and i32")
+            && proto.contains(", 3145728")
+            && !proto.contains("load i8")
+            && !proto.contains("and i8"),
+        "compare the full runtime ShapeId prototype edge: {proto}"
     );
     let branch = proto.lines().find(|line| line.contains("br i1 ")).unwrap();
     assert!(
