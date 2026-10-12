@@ -69,13 +69,22 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
     // Only the events addressed to this agent (#11433); a Worker's own pump
     // must leave its parent's events where the parent will find them.
     let agent = perry_runtime::agent::current_agent();
-    let events: Vec<WorkerEvent> = {
+    // O(1) when nothing is addressed to this agent: every agent's pump runs
+    // this, and the queue is shared by all of them.
+    let events: Vec<WorkerEvent> = if with_own_counts(|c| c.events.load(Ordering::Acquire)) == 0 {
+        Vec::new()
+    } else {
         let mut q = PARENT_EVENTS.lock().unwrap();
-        let (mine, theirs): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut *q)
-            .into_iter()
-            .partition(|(parent, _)| *parent == agent);
-        *q = theirs;
-        mine.into_iter().map(|(_, event)| event).collect()
+        let mut mine = Vec::new();
+        q.retain_mut(|(parent, event)| {
+            if *parent != agent {
+                return true;
+            }
+            mine.push(std::mem::replace(event, WorkerEvent::Online(0)));
+            false
+        });
+        with_own_counts(|c| c.events.fetch_sub(mine.len(), Ordering::AcqRel));
+        mine
     };
     for event in events {
         match event {
@@ -160,9 +169,17 @@ fn purge_parent_events(agent: perry_runtime::agent::AgentId) {
             .into_iter()
             .partition(|(parent, _)| *parent == agent);
         *q = live;
+        // Under the queue lock, so no push can count an event for this agent
+        // after its counts are gone.
+        forget_agent_counts(agent);
         dead
     };
     drop(dropped);
+}
+
+#[cfg(test)]
+pub(super) fn purge_parent_events_for_test(agent: perry_runtime::agent::AgentId) {
+    purge_parent_events(agent);
 }
 
 pub(super) fn ensure_parent_event_retire_hook() {
@@ -176,20 +193,16 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     let started = STDIN_READER_STARTED.with(|s| *s.borrow());
     let eof = STDIN_EOF.with(|eof| *eof.borrow());
     let has_messages = PENDING_MESSAGES.with(|q| !q.borrow().is_empty());
-    let agent = perry_runtime::agent::current_agent();
-    let has_worker_events = PARENT_EVENTS
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(parent, _)| *parent == agent);
-    // The record's owner is authoritative on every agent. Counting the
-    // parent's record on the child keeps the child itself alive forever;
-    // counting nested children on the primary defeats Worker.unref().
-    let has_live_refed_worker = WORKERS
-        .lock()
-        .unwrap()
-        .values()
-        .any(|w| w.owner_agent == agent && w.alive && w.refed);
+    // Per-agent counters (#12448). The record's owner is authoritative on
+    // every agent: counting the parent's record on the child keeps the child
+    // itself alive forever; counting nested children on the primary defeats
+    // Worker.unref().
+    let (has_worker_events, has_live_refed_worker) = with_own_counts(|c| {
+        (
+            c.events.load(Ordering::Acquire) != 0,
+            c.live_refed.load(Ordering::Acquire) != 0,
+        )
+    });
 
     if has_messages
         || has_worker_events

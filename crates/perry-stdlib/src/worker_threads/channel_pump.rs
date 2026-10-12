@@ -318,8 +318,32 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
 /// `message` listener with queued or potentially-incoming messages (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
-    let port_ids = MESSAGE_PORTS.with(|ports| ports.borrow().keys().copied().collect::<Vec<_>>());
-    if port_ids.into_iter().any(super::message_port::port_is_refed) {
+    // Runs after every worker callback (#12448): no allocation for the usual
+    // handful of ports. `port_is_refed` may run an `onmessage` getter, so the
+    // ids are copied out of the borrow first.
+    let mut inline = [0u64; 8];
+    let mut spilled = Vec::new();
+    let count = MESSAGE_PORTS.with(|ports| {
+        let ports = ports.borrow();
+        if ports.len() > inline.len() {
+            spilled.extend(ports.keys().copied());
+        } else {
+            for (slot, id) in inline.iter_mut().zip(ports.keys()) {
+                *slot = *id;
+            }
+        }
+        ports.len()
+    });
+    let port_ids = if spilled.is_empty() {
+        &inline[..count]
+    } else {
+        &spilled[..]
+    };
+    if port_ids
+        .iter()
+        .copied()
+        .any(super::message_port::port_is_refed)
+    {
         return 1;
     }
     let pending_without_onmessage = MESSAGE_PORTS.with(|ports| {

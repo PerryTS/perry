@@ -132,3 +132,47 @@ fn a_worker_does_not_count_its_parents_worker_record_as_its_own_work() {
         record.set_liveness(false, false);
     });
 }
+
+#[test]
+fn parent_events_are_counted_per_agent_and_drained_by_their_own_pump() {
+    isolated(|| {
+        let me = perry_runtime::agent::current_agent();
+        let other = std::thread::spawn(|| {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            with_own_counts(|_| ());
+            agent
+        })
+        .join()
+        .unwrap();
+        with_own_counts(|_| ());
+        assert_eq!(js_worker_threads_has_pending(), 0);
+        push_parent_event(other, WorkerEvent::Online(0));
+        assert_eq!(
+            js_worker_threads_has_pending(),
+            0,
+            "another agent's event kept this agent alive"
+        );
+        push_parent_event(me, WorkerEvent::Online(0));
+        assert_eq!(js_worker_threads_has_pending(), 1);
+        assert_eq!(js_worker_threads_process_pending(), 1);
+        assert_eq!(js_worker_threads_has_pending(), 0);
+        assert_eq!(
+            PARENT_EVENTS
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(parent, _)| *parent == other)
+                .count(),
+            1,
+            "this agent's pump took another agent's event"
+        );
+        // A retired parent's events are dropped rather than queued for ever.
+        worker_pump::purge_parent_events_for_test(other);
+        push_parent_event(other, WorkerEvent::Online(0));
+        assert!(!PARENT_EVENTS
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(parent, _)| *parent == other));
+    });
+}

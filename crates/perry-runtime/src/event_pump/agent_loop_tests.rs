@@ -467,6 +467,46 @@ fn a_notify_wakes_a_parked_worker_agent() {
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
 
+/// A targeted wake that arrives after the agent claimed its route but before
+/// its loop exists is kept on the route and ends the loop's first turn. Before
+/// this, `notify_agent` found no notifier and dropped the wake, and the first
+/// park slept until the idle cap (the worker_heavy whole-second stall shape).
+#[test]
+fn a_targeted_wake_before_the_loop_exists_ends_its_first_turn() {
+    let _g = serial();
+    let (claimed_tx, claimed_rx) = mpsc::channel();
+    let (sent_tx, sent_rx) = mpsc::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        let agent = crate::agent::enter_worker_agent();
+        assert!(claim_route_for_wakes());
+        assert_eq!(route_loop_id(agent), 0, "the claim must not build a loop");
+        claimed_tx.send(agent).unwrap();
+        sent_rx.recv().unwrap();
+        let latched = ROUTES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|route| route.agent == agent && route.pending_wake);
+        assert!(ensure_loop());
+        super::super::NOTIFIED.store(false, Ordering::SeqCst);
+        let start = Instant::now();
+        let park = park_until(start + Duration::from_secs(30));
+        let waited = start.elapsed();
+        crate::agent::retire_agent(agent);
+        (latched, park, waited)
+    });
+    let agent = claimed_rx.recv().unwrap();
+    notify_agent(agent);
+    sent_tx.send(()).unwrap();
+    let (latched, park, waited) = worker.join().unwrap();
+    assert!(latched, "the wake was not kept for the unpublished loop");
+    assert_ne!(park, Park::Failed);
+    assert!(
+        waited < Duration::from_secs(10),
+        "the first turn missed the latched wake: waited {waited:?}"
+    );
+}
+
 /// `fast()` turns only when turnloop has outstanding work: no OS call while
 /// the loop is idle (the P0 steady state), one nonblocking turn once a
 /// turnloop timer is armed.

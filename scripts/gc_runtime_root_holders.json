@@ -1386,6 +1386,12 @@
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "OWN_WORKER_COUNTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#12448: this thread's cached handle to its agent's Rust-owned Worker counters (an AgentId plus an Arc of two AtomicUsize counts). It holds counts, never a JS heap address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "NEXT_PORT_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic MessagePort id counter."

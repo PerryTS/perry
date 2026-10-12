@@ -193,6 +193,42 @@ pub fn notify_agent_loop(agent: crate::agent::AgentId) {
     agent_loop::notify_agent(agent);
 }
 
+/// Announce work queued for `agent` by another agent (a Worker's event for
+/// its parent).
+///
+/// [`js_notify_main_thread`] is the wrong tool for that. Its loop wake is a
+/// broadcast to every parked agent, and its `NOTIFIED` flag is consumed by
+/// whichever agent's wait reads it first. So a sibling Worker could eat the
+/// notify and leave the parent parked with the event queued until the idle
+/// cap. The broadcast also woke every parked sibling for nothing. This wakes
+/// the target's own loop, and the wake latches. The non-loop waiters still
+/// see the notify: a host wake callback, and a condvar park in the degraded
+/// mode. A target with no route falls back to the broadcast.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn notify_agent_work(agent: crate::agent::AgentId) {
+    if !agent_loop::notify_agent(agent) {
+        js_notify_main_thread();
+        return;
+    }
+    NOTIFIED.store(true, Ordering::Release);
+    loop_stats::note_notify();
+    invoke_host_wake_callback();
+    if WAITER_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let mut flag = PUMP.flag.lock().unwrap();
+    *flag = true;
+    drop(flag);
+    PUMP.cvar.notify_one();
+}
+
+/// Make the calling agent a target [`notify_agent_loop`] cannot miss, even
+/// before its loop exists; see `agent_loop::claim_route_for_wakes`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn claim_agent_loop_route() -> bool {
+    agent_loop::claim_route_for_wakes()
+}
+
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
 /// this agent's loop for at most `budget_ms`, dispatching whatever completes.
 ///

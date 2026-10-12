@@ -10,9 +10,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use perry_runtime::agent::AgentId;
 use perry_runtime::closure::ClosureHeader;
@@ -241,7 +241,7 @@ impl WorkerSender {
 
     fn send(&self, command: WorkerCommand) -> Result<(), mpsc::SendError<WorkerCommand>> {
         self.tx.send(command)?;
-        let agent = self.agent.load(Ordering::Acquire);
+        let agent = self.agent.load(Ordering::SeqCst);
         if agent != 0 {
             perry_runtime::event_pump::notify_agent_loop(agent);
         }
@@ -265,11 +265,89 @@ struct WorkerRecord {
 }
 
 impl WorkerRecord {
-    /// Update the state queried by the owning agent's liveness check.
+    /// Update the state queried by the owning agent's liveness check, and move
+    /// that agent's live-refed count with it. Call with the `WORKERS` lock held.
     fn set_liveness(&mut self, alive: bool, refed: bool) {
+        let before = self.alive && self.refed;
         self.alive = alive;
         self.refed = refed;
+        match (before, alive && refed) {
+            (false, true) => {
+                agent_counts(self.owner_agent, true)
+                    .expect("created on demand")
+                    .live_refed
+                    .fetch_add(1, Ordering::AcqRel);
+            }
+            (true, false) => {
+                // A retired owner has no counts left to release.
+                if let Some(counts) = agent_counts(self.owner_agent, false) {
+                    let previous = counts.live_refed.fetch_sub(1, Ordering::AcqRel);
+                    debug_assert!(previous > 0, "live worker count underflow");
+                }
+            }
+            _ => {}
+        }
     }
+}
+
+/// One agent's share of the process-global Worker state, kept as counters so
+/// the liveness check after every callback is O(1) (#12448) instead of a scan
+/// of `PARENT_EVENTS` and every `WorkerRecord` ever created under two
+/// process-global locks.
+#[derive(Default)]
+struct AgentWorkerCounts {
+    /// Entries in `PARENT_EVENTS` addressed to this agent. Changed only with
+    /// the `PARENT_EVENTS` lock held.
+    events: AtomicUsize,
+    /// This agent's `WorkerRecord`s that are alive and refed. Changed only
+    /// with the `WORKERS` lock held.
+    live_refed: AtomicUsize,
+}
+
+/// Lock order: `WORKERS` / `PARENT_EVENTS` before this. The entry is removed
+/// when its agent retires.
+static AGENT_WORKER_COUNTS: LazyLock<Mutex<HashMap<AgentId, Arc<AgentWorkerCounts>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+thread_local! {
+    static OWN_WORKER_COUNTS: RefCell<Option<(AgentId, Arc<AgentWorkerCounts>)>> =
+        const { RefCell::new(None) };
+}
+
+/// `agent`'s counters; `create` adds them when missing. No TLS access: this
+/// runs from the thread-exit hook too.
+fn agent_counts(agent: AgentId, create: bool) -> Option<Arc<AgentWorkerCounts>> {
+    let mut counts = AGENT_WORKER_COUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if create {
+        Some(counts.entry(agent).or_default().clone())
+    } else {
+        counts.get(&agent).cloned()
+    }
+}
+
+/// The calling agent's counters, cached per thread.
+fn with_own_counts<R>(f: impl FnOnce(&AgentWorkerCounts) -> R) -> R {
+    let agent = perry_runtime::agent::current_agent();
+    OWN_WORKER_COUNTS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if !matches!(&*slot, Some((cached, _)) if *cached == agent) {
+            // The retire hook removes the entry this creates.
+            worker_pump::ensure_parent_event_retire_hook();
+            *slot = Some((agent, agent_counts(agent, true).expect("created on demand")));
+        }
+        f(&slot.as_ref().expect("filled above").1)
+    })
+}
+
+/// `perry_runtime::agent::retire_agent` hook: a retired agent is never asked
+/// about its liveness again.
+fn forget_agent_counts(agent: AgentId) {
+    AGENT_WORKER_COUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&agent);
 }
 
 struct WorkerListener {
@@ -885,8 +963,20 @@ fn event_name(value: f64) -> Option<String> {
 }
 
 fn push_parent_event(parent: AgentId, event: WorkerEvent) {
-    PARENT_EVENTS.lock().unwrap().push_back((parent, event));
-    perry_runtime::event_pump::js_notify_main_thread();
+    {
+        let mut events = PARENT_EVENTS.lock().unwrap();
+        // A retired parent can never drain the event; its counts went with it.
+        let Some(counts) = agent_counts(parent, false) else {
+            return;
+        };
+        events.push_back((parent, event));
+        counts.events.fetch_add(1, Ordering::AcqRel);
+    }
+    // Targeted and latching: the parent's own loop wakes even when it is
+    // between its last drain and its park, and no other agent can consume the
+    // wake. A process-global notify could be consumed by a sibling Worker's
+    // wait, which stalled the parent until the idle cap.
+    perry_runtime::event_pump::notify_agent_work(parent);
 }
 
 extern "C" fn worker_on(
@@ -1371,6 +1461,9 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     record.set_liveness(true, true);
     workers.insert(worker_id, record);
     drop(workers);
+    // This agent receives the Worker's events through a targeted wake, which
+    // only latches for an agent holding a route slot.
+    perry_runtime::event_pump::claim_agent_loop_route();
 
     let thread_options = options_state.clone();
     // Captured on the creating thread: this Worker's events go to THIS agent.
@@ -1411,7 +1504,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             // later by `ensure_loop_with` — failing after acceptance instead of
             // taking the fallback path.
             let worker_agent = perry_runtime::agent::enter_worker_agent();
-            published_agent.store(worker_agent, Ordering::Release);
+            // Claim before publishing: a send that sees the agent id must find
+            // a route that keeps its wake until this worker's loop exists.
+            perry_runtime::event_pump::claim_agent_loop_route();
+            published_agent.store(worker_agent, Ordering::SeqCst);
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));

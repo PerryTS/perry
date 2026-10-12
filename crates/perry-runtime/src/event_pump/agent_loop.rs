@@ -87,6 +87,10 @@ struct Route {
     /// thread that must decline to tokio and one that can serve the agent it
     /// is already acting for.
     poster: Option<Poster>,
+    /// A targeted wake ([`notify_agent`]) arrived while no loop was published.
+    /// The loop built next is notified at publication, so its first turn does
+    /// not block on work that was handed over before the loop existed.
+    pending_wake: bool,
 }
 
 /// Every claimed agent route, one entry per agent. A `Vec` rather than a map:
@@ -409,6 +413,7 @@ fn claim_route() -> bool {
                     in_turn: flag.clone(),
                     notifier: None,
                     poster: None,
+                    pending_wake: false,
                 });
                 flag
             }
@@ -441,7 +446,12 @@ fn publish_route(agent: &AgentLoop) {
         .find(|route| Arc::ptr_eq(&route.in_turn, &agent.in_turn))
     {
         route.loop_id = agent.id;
-        route.notifier = Some(agent.driver.notifier());
+        let notifier = agent.driver.notifier();
+        if std::mem::take(&mut route.pending_wake) {
+            // The notification latches until the loop's next turn.
+            let _ = notifier.notify();
+        }
+        route.notifier = Some(notifier);
         route.poster = Some(agent.driver.poster());
     }
 }
@@ -1111,21 +1121,38 @@ pub fn post_to_agent(
 /// handed to it over a channel must also reach that loop, or it waits until
 /// the I/O completes. The notification latches: one sent before the owner's
 /// next turn begins makes that turn nonblocking, so a send that races the
-/// owner's "anything queued?" check is never lost. Nothing happens when the
-/// agent has no published loop.
-pub fn notify_agent(agent: AgentId) {
+/// owner's "anything queued?" check is never lost. A wake for a claimed route
+/// whose loop is not published yet (or is being rebuilt) is kept on the route
+/// and delivered when the loop is published. An agent with no route at all
+/// gets nothing, so a target that must not miss a wake claims its route first
+/// ([`claim_route_for_wakes`]).
+///
+/// Returns whether `agent` has a route, i.e. whether the wake was delivered or
+/// kept for its loop.
+pub fn notify_agent(agent: AgentId) -> bool {
     let notifier = {
-        let routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
-        routes
-            .iter()
-            .find(|route| route.agent == agent)
-            .and_then(|route| route.notifier.clone())
+        let mut routes = ROUTES.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(route) = routes.iter_mut().find(|route| route.agent == agent) else {
+            return false;
+        };
+        if route.notifier.is_none() {
+            route.pending_wake = true;
+        }
+        route.notifier.clone()
     };
     // Outside the registry lock, like `post_to_agent`. Err means the loop is
     // closing: there is no waiter left to wake.
     if let Some(notifier) = notifier {
         let _ = notifier.notify();
     }
+    true
+}
+
+/// Claim the calling thread's route slot so [`notify_agent`] can latch wakes
+/// for this agent from now on, including ones that arrive before its loop is
+/// built. Returns whether this thread holds the slot.
+pub fn claim_route_for_wakes() -> bool {
+    eligible()
 }
 
 /// Whether a post to `agent` would reach a loop, asked without building a job.
