@@ -35,8 +35,8 @@ pub(crate) use reporters::{
 };
 pub(crate) use runner::{
     thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before, thunk_test_before_each,
-    thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite, thunk_test_suite_only,
-    thunk_test_suite_skip, thunk_test_suite_todo, thunk_test_todo,
+    thunk_test_expect_failure, thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite,
+    thunk_test_suite_only, thunk_test_suite_skip, thunk_test_suite_todo, thunk_test_todo,
 };
 use snapshot::{
     assert_file_snapshot, assert_snapshot, snapshot_object_value, snapshot_set_default_serializers,

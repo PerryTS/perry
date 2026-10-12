@@ -906,6 +906,19 @@ pub(crate) extern "C" fn thunk_test_run(
     crate::node_stream::js_node_stream_readable_from(boxed_ptr(array))
 }
 
+/// #9202: the `node:test` `expectFailure(options)` named export. Perry's
+/// runner does not execute tests (`thunk_test_run` reports a fixed event
+/// stream), so there is nothing to mark and the call is a no-op returning
+/// `undefined` — the export exists so `typeof expectFailure` is `"function"`
+/// and the namespace shape matches Node's.
+pub(crate) extern "C" fn thunk_test_expect_failure(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _options: f64,
+) -> f64 {
+    undefined_value()
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_test_register(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test(
@@ -1043,5 +1056,36 @@ fn scan_result_roots(result: &mut TestResult, visitor: &mut crate::gc::RuntimeRo
     }
     for child in &mut result.children {
         scan_result_roots(child, visitor);
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+
+    /// #9202: `node:test`'s `expectFailure` has to resolve through the export
+    /// table to a real callable. Pre-fix `find_export` had no entry for it, so
+    /// the shared export path handed back the TAG_TRUE "unlisted export"
+    /// sentinel and `typeof expectFailure` was `"boolean"` while the sibling
+    /// namespace read (a compile-time `typeof` fold) still printed `function`.
+    #[test]
+    fn expect_failure_exported_as_a_callable() {
+        crate::node_submodules::js_node_submod_install_test();
+        let value = crate::node_test::property("expectFailure")
+            .expect("node:test must list the expectFailure export");
+        assert!(
+            is_callable_value(value),
+            "expectFailure must be a callable, got {:#x}",
+            value.to_bits()
+        );
+        let called = thunk_test_expect_failure(
+            std::ptr::null(),
+            crate::closure::plain_call_receiver(),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+        assert!(
+            is_undefined_value(called),
+            "expectFailure() must return undefined from the stub runner"
+        );
     }
 }

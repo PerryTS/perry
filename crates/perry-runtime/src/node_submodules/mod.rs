@@ -136,8 +136,8 @@ use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from
 use test::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
     thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
-    thunk_test_before_each, thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite,
-    thunk_test_todo,
+    thunk_test_before_each, thunk_test_expect_failure, thunk_test_only, thunk_test_run,
+    thunk_test_skip, thunk_test_suite, thunk_test_todo,
 };
 use timers::{
     timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
@@ -788,6 +788,17 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
         ExportSpec {
             name: "run",
             info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
+        },
+        // #9202: `expectFailure` is a current Node `node:test` named export.
+        // It has to be listed here — `find_export` is what
+        // `js_node_submodule_export_as_function` reads, and an unlisted name
+        // falls back to the TAG_TRUE "unlisted export" sentinel, so
+        // `import { expectFailure } from "node:test"` observed `true` instead
+        // of a function.
+        ExportSpec {
+            name: "expectFailure",
+            info: JsFunctionInfo::of(thunk_test_expect_failure as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         // Object-valued exports are handled by `special_export_value`.
         ExportSpec {
