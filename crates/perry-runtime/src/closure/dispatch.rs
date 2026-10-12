@@ -17,7 +17,7 @@ use super::*;
 
 #[cfg(test)]
 mod bind_creation_tests;
-mod bound;
+pub(super) mod bound;
 pub(super) mod bound_intrinsic;
 mod calln;
 mod direct;
@@ -27,9 +27,9 @@ mod validate;
 mod value_call;
 
 pub(crate) use bound::{
-    bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
-    callee_boxes_primitive_this, coerce_call_this, rebind_explicit_this,
-    rebind_explicit_this_allocates, reify_function_method_value,
+    bound_function_args, bound_function_lazy_name, bound_function_length,
+    bound_method_source_func_ptr, callee_boxes_primitive_this, coerce_call_this,
+    rebind_explicit_this, rebind_explicit_this_allocates, reify_function_method_value,
 };
 pub use bound::{dispatch_bound_function, dispatch_bound_method, js_function_bind};
 

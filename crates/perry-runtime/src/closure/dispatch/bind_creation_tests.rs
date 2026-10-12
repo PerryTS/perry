@@ -66,7 +66,7 @@ fn immutable_bind_birth_has_three_slots_and_no_metadata_bag() {
             target_value.to_bits()
         );
         assert_eq!(js_closure_get_capture_f64(b, 1), 4.0);
-        assert_eq!(js_closure_get_capture_ptr(b, 2), 0);
+        assert!(crate::closure::bound_function_args(b).is_empty());
         // Late property edits must not change this bind's immutable snapshot.
         crate::closure::closure_define_dynamic_prop(target as usize, "length", 99.0);
         assert_eq!(crate::closure::bound_function_length(b as usize), Some(1));
@@ -130,4 +130,80 @@ fn compact_birth_traces_target_and_receiver_across_full_collection() {
             Some(1)
         );
     }
+}
+
+#[test]
+fn compact_partials_are_traced_and_length_is_a_snapshot() {
+    let _agent = crate::state::state();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    for count in 1..=4 {
+        let target = js_closure_alloc(&COMPILED, 0);
+        let child = crate::object::js_object_alloc(0, 0);
+        let child_value = crate::value::js_nanbox_pointer(child as i64);
+        let mut args = vec![4.0];
+        args.extend(std::iter::repeat_n(child_value, count));
+        let bound = unsafe {
+            js_function_bind(
+                crate::value::js_nanbox_pointer(target as i64),
+                args.as_ptr(),
+                args.len(),
+            )
+        };
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let handle = scope.root_nanbox_f64(bound);
+        crate::gc::js_gc_collect();
+        let bound =
+            JSValue::from_bits(handle.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+        unsafe {
+            assert_eq!((*bound).capture_count, 3 + count as u32);
+            assert!((*bound).props.is_null());
+            let children = crate::closure::bound_function_args(bound);
+            assert_eq!(children.len(), count);
+            assert!(children
+                .iter()
+                .all(|v| JSValue::from_bits(v.to_bits()).is_pointer()));
+            let slots = crate::closure::closure_capture_slots_mut(bound as *mut ClosureHeader);
+            let rewritten = crate::gc::test_gc_rewrite_slot_addresses(bound as usize).unwrap();
+            for i in 3..3 + count {
+                assert!(rewritten.contains(&(slots.add(i) as usize)));
+            }
+            assert_eq!(
+                crate::closure::bound_function_length(bound as usize),
+                Some(0)
+            );
+        }
+    }
+}
+
+#[test]
+fn bound_of_bound_preserves_first_receiver_and_argument_order() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let target = js_closure_alloc(&COMPILED, 0);
+    let first = unsafe {
+        js_function_bind(
+            crate::value::js_nanbox_pointer(target as i64),
+            [4.0, 2.0].as_ptr(),
+            2,
+        )
+    };
+    let second = unsafe { js_function_bind(first, [99.0, 3.0].as_ptr(), 2) };
+    let closure = JSValue::from_bits(second.to_bits()).as_pointer::<ClosureHeader>();
+    assert_eq!(js_closure_call0(closure, JsThis::UNDEFINED), 6.0);
+}
+
+#[test]
+fn receiver_witness_rejects_an_internal_slot_mutation() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let target = js_closure_alloc(&COMPILED, 0);
+    let bound =
+        unsafe { js_function_bind(crate::value::js_nanbox_pointer(target as i64), &4.0, 1) };
+    let closure = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
+    let witness = || js_closure_call1(closure, JsThis::UNDEFINED, 2.0) == 6.0;
+    assert!(witness());
+    // Negative control: a wrong bound receiver must make the same witness fail.
+    js_closure_set_capture_f64(closure as *mut ClosureHeader, 1, 99.0);
+    assert!(!witness());
 }

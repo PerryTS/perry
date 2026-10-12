@@ -89,7 +89,12 @@ unsafe fn construct_function_impl(
 ) -> f64 {
     if let Some(entry) = site::validated_class_entry(site, func_value) {
         return construct_class_object_entry(
-            func_value, args_ptr, args_len, func_value, Some(entry), site::capture_slot(site),
+            func_value,
+            args_ptr,
+            args_len,
+            func_value,
+            Some(entry),
+            site::capture_slot(site),
         );
     }
     // #10507: an ordinary compiled function is none of the exotic callees
@@ -1191,14 +1196,10 @@ unsafe fn unwrap_bound_construct_chain(
         if nt.to_bits() == cur.to_bits() {
             nt = target;
         }
-        let bound_args_ptr =
-            crate::closure::js_closure_get_capture_ptr(ptr, 2) as *const crate::array::ArrayHeader;
-        if !bound_args_ptr.is_null() {
-            let n = crate::array::js_array_length(bound_args_ptr) as usize;
-            let mut prefix: Vec<f64> = Vec::with_capacity(n + args.len());
-            for i in 0..n {
-                prefix.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
-            }
+        let bound_args = crate::closure::bound_function_args(ptr);
+        if !bound_args.is_empty() {
+            let mut prefix = Vec::with_capacity(bound_args.len() + args.len());
+            prefix.extend_from_slice(bound_args);
             prefix.extend(args);
             args = prefix;
         }
@@ -1718,9 +1719,7 @@ mod callable_probe_tests {
                 crate::arena::classify_heap_generation(ptr),
                 crate::arena::HeapGeneration::Unknown
             );
-            assert!(
-                unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr) }.is_none()
-            );
+            assert!(unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr) }.is_none());
             let value = pointer_value(ptr);
             assert!(!is_callable_function_value(value));
             assert!(!is_arrow_function_value(value));

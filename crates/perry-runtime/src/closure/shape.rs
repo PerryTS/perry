@@ -186,6 +186,12 @@ pub(crate) fn is_class_info(info: *const super::JsFunctionInfo) -> bool {
     std::ptr::eq(info, &crate::object::class_value::CLASS_CONSTRUCTOR_INFO)
 }
 
+/// Ordinary bound layout, including inline partial arguments.
+#[inline(always)]
+pub(crate) fn function_bound_shape() -> u32 {
+    base_slot(7)
+}
+
 /// The ShapeId a fresh closure of the body `info` describes is born with.
 #[inline]
 pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> u32 {
@@ -832,8 +838,8 @@ mod tests {
         );
         assert_eq!(
             unsafe { (*(b as *const ClosureHeader)).capture_count },
-            5,
-            "target, this, partial args, name snapshot, bound length"
+            6,
+            "target, this, argument count, name snapshot, bound length, inline argument"
         );
         // The bound call still sees target + partial args + call args.
         let r = crate::closure::js_closure_call2(

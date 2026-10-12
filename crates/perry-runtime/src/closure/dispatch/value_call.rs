@@ -134,6 +134,15 @@ pub(super) unsafe fn dispatch_explicit_this_call(
         }
     }
 
+    if value_info.is_some_and(|info| info.code == BOUND_FUNCTION_FUNC_PTR) {
+        let args = if args_ptr.is_null() || args_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        return dispatch_bound_function(jsval.as_pointer(), args);
+    }
+
     // #3656: a Proxy value invoked as a function dispatches through its `apply`
     // trap (or, absent a trap, forwards to the target). The compiler emits a
     // `ProxyApply` node when it can statically prove the callee is a proxy, but

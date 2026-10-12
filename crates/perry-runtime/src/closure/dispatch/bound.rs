@@ -338,68 +338,123 @@ unsafe fn dispatch_symbol_bound_method(
 /// captures, prepends the bound args to the call-time args, and invokes the
 /// target closure with the bound receiver as its `this`.
 /// Refs #2840.
-#[inline]
+#[inline(never)]
 pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64]) -> f64 {
-    // Only the resolved
-    // layout has an operand slot, so other binds skip its info admission.
-    if (*closure).capture_count == BOUND_FUNCTION_CAPTURES + 1 {
+    let slots = crate::closure::closure_capture_slots_mut(closure as *mut ClosureHeader);
+    // Empty inline arguments need only the internal operand read. Keep the
+    // partial-argument scratch buffer and adapter frame in one shared helper.
+    if std::ptr::eq((*closure).info, &BOUND_FUNCTION_INFO)
+        && *slots.add(2) & !1 == crate::value::INT32_TAG
+    {
+        return call_bound_target(f64::from_bits(*slots), f64::from_bits(*slots.add(1)), args);
+    }
+    dispatch_bound_function_args(closure, args)
+}
+
+#[inline(never)]
+unsafe fn dispatch_bound_function_args(closure: *const ClosureHeader, args: &[f64]) -> f64 {
+    let slots = crate::closure::closure_capture_slots_mut(closure as *mut ClosureHeader);
+    // Resolved call/apply adapters have an immutable info of their own. Inline
+    // argument binds can also have six slots, so slot count is not authority.
+    if !std::ptr::eq((*closure).info, &BOUND_FUNCTION_INFO) {
         if let Some(result) = super::bound_intrinsic::dispatch(closure, args) {
             return result;
         }
     }
-    let target = js_closure_get_capture_f64(closure, 0);
-    let bound_this = js_closure_get_capture_f64(closure, 1);
-    let bound_args_ptr = js_closure_get_capture_ptr(closure, 2) as *const crate::array::ArrayHeader;
+    let target = f64::from_bits(*slots);
+    let bound_this = f64::from_bits(*slots.add(1));
+    let bound_args = bound_function_args(closure);
+    if bound_args.is_empty() {
+        return call_bound_target(target, bound_this, args);
+    }
+    let total = bound_args.len() + args.len();
+    if total <= 16 {
+        let mut combined = [0.0; 16];
+        combined[..bound_args.len()].copy_from_slice(bound_args);
+        combined[bound_args.len()..total].copy_from_slice(args);
+        return call_bound_target(target, bound_this, &combined[..total]);
+    }
+    let mut combined = Vec::with_capacity(total);
+    combined.extend_from_slice(bound_args);
+    combined.extend_from_slice(args);
+    call_bound_target(target, bound_this, &combined)
+}
 
-    // Collect the partial-applied (bound) leading args, then append the
-    // call-time args. `g = f.bind(obj, 2); g(3)` calls `f` with `(2, 3)`.
-    //
-    // The overwhelmingly common shape is `.bind(thisArg)` with NO partial
-    // args at all — a plain method reference (`arr.forEach(obj.method.bind(
-    // obj))`), the callback shape `direct.rs` cannot hoist out of a loop
-    // (BoundFunction is deliberately excluded from `resolve_direct_func_ptr`
-    // — see that module's doc), so this function runs on every element.
-    // `js_function_bind` leaves capture slot 2 (`bound_args_ptr`) null
-    // whenever `bound_arg_count == 0`, so that's exactly the free-to-detect
-    // case: skip the allocate-copy-free `Vec` and hand `js_native_call_value`
-    // the caller's own `args` slice directly. Only the actual
-    // partial-application shape (`.bind(obj, extra)`) still needs a combined
-    // buffer.
-    let mut combined: Vec<f64>;
-    let (call_ptr, call_len): (*const f64, usize) = if bound_args_ptr.is_null() {
-        if args.is_empty() {
-            (std::ptr::null(), 0)
-        } else {
-            (args.as_ptr(), args.len())
+/// The bound target is an internal managed edge, already admitted at birth.
+/// Ordinary bodies, nested binds and method values dispatch from that body's
+/// info without re-entering generic value/proxy/native classification. A
+/// captured-this method still uses the shared receiver forwarder.
+#[inline(never)]
+unsafe fn call_bound_target(target: f64, receiver: f64, args: &[f64]) -> f64 {
+    let value = crate::value::JSValue::from_bits(target.to_bits());
+    if value.is_pointer() {
+        let closure = value.as_pointer::<ClosureHeader>();
+        // Pointer bind targets are admitted closure cells at birth (native
+        // handles/proxies keep the observable helper's pass-through). This
+        // internal edge is traced and rewritten by GC, so it needs neither
+        // another address-band check nor a second live-header validation.
+        if let Some(info) = (*closure).info.as_ref() {
+            let captures = (*closure).capture_count;
+            if captures & CAPTURES_THIS_FLAG == 0
+                || captures & NO_THIS_REBIND_FLAG != 0
+                || info.flags & FN_ARROW != 0
+            {
+                // Class constructors and no-op builtin adapters need their
+                // existing value-call semantics; callable bodies do not.
+                if crate::closure::has_direct_call_body(info)
+                    || info.code == BOUND_FUNCTION_FUNC_PTR
+                    || info.code == BOUND_METHOD_FUNC_PTR
+                {
+                    return super::calln::dispatch_body_slice(
+                        closure,
+                        info,
+                        JsThis::from_f64(receiver),
+                        args,
+                    );
+                }
+            }
         }
-    } else {
-        let n = crate::array::js_array_length(bound_args_ptr) as usize;
-        combined = Vec::with_capacity(n + args.len());
-        for i in 0..n {
-            combined.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
-        }
-        combined.extend_from_slice(args);
-        if combined.is_empty() {
-            (std::ptr::null(), 0)
-        } else {
-            (combined.as_ptr(), combined.len())
-        }
-    };
-
-    // A bound concise/object-literal method reads `this` from its baked capture
-    // slot, not only the `this` parameter — the forwarder rebinds it to the
-    // bound receiver (the receiver itself was bound by `bind`).
-    let call_args = if call_ptr.is_null() {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(call_ptr, call_len)
-    };
+    }
     super::explicit_this::call_with_explicit_this(
         target,
-        bound_this,
-        call_args,
+        receiver,
+        args,
         super::explicit_this::ReceiverBinding::AsGiven,
     )
+}
+
+/// Slot 2 is an INT32 internal operand: argument count and immutable-metadata
+/// bit. Partial values follow the three compact slots or five snapshot slots.
+/// Legacy/resolved adapters retain their raw array-or-null slot.
+pub(in crate::closure) fn inline_args_marker(count: usize, lazy: bool) -> u64 {
+    crate::value::INT32_TAG | ((count as u64) << 1) | u64::from(lazy)
+}
+
+unsafe fn inline_args_layout(closure: *const ClosureHeader) -> Option<(usize, bool)> {
+    let slots = crate::closure::closure_capture_slots_mut(closure as *mut ClosureHeader);
+    let marker = *slots.add(2);
+    (marker & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG)
+        .then_some(((marker as u32 >> 1) as usize, marker & 1 != 0))
+}
+
+/// Internal bound argument slice. It is borrowed only until the target call;
+/// it must never be retained across an allocation by the caller.
+pub(crate) unsafe fn bound_function_args<'a>(closure: *const ClosureHeader) -> &'a [f64] {
+    let slots = crate::closure::closure_capture_slots_mut(closure as *mut ClosureHeader);
+    if let Some((count, lazy)) = inline_args_layout(closure) {
+        return std::slice::from_raw_parts(slots.add(if lazy { 3 } else { 5 }).cast(), count);
+    }
+    let array = *slots.add(2) as *const crate::array::ArrayHeader;
+    if array.is_null() {
+        &[]
+    } else {
+        // Existing internal arrays are dense, born with exactly their length.
+        let array = crate::array::clean_arr_ptr(array);
+        std::slice::from_raw_parts(
+            crate::array::array_elements_ptr(array).cast(),
+            (*array).length as usize,
+        )
+    }
 }
 
 /// OrdinaryCallBindThis for the `call`/`apply`/`bind` entry points: box a
@@ -631,8 +686,9 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
     let ptr_handle = scope.root_raw_mut_ptr(ptr as *mut u8);
     let (name_value, ptr_raw) = ptr_handle.across_mut::<u8, _>(|| {
         let closure = ptr as *const ClosureHeader;
-        let name_hint = if crate::closure::real_capture_count((*closure).capture_count)
-            >= BOUND_FUNCTION_CAPTURES
+        let name_hint = if !inline_args_layout(closure).is_some_and(|(_, lazy)| lazy)
+            && crate::closure::real_capture_count((*closure).capture_count)
+                >= BOUND_FUNCTION_CAPTURES
         {
             js_closure_get_capture_f64(closure, 3)
         } else {
@@ -658,7 +714,7 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 
 /// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound
 /// function closure. Captures the target closure value, the bound `this`, and
-/// the partial-applied leading args (as a JS array). The returned closure uses
+/// the partial-applied leading arguments in the same allocation. The returned closure uses
 /// the BOUND_FUNCTION_FUNC_PTR sentinel; `js_closure_callN` /
 /// `js_native_call_value` route it through `dispatch_bound_function`.
 ///
@@ -674,17 +730,18 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 /// `js_object_get_own_property_descriptor`, `closure_set_field_by_name`), so
 /// those calls were redundant. `.name`'s string is built lazily by
 /// `bound_function_lazy_name`, on first actual read. Refs #2840.
-/// Capture slots of a `Function.prototype.bind` result: target, bound `this`,
-/// partial-args array (raw pointer or 0), and optionally the observable
-/// `.name` snapshot and bound length.
+/// Snapshot layout: target, bound `this`, inline-argument marker, observable
+/// `.name` snapshot, bound length, then arguments. Compact immutable metadata
+/// layout omits the two snapshot slots. Resolved intrinsic adapters retain
+/// their five metadata slots and append the operand body info.
 pub(crate) const BOUND_FUNCTION_CAPTURES: u32 = 5;
-/// Untouched compiled targets need only target, receiver and partial args.
+/// Untouched compiled targets need target, receiver and argument marker.
 /// Their body info and declared name remain immutable after property edits.
 const BOUND_FUNCTION_LAZY_CAPTURES: u32 = 3;
 
-/// The `.length` a bind recorded in its bound closure's capture 4, or `None`
-/// when `closure` is not a bind result or the length lives as an own
-/// property (a non-u32 length).
+/// Derive compact `.length` from immutable target metadata and argument count,
+/// or read the bind-time snapshot in slot 4. An exceptional non-u32 length
+/// lives as an own property.
 ///
 /// # Safety
 /// `closure` is a closure address its caller already proved
@@ -700,7 +757,8 @@ pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
         return None;
     }
     let count = crate::closure::real_capture_count((*c).capture_count);
-    if count == BOUND_FUNCTION_LAZY_CAPTURES {
+    if inline_args_layout(c).is_some_and(|(_, lazy)| lazy) || count == BOUND_FUNCTION_LAZY_CAPTURES
+    {
         let target = crate::value::JSValue::from_bits(js_closure_get_capture_f64(c, 0).to_bits())
             .as_pointer::<ClosureHeader>();
         // This layout is born only from a proven compiled target. Its info is
@@ -709,7 +767,8 @@ pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
         return Some(
             crate::closure::info_length(info)
                 .or_else(|| crate::closure::info_arity(info))
-                .unwrap_or(0),
+                .unwrap_or(0)
+                .saturating_sub(inline_args_layout(c).map_or(0, |(n, _)| n as u32)),
         );
     }
     if count < BOUND_FUNCTION_CAPTURES {
@@ -740,7 +799,10 @@ pub unsafe extern "C" fn js_function_bind(
             if info
                 .as_ref()
                 .is_some_and(|info| info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0)
-                && (*closure).shape_id == crate::closure::shape::birth_shape_for_body(info)
+                && (*closure).shape_id
+                    == crate::closure::shape::function_base_shape(
+                        crate::closure::shape::FunctionProtoKind::Function,
+                    )
             {
                 let receiver = if args_len == 0 || args_ptr.is_null() {
                     crate::value::TAG_UNDEFINED
@@ -762,6 +824,7 @@ pub unsafe extern "C" fn js_function_bind(
                 let bound = crate::closure::alloc::closure_alloc_bound_function(
                     target_value.to_bits(),
                     receiver,
+                    &[],
                 );
                 crate::gc::runtime_write_barrier_root_raw_ptr(bound);
                 return f64::from_bits(JSValue::pointer(bound as *mut u8).bits());
@@ -773,7 +836,6 @@ pub unsafe extern "C" fn js_function_bind(
 
 /// Observable metadata, partial arguments, built-ins and sloppy receiver
 /// boxing retain the spec-ordered rooted birth. Kept out of the common frame.
-#[cold]
 #[inline(never)]
 unsafe fn function_bind_observable(
     target_value: f64,
@@ -866,6 +928,12 @@ unsafe fn function_bind_observable(
         Vec::new()
     };
 
+    // BoundFunctionCreate snapshots [[Prototype]] before observable metadata.
+    let prototype = target_h
+        .across_nanbox(|| crate::object::js_object_get_prototype_of(target_h.get_nanbox_f64()))
+        .0;
+    let prototype_h = scope.root_nanbox_f64(prototype);
+
     // Coercion consumes the original thisArg; reuse its root for the result.
     // Partial arguments remain independent roots throughout.
     let bound_this = coerce_call_this(target_h.get_nanbox_f64(), this_h.get_nanbox_f64());
@@ -882,6 +950,22 @@ unsafe fn function_bind_observable(
             && !target_info.is_null()
             && (*target_info).flags & crate::codegen_abi::FN_COMPILED_BODY != 0
     };
+    // Partial arguments share this helper, keeping the zero-argument entry a
+    // constant-size bump. A plain birth shape still proves immutable metadata;
+    // install the rooted partials directly without a JS array or metadata bag.
+    if declared_metadata
+        && partial_handles.len() <= 4
+        && (*target_info).flags & (FN_ASYNC | FN_GENERATOR | FN_ASYNC_GENERATOR) == 0
+    {
+        let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&partial_handles);
+        let bound = crate::closure::alloc::closure_alloc_bound_function(
+            target_h.get_nanbox_f64().to_bits(),
+            this_h.get_nanbox_f64().to_bits(),
+            &args,
+        );
+        crate::gc::runtime_write_barrier_root_raw_ptr(bound);
+        return f64::from_bits(JSValue::pointer(bound as *mut u8).bits());
+    }
     // HasOwnProperty(length), then Get(length), precede Get(name). A getter
     // may change the target's name, so the name proof is checked again below.
     let target_len_f = if declared_metadata {
@@ -957,17 +1041,6 @@ unsafe fn function_bind_observable(
 
     let bound_arg_count = partial_handles.len();
 
-    // Build the partial-args array (NaN-boxed values copied as-is) from the
-    // rooted arguments: the array allocation can collect too.
-    let bound_args_arr: *mut crate::array::ArrayHeader = if bound_arg_count > 0 {
-        let array = crate::closure::build_rest_array_rooted(&partial_handles, false);
-        JSValue::from_bits(array.to_bits()).as_pointer::<crate::array::ArrayHeader>()
-            as *mut crate::array::ArrayHeader
-    } else {
-        std::ptr::null_mut()
-    };
-    let args_h = (!bound_args_arr.is_null()).then(|| scope.root_raw_mut_ptr(bound_args_arr));
-
     let target_len_f = if target_len_f.is_nan() {
         0.0
     } else {
@@ -999,32 +1072,27 @@ unsafe fn function_bind_observable(
         };
         super::bound_intrinsic::allocate(resolved, &target_h, &this_h, &name_h, length)
     } else {
-        let bound = crate::closure::js_closure_alloc(
-            &crate::closure::BOUND_FUNCTION_INFO,
-            BOUND_FUNCTION_CAPTURES,
-        ) as *mut ClosureHeader;
-        let target_value = target_h.get_nanbox_f64();
-        let bound_this = this_h.get_nanbox_f64();
-        let name_hint = name_h.get_nanbox_f64();
-        let args_bits = match args_h.as_ref() {
-            Some(h) => h.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| arr as u64),
-            None => 0,
-        };
         let len_bits = if len_in_capture {
             JSValue::number(bound_len).bits()
         } else {
             crate::value::TAG_UNDEFINED
         };
-        crate::closure::closure_install_boxed_captures(
-            bound,
-            &[
-                target_value.to_bits(),
-                bound_this.to_bits(),
-                args_bits,
-                name_hint.to_bits(),
-                len_bits,
-            ],
-        );
+        // Snapshot metadata and all partial arguments in the same managed
+        // allocation. The installer roots these initialized values on refusal.
+        let mut captures = Vec::with_capacity(5 + bound_arg_count);
+        captures.extend_from_slice(&[
+            target_h.get_nanbox_f64().to_bits(),
+            this_h.get_nanbox_f64().to_bits(),
+            inline_args_marker(bound_arg_count, false),
+            name_h.get_nanbox_f64().to_bits(),
+            len_bits,
+        ]);
+        captures.extend(partial_handles.iter().map(|h| h.get_nanbox_f64().to_bits()));
+        let bound = crate::closure::js_closure_alloc_init_boxed(
+            &crate::closure::BOUND_FUNCTION_INFO,
+            captures.len() as u32,
+            captures.as_ptr(),
+        ) as *mut ClosureHeader;
         bound
     };
     // Installing fresh captures cannot collect. The only remaining
@@ -1043,6 +1111,15 @@ unsafe fn function_bind_observable(
     } else {
         bound
     };
+    let bound_h = scope.root_raw_mut_ptr(bound);
+    let default_proto = crate::closure::shape::function_prototype_ptr_materialized();
+    let prototype = prototype_h.get_nanbox_f64().to_bits();
+    if prototype != JSValue::pointer(default_proto as *mut u8).bits() {
+        bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+            crate::closure::closure_set_static_prototype(bound as usize, prototype);
+        });
+    }
+    let bound = bound_h.with_mut_ptr(|bound: *mut ClosureHeader| bound);
     crate::gc::runtime_write_barrier_root_raw_ptr(bound as *const u8);
     f64::from_bits(JSValue::pointer(bound as *mut u8).bits())
 }

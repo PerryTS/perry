@@ -268,6 +268,10 @@ pub extern "C" fn js_nanbox_get_string_pointer(value: f64) -> i64 {
 /// 1. A properly NaN-boxed string (with STRING_TAG)
 /// 2. A raw pointer bitcast to f64 (for locally-created strings)
 /// This unified function handles both cases for function parameters.
+// Keep SSO materialization and numeric conversion in one shared entry. LTO
+// otherwise duplicates their allocating arms into unrelated callers when a
+// runtime call graph changes (including bound-function metadata reads).
+#[inline(never)]
 #[no_mangle]
 pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
     let bits = value.to_bits();

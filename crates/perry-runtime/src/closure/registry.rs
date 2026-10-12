@@ -549,12 +549,10 @@ pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
 /// prepends the bound args and calls the target closure with the bound receiver
 /// as its `this`.
 ///
-/// Captures layout (`js_function_bind`, `dispatch/bound.rs`):
-///   [0] = target closure value (f64, NaN-boxed)
-///   [1] = bound `this` value (f64)
-///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
-///   [3] = target name snapshot (only in the observable metadata layout)
-///   [4] = `length` snapshot (only in the observable metadata layout)
+/// Captures layout (`js_function_bind`, `dispatch/bound.rs`): target,
+/// receiver, inline-argument marker; immutable metadata is derived lazily.
+/// Snapshot layouts append name/length before the inline arguments. Resolved
+/// call/apply adapters append their operand info to the metadata layout.
 pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
 /// The info every bound-method value points to (its "code" is the
