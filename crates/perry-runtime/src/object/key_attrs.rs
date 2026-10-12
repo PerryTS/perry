@@ -722,26 +722,22 @@ pub(crate) unsafe fn copy_entries(
 
 /// Is `addr` an ordinary property holder whose attributes live in its keys?
 /// Every receiver kind normalizes its descriptor storage to such a holder.
-/// Reads classify known cells; installs prove allocator ownership separately.
+/// The address may belong to native code, so prove allocator ownership before
+/// decoding the preceding bytes as a GC header.
 ///
 /// # Safety
 /// `addr` is a descriptor owner.
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+    attrs_live_in_keys_for_install(addr)
 }
 
 /// [`attrs_live_in_keys`] for a site that WRITES the owner (its keys, slots or
 /// header). Descriptor owners are arbitrary addresses — a native `Box`
 /// backing (an `AsyncResource`'s, #11258) is heap-plausible and the bytes
 /// before it may decode as an object header — so ownership is proved by
-/// allocator metadata (`try_read_tracked_gc_header`) before anything is
-/// written. Installs are rare; the lookup path never pays for this.
+/// allocator metadata (`try_read_tracked_gc_header`) before its preceding
+/// bytes are decoded.
 ///
 /// # Safety
 /// `addr` is any address.

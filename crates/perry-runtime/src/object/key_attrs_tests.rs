@@ -2,6 +2,29 @@
 
 use super::*;
 
+#[test]
+fn descriptor_holder_probe_rejects_a_spoofed_native_box_header() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let mut words = Box::new([0u64; 16]);
+        words[0] = crate::gc::GC_TYPE_OBJECT as u64 | ((16 * 8) << 32);
+        let owner = &words[1] as *const u64 as usize;
+
+        assert_eq!(
+            crate::value::addr_class::try_read_gc_header(owner).map(|h| h.obj_type),
+            Some(crate::gc::GC_TYPE_OBJECT),
+            "fixture must fool the magnitude-only reader"
+        );
+        assert!(crate::value::addr_class::try_read_tracked_gc_header(owner).is_none());
+        assert!(!attrs_live_in_keys(owner));
+        assert!(!attrs_live_in_keys_for_install(owner));
+
+        let object = crate::object::js_object_alloc(0, 1);
+        assert!(attrs_live_in_keys(object as usize));
+        assert!(attrs_live_in_keys_for_install(object as usize));
+    }
+}
+
 unsafe fn list_with_entries(entries: &[u8]) -> *mut ArrayHeader {
     let keys = alloc_key_list(entries.len() as u32, true, true);
     let attrs = keys_attrs(keys);

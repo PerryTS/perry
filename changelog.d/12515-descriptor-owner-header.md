@@ -1,0 +1,1 @@
+Descriptor attribute lookups now verify that an arbitrary receiver belongs to the GC heap before decoding bytes before it as a header. This prevents native `Box`-backed owners from being misclassified based on allocator residue.

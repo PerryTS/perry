@@ -7,7 +7,8 @@ struct Record {
     bag: UnsafeCell<f64>,
 }
 /// The 8 bytes before a native owner are whatever the allocator keeps there,
-/// and the descriptor LOOKUP path (`attrs_live_in_keys`, unproven by design)
+/// and the descriptor LOOKUP path (`attrs_live_in_keys`, which must prove
+/// allocator ownership before interpreting the preceding bytes)
 /// decodes them as a `GcHeader`: stale bytes that read as an unforwarded
 /// OBJECT header send the lookup into the wrong memory. The guard word pins
 /// those 8 bytes to zero so the fixture does not depend on heap layout.
