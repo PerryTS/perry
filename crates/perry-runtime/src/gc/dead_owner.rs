@@ -50,9 +50,9 @@
 //!
 //! Deadness rules (the audit's central caveat): a MINOR trace never marks
 //! old-gen/malloc'd objects, so an unmarked header only proves death for an
-//! untenured nursery object; everything else is only provably dead after a
-//! FULL trace. Both predicates additionally require the owner address to be
-//! attributable to THIS thread's heap (arena page classification or the
+//! object physically resident in the nursery; everything else is only
+//! provably dead after a FULL trace. Both predicates additionally require the
+//! owner address to be attributable to THIS thread's heap (arena page classification or the
 //! thread's malloc-tracked header list) before reading any header byte —
 //! several of the pruned tables are process-global and can hold other
 //! threads' heap addresses (whose mark bits this thread's trace says nothing
@@ -117,13 +117,11 @@ impl PostTraceProbe {
         if self.full_trace {
             return true;
         }
-        // Minor trace: unmarked is only meaningful for untenured nursery
-        // objects (minors never mark old-gen, and malloc'd objects are
-        // black-leafed).
+        // Minor trace: unmarked is only meaningful for objects physically in
+        // the nursery (minors never mark old-gen, and malloc'd objects are
+        // black-leafed). TENURED can be set before an object has physically
+        // left the nursery, so the generation classification is authoritative.
         if !in_arena {
-            return false;
-        }
-        if flags & GC_FLAG_TENURED != 0 {
             return false;
         }
         matches!(
@@ -202,8 +200,9 @@ fn is_minor_from_space(space: crate::arena::HeapSpace) -> bool {
 /// as `PromotedYoung` before this runs, so their objects are never dead here:
 /// an untraced promotion marks nothing, and treating its unmarked live
 /// objects as dead freed the store of a live Map. A traced promotion's dead
-/// objects are left to the old generation. TENURED is old-generation by
-/// definition (`Old ⟹ TENURED`), so it is never minor garbage either.
+/// objects are left to the old generation. This copied-minor predicate keeps
+/// treating TENURED as non-garbage; only the post-trace fallback classifier
+/// consults physical Nursery versus Old residency for TENURED objects.
 pub(crate) fn minor_side_owner_is_dead(header: &GcHeader, space: crate::arena::HeapSpace) -> bool {
     let flags = header.gc_flags;
     is_minor_from_space(space)
@@ -247,9 +246,9 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
         crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
     }
     let probe = PostTraceProbe::new(full_trace);
-    // #9754: a minor can only find a young owner dead (`owner_is_dead` refuses
-    // tenured and old-generation owners on a minor), so the young-logged
-    // tables prune from their logs instead of walking.
+    // #9754: a minor can only find a physically young owner dead
+    // (`owner_is_dead` refuses old-generation owners on a minor), so the
+    // young-logged tables prune from their logs instead of walking.
     fan_out(
         &|addr| probe.owner_is_dead(addr, None),
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_CLOSURE)),

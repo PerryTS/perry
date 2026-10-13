@@ -558,6 +558,78 @@ fn test_live_function_class_id_key_survives_and_is_rekeyed_on_copied_minor() {
     );
 }
 
+#[test]
+fn tenured_nursery_closure_key_is_pruned_but_marked_and_old_keys_survive_minor() {
+    let _guard = GcTestIsolationGuard::new();
+    crate::object::test_clear_class_side_table_roots();
+
+    let dead_nursery = alloc_nursery_test_closure();
+    let marked_nursery = alloc_nursery_test_closure();
+    let old = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    unsafe { init_test_closure(old as *mut u8) };
+
+    assert_eq!(
+        crate::arena::classify_heap_generation(dead_nursery),
+        crate::arena::HeapGeneration::Nursery
+    );
+    assert_eq!(
+        crate::arena::classify_heap_generation(marked_nursery),
+        crate::arena::HeapGeneration::Nursery
+    );
+    assert_eq!(
+        crate::arena::classify_heap_generation(old),
+        crate::arena::HeapGeneration::Old
+    );
+    unsafe {
+        let dead_header = header_from_user_ptr(dead_nursery as *const u8) as *mut GcHeader;
+        let marked_header = header_from_user_ptr(marked_nursery as *const u8) as *mut GcHeader;
+        let old_header = header_from_user_ptr(old as *const u8) as *mut GcHeader;
+        (*dead_header).gc_flags |= GC_FLAG_TENURED;
+        (*marked_header).gc_flags |= GC_FLAG_TENURED | GC_FLAG_MARKED;
+        (*old_header).gc_flags |= GC_FLAG_TENURED;
+
+        // The copied-minor from-space predicate remains stricter: TENURED
+        // nursery cells are not classified as copied-minor garbage.
+        assert!(
+            !crate::gc::dead_owner::owner_is_dead_copied_minor_from_space_of_type(
+                dead_nursery,
+                GC_TYPE_CLOSURE
+            )
+        );
+    }
+
+    const DEAD_CLASS_ID: u32 = 0x8200_8042;
+    const MARKED_CLASS_ID: u32 = 0x8200_8043;
+    const OLD_CLASS_ID: u32 = 0x8200_8044;
+    crate::object::test_seed_function_class_id_key(ptr_bits(dead_nursery), DEAD_CLASS_ID);
+    crate::object::test_seed_function_class_id_key(ptr_bits(marked_nursery), MARKED_CLASS_ID);
+    crate::object::test_seed_function_class_id_key(ptr_bits(old), OLD_CLASS_ID);
+
+    // This is the real registered side-table fan-out used after a non-copying
+    // minor trace, with the three owners modeling its post-trace states.
+    crate::gc::dead_owner::prune_dead_owner_side_tables_post_trace(false, false);
+
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(DEAD_CLASS_ID),
+        0,
+        "an unmarked TENURED closure still physically in Nursery is dead"
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(MARKED_CLASS_ID),
+        ptr_bits(marked_nursery),
+        "a marked Nursery+TENURED closure remains live"
+    );
+    assert_eq!(
+        crate::object::test_function_class_id_key_for_class(OLD_CLASS_ID),
+        ptr_bits(old),
+        "a physical Old+TENURED closure is not minor garbage"
+    );
+}
+
 /// The #8040 shape, end to end: a dead key that survives one collection is
 /// re-pointed at the next tenant of its address, and the collection after that
 /// follows THAT object's forwarding pointer.
