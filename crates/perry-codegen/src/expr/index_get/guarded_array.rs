@@ -613,14 +613,12 @@ fn lower_guarded_array_index_get_with_index(
     let blk = ctx.block();
     let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
     let capacity = blk.load(I32, &cap_ptr);
+    // Numeric context does not consult the array layout bit: a plain double
+    // has the same bits in a raw and in a boxed array, so the loaded element
+    // carries its own proof (tested after the load, below). Holes, INT32
+    // boxes and every tagged value miss that test and take the shared cold
+    // helper, so no prototype protector is needed at the site.
     let mut admitted = blk.icmp_ult(I32, idx_i32, &capacity);
-    if require_numeric_layout {
-        // Dense raw-f64 is the existing numeric contract. Holes are cold even
-        // in numeric context, so no prototype protector is needed at the site.
-        let dense = blk.and(I32, &word, "8388608");
-        let dense = blk.icmp_ne(I32, &dense, "0");
-        admitted = blk.and(I1, &admitted, &dense);
-    }
     if typed_feedback_emission_enabled() {
         // Diagnostic builds retain their established observing guard.
         let guard_fn = if require_numeric_layout {
@@ -733,7 +731,10 @@ fn lower_guarded_array_index_get_with_index(
     let fast_val = blk.bitcast_i64_to_double(&bits);
     let fast_end_label = blk.label.clone();
     if require_numeric_layout {
-        blk.br(&merge_label);
+        // The element is the proof (types never prove): the one emitted
+        // is_number predicate. A miss shares the exact-args cold arm.
+        let is_number = crate::codegen::emit_plain_number_bits_test(blk, &bits);
+        blk.cond_br(&is_number, &merge_label, &exotic_label);
     } else {
         let hole = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
         if crate::expr::store_census::enabled() {

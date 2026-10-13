@@ -130,8 +130,25 @@ fn numeric_layout_oob_array_read_uses_shared_cold_body() {
         "a numeric-layout OOB read must use the shared generic fallback:\n{ir}"
     );
     assert!(
-        ir.contains("arr.guard.range") && ir.contains("8388608"),
-        "only the in-bounds arm may require the numeric element-layout proof:\n{ir}"
+        ir.contains("arr.guard.range") && !ir.contains("8388608"),
+        "the numeric read must not consult the array layout bit:\n{ir}"
+    );
+    // The proof is the loaded element's own tag, tested inside the fast arm
+    // (the consumer's copy of the predicate elsewhere does not count).
+    let mut in_fast = false;
+    let mut fast_arm = Vec::new();
+    for line in ir.lines() {
+        if !line.starts_with(char::is_whitespace) && line.ends_with(':') {
+            in_fast = line.starts_with("arr.fast.");
+        } else if in_fast {
+            fast_arm.push(line.trim());
+        }
+    }
+    assert!(
+        fast_arm
+            .iter()
+            .any(|l| l.contains("icmp ule i64") && l.contains("9221401712017801215")),
+        "the fast arm must test the loaded element:\n{ir}"
     );
 }
 
