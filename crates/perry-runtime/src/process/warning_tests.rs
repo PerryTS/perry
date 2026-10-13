@@ -13,8 +13,8 @@ use std::cell::RefCell;
 
 use super::*;
 
-/// `(name, code, detail, message, is_the_same_object)` for every warning the
-/// registered listener received.
+// `(name, code, detail, message, is_the_same_object)` for every warning the
+// registered listener received.
 thread_local! {
     static CAPTURED: RefCell<Vec<(String, String, String, String, bool)>> =
         const { RefCell::new(Vec::new()) };

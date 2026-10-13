@@ -1163,14 +1163,11 @@ fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHand
         b"emitWarning".as_ptr(),
         11,
     ));
-    // SAFETY: the namespace is a live object (rooted above).
-    let callback = unsafe {
-        crate::object::js_object_get_field_by_name_f64(
-            crate::value::js_nanbox_get_pointer(process.get_nanbox_f64())
-                as *const crate::object::ObjectHeader,
-            name.get_raw_const_ptr::<crate::string::StringHeader>(),
-        )
-    };
+    let callback = crate::object::js_object_get_field_by_name_f64(
+        crate::value::js_nanbox_get_pointer(process.get_nanbox_f64())
+            as *const crate::object::ObjectHeader,
+        name.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
     let callback = scope.root_nanbox_f64(callback);
     if !is_callable_value(callback.get_nanbox_f64()) {
         crate::process::schedule_warning(warning, "MaxListenersExceededWarning", "", text, "");
