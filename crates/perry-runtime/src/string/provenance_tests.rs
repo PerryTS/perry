@@ -149,6 +149,12 @@ fn index_conversion_matches_saturation_and_numeric_coercion() {
         assert_eq!(char_ops::js_string_number_end_index_to_i32(n, 17), expected);
         assert_eq!(slice_ops::js_string_position_to_index(n), expected);
     }
+    for n in [i32::MIN, -1, 0, 1, i32::MAX] {
+        let boxed = f64::from_bits(crate::value::JSValue::int32(n).bits());
+        assert_eq!(js_string_index_to_i32(boxed), n);
+        assert_eq!(char_ops::js_string_number_index_to_i32(boxed), n);
+        assert_eq!(char_ops::js_string_end_index_to_i32(boxed, 17), n);
+    }
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     assert_eq!(char_ops::js_string_number_index_to_i32(undefined), 0);
     assert_eq!(
@@ -227,4 +233,31 @@ fn prehashed_intern_probe_checks_bytes_on_a_hash_collision() {
     let atom = js_string_pool_atom(a.as_ptr(), a.len() as u32, hash, 0);
     assert_ne!(atom, first as *mut StringHeader);
     assert_eq!(unsafe { header_str_checked(atom) }, Some("strops-first"));
+}
+
+#[test]
+fn coercing_index_applies_to_number_to_legacy_constructor_values() {
+    // A legacy constructor shares INT32's bits but is a Function object.
+    // The full entry must perform ToPrimitive rather than expose its id.
+    let class_id = 0x7D53_0001;
+    assert!(!crate::object::is_class_id_registered(class_id));
+    {
+        let mut registry = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
+        registry
+            .get_or_insert_with(Default::default)
+            .insert(class_id);
+    }
+    let value = f64::from_bits(crate::value::JSValue::int32(class_id as i32).bits());
+    let number = crate::builtins::js_number_coerce(value);
+    let index = js_string_index_to_i32(value);
+    let end = char_ops::js_string_end_index_to_i32(value, 17);
+    crate::object::REGISTERED_CLASS_IDS
+        .write()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .remove(&class_id);
+    assert!(number.is_nan(), "a default Function string is not a number");
+    assert_eq!(index, 0);
+    assert_eq!(end, 0);
 }

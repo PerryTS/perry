@@ -47,7 +47,7 @@ use crate::type_analysis::{
     expr_produces_canonical_raw_f64, is_numeric_expr, is_string_expr,
     string_value_is_runtime_guaranteed,
 };
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 /// How a dispatch arm coerces one argument before consuming the receiver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,7 +86,9 @@ pub(super) fn dispatch_arg_coercion(property: &str, i: usize) -> Option<ArgCoerc
 /// (the arms already skip `js_string_coerce` for an `is_string_expr` operand).
 pub(super) fn coercion_may_collect(ctx: &FnCtx<'_>, coercion: ArgCoercion, arg: &Expr) -> bool {
     match coercion {
-        ArgCoercion::Number => !number_argument_is_inert(ctx, arg),
+        ArgCoercion::Number => {
+            !matches!(arg, Expr::Undefined) && !number_argument_is_inert(ctx, arg)
+        }
         ArgCoercion::String => !string_value_is_runtime_guaranteed(ctx, arg),
         ArgCoercion::Options => true,
     }
@@ -168,44 +170,51 @@ pub(super) fn pre_coerce_number(
     if !coercion_may_collect(ctx, ArgCoercion::Number, arg) {
         return Ok(Some(value));
     }
-    // A plain double (top 16 bits, sign stripped, below the NaN-box tag band)
-    // is already a Number — the test `js_number_coerce` itself opens with — so
-    // the call, and its safepoint, run only for a tagged value. The slow arm
-    // takes the `undefined` test BEFORE the call and selects the constant, not
-    // `value`: the argument register is not read again once the coercion
-    // (which can move it) has run. Neither arm yields a pointer.
-    let blk = ctx.block();
-    let bits = blk.bitcast_double_to_i64(&value);
-    let top = blk.and(I64, &bits, PLAIN_DOUBLE_TOP_MASK);
-    let is_plain = blk.icmp_ult(I64, &top, NANBOX_TAG_BAND_START);
-    let entry_label = ctx.block().label.clone();
-    let slow_idx = ctx.new_block("strm.tonum.slow");
-    let merge_idx = ctx.new_block("strm.tonum.merge");
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&is_plain, &merge_label, &slow_label);
-
-    ctx.current_block = slow_idx;
-    let blk = ctx.block();
-    let is_undefined = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
-    let coerced = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &value)]);
-    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let slow_val = blk.select(I1, &is_undefined, DOUBLE, &undefined, &coerced);
-    let slow_pred = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
-    Ok(Some(ctx.block().phi(
+    // The shared runtime entry owns the tag fast path and preserves
+    // undefined. Read the argument only before its potentially moving call;
+    // the result is a scalar, so it needs no later root.
+    Ok(Some(ctx.block().call(
         DOUBLE,
-        &[(&value, &entry_label), (&slow_val, &slow_pred)],
+        "js_string_number_coerce",
+        &[(DOUBLE, &value)],
     )))
 }
 
-/// `0x7FFF_0000_0000_0000`: a double's top 16 bits with the sign stripped.
-const PLAIN_DOUBLE_TOP_MASK: &str = "9223090561878065152";
-/// `0x7FF9_0000_0000_0000`: the first NaN-box tag; below it is a plain double
-/// (finite, infinite or a canonical NaN). Same band as `js_number_coerce`.
-const NANBOX_TAG_BAND_START: &str = "9221401712017801216";
+/// ToIntegerOrInfinity before receiver access. End defaults use i32::MAX:
+/// slice/substring clamp it to their own UTF-16 length.
+pub(super) fn pre_coerce_index(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    args: &[Expr],
+    i: usize,
+    end: bool,
+) -> Result<Option<String>> {
+    let Some(arg) = args.get(i) else {
+        return Ok(None);
+    };
+    let value = group.reread(ctx, i)?;
+    let literal = match arg {
+        Expr::Integer(n) => Some((*n as f64) as i32),
+        Expr::Number(n) => Some(*n as i32),
+        Expr::Undefined => Some(if end { i32::MAX } else { 0 }),
+        _ => None,
+    };
+    if let Some(index) = literal {
+        return Ok(Some(index.to_string()));
+    }
+    let collects = coercion_may_collect(ctx, ArgCoercion::Number, arg);
+    let callee = match (end, collects) {
+        (false, true) => "js_string_index_to_i32",
+        (false, false) => "js_string_number_index_to_i32",
+        (true, true) => "js_string_end_index_to_i32",
+        (true, false) => "js_string_number_end_index_to_i32",
+    };
+    let mut operands = vec![(DOUBLE, value.as_str())];
+    if end {
+        operands.push((I32, "2147483647"));
+    }
+    Ok(Some(ctx.block().call(I32, callee, &operands)))
+}
 
 /// Which runtime `ToString` an arm applies.
 #[derive(Clone, Copy)]
@@ -243,14 +252,7 @@ pub(super) fn pre_coerce_string(
         .is_some_and(|a| string_value_is_runtime_guaranteed(ctx, a));
     let blk = ctx.block();
     let handle = match how {
-        StringCoercion::Search(_) if search_is_str => {
-            let string = blk.call(
-                DOUBLE,
-                "js_string_search_string_to_string",
-                &[(DOUBLE, &value)],
-            );
-            unbox_str_handle(blk, &string)
-        }
+        StringCoercion::Search(_) if search_is_str => unbox_str_handle(blk, &value),
         StringCoercion::Search(method_id) => blk.call(
             I64,
             "js_string_search_value_to_string",

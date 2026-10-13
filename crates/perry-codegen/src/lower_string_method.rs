@@ -22,7 +22,7 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 use char_code_at::lower_char_code_at_inline;
 use coerce::{
     dispatch_coercions_may_collect, later_coercion_may_collect, lower_coerced_args,
-    pre_coerce_number, pre_coerce_string, StringCoercion,
+    pre_coerce_index, pre_coerce_number, pre_coerce_string, StringCoercion,
 };
 
 fn regexp_search_method_id(property: &str) -> String {
@@ -493,15 +493,14 @@ fn lower_string_method_dispatch(
                 StringCoercion::Plain,
                 later_coercion_may_collect(ctx, property, args, 0),
             )?;
-            let from_d = pre_coerce_number(ctx, &arg_group, args, 1)?;
+            let from_i32 = pre_coerce_index(ctx, &arg_group, args, 1, false)?;
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = unbox_str_handle(ctx.block(), &recv_box);
             let needle_handle = arg_group.reread_emitted(ctx, needle);
             let blk = ctx.block();
-            let result_i32 = if let Some(from_d) = from_d {
+            let result_i32 = if let Some(from_i32) = from_i32 {
                 // `ToIntegerOrInfinity(position)` via the runtime helper
                 // (handles ±Infinity/NaN), NOT a raw `fptosi`.
-                let from_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &from_d)]);
                 blk.call(
                     I32,
                     "js_string_index_of_from",
@@ -526,35 +525,13 @@ fn lower_string_method_dispatch(
             // `ToNumber` of both indices runs before the receiver is read
             // (`coerce.rs`); an `undefined` end survives as `undefined`.
             let arg_group = lower_coerced_args(ctx, property, args)?;
-            let start_d =
-                pre_coerce_number(ctx, &arg_group, args, 0)?.unwrap_or_else(|| "0.0".to_string());
-            // 2-arg form: explicit end (may be `undefined` → treated as `len`).
-            let end_d = pre_coerce_number(ctx, &arg_group, args, 1)?;
+            let start_i32 = pre_coerce_index(ctx, &arg_group, args, 0, false)?
+                .unwrap_or_else(|| "0".to_string());
+            let end_i32 = pre_coerce_index(ctx, &arg_group, args, 1, true)?
+                .unwrap_or_else(|| "2147483647".to_string());
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            // String length (i32 at header offset 0). Used as the default end
-            // (0/1-arg form, issue #316/#214) and the `undefined`-end fallback.
-            // Routed through SSO-safe unbox so SHORT_STRING_TAG receivers work.
-            let len_ptr = blk.inttoptr(I64, &recv_handle);
-            let len_i32 = blk.load(I32, &len_ptr);
-            // `ToIntegerOrInfinity` via the runtime helper, NOT a raw `fptosi`:
-            // `fptosi(±Infinity/NaN → i32)` is UB and on x86 yields the integer-
-            // indefinite `i32::MIN`, so `"abc".slice(Infinity)` / `.substring(
-            // Infinity, NaN)` clamped to the wrong end. The helper truncates and
-            // clamps ±Infinity to the i32 bounds, matching the char-access
-            // methods and the runtime dispatch arm.
-            let start_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &start_d)]);
-            // An explicit `undefined` end means `len` (not `ToInteger(undefined)
-            // === 0`), per spec — `s.substring(0, undefined) === s`.
-            let end_i32 = match &end_d {
-                Some(end_d) => blk.call(
-                    I32,
-                    "js_string_number_end_index_to_i32",
-                    &[(DOUBLE, end_d), (I32, &len_i32)],
-                ),
-                None => len_i32.clone(),
-            };
             let runtime_fn = if property == "slice" {
                 "js_string_slice"
             } else {
@@ -719,12 +696,11 @@ fn lower_string_method_dispatch(
             // lower the rest, discarding their values, instead of bailing.
             // `ToNumber(index)` runs before the receiver is read (`coerce.rs`).
             let arg_group = lower_coerced_args(ctx, property, args)?;
-            let idx_d = pre_coerce_number(ctx, &arg_group, args, 0)?
-                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            let idx_i32 = pre_coerce_index(ctx, &arg_group, args, 0, false)?
+                .unwrap_or_else(|| "0".to_string());
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             let result = blk.call(
                 I64,
                 "js_string_char_at",
@@ -806,12 +782,11 @@ fn lower_string_method_dispatch(
             // #3987: ignore extra args (still evaluate for side effects).
             // `ToNumber(index)` runs before the receiver is read (`coerce.rs`).
             let arg_group = lower_coerced_args(ctx, property, args)?;
-            let idx_d = pre_coerce_number(ctx, &arg_group, args, 0)?
-                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            let idx_i32 = pre_coerce_index(ctx, &arg_group, args, 0, false)?
+                .unwrap_or_else(|| "0".to_string());
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
             let result = blk.call(
                 DOUBLE,
@@ -826,12 +801,11 @@ fn lower_string_method_dispatch(
             // #3987: ignore extra args (still evaluate for side effects).
             // `ToNumber(index)` runs before the receiver is read (`coerce.rs`).
             let arg_group = lower_coerced_args(ctx, property, args)?;
-            let idx_d = pre_coerce_number(ctx, &arg_group, args, 0)?
-                .unwrap_or_else(|| crate::nanbox::double_literal(0.0));
+            let idx_i32 = pre_coerce_index(ctx, &arg_group, args, 0, false)?
+                .unwrap_or_else(|| "0".to_string());
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
             let result = blk.call(
                 DOUBLE,
@@ -842,6 +816,9 @@ fn lower_string_method_dispatch(
             Ok(result)
         }
         "charCodeAt" => {
+            // Keep the coerced number for the inline operation: it already
+            // checks and converts the index. An eager i32 conversion would
+            // add an opaque call (and a round trip) on every ASCII byte read.
             // #2787: missing index -> 0; JS index coercion (undefined/NaN -> 0).
             // #3987: ignore extra args (still evaluate for side effects).
             // `ToNumber(index)` runs before the receiver is read (`coerce.rs`).
@@ -1273,15 +1250,14 @@ fn lower_string_method_dispatch(
                 StringCoercion::Search(&method_id),
                 later_coercion_may_collect(ctx, property, args, 0),
             )?;
-            let pos_d = pre_coerce_number(ctx, &arg_group, args, 1)?;
+            let pos_i32 = pre_coerce_index(ctx, &arg_group, args, 1, false)?;
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = unbox_str_handle(ctx.block(), &recv_box);
             let other_handle = arg_group.reread_emitted(ctx, other);
             let blk = ctx.block();
-            let result_i32 = if let Some(pos_d) = pos_d {
+            let result_i32 = if let Some(pos_i32) = pos_i32 {
                 // ToIntegerOrInfinity(position) on the number coerced above:
                 // the runtime helper, not a raw `fptosi` (UB on NaN/±Inf).
-                let pos_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &pos_d)]);
                 let runtime_fn = if property == "startsWith" {
                     "js_string_starts_with_at"
                 } else {
@@ -1329,17 +1305,12 @@ fn lower_string_method_dispatch(
                 StringCoercion::Search(&method_id),
                 later_coercion_may_collect(ctx, property, args, 0),
             )?;
-            let pos_d = pre_coerce_number(ctx, &arg_group, args, 1)?;
+            let from_i32 = pre_coerce_index(ctx, &arg_group, args, 1, false)?
+                .unwrap_or_else(|| "0".to_string());
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = unbox_str_handle(ctx.block(), &recv_box);
             let needle_handle = arg_group.reread_emitted(ctx, needle);
             let blk = ctx.block();
-            let from_i32 = match pos_d {
-                // Use the runtime ToIntegerOrInfinity helper rather than a raw
-                // `fptosi`, which is undefined for Infinity/NaN.
-                Some(pos_d) => blk.call(I32, "js_string_position_to_index", &[(DOUBLE, &pos_d)]),
-                None => "0".to_string(),
-            };
             let idx_i32 = blk.call(
                 I32,
                 "js_string_index_of_from",

@@ -3231,6 +3231,7 @@ js_string_match_value	Reenters
 js_string_materialize_to_heap	AllocOnly
 js_string_new_sso	AllocOnly
 js_string_normalize	Reenters
+js_string_number_coerce	Reenters
 js_string_number_end_index_to_i32	Leaf
 js_string_number_index_to_i32	Leaf
 js_string_pad_end	ThrowOnly

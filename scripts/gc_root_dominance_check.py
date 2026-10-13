@@ -762,6 +762,10 @@ _MACRO_ITEM_INLINE_RE = re.compile(
 _MACRO_ITEM_FN_RE = re.compile(
     r'(?m)^(?:\w+::)*\w+!\s*[({]\s*(?:\w+\s*,\s*)?fn\s+(js_\w+)\s*\(')
 _MACRO_ITEM_ARG_RE = re.compile(r'^[ \t]+(js_\w+)\s*(?:=>|[,)])')
+# A checked/body declaration names two exports, with the shared operation
+# after '='. Recognize its syntax, independent of the macro or method name.
+_MACRO_ITEM_PAIR_RE = re.compile(
+    r'^[ \t]*(js_\w+)\s*/\s*(js_\w+)\s*=')
 
 # The runtime crates that export the C-ABI surface perry-codegen calls.
 SYMBOL_ROOTS = (
@@ -788,7 +792,7 @@ def _macro_defined_symbols(text):
           /// doc
           js_path_basename_ext_value => super::js_path_basename_ext, ..);
     """
-    out, lines, i = set(_MACRO_ITEM_FN_RE.findall(_macro_declaration_code(text))), text.split("\n"), 0
+    out, lines, i = set(_MACRO_ITEM_FN_RE.findall(_macro_declaration_code(text))), _macro_declaration_code(text).split("\n"), 0
     while i < len(lines):
         if not _MACRO_ITEM_OPEN_RE.match(lines[i]):
             i += 1
@@ -801,6 +805,10 @@ def _macro_defined_symbols(text):
             stripped = re.sub(r'//.*', '', lines[j])
             depth += (stripped.count('(') + stripped.count('{')
                       - stripped.count(')') - stripped.count('}'))
+            pair_line = stripped[_MACRO_ITEM_OPEN_RE.match(stripped).end():] if j == i else stripped
+            pair = _MACRO_ITEM_PAIR_RE.match(pair_line)
+            if pair:
+                out.update(pair.groups())
             if j > i:
                 arg = _MACRO_ITEM_ARG_RE.match(lines[j])
                 if arg:
@@ -1102,6 +1110,10 @@ _INDENTED_MACRO_FN_RE = re.compile(
     r'(?m)^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*'
     r'(?:\w+\s*,\s*)?fn\s+(js_\w+)\s*\(')
 
+_INDENTED_MACRO_PAIR_RE = re.compile(
+    r'(?m)^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*'
+    r'(js_\w+)\s*/\s*(js_\w+)\s*=')
+
 
 def indented_macro_exports(roots=SYMBOL_ROOTS):
     """`[(path, lineno, macro, symbol)]` for INDENTED macro calls naming a `js_*`.
@@ -1126,6 +1138,11 @@ def indented_macro_exports(roots=SYMBOL_ROOTS):
             if m.group(1) not in _NON_DEFINING_MACROS:
                 hits.append((path, src.count("\n", 0, m.start()) + 1,
                              m.group(1), m.group(2)))
+        for m in _INDENTED_MACRO_PAIR_RE.finditer(_macro_declaration_code(src)):
+            if m.group(1) not in _NON_DEFINING_MACROS:
+                for sym in m.group(2, 3):
+                    hits.append((path, src.count("\n", 0, m.start()) + 1,
+                                 m.group(1), sym))
     return sorted(hits)
 
 
@@ -1755,7 +1772,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_number_coerce", "js_object_coerce",
     # Full string argument coercion/validation can invoke user code. The
     # number/string-only entries used after coercion are deliberately absent.
-    "js_string_index_to_i32", "js_string_end_index_to_i32",
+    "js_string_index_to_i32", "js_string_end_index_to_i32", "js_string_number_coerce",
     "js_string_search_value_to_string", "js_string_resolve_collator_args",
     # #10762: the NaN-box-returning twins the `String(x)`, `${x}` and
     # `x.toString()` lowerings call instead. Each forwards every non-number,
@@ -7754,6 +7771,34 @@ const DECOY: &str = "kind_export! { Family, fn js_text_new(v: f64) -> f64 { v } 
                 or indented != [("kind_export", "js_not_an_item")]):
             print("self-test FAIL: macro fn declaration/body population",
                   file=sys.stderr)
+            ok = False
+    with tempfile.TemporaryDirectory() as native:
+        Path(native, "exports.rs").write_text("""
+macro_rules! paired_exports {
+    ($checked:ident / $body:ident = $value:expr) => {
+        pub extern "C" fn $checked(v: f64) -> f64 { js_number_coerce(v) }
+        pub extern "C" fn $body(v: f64) -> f64 { v }
+    };
+}
+paired_exports! {
+    js_pair_new / js_pair_direct = 0;
+    // js_comment_new / js_comment_direct = 0;
+}
+paired_exports! { js_inline_new / js_inline_direct = 0; }
+fn local() {
+    paired_exports! { js_not_item_new / js_not_item_direct = 0; }
+}
+const DECOY: &str = "paired_exports! { js_text_new / js_text_direct = 0; }";
+""")
+        roots = (native,)
+        names = runtime_symbols(roots)
+        reaching = poll_reaching_runtime_symbols(
+            runtime_direct_callees(runtime_symbol_bodies(roots)), {"js_number_coerce"})
+        expected = {"js_pair_new", "js_pair_direct", "js_inline_new", "js_inline_direct"}
+        indented = {sym for _, _, _, sym in indented_macro_exports(roots)}
+        if (names != expected or reaching != expected
+                or indented != {"js_not_item_new", "js_not_item_direct"}):
+            print("self-test FAIL: paired macro export/body population", file=sys.stderr)
             ok = False
     poll = {"js_object_get_field_by_name", "js_string_coerce",
             "js_number_coerce"}

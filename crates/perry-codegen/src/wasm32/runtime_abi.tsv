@@ -3716,6 +3716,7 @@ js_string_match_value	f64	ptr,f64
 js_string_materialize_to_heap	ptr	f64
 js_string_new_sso	f64	ptr,i32u
 js_string_normalize	ptr	ptr,f64
+js_string_number_coerce	f64	f64
 js_string_number_end_index_to_i32	i32s	f64,i32s
 js_string_number_index_to_i32	i32s	f64
 js_string_pad_end	ptr	ptr,f64,ptr

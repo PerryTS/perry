@@ -83,33 +83,53 @@ fn s(text: &str) -> Expr {
 /// `(property, args, the coercion's runtime callee, the arm's consumer)`.
 fn cases() -> Vec<(&'static str, Vec<Expr>, &'static str, &'static str)> {
     vec![
-        ("charAt", vec![v()], "js_number_coerce", "js_string_char_at"),
-        ("at", vec![v()], "js_number_coerce", "js_string_at"),
+        (
+            "charAt",
+            vec![v()],
+            "js_string_index_to_i32",
+            "js_string_char_at",
+        ),
+        ("at", vec![v()], "js_string_index_to_i32", "js_string_at"),
         (
             "codePointAt",
             vec![v()],
-            "js_number_coerce",
+            "js_string_index_to_i32",
             "js_string_code_point_at",
         ),
         (
             "charCodeAt",
             vec![v()],
-            "js_number_coerce",
+            "js_string_number_coerce",
             "js_string_char_code_at",
         ),
-        ("slice", vec![v()], "js_number_coerce", "js_string_slice"),
+        (
+            "slice",
+            vec![v()],
+            "js_string_index_to_i32",
+            "js_string_slice",
+        ),
         (
             "substring",
             vec![Expr::Integer(1), v()],
-            "js_number_coerce",
+            "js_string_end_index_to_i32",
             "js_string_substring",
         ),
-        ("substr", vec![v()], "js_number_coerce", "js_string_substr"),
-        ("repeat", vec![v()], "js_number_coerce", "js_string_repeat"),
+        (
+            "substr",
+            vec![v()],
+            "js_string_number_coerce",
+            "js_string_substr",
+        ),
+        (
+            "repeat",
+            vec![v()],
+            "js_string_number_coerce",
+            "js_string_repeat",
+        ),
         (
             "padStart",
             vec![v(), s("0")],
-            "js_number_coerce",
+            "js_string_number_coerce",
             "js_string_pad_start",
         ),
         (
@@ -127,7 +147,7 @@ fn cases() -> Vec<(&'static str, Vec<Expr>, &'static str, &'static str)> {
         (
             "lastIndexOf",
             vec![s("-"), v()],
-            "js_number_coerce",
+            "js_string_number_coerce",
             "js_string_last_index_of_from",
         ),
         (
@@ -139,7 +159,7 @@ fn cases() -> Vec<(&'static str, Vec<Expr>, &'static str, &'static str)> {
         (
             "startsWith",
             vec![s("r"), v()],
-            "js_number_coerce",
+            "js_string_index_to_i32",
             "js_string_starts_with_at",
         ),
         (
@@ -257,6 +277,9 @@ fn a_string_method_with_primitive_arguments_emits_no_coercion() {
         for (property, args) in [
             ("padStart", vec![Expr::Integer(2), s("0")]),
             ("charAt", vec![Expr::Integer(1)]),
+            ("charAt", vec![Expr::Undefined]),
+            ("includes", vec![s("x"), Expr::Integer(1)]),
+            ("slice", vec![Expr::Undefined, Expr::Undefined]),
             ("indexOf", vec![s("x"), Expr::Integer(1)]),
             ("slice", vec![Expr::Integer(1), Expr::Integer(3)]),
         ] {
@@ -265,7 +288,14 @@ fn a_string_method_with_primitive_arguments_emits_no_coercion() {
             let ir = native_ir(&module, target, false);
             let symbol = probe_body_symbol(&ir, &name);
             let body = function_slice(&ir, &symbol);
-            for coercion in ["js_number_coerce", "js_string_coerce", "js_string_pad_fill"] {
+            for coercion in [
+                "js_number_coerce",
+                "js_string_number_coerce",
+                "js_string_coerce",
+                "js_string_pad_fill",
+                "js_string_search_value_to_string",
+                "js_string_search_string_to_string",
+            ] {
                 assert!(
                     !body.contains(&format!("@{coercion}(")),
                     "[{target}] {property} with primitive arguments must not emit \
@@ -273,5 +303,109 @@ fn a_string_method_with_primitive_arguments_emits_no_coercion() {
                 );
             }
         }
+    }
+}
+
+/// These locals carry initializer/representation evidence, with erased Any
+/// annotations. Both f64 and integer storage, and string-operation results,
+/// must avoid a second coercion.
+#[test]
+fn proven_string_argument_representations_are_call_free() {
+    for target in NATIVE_TARGETS {
+        for (property, init) in [
+            ("charAt", Expr::Number(1.25)),
+            ("charAt", Expr::Integer(2)),
+            ("includes", s("b")),
+            (
+                "includes",
+                Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(s("abc")),
+                        property: "slice".to_string(),
+                        byte_offset: 0,
+                    }),
+                    args: vec![Expr::Integer(1)],
+                    type_args: vec![],
+                    byte_offset: 0,
+                },
+            ),
+            (
+                "charAt",
+                Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(s("abc")),
+                        property: "indexOf".to_string(),
+                        byte_offset: 0,
+                    }),
+                    args: vec![s("b")],
+                    type_args: vec![],
+                    byte_offset: 0,
+                },
+            ),
+        ] {
+            let name = format!("smc_repr_{property}.ts");
+            let is_result = matches!(init, Expr::Call { .. });
+            let mut module = method_module(
+                &name,
+                property,
+                vec![if is_result {
+                    init.clone()
+                } else {
+                    Expr::LocalGet(102)
+                }],
+            );
+            module.functions[0].body.insert(
+                0,
+                Stmt::Let {
+                    id: 102,
+                    name: "known".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(init),
+                },
+            );
+            let ir = native_ir(&module, target, false);
+            let symbol = probe_body_symbol(&ir, &name);
+            let body = function_slice(&ir, &symbol);
+            for coercion in [
+                "js_number_coerce",
+                "js_string_number_coerce",
+                "js_string_search_value_to_string",
+                "js_string_search_string_to_string",
+            ] {
+                assert!(
+                    !body.contains(&format!("@{coercion}(")),
+                    "[{target}] {property}: redundant coercion {coercion}:\n{body}"
+                );
+            }
+            assert!(
+                !body.contains("strm.tonum"),
+                "known representation has a guard: {body}"
+            );
+        }
+    }
+}
+
+/// The inline decoder already admits and converts numeric indices. Forcing
+/// the dispatch arm (extra arguments have no checked entry) must not eagerly
+/// call the converter before that decoder; its call belongs to the slow arm.
+#[test]
+fn char_code_at_keeps_index_conversion_in_its_slow_arm() {
+    for target in NATIVE_TARGETS {
+        let name = "smc_char_code_conversion.ts";
+        let module = method_module(
+            name,
+            "charCodeAt",
+            vec![Expr::Number(1.25), Expr::Undefined],
+        );
+        let ir = native_ir(&module, target, false);
+        let symbol = probe_body_symbol(&ir, name);
+        let body = function_slice(&ir, &symbol);
+        let slow = body.find("\ncca.slow.").expect("inline decoder slow arm");
+        assert!(
+            !body[..slow].contains("@js_string_number_index_to_i32("),
+            "[{target}] eager conversion obstructs the inline decoder:\n{body}"
+        );
+        assert!(body[slow..].contains("@js_string_number_index_to_i32("));
     }
 }
