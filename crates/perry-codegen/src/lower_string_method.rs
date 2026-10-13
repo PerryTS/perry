@@ -501,7 +501,7 @@ fn lower_string_method_dispatch(
             let result_i32 = if let Some(from_d) = from_d {
                 // `ToIntegerOrInfinity(position)` via the runtime helper
                 // (handles ±Infinity/NaN), NOT a raw `fptosi`.
-                let from_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &from_d)]);
+                let from_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &from_d)]);
                 blk.call(
                     I32,
                     "js_string_index_of_from",
@@ -544,13 +544,13 @@ fn lower_string_method_dispatch(
             // Infinity, NaN)` clamped to the wrong end. The helper truncates and
             // clamps ±Infinity to the i32 bounds, matching the char-access
             // methods and the runtime dispatch arm.
-            let start_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &start_d)]);
+            let start_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &start_d)]);
             // An explicit `undefined` end means `len` (not `ToInteger(undefined)
             // === 0`), per spec — `s.substring(0, undefined) === s`.
             let end_i32 = match &end_d {
                 Some(end_d) => blk.call(
                     I32,
-                    "js_string_end_index_to_i32",
+                    "js_string_number_end_index_to_i32",
                     &[(DOUBLE, end_d), (I32, &len_i32)],
                 ),
                 None => len_i32.clone(),
@@ -724,7 +724,7 @@ fn lower_string_method_dispatch(
             let recv_box = reread_recv(ctx, group, recv);
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
+            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             let result = blk.call(
                 I64,
                 "js_string_char_at",
@@ -811,7 +811,7 @@ fn lower_string_method_dispatch(
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
+            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_at returns a NaN-boxed string or undefined directly.
             let result = blk.call(
                 DOUBLE,
@@ -831,7 +831,7 @@ fn lower_string_method_dispatch(
             let recv_box = reread_recv(ctx, group, recv);
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
+            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             // Returns NaN-boxed number or undefined directly.
             let result = blk.call(
                 DOUBLE,
@@ -856,7 +856,7 @@ fn lower_string_method_dispatch(
             }
             let recv_handle = str_operand_handle_tag_dispatched(ctx, object, &recv_box);
             let blk = ctx.block();
-            let idx_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &idx_d)]);
+            let idx_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &idx_d)]);
             // js_string_char_code_at returns a plain f64 (NaN for OOB).
             let result = blk.call(
                 DOUBLE,
@@ -1281,7 +1281,7 @@ fn lower_string_method_dispatch(
             let result_i32 = if let Some(pos_d) = pos_d {
                 // ToIntegerOrInfinity(position) on the number coerced above:
                 // the runtime helper, not a raw `fptosi` (UB on NaN/±Inf).
-                let pos_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &pos_d)]);
+                let pos_i32 = blk.call(I32, "js_string_number_index_to_i32", &[(DOUBLE, &pos_d)]);
                 let runtime_fn = if property == "startsWith" {
                     "js_string_starts_with_at"
                 } else {

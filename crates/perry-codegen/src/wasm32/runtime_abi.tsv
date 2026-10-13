@@ -3713,6 +3713,8 @@ js_string_match_value	f64	ptr,f64
 js_string_materialize_to_heap	ptr	f64
 js_string_new_sso	f64	ptr,i32u
 js_string_normalize	ptr	ptr,f64
+js_string_number_end_index_to_i32	i32s	f64,i32s
+js_string_number_index_to_i32	i32s	f64
 js_string_pad_end	ptr	ptr,f64,ptr
 js_string_pad_fill	ptr	f64
 js_string_pad_start	ptr	ptr,f64,ptr
@@ -3741,6 +3743,7 @@ js_string_replace_string_dyn	ptr	ptr,ptr,f64
 js_string_replace_string_fn	ptr	ptr,ptr,f64
 js_string_resolve_collator_args	i32s	f64,f64
 js_string_search_js	f64	f64,f64
+js_string_search_string_to_string	f64	f64
 js_string_search_value	f64	ptr,f64
 js_string_search_value_to_string	ptr	f64,i32s
 js_string_slice	ptr	ptr,i32s,i32s

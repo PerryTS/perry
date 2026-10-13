@@ -43,7 +43,10 @@ use perry_hir::Expr;
 
 use crate::expr::{unbox_str_handle, FnCtx};
 use crate::rooting::{any_operand_may_collect, open_rooted_group, EmittedValue, Repr, RootedGroup};
-use crate::type_analysis::{is_numeric_expr, is_string_expr};
+use crate::type_analysis::{
+    expr_produces_canonical_raw_f64, is_numeric_expr, is_string_expr,
+    string_value_is_runtime_guaranteed,
+};
 use crate::types::{DOUBLE, I1, I32, I64};
 
 /// How a dispatch arm coerces one argument before consuming the receiver.
@@ -83,10 +86,20 @@ pub(super) fn dispatch_arg_coercion(property: &str, i: usize) -> Option<ArgCoerc
 /// (the arms already skip `js_string_coerce` for an `is_string_expr` operand).
 pub(super) fn coercion_may_collect(ctx: &FnCtx<'_>, coercion: ArgCoercion, arg: &Expr) -> bool {
     match coercion {
-        ArgCoercion::Number => !is_numeric_expr(ctx, arg),
-        ArgCoercion::String => !is_string_expr(ctx, arg),
-        ArgCoercion::Options => !matches!(arg, Expr::Undefined) && !is_string_expr(ctx, arg),
+        ArgCoercion::Number => !number_argument_is_inert(ctx, arg),
+        ArgCoercion::String => !string_value_is_runtime_guaranteed(ctx, arg),
+        ArgCoercion::Options => true,
     }
+}
+
+/// A representation proof, never an erased return/field annotation.
+/// String-method numeric results are scalar when their receiver is proven.
+fn number_argument_is_inert(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
+    expr_produces_canonical_raw_f64(ctx, arg)
+        || matches!(arg, Expr::Call { callee, .. }
+            if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
+                if string_value_is_runtime_guaranteed(ctx, object))
+            && is_numeric_expr(ctx, arg))
 }
 
 /// Whether any coercion the dispatch applies to `args` can collect — part of
@@ -96,9 +109,12 @@ pub(super) fn dispatch_coercions_may_collect(
     property: &str,
     args: &[Expr],
 ) -> bool {
-    args.iter().enumerate().any(|(i, arg)| {
-        dispatch_arg_coercion(property, i).is_some_and(|c| coercion_may_collect(ctx, c, arg))
-    })
+    // A missing ToString operand still emits the full coercing entry for
+    // undefined. Its symbol is poll-capable regardless of this call's value.
+    (args.is_empty() && dispatch_arg_coercion(property, 0) == Some(ArgCoercion::String))
+        || args.iter().enumerate().any(|(i, arg)| {
+            dispatch_arg_coercion(property, i).is_some_and(|c| coercion_may_collect(ctx, c, arg))
+        })
 }
 
 /// Lower the arguments of a coercing arm. Argument `i` stays rooted across the
@@ -222,8 +238,19 @@ pub(super) fn pre_coerce_string(
             .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
     };
     let is_str = args.get(i).is_some_and(|a| is_string_expr(ctx, a));
+    let search_is_str = args
+        .get(i)
+        .is_some_and(|a| string_value_is_runtime_guaranteed(ctx, a));
     let blk = ctx.block();
     let handle = match how {
+        StringCoercion::Search(_) if search_is_str => {
+            let string = blk.call(
+                DOUBLE,
+                "js_string_search_string_to_string",
+                &[(DOUBLE, &value)],
+            );
+            unbox_str_handle(blk, &string)
+        }
         StringCoercion::Search(method_id) => blk.call(
             I64,
             "js_string_search_value_to_string",

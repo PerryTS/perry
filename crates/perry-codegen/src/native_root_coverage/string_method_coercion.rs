@@ -218,14 +218,27 @@ fn a_string_method_receiver_is_rooted_across_its_argument_coercion() {
             let coerce_at = body
                 .find(&format!("@{coercion}("))
                 .unwrap_or_else(|| panic!("[{target}] {property}: no {coercion} call"));
-            if let Some(unbox_at) = body.find("@js_get_string_pointer_unified(") {
-                assert!(
-                    coerce_at < unbox_at,
-                    "[{target}] {property}: the receiver is unboxed to a raw \
-                     address BEFORE `{coercion}` runs, so the address names \
-                     from-space after a collection inside it:\n{body}"
-                );
-            }
+            // A string-only search argument may be unboxed before a
+            // numeric position is coerced. Check the handle the consumer
+            // actually receives, rather than the first unbox in the function.
+            let call_prefix = format!("@{consumer}(i64 ");
+            let receiver_handle = body
+                .lines()
+                .find_map(|line| {
+                    line.split_once(&call_prefix)
+                        .map(|(_, rest)| rest.split([',', ')']).next().unwrap().trim())
+                })
+                .expect("consumer must take a receiver handle");
+            let definition = format!("{receiver_handle} =");
+            let receiver_def = body
+                .lines()
+                .find(|line| line.trim_start().starts_with(&definition))
+                .expect("fresh receiver handle must have an SSA definition");
+            let receiver_at = body.find(receiver_def).unwrap();
+            assert!(
+                coerce_at < receiver_at,
+                "[{target}] {property}: the receiver handle consumed by                  {consumer} is derived BEFORE {coercion}:\n{body}"
+            );
         }
         assert!(
             inline_arms >= 2,

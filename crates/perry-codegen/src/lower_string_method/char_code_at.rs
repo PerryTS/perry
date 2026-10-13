@@ -36,14 +36,14 @@ const SHORT_STRING_HIGH_BITS: &str = "551911719040"; // 0x80_8080_8080
 /// #7592 — the FNV-1a phase of `json_pipeline` spent 85% of its leaf profile
 /// in four opaque runtime calls per character over a 68 MB string:
 /// `js_string_char_code_at` (31.5%), `js_dynamic_bitxor` (31.0%),
-/// `js_string_index_to_i32` (13.1%) and `js_get_string_pointer_unified`
+/// `js_string_number_index_to_i32` (13.1%) and `js_get_string_pointer_unified`
 /// (9.0%). Only 15% was the JS loop. The individual helpers are each a
 /// handful of instructions; the cost is the FFI boundary itself, and — worse
 /// — an opaque call on the loop's critical path blocks LICM, so the
 /// loop-invariant receiver unbox and header loads could never be hoisted.
 ///
 /// The guard chain reproduces exactly what `js_string_char_code_at` +
-/// `js_string_index_to_i32` would compute, and anything it cannot prove
+/// `js_string_number_index_to_i32` would compute, and anything it cannot prove
 /// branches to those same two calls:
 /// * `STRING_TAG` receiver — a lying `string` annotation or `undefined`
 ///   take the slow arm, which still routes through
@@ -53,8 +53,8 @@ const SHORT_STRING_HIGH_BITS: &str = "551911719040"; // 0x80_8080_8080
 /// * handle ≥ 4096 — the runtime's `is_valid_string_ptr` magnitude check;
 /// * `0.0 <= index < 2^31-1` — ORDERED comparisons, so a NaN-boxed index
 ///   (a string, a bool, `undefined`, or a genuine NaN) fails both and takes
-///   the slow arm, where `js_string_index_to_i32` performs the full
-///   `ToIntegerOrInfinity` including user `valueOf`. Also makes the
+///   the slow arm, where `js_string_number_index_to_i32` saturates the
+///   already-coerced number without invoking user code. Also makes the
 ///   subsequent `fptosi` in-range, so it can never be poison;
 /// * `utf16_len == byte_len` — the runtime's own `is_ascii_string`
 ///   predicate. Equality implies every byte is one UTF-16 code unit, i.e.
@@ -278,7 +278,7 @@ fn lower_inline(
         let recv_handle = str_operand_handle_tag_dispatched(ctx, object, recv_box);
         let slow_idx_i32 = ctx
             .block()
-            .call(I32, "js_string_index_to_i32", &[(DOUBLE, idx_d)]);
+            .call(I32, "js_string_number_index_to_i32", &[(DOUBLE, idx_d)]);
         ctx.block().call(
             DOUBLE,
             "js_string_char_code_at",

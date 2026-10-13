@@ -86,7 +86,7 @@ fn untyped_scanner_uses_the_same_checked_character_load() {
         ir.contains("cca.slow"),
         "Unicode and coercing indices must keep the decoder"
     );
-    assert!(ir.contains("@js_string_index_to_i32"));
+    assert!(ir.contains("@js_string_number_index_to_i32"));
     assert!(ir.contains("@js_string_char_code_at"));
     assert!(
         !ir.contains("\nmsite."),

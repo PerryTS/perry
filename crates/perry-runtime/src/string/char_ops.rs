@@ -39,7 +39,7 @@ pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
     // helper's ToIntegerOrInfinity + i32 clamp: truncate toward zero, NaN
     // to zero, infinities/out-of-range values to the nearest endpoint.
     // Calling libm trunc first repeats work the conversion already does.
-    n as i32
+    js_string_number_index_to_i32(n)
 }
 
 /// `end`-argument coercion for `slice`/`substring`. Per ECMA-262 §22.1.3.20 /
@@ -54,6 +54,36 @@ pub extern "C" fn js_string_end_index_to_i32(value: f64, len: i32) -> i32 {
     }
     js_string_index_to_i32(value)
 }
+
+/// ToIntegerOrInfinity on an already-coerced Number (or undefined).
+/// This entry cannot invoke user code. Rust supplies truncation and saturation.
+#[no_mangle]
+pub extern "C" fn js_string_number_index_to_i32(index: f64) -> i32 {
+    let value = crate::value::JSValue::from_bits(index.to_bits());
+    if value.is_int32() {
+        value.as_int32()
+    } else {
+        index as i32
+    }
+}
+
+/// Already-coerced end index; undefined retains the method's default.
+#[no_mangle]
+pub extern "C" fn js_string_number_end_index_to_i32(value: f64, len: i32) -> i32 {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        len
+    } else {
+        js_string_number_index_to_i32(value)
+    }
+}
+
+// Generated code is the only caller of the end-index twin in some programs.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_NUMBER_INDEX: extern "C" fn(f64) -> i32 = js_string_number_index_to_i32;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_NUMBER_END_INDEX: extern "C" fn(f64, i32) -> i32 = js_string_number_end_index_to_i32;
 
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
 /// Index is in UTF-16 code units (matches JS spec). For ASCII strings this is

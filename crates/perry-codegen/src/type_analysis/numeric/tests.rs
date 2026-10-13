@@ -641,7 +641,7 @@ fn i64_range_local_is_refused_as_a_modulo_divisor() {
 // `honest_bench`'s `json_pipeline` FNV-1a phase hashes a 68 MB string one
 // `charCodeAt` at a time. Its leaf profile was 85% opaque runtime calls:
 // `js_string_char_code_at` 31.5%, `js_dynamic_bitxor` 31.0%,
-// `js_string_index_to_i32` 13.1%, `js_get_string_pointer_unified` 9.0% —
+// `js_string_number_index_to_i32` 13.1%, `js_get_string_pointer_unified` 9.0% —
 // only 15% was the JS loop. Two independent defects produced that, and each
 // assertion below pins exactly one of them.
 
@@ -744,7 +744,7 @@ fn char_code_at_on_a_proven_string_receiver_is_statically_numeric() {
 #[test]
 fn char_code_at_on_a_proven_string_receiver_emits_the_inline_ascii_read() {
     // Defect 2: even with the receiver handle resolved, each character cost
-    // two more opaque calls (`js_string_index_to_i32` +
+    // two more opaque calls (`js_string_number_index_to_i32` +
     // `js_string_char_code_at`), which also pinned the loop-invariant header
     // loads inside the loop because LICM cannot hoist across an opaque call.
     let ir = hash_loop_ir(Type::String);

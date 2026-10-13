@@ -454,6 +454,18 @@ pub extern "C" fn js_string_search_value_to_string(
     crate::value::js_jsvalue_to_string(value)
 }
 
+/// Search argument already proven to be a string. IsRegExp is false and
+/// ToString is identity. Return the boxed string so short-string
+/// materialization remains the caller's ordinary unboxing operation.
+#[no_mangle]
+pub extern "C" fn js_string_search_string_to_string(value: f64) -> f64 {
+    value
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_SEARCH_STRING: extern "C" fn(f64) -> f64 = js_string_search_string_to_string;
+
 fn string_search_is_regexp(value: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);

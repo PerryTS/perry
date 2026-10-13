@@ -145,7 +145,22 @@ fn index_conversion_matches_saturation_and_numeric_coercion() {
         (-2147483648.9, i32::MIN),
     ] {
         assert_eq!(js_string_index_to_i32(n), expected);
+        assert_eq!(char_ops::js_string_number_index_to_i32(n), expected);
+        assert_eq!(char_ops::js_string_number_end_index_to_i32(n, 17), expected);
         assert_eq!(slice_ops::js_string_position_to_index(n), expected);
+    }
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    assert_eq!(char_ops::js_string_number_index_to_i32(undefined), 0);
+    assert_eq!(
+        char_ops::js_string_number_end_index_to_i32(undefined, 17),
+        17
+    );
+    for text in ["x", "a heap string longer than seven bytes"] {
+        let boxed = crate::value::js_nanbox_string(heap(text) as i64);
+        assert_eq!(
+            compare::js_string_search_string_to_string(boxed).to_bits(),
+            boxed.to_bits()
+        );
     }
     // Negative control for the numeric path: ToNumber still runs on strings.
     assert_eq!(

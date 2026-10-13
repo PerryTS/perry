@@ -688,6 +688,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #2787: NaN-safe JS index coercion (undefined/NaN -> 0, trunc, clamp) for
     // the char-access methods, replacing a raw `fptosi` that is UB on a NaN.
     module.declare_function("js_string_index_to_i32", I32, &[DOUBLE]);
+    module.declare_function("js_string_number_index_to_i32", I32, &[DOUBLE]);
+    module.declare_function("js_string_number_end_index_to_i32", I32, &[DOUBLE, I32]);
+    module.declare_function("js_string_search_string_to_string", DOUBLE, &[DOUBLE]);
     // `end`-arg coercion for slice/substring: `undefined` -> `len` (not 0), else
     // ToIntegerOrInfinity. `(value, len) -> i32`.
     module.declare_function("js_string_end_index_to_i32", I32, &[DOUBLE, I32]);

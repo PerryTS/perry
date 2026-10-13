@@ -757,6 +757,10 @@ _EXTERN_C_FN_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(js_\w+)')
 _MACRO_ITEM_OPEN_RE = re.compile(r'^(?:\w+::)*\w+!\s*[({]')
 _MACRO_ITEM_INLINE_RE = re.compile(
     r'^(?:\w+::)*\w+!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
+# Export declarations can put a receiver-kind token before a literal fn.
+# Read the declaration shape rather than listing the seven generated names.
+_MACRO_ITEM_FN_RE = re.compile(
+    r'(?m)^(?:\w+::)*\w+!\s*[({]\s*(?:\w+\s*,\s*)?fn\s+(js_\w+)\s*\(')
 _MACRO_ITEM_ARG_RE = re.compile(r'^[ \t]+(js_\w+)\s*(?:=>|[,)])')
 
 # The runtime crates that export the C-ABI surface perry-codegen calls.
@@ -766,6 +770,12 @@ SYMBOL_ROOTS = (
     # of perry-stdlib. --verify-symbols found 47 otherwise invisible exports.
     "crates/perry-ext-zlib/src",
 )
+
+
+def _macro_declaration_code(text):
+    """Mask ordinary strings/comments without shifting declaration positions."""
+    mask = lambda match: re.sub(r"[^\n]", " ", match.group(0))
+    return _STRING_LIT_RE.sub(mask, _LINE_COMMENT_RE.sub(mask, text))
 
 
 def _macro_defined_symbols(text):
@@ -778,7 +788,7 @@ def _macro_defined_symbols(text):
           /// doc
           js_path_basename_ext_value => super::js_path_basename_ext, ..);
     """
-    out, lines, i = set(), text.split("\n"), 0
+    out, lines, i = set(_MACRO_ITEM_FN_RE.findall(_macro_declaration_code(text))), text.split("\n"), 0
     while i < len(lines):
         if not _MACRO_ITEM_OPEN_RE.match(lines[i]):
             i += 1
@@ -839,6 +849,15 @@ def _c_symbol_bodies(roots):
                     body = _balanced_body(src, match.end() - 1)
                     if body is not None:
                         yield match.group(1), body
+
+
+def _macro_function_bodies(text):
+    """Literal function bodies supplied to item-position export macros."""
+    code = _macro_declaration_code(text)
+    for match in _MACRO_ITEM_FN_RE.finditer(code):
+        body = _balanced_body(code, match.end())
+        if body is not None:
+            yield match.group(1), body
 
 
 def _macro_rule_bodies(text):
@@ -1079,6 +1098,10 @@ _NON_DEFINING_MACROS = frozenset((
 _INDENTED_MACRO_RE = re.compile(
     r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
 
+_INDENTED_MACRO_FN_RE = re.compile(
+    r'(?m)^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*'
+    r'(?:\w+\s*,\s*)?fn\s+(js_\w+)\s*\(')
+
 
 def indented_macro_exports(roots=SYMBOL_ROOTS):
     """`[(path, lineno, macro, symbol)]` for INDENTED macro calls naming a `js_*`.
@@ -1099,6 +1122,10 @@ def indented_macro_exports(roots=SYMBOL_ROOTS):
             m = _INDENTED_MACRO_RE.match(line)
             if m and m.group(1) not in _NON_DEFINING_MACROS:
                 hits.append((path, lineno, m.group(1), m.group(2)))
+        for m in _INDENTED_MACRO_FN_RE.finditer(_macro_declaration_code(src)):
+            if m.group(1) not in _NON_DEFINING_MACROS:
+                hits.append((path, src.count("\n", 0, m.start()) + 1,
+                             m.group(1), m.group(2)))
     return sorted(hits)
 
 
@@ -1339,6 +1366,8 @@ def runtime_symbol_bodies(roots=SYMBOL_ROOTS):
                 # call-graph walk sees the calls it makes instead of treating it
                 # as a leaf that reaches nothing -- which is the same silent
                 # under-count in a different coat.
+                for sym, body in _macro_function_bodies(src):
+                    bodies[sym].append(_strip_noncode(body))
                 for sym in _macro_defined_symbols(src):
                     for macro_body in _macro_rule_bodies(src):
                         bodies[sym].append(macro_body)
@@ -1724,8 +1753,10 @@ POLL_CAPABLE_RUNTIME = {
     "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
     "js_string_coerce", "js_string_coerce_method_this",
     "js_number_coerce", "js_object_coerce",
-    # These legacy index ABIs accept tagged values and can reach ToNumber.
+    # Full string argument coercion/validation can invoke user code. The
+    # number/string-only entries used after coercion are deliberately absent.
     "js_string_index_to_i32", "js_string_end_index_to_i32",
+    "js_string_search_value_to_string", "js_string_resolve_collator_args",
     # #10762: the NaN-box-returning twins the `String(x)`, `${x}` and
     # `x.toString()` lowerings call instead. Each forwards every non-number,
     # non-string argument to its pointer-returning original above, so each can
@@ -6197,6 +6228,44 @@ def statepoint_self_test():
                   file=sys.stderr)
             ok = False
 
+        # #12538: the same unrelocated live GC value across each coercing
+        # entry must be moving; its scalar/string-only twin is the control.
+        for entry, twin, signature, operands, argc in (
+                ("js_string_index_to_i32", "js_string_number_index_to_i32",
+                 "i32 (double)", "double 0.0", 1),
+                ("js_string_end_index_to_i32", "js_string_number_end_index_to_i32",
+                 "i32 (double, i32)", "double 0.0, i32 7", 2),
+                ("js_string_search_value_to_string", "js_string_search_string_to_string",
+                 "ptr (double, i32)", "double 0.0, i32 0", 2),
+                ("js_string_resolve_collator_args", None,
+                 "i32 (double, double)", "double 0.0, double 0.0", 2)):
+            def fixture_for(arm, callee):
+                text = _stack_guard_reentry(arm).replace(
+                    "@js_gc_loop_safepoint", "@" + callee)
+                sig, ops, n = signature, operands, argc
+                if callee == "js_string_search_string_to_string":
+                    sig, ops, n = "double (double)", "double 0.0", 1
+                return text.replace(
+                    "elementtype(void ()) @" + callee + ", i32 0, i32 0, i32 0, i32 0",
+                    "elementtype(" + sig + ") @" + callee
+                    + f", i32 {n}, i32 0, {ops}, i32 0, i32 0")
+            for callee, count in ((entry, 1), (twin, 0)):
+                if callee is None:
+                    continue
+                p = os.path.join(td, "sp_string_coercion.ll")
+                fixture = fixture_for("unrooted", callee)
+                Path(p).write_text(fixture)
+                hits = _scan_statepoints([p], moving_only=True)
+                if len(hits) != count:
+                    print(f"self-test FAIL: {callee} live across coercion: "
+                          f"{len(hits)} hazards, expected {count}", file=sys.stderr)
+                    ok = False
+            p = os.path.join(td, "sp_string_coercion_relocated.ll")
+            Path(p).write_text(fixture_for("rooted", entry))
+            if _scan_statepoints([p], moving_only=True):
+                print(f"self-test FAIL: {entry} relocated control", file=sys.stderr)
+                ok = False
+
         # ★★ Re-entry into the tracked domain, in the stack-guard prologue
         # (the 39/40 seeded miss in zod's classic/compat.ts). Four arms that
         # differ only in the safepoint's bundle and which register the use
@@ -7661,6 +7730,30 @@ const char *decoy = "void js_c_string(void) { js_string_coerce(value); }";
                 or len(bodies.get('js_c_bridge', [])) != 2
                 or reaching != {'js_c_new', 'js_c_bridge'}):
             print('self-test FAIL: native C export/body/call population', file=sys.stderr)
+            ok = False
+    with tempfile.TemporaryDirectory() as native:
+        Path(native, "exports.rs").write_text("""
+kind_export! {
+    Family, fn js_macro_new(v: f64) -> f64 { js_string_coerce(v) }
+}
+kind_export! { Family, fn js_macro_leaf(v: f64) -> f64 { v } }
+fn local() {
+    kind_export! { Family, fn js_not_an_item(v: f64) -> f64 { v } }
+}
+// kind_export! { Family, fn js_prose_new(v: f64) -> f64 { v } }
+const DECOY: &str = "kind_export! { Family, fn js_text_new(v: f64) -> f64 { v } }";
+""")
+        roots = (native,)
+        names = runtime_symbols(roots)
+        bodies = runtime_symbol_bodies(roots)
+        reaching = poll_reaching_runtime_symbols(runtime_direct_callees(bodies),
+                                                  {"js_string_coerce"})
+        indented = [(macro, sym) for _, _, macro, sym in indented_macro_exports(roots)]
+        if (names != {"js_macro_new", "js_macro_leaf"}
+                or reaching != {"js_macro_new"}
+                or indented != [("kind_export", "js_not_an_item")]):
+            print("self-test FAIL: macro fn declaration/body population",
+                  file=sys.stderr)
             ok = False
     poll = {"js_object_get_field_by_name", "js_string_coerce",
             "js_number_coerce"}

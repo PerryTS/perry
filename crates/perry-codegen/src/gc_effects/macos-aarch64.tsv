@@ -3231,6 +3231,8 @@ js_string_match_value	Reenters
 js_string_materialize_to_heap	AllocOnly
 js_string_new_sso	AllocOnly
 js_string_normalize	Reenters
+js_string_number_end_index_to_i32	Leaf
+js_string_number_index_to_i32	Leaf
 js_string_pad_end	ThrowOnly
 js_string_pad_fill	Reenters
 js_string_pad_start	ThrowOnly
@@ -3259,6 +3261,7 @@ js_string_replace_string_dyn	Reenters
 js_string_replace_string_fn	Reenters
 js_string_resolve_collator_args	Reenters
 js_string_search_js	Reenters
+js_string_search_string_to_string	Leaf
 js_string_search_value	Reenters
 js_string_search_value_to_string	Reenters
 js_string_slice	AllocOnly
