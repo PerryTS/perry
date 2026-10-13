@@ -47,10 +47,56 @@ pub(crate) unsafe fn array_answer(c: &PicCache, recv: *const ObjectHeader) -> Op
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
+    if let Some(bits) = pristine_array_answer(c, recv) {
+        return Some(bits);
+    }
     let (token, _) = array_facts(recv)?;
     // These layout tokens name holder proofs only. Class receiver sets
     // retain u32 ShapeIds and must never truncate a layout discriminator.
     primary_entry_answer(c, token, recv).or_else(|| class_read::holder_answer(c, token))
+}
+
+/// The typed `Pristine(Array)` body (decision 129): while
+/// `%Array.prototype%` and `%Object.prototype%` are unmodified
+/// (`builtin_proto::PristineReceiverFact::Intrinsic(Array)`, one byte load),
+/// a plain Array's prototype link and its bag's ShapeId are the ones the
+/// site's array entry was primed with, so the entry's own token stands for
+/// the receiver; the receiver keeps only its own header facts (a live
+/// Array, no own named key, no custom link). The entry still compares its
+/// holder's ShapeId, and a deep entry its proof epoch. Anything else
+/// declines to the full proof (`array_facts`).
+#[inline(always)]
+unsafe fn pristine_array_answer(c: &PicCache, recv: *const ObjectHeader) -> Option<u64> {
+    let token = c[HOLDER_RECV];
+    if token as u64 & !u64::from(u32::MAX) != ARRAY_TOKEN
+        || !crate::object::builtin_proto::PristineReceiverFact::Intrinsic(
+            crate::object::builtin_proto::BuiltinProto::Array,
+        )
+        .holds()
+        || super::super::contracts::force_generic()
+    {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(recv as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || !crate::array::array_has_plain_shape_resolved(recv.cast())
+    {
+        return None;
+    }
+    super::super::contracts::assert_holds(
+        || {
+            array_facts(recv).is_some_and(|(full, _)| full == token)
+            // A bag restamped by a builtin definition while pristine: the
+            // entry's own holder / epoch proof must decline it.
+            || primary_entry_answer(c, token, recv).is_none()
+        },
+        "read_holder::exotic_read::array_answer",
+        "Pristine(Array)",
+        recv as usize,
+        token as u64,
+    );
+    primary_entry_answer(c, token, recv)
 }
 
 /// Read starting ON an ordinary prototype, including its own slot. The
@@ -248,6 +294,58 @@ mod tests {
             &packed,
         )
         .to_bits()
+    }
+
+    /// `Pristine(Array)`: the typed body answers a plain array's entry from
+    /// the entry's own token while the prototypes are unmodified; re-linking
+    /// `%Array.prototype%` withdraws the fact, and the read sees the new link.
+    #[test]
+    fn pristine_array_entry_answers_and_relink_withdraws_it() {
+        if !super::super::super::run_with_fresh_worker_gate(
+            "pristine_array_entry_answers_and_relink_withdraws_it",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        crate::object::js_get_global_this();
+        unsafe {
+            let recv = crate::array::js_array_alloc(1);
+            let key = crate::string::canonical_key(b"pristine_absent");
+            let mut cache: PicCache = [0; crate::object::PIC_CACHE_WORDS];
+            let _admit = crate::gc::never_move::test_admit::Guard::new();
+            let mut slot = &mut cache as *mut PicCache;
+            for _ in 0..2 {
+                assert_eq!(
+                    prime_array_read(recv.cast(), key, &mut slot).map(f64::to_bits),
+                    Some(crate::value::TAG_UNDEFINED)
+                );
+            }
+            assert!(crate::object::builtin_proto::pristine(
+                crate::object::builtin_proto::BuiltinProto::Array
+            ));
+            assert_eq!(
+                pristine_array_answer(&cache, recv.cast()),
+                Some(crate::value::TAG_UNDEFINED),
+                "the typed Pristine(Array) body answers"
+            );
+            let other = crate::object::js_object_alloc(0, 1);
+            crate::object::js_object_set_field_by_name(other, key, 41.0);
+            let proto = crate::array::array_prototype_addr();
+            crate::object::js_object_set_prototype_of(
+                crate::value::js_nanbox_pointer(proto as i64),
+                crate::value::js_nanbox_pointer(other as i64),
+            );
+            assert!(!crate::object::builtin_proto::pristine(
+                crate::object::builtin_proto::BuiltinProto::Array
+            ));
+            assert_eq!(pristine_array_answer(&cache, recv.cast()), None);
+            assert_ne!(
+                front(recv.cast(), &mut slot),
+                crate::value::TAG_UNDEFINED,
+                "the re-linked prototype chain must not answer the old absence"
+            );
+        }
     }
 
     extern "C" fn body(
