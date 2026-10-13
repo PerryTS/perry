@@ -965,10 +965,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         let expandos: Vec<(String, f64)> =
             crate::array::array_named_property_enumeration_names(arr, true, n)
                 .into_iter()
-            .filter_map(|name| {
-                crate::array::array_named_property_get_by_name(arr, &name).map(|v| (name, v))
-            })
-            .collect();
+                .filter_map(|name| {
+                    crate::array::array_named_property_get_by_name(arr, &name).map(|v| (name, v))
+                })
+                .collect();
         for i in 0..n {
             // Re-derive from the handle: `js_string_from_bytes` and the write
             // funnel both allocate, so the previous iteration may have moved the

@@ -1420,8 +1420,11 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     } else {
                         0
                     };
-                    let names =
-                        crate::array::array_named_property_enumeration_names(arr, true, dense_limit);
+                    let names = crate::array::array_named_property_enumeration_names(
+                        arr,
+                        true,
+                        dense_limit,
+                    );
                     let result = crate::array::js_array_alloc(
                         dense_limit.saturating_add(names.len() as u32),
                     );
@@ -1477,8 +1480,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
                     crate::array::js_array_push_f64(result, key_box);
                 }
-                let named =
-                    crate::array::array_named_property_enumeration_names(arr, true, length);
+                let named = crate::array::array_named_property_enumeration_names(arr, true, length);
                 for name in &named {
                     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                     crate::array::js_array_push(result, JSValue::string_ptr(key));
@@ -1865,7 +1867,8 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                     let v = crate::array::js_array_get(arr, i);
                     crate::array::js_array_push_f64(result, f64::from_bits(v.bits()));
                 }
-                for name in crate::array::array_named_property_enumeration_names(arr, true, length) {
+                for name in crate::array::array_named_property_enumeration_names(arr, true, length)
+                {
                     if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
                         crate::array::js_array_push_f64(result, v);
                     }

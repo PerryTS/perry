@@ -24,7 +24,10 @@ fn tagged_template_pair_resolves_through_the_read_path() {
     let raw = super::alloc::js_array_from_values([3.0, 4.0].as_ptr(), 2);
 
     let template = js_tagged_template_get_or_init(9_202, cooked, raw);
-    assert!(!template.is_null(), "get_or_init returns the template object");
+    assert!(
+        !template.is_null(),
+        "get_or_init returns the template object"
+    );
     assert_ne!(
         js_template_raw(template),
         0,

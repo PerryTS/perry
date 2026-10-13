@@ -82,7 +82,8 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                         crate::value::js_nanbox_pointer(pair as i64),
                     );
                 }
-                for name in crate::array::array_named_property_enumeration_names(arr, true, length) {
+                for name in crate::array::array_named_property_enumeration_names(arr, true, length)
+                {
                     if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
                         let pair = crate::array::js_array_alloc(2);
                         let key =

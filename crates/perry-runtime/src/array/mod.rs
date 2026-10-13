@@ -50,9 +50,6 @@ mod jsvalue_api;
 mod named_props;
 #[cfg(test)]
 mod named_props_tests;
-#[cfg(test)]
-#[path = "tagged_template_tests.rs"]
-mod tagged_template_tests;
 mod numeric_range;
 mod prototype_addr;
 mod push_pop;
@@ -66,6 +63,9 @@ mod sort;
 mod species;
 mod splice_slice;
 mod storage;
+#[cfg(test)]
+#[path = "tagged_template_tests.rs"]
+mod tagged_template_tests;
 pub use storage::array_elements_ptr;
 pub(crate) use storage::{array_front_offset, array_physical_capacity, array_truncate_length};
 mod subclass;
@@ -336,9 +336,9 @@ pub(crate) use self::header::{
 };
 pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
-    array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
-    array_named_property_get_by_name, array_named_property_has,
-    array_named_property_enumeration_names, array_named_property_names,
+    array_named_property_delete, array_named_property_delete_by_name,
+    array_named_property_enumeration_names, array_named_property_get,
+    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
     array_named_property_set, array_named_props_reserve, array_named_props_slot,
     array_property_bag, array_property_bag_ensure, array_property_bag_resolved,
     array_prototype_property_bag_ensure, carry_named_props_reserve, ensure_named_props_slot,

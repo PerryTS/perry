@@ -265,17 +265,27 @@ fn a_defined_index_is_an_element_fact_not_a_named_key() {
     assert_eq!(keys, ["0", "1", "2"], "Object.keys");
 
     let values = unsafe { js_object_values(arr as *const ObjectHeader) };
-    assert_eq!(crate::array::js_array_length(values), 3, "Object.values count");
+    assert_eq!(
+        crate::array::js_array_length(values),
+        3,
+        "Object.values count"
+    );
 
     let entries = unsafe { js_object_entries(arr as *const ObjectHeader) };
-    assert_eq!(crate::array::js_array_length(entries), 3, "Object.entries count");
+    assert_eq!(
+        crate::array::js_array_length(entries),
+        3,
+        "Object.entries count"
+    );
 
     let names = unsafe {
-        crate::value::js_nanbox_get_pointer(
-            crate::object::js_object_get_own_property_names(crate::value::js_nanbox_pointer(
-                arr as i64,
-            )),
-        )
+        crate::value::js_nanbox_get_pointer(crate::object::js_object_get_own_property_names(
+            crate::value::js_nanbox_pointer(arr as i64),
+        ))
     } as *mut ArrayHeader;
-    assert_eq!(own_key_strings(names), ["0", "1", "2", "length"], "getOwnPropertyNames");
+    assert_eq!(
+        own_key_strings(names),
+        ["0", "1", "2", "length"],
+        "getOwnPropertyNames"
+    );
 }
