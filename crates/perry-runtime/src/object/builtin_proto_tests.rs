@@ -118,3 +118,115 @@ fn a_shape_fact_dies_when_a_prototype_method_is_replaced_in_place() {
         assert!(!fact.holds(), "a replaced method kills the proof");
     }
 }
+
+extern "C" fn function_receiver_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    1.0
+}
+
+/// The replacement returns its own receiver's bits, so the assertion can see
+/// both that it ran and which `this` it received.
+extern "C" fn replaced_prototype_method_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    this.as_f64()
+}
+
+/// #9202 (`globals/function-tostring-override`): the generic `[[Get]]` the
+/// failed-`Pristine` redirect performs cannot see a FUNCTION receiver's
+/// method surface — `js_object_get_field_by_name_f64`'s closure arms report
+/// `toString`/`valueOf`/`isPrototypeOf` absent because dedicated dispatch owns
+/// them — so a program that replaces a method on the function's prototype made
+/// `fn.method()` throw `TypeError: value is not a function` instead of calling
+/// the replacement. `spec_get`'s function-receiver fallback must resolve the
+/// name off the receiver's real `[[Prototype]]`.
+#[test]
+fn a_replaced_prototype_method_is_called_on_a_function_receiver() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(function_receiver_fixture, 0), 0)
+                as i64,
+        ));
+        let proto = crate::object::js_object_alloc(0, 1);
+        let replacement = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(
+                crate::fn_info!(replaced_prototype_method_fixture, 0),
+                0,
+            ) as i64,
+        ));
+        let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+        crate::object::js_object_set_field_by_name(proto, key, replacement.get_nanbox_f64());
+        crate::object::js_object_set_prototype_of(
+            receiver.get_nanbox_f64(),
+            crate::value::js_nanbox_pointer(proto as i64),
+        );
+
+        // Premise: the receiver IS a function, and the plain object it
+        // inherits from really holds the replacement — a vacuous test below
+        // would otherwise pass on a missing method.
+        assert!(
+            crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(
+                receiver.get_nanbox_f64()
+            ) as usize),
+            "premise: the receiver must be a function"
+        );
+        assert_eq!(
+            crate::object::js_object_get_field_by_name_f64(
+                proto as *const crate::object::ObjectHeader,
+                key
+            )
+            .to_bits(),
+            replacement.get_nanbox_u64(),
+            "premise: the prototype owns the replacement"
+        );
+
+        // The `Get` the redirect performs must answer with the replacement.
+        let selected =
+            crate::object::method_site::spec_get_value(receiver.get_nanbox_f64(), b"toString");
+        assert_eq!(
+            selected.to_bits(),
+            replacement.get_nanbox_u64(),
+            "the redirect's Get must see the inherited method on a function"
+        );
+
+        // And the redirect must call it with the function as `this`.
+        let called = redirect_call(receiver.get_nanbox_f64(), b"toString", std::ptr::null(), 0);
+        assert_eq!(
+            called.map(|value| value.to_bits()),
+            Some(receiver.get_nanbox_u64()),
+            "the replacement must run with the function as `this`"
+        );
+    }
+}
+
+/// A detached function (`Object.setPrototypeOf(fn, null)`) has no inherited
+/// method surface, so the fallback must find nothing there and leave the
+/// redirect's non-callable verdict intact.
+#[test]
+fn a_detached_function_has_no_inherited_method_for_the_redirect() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(function_receiver_fixture, 0), 0)
+                as i64,
+        ));
+        crate::object::js_object_set_prototype_of(
+            receiver.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(
+            crate::object::method_site::spec_get_value(receiver.get_nanbox_f64(), b"toString")
+                .to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "a detached function inherits no method"
+        );
+    }
+}

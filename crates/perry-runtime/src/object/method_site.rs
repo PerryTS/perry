@@ -1279,15 +1279,61 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
     let recv_h = scope.root_nanbox_f64(recv);
     // The canonical interned key: no allocation per read.
     let key = crate::string::canonical_key(name);
+    let recv_value = recv_h.get_nanbox_f64();
     let value = crate::object::js_object_get_field_by_name_f64(
-        recv_h.get_nanbox_f64().to_bits() as usize as *const ObjectHeader,
+        recv_value.to_bits() as usize as *const ObjectHeader,
         key,
     );
     if value.to_bits() == METHOD_SITE_BY_NAME || value.to_bits() == METHOD_SITE_BY_NAME_DIRECT {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        value
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        if let Some(inherited) = function_receiver_inherited_get(recv_value, key) {
+            return inherited;
+        }
+    }
+    value
+}
+
+/// The generic field get is not a faithful `[[Get]]` for a FUNCTION receiver:
+/// `%Function.prototype%`'s method surface (`call`/`apply`/`bind`/`toString`/
+/// `valueOf`/…) is answered by dedicated dispatch, so the closure arms of
+/// `js_object_get_field_by_name_f64` report every one of those names absent.
+/// [`spec_get`]'s caller (`builtin_proto::redirect_call`) reads that absence
+/// as "not callable" and throws, where `#11915`'s predecessor fell through to
+/// the by-name dispatcher — so a program that replaces
+/// `Function.prototype.toString` made `fn.toString()` throw
+/// `TypeError: value is not a function` (`globals/function-tostring-override`,
+/// #9202).
+///
+/// Resolve the name off the receiver's REAL `[[Prototype]]`, the same `Get`
+/// `closure::reify_function_method_value` already performs for
+/// `call`/`apply`/`bind`: a replaced slot is the value the call runs, a
+/// deleted one stays absent, and a detached function
+/// (`Object.setPrototypeOf(fn, null)`) still finds nothing. `None` for any
+/// receiver that is not a function, so no other family's path changes.
+unsafe fn function_receiver_inherited_get(
+    recv: f64,
+    key: *const crate::string::StringHeader,
+) -> Option<f64> {
+    let jsval = crate::value::JSValue::from_bits(recv.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    if !crate::closure::is_closure_ptr(jsval.as_pointer::<u8>() as usize) {
+        return None;
+    }
+    // `js_object_get_prototype_of` answers `null` for a detached function, and
+    // the closure's recorded static prototype otherwise.
+    let proto = crate::object::js_object_get_prototype_of(recv);
+    if proto.to_bits() == crate::value::TAG_NULL {
+        return None;
+    }
+    Some(crate::proxy::js_reflect_get(
+        proto,
+        crate::value::js_nanbox_string(key as i64),
+        recv,
+    ))
 }
 
 /// What one read of a miss receiver's header says.
