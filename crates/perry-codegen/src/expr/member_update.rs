@@ -552,7 +552,10 @@ fn emit_numeric_slot_update(
     let recv_box = lower_expr(ctx, object)?;
     // Addressed from the biased receiver (`wpfacts_access::emit_slot_ptr`);
     // the handle is derived only on the cold arm that needs it.
-    let field_ptr = super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index);
+    let field_ptr = match wpf {
+        Some(w) => super::wpfacts_access::emit_proof_slot_ptr(ctx, &recv_box, &w.proof),
+        None => super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index),
+    };
     let (old, new) = {
         let blk = ctx.block();
         let old = blk.load(DOUBLE, &field_ptr);

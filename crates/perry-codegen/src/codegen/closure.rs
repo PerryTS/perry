@@ -1093,7 +1093,11 @@ pub(super) fn compile_closure(
         pending_labels: Vec::new(),
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
-        wpfacts: cross_module.wpfacts.clone(),
+        // A typed body's entry check proved its class parameters' class sets:
+        // they answer like whole-program receiver facts.
+        wpfacts: typed_body
+            .map(|p| p.receiver_facts(&cross_module.wpfacts))
+            .unwrap_or_else(|| cross_module.wpfacts.clone()),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_this: if captures_this {
@@ -1474,6 +1478,7 @@ pub(super) fn compile_closure(
     let helpers = std::mem::take(&mut ctx.pending_helpers);
     let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
+    ctx.func.wpfacts_sites = ctx.wpfacts_sites;
     drop(ctx);
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;

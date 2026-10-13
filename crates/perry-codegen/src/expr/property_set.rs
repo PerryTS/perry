@@ -460,7 +460,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             property,
             value,
         } => {
-            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none() {
+            // A receiver the wpfacts lowering proves takes the elided read
+            // and store below instead of the compound site.
+            if super::private_field_site::private_field_site(ctx, object, property, 1).is_none()
+                && super::wpfacts_access::prove(
+                    ctx,
+                    object,
+                    property,
+                    super::wpfacts_access::Access::Set,
+                )
+                .is_none()
+            {
                 if let Some(result) = super::property_rmw::try_lower_compound(
                     ctx,
                     object,
@@ -1085,21 +1095,31 @@ fn emit_proven_class_field_store(
         // no barrier (the contract build checks every stored kind).
         let field_set_barrier_needed = !expr_produces_non_pointer_bits_by_construction(ctx, value)
             && wpf.is_none_or(|w| w.proof.may_hold_pointer());
+        // Case 2 (§3.7): the proven classes disagree on the slot, so the
+        // receiver's class id selects it.
+        let case2 = wpf.filter(|w| !w.proof.agrees());
         let (obj_bits, obj_handle, field_ptr, val_bits) = {
+            let case2_ptr =
+                case2.map(|w| super::wpfacts_access::emit_proof_slot_ptr(ctx, &recv_box, &w.proof));
             let blk = ctx.block();
             let obj_bits = blk.bitcast_double_to_i64(&recv_box);
             let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-            // Biased addressing (`wpfacts_access::emit_slot_ptr`).
-            let biased = blk.sub(
-                I64,
-                &obj_bits,
-                &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
-            );
-            let field_ptr = super::receiver_range::emit_field_ptr(
-                blk,
-                &biased,
-                header_skip.parse::<i64>().unwrap_or(0) + i64::from(field_index) * 8,
-            );
+            let field_ptr = match case2_ptr {
+                Some(p) => p,
+                None => {
+                    // Biased addressing (`wpfacts_access::emit_slot_ptr`).
+                    let biased = blk.sub(
+                        I64,
+                        &obj_bits,
+                        &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+                    );
+                    super::receiver_range::emit_field_ptr(
+                        blk,
+                        &biased,
+                        header_skip.parse::<i64>().unwrap_or(0) + i64::from(field_index) * 8,
+                    )
+                }
+            };
             let val_bits = blk.bitcast_double_to_i64(&val_double);
             (obj_bits, obj_handle, field_ptr, val_bits)
         };

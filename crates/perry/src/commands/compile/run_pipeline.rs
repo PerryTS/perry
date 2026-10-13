@@ -5972,6 +5972,12 @@ pub fn run_with_parse_cache(
             || ctx.uses_data_url_dynamic_import,
         &ctx.cjs_wrap_debug_sources,
     );
+    // Step 5b: closure class parameters as typed-body receiver proofs, once
+    // the facts say some class's layout is stable.
+    let receiver_params = super::fn_infer::receiver_params(
+        &ctx.native_modules,
+        super::program_facts::has_stable_classes(&program_facts),
+    );
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         &PathBuf,
@@ -6061,7 +6067,8 @@ pub fn run_with_parse_cache(
                 opts.program_class_shape_ids = program_class_shape_ids
                     .restricted_to(class_ids.iter().copied().chain(foreign));
             }
-            opts.program_facts = super::program_facts::view_for(&program_facts, path);
+            opts.program_facts =
+                super::program_facts::view_for(&program_facts, path, receiver_params.get(path));
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry

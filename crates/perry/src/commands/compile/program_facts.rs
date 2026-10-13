@@ -164,10 +164,26 @@ pub(crate) fn run(
     Some(Arc::new(pf))
 }
 
+/// Whether any class is prefix-stable with its facts usable for elision
+/// (step 5b: the only classes a typed body's receiver proof can use).
+pub(crate) fn has_stable_classes(pf: &Option<Arc<perry_wpfacts::ProgramFacts>>) -> bool {
+    pf.as_ref().is_some_and(|pf| {
+        elide_enabled()
+            && pf.global.is_none()
+            && !pf.stats.aborted
+            && !pf.whatif_no_e14
+            && pf
+                .templates
+                .iter()
+                .any(|t| t.prefix_stable && t.kind == "class" && t.class_id.is_some())
+    })
+}
+
 /// The view module `path`'s codegen receives.
 pub(crate) fn view_for(
     pf: &Option<Arc<perry_wpfacts::ProgramFacts>>,
     path: &Path,
+    receiver_params: Option<&BTreeMap<u32, Vec<String>>>,
 ) -> perry_codegen::ProgramFactsView {
     let Some(pf) = pf else {
         return Default::default();
@@ -182,7 +198,12 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
-    let elision = elision_for(pf, &key);
+    let mut elision = elision_for(pf, &key);
+    if !elision.classes.is_empty() {
+        if let Some(r) = receiver_params {
+            elision.receiver_params = r.clone();
+        }
+    }
     let digest = if elision.is_empty() {
         pf.digest_for(&key)
     } else {
@@ -247,21 +268,20 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             nullable: b.prims != 0,
         })
     };
-    let mut used = std::collections::BTreeSet::new();
     for (id, b) in &mb.locals {
         if let Some(r) = recv(b) {
-            used.extend(r.class_ids.iter().copied());
             out.locals.insert(*id, r);
         }
     }
     for (id, b) in &mb.this_of {
         if let Some(r) = recv(b) {
-            used.extend(r.class_ids.iter().copied());
             out.this_of.insert(*id, r);
         }
     }
-    for cid in used {
-        let t = stable[&cid];
+    // Step 5b: a typed body's entry check proves a class set for a
+    // parameter no binding fact covers, so every prefix-stable class's
+    // layout facts are visible, not only those of classes some binding holds.
+    for (&cid, &t) in &stable {
         let fields = t
             .fields
             .iter()

@@ -67,3 +67,41 @@ pub(crate) fn apply(modules: &mut BTreeMap<PathBuf, perry_hir::Module>) {
         );
     }
 }
+
+/// Step 5b: per module, the closure parameters fninfer types as ES classes
+/// (or unions of up to four), which codegen's typed bodies entry-check and
+/// carry to field sites as receiver proofs (`codegen/typed_body.rs`). Run
+/// over the final HIR only when the program has a prefix-stable class
+/// (`stable_classes`): without one no typed body can elide a site. Off with
+/// typed bodies (`PERRY_TYPED_BODIES=0`).
+pub(crate) fn receiver_params(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    stable_classes: bool,
+) -> std::collections::HashMap<PathBuf, BTreeMap<u32, Vec<String>>> {
+    use perry_hir::analysis::fn_infer::{infer_module, InferConfig};
+    let mut out = std::collections::HashMap::new();
+    let typed_bodies = !matches!(
+        std::env::var("PERRY_TYPED_BODIES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    if !typed_bodies || !stable_classes {
+        return out;
+    }
+    let started = std::time::Instant::now();
+    let mut n = 0usize;
+    for (path, m) in modules {
+        let inf = infer_module(m, InferConfig::default());
+        let r = perry_hir::analysis::fn_infer::receiver_params(m, &inf);
+        if !r.is_empty() {
+            n += r.len();
+            out.insert(path.clone(), r);
+        }
+    }
+    if std::env::var("PERRY_FNINFER_REPORT").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "[fninfer] {n} closure receiver parameters in {:.1} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    out
+}

@@ -36,7 +36,7 @@ use super::value_types::{infer_expr_type, HirTypeFacts};
 mod apply;
 mod callee;
 mod layout;
-pub use apply::{apply_param_types, ApplyPolicy};
+pub use apply::{apply_param_types, receiver_params, ApplyPolicy};
 pub use callee::{CalleeFacts, CalleeId, Callees, CALLEE_CAP};
 pub use layout::{Layout, LayoutFacts};
 

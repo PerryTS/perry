@@ -3,11 +3,20 @@
 //!
 //! A field read, write or update `e.f` whose receiver `e` is a binding (a
 //! local, or `this`) that the facts prove holds only instances of
-//! prefix-stable classes (F3, F4), where `f` is a definite data birth field at
-//! one slot in every one of them (F1', F3), lowers to a bare fixed-offset
-//! load/store: no receiver test (unless the binding can also hold
-//! null/undefined: then the site keeps that one test, and its miss arm is the
-//! complete site operation, which throws), no ShapeId compare, no miss call.
+//! prefix-stable classes (F3, F4), where `f` is a definite data birth field in
+//! every one of them (F1', F3), lowers to a bare fixed-offset load/store (§3.7
+//! case 1, every class has `f` at one slot), or, when the classes disagree on
+//! the slot, to a select over their class ids, each arm a fixed offset (§3.7
+//! case 2; the ids are constants of the compile, nothing is learned). No
+//! receiver test (unless the binding can also hold null/undefined: then the
+//! site keeps that one test, and its miss arm is the complete site operation,
+//! which throws), no ShapeId compare, no miss call.
+//!
+//! The receiver facts come from the whole-program solve (`locals`,
+//! `this_of`) or from a typed body's entry check (`codegen/typed_body.rs`:
+//! a parameter whose class id the dispatcher tested against fninfer's class
+//! set; the parameter is never reassigned, and the field facts hold for the
+//! object's whole life, so a call in between changes nothing).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!
@@ -54,7 +63,10 @@ pub(crate) enum Access {
 pub(crate) struct FieldProof {
     pub class_ids: Vec<u32>,
     pub class_names: Vec<String>,
+    /// The slot of the first class; [`FieldProof::slots`] has every class's.
     pub slot: u32,
+    /// The slot per class, aligned with `class_ids` (case 2 when they differ).
+    pub slots: Vec<u32>,
     /// The binding can also hold null/undefined: the receiver test stays.
     pub nullable: bool,
     /// F2: the union of the field's kinds over the class set.
@@ -76,6 +88,11 @@ pub(crate) struct FieldProof {
 }
 
 impl FieldProof {
+    /// Every class holds the field at one slot (§3.7 case 1).
+    pub(crate) fn agrees(&self) -> bool {
+        self.slots.iter().all(|s| *s == self.slot)
+    }
+
     pub(crate) fn may_hold_string(&self) -> bool {
         self.kind_mask & K_STR != 0
     }
@@ -206,12 +223,13 @@ pub(crate) fn prove(
     let mut all_f64 = true;
     let mut any_f64 = false;
     let mut names = Vec::new();
+    let mut slots = Vec::new();
     for &cid in &recv.class_ids {
         let name = class_name_of(ctx, cid)?;
         let f = ctx.wpfacts.field(cid, property)?;
         // Codegen's own layout must agree with the facts' birth slot.
         let idx = crate::type_analysis::class_field_global_index(ctx, &name, property)?;
-        if idx != f.slot || slot.is_some_and(|s| s != idx) {
+        if idx != f.slot {
             return None;
         }
         if super::property_set::class_has_computed_runtime_members(ctx, &name)
@@ -226,7 +244,8 @@ pub(crate) fn prove(
                 return None;
             }
         }
-        slot = Some(idx);
+        slot.get_or_insert(idx);
+        slots.push(idx);
         kind_mask |= f.kind_mask;
         readonly &= f.readonly;
         ta_stable &= f.ta_stable;
@@ -244,6 +263,7 @@ pub(crate) fn prove(
         class_ids: recv.class_ids.clone(),
         class_names: names,
         slot: slot?,
+        slots,
         nullable: recv.nullable,
         kind_mask,
         readonly,
@@ -281,7 +301,11 @@ fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof
         ctx.func.name,
         p.binding,
         p.class_names,
-        p.slot,
+        if p.agrees() {
+            p.slot.to_string()
+        } else {
+            format!("{:?}", p.slots)
+        },
         p.nullable as u8,
         p.kind_mask,
         p.raw_f64 as u8,
@@ -327,6 +351,17 @@ pub(crate) fn emit_witness(
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
+    let slot = if p.agrees() {
+        p.slot.to_string()
+    } else {
+        let bits = ctx.block().bitcast_double_to_i64(recv_box);
+        let biased = ctx.block().sub(
+            I64,
+            &bits,
+            &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        );
+        select_by_class(ctx, &biased, p, |s| s.to_string())
+    };
     let blk = ctx.block();
     let key_box = blk.load(DOUBLE, &key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
@@ -349,7 +384,7 @@ pub(crate) fn emit_witness(
             (I64, &key_handle),
             (I64, &c01),
             (I64, &c23),
-            (I32, &p.slot.to_string()),
+            (I32, &slot),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
             (I64, &(site as i64).to_string()),
@@ -373,6 +408,55 @@ pub(crate) fn emit_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> S
         &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
     );
     super::receiver_range::emit_field_ptr(blk, &biased, header + i64::from(slot) * 8)
+}
+
+/// `i32` `arm(slot)` of the receiver's class (§3.7 case 2): the header's
+/// class id against the proof's class ids, constants of the compile. The
+/// last class is the default arm: the proof says the receiver is one of
+/// them.
+fn select_by_class(
+    ctx: &mut FnCtx<'_>,
+    biased: &str,
+    p: &FieldProof,
+    arm: impl Fn(u32) -> String,
+) -> String {
+    let blk = ctx.block();
+    let hdr = super::receiver_range::emit_field_ptr(blk, biased, 0);
+    let cid = blk.load(I32, &hdr);
+    let n = p.class_ids.len();
+    let mut v = arm(p.slots[n - 1]);
+    for i in (0..n - 1).rev() {
+        if p.slots[i] == p.slots[n - 1] {
+            continue;
+        }
+        let eq = blk.icmp_eq(I32, &cid, &p.class_ids[i].to_string());
+        v = blk.select(crate::types::I1, &eq, I32, &arm(p.slots[i]), &v);
+    }
+    v
+}
+
+/// The slot pointer of an elided access: [`emit_slot_ptr`] when every class
+/// agrees on the slot (case 1), else the slot selected by the receiver's
+/// class id (case 2).
+pub(crate) fn emit_proof_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, p: &FieldProof) -> String {
+    if p.agrees() {
+        return emit_slot_ptr(ctx, recv_box, p.slot);
+    }
+    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let biased = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        blk.sub(
+            I64,
+            &bits,
+            &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        )
+    };
+    let off = select_by_class(ctx, &biased, p, |s| (header + i64::from(s) * 8).to_string());
+    let blk = ctx.block();
+    let off64 = blk.sext(I32, &off, I64);
+    let base = super::receiver_range::emit_field_ptr(blk, &biased, 0);
+    blk.gep(I8, &base, &[(I64, &off64)])
 }
 
 /// `object.property` read through a zero-guard proof.
@@ -435,7 +519,7 @@ pub(crate) fn try_lower_get(
         }
     }
     let value = {
-        let field_ptr = emit_slot_ptr(ctx, &recv_box, p.slot);
+        let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
         let val = ctx.block().load(DOUBLE, &field_ptr);
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         val

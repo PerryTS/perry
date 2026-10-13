@@ -66,6 +66,10 @@ pub struct ElisionFacts {
     pub this_of: std::collections::BTreeMap<u32, FactsRecv>,
     /// Class id → layout facts (prefix-stable classes only).
     pub classes: std::collections::BTreeMap<u32, FactsClass>,
+    /// Step 5b: closure parameter (local id) → the classes fninfer infers
+    /// for it (a candidate, not a fact: a typed body's entry check proves
+    /// it, `codegen/typed_body.rs`).
+    pub receiver_params: std::collections::BTreeMap<u32, Vec<String>>,
     /// Contract build: every elided site asserts its facts at run time.
     pub contracts: bool,
 }

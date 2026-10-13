@@ -212,6 +212,7 @@ pub(super) fn emit_module_artifacts(
                 module_boxed_vars,
                 &module_reassigned_locals,
                 class_ids,
+                &cross_module.wpfacts,
             )
         } else {
             None

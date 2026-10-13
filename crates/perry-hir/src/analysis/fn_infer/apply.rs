@@ -34,6 +34,17 @@ fn applicable(t: &Type, policy: ApplyPolicy, es_classes: &HashSet<String>) -> Op
     }
 }
 
+/// A receiver type ([`receiver_params`]): a class, or a union of up to four
+/// classes.
+fn applicable_receiver(t: &Type, es_classes: &HashSet<String>) -> Option<Type> {
+    let class = |t: &Type| matches!(t, Type::Named(c) if es_classes.contains(c));
+    match t {
+        Type::Named(_) if class(t) => Some(t.clone()),
+        Type::Union(v) if (2..=4).contains(&v.len()) && v.iter().all(class) => Some(t.clone()),
+        _ => None,
+    }
+}
+
 /// Write inferred parameter types into the HIR where the declared type is
 /// `Any`/`Unknown`. Returns the number of parameters typed.
 pub fn apply_param_types(m: &mut Module, inf: &ModuleInference, policy: ApplyPolicy) -> usize {
@@ -195,4 +206,92 @@ fn apply_expr(e: &mut Expr, fix: &mut dyn FnMut(FuncId, &mut [Param])) {
         return;
     }
     crate::walker::walk_expr_children_mut(e, &mut |c| apply_expr(c, fix));
+}
+
+/// Step 5b: the closure parameters (by `LocalId`) declared `any` whose
+/// inferred type is an ES class or a union of up to four ES classes, with the
+/// class names. Codegen's typed bodies entry-check them and carry them to
+/// field sites as receiver proofs; the HIR is not changed.
+pub fn receiver_params(
+    m: &Module,
+    inf: &ModuleInference,
+) -> std::collections::BTreeMap<u32, Vec<String>> {
+    let es_classes: HashSet<String> = m
+        .classes
+        .iter()
+        .filter(|c| !c.name.starts_with("__AnonShape_"))
+        .map(|c| c.name.clone())
+        .collect();
+    let mut out = std::collections::BTreeMap::new();
+    let mut found = |id: FuncId, params: &[Param]| {
+        let Some(sig) = inf.sigs.get(&id) else { return };
+        for (p, t) in params.iter().zip(sig.params.iter()) {
+            if p.is_rest || !matches!(p.ty, Type::Any | Type::Unknown) {
+                continue;
+            }
+            let names = match applicable_receiver(t, &es_classes) {
+                Some(Type::Named(c)) => vec![c],
+                Some(Type::Union(v)) => v
+                    .into_iter()
+                    .filter_map(|t| match t {
+                        Type::Named(c) => Some(c),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => continue,
+            };
+            out.insert(p.id, names);
+        }
+    };
+    visit_stmts(&m.init, &mut found);
+    for f in &m.functions {
+        visit_stmts(&f.body, &mut found);
+    }
+    for c in &m.classes {
+        let fns = c
+            .constructor
+            .iter()
+            .chain(c.methods.iter())
+            .chain(c.getters.iter().map(|(_, f)| f))
+            .chain(c.setters.iter().map(|(_, f)| f))
+            .chain(c.static_methods.iter());
+        for f in fns {
+            visit_stmts(&f.body, &mut found);
+        }
+        for fld in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(e) = fld.init.as_ref() {
+                visit_expr(e, &mut found);
+            }
+        }
+    }
+    out
+}
+
+fn visit_stmts(body: &[Stmt], found: &mut dyn FnMut(FuncId, &[Param])) {
+    for s in body {
+        crate::walker::stmt_any_expr(s, &mut |e| {
+            visit_expr(e, found);
+            false
+        });
+    }
+}
+
+fn visit_expr(e: &Expr, found: &mut dyn FnMut(FuncId, &[Param])) {
+    if let Expr::Closure {
+        func_id,
+        params,
+        body,
+        ..
+    } = e
+    {
+        found(*func_id, params);
+        for p in params {
+            if let Some(d) = p.default.as_ref() {
+                visit_expr(d, found);
+            }
+        }
+        visit_stmts(body, found);
+        return;
+    }
+    crate::walker::walk_expr_children(e, &mut |c| visit_expr(c, found));
 }
