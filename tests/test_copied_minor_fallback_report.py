@@ -32,6 +32,7 @@ DEFAULT_SAFE_WORKLOADS = (
 def gc_cycle(
     fallback_reason="none",
     *,
+    collection_kind="minor",
     eligible=True,
     conservative_pinned_bytes=0,
     compiled_frame_conservative_pinned_bytes=0,
@@ -49,6 +50,7 @@ def gc_cycle(
 ):
     cycle = {
         "event": "gc_cycle",
+        "collection_kind": collection_kind,
         "conservative_pinned_bytes": conservative_pinned_bytes,
         "compiled_frame_conservative_pinned_bytes": (
             compiled_frame_conservative_pinned_bytes
@@ -532,6 +534,35 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
         self.assertEqual(
             report["workloads"]["default_copying"]["malloc_kind_allocations"],
             {"string": 0, "closure": 0, "promise": 0},
+        )
+
+    def test_target_gates_ignore_full_cycle_not_attempted_for_minor_eligibility(self):
+        full_cycle = gc_cycle(
+            "not_attempted",
+            collection_kind="full",
+            eligible=False,
+            layout_scans=layout_scans(),
+        )
+        full_cycle["copying_nursery"]["copied_objects"] = 0
+        full_cycle["copying_nursery"]["copied_bytes"] = 0
+        exit_code, stderr, report = self.run_report(
+            {
+                "default_copying": [
+                    gc_cycle(layout_scans=layout_scans()),
+                    full_cycle,
+                ]
+            },
+            target=True,
+        )
+
+        self.assertEqual(exit_code, 0, stderr)
+        copying = report["workloads"]["default_copying"]["copying_nursery"]
+        self.assertEqual(copying["ineligible_cycles"], 0)
+        self.assertEqual(
+            report["workloads"]["default_copying"]["fallback_reason_counts"][
+                "not_attempted"
+            ],
+            0,
         )
 
     def test_target_gates_honor_documented_malloc_kind_allowances(self):

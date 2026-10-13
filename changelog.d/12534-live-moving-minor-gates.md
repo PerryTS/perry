@@ -1,0 +1,1 @@
+Correct the target collector harness so its copied-minor workloads retain and use heap objects across `gc()` while forced evacuation and verification are enabled. The trace report distinguishes full-cycle `not_attempted` telemetry from copied-minor eligibility. This is a partial harness fix for #9659; old-page defragmentation accounting remains separate.

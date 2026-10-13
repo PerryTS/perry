@@ -1282,6 +1282,10 @@ for (let batch = 0; batch < 8; batch++) {
   }
   total += keep.length + keep[0].value + keep[63].next.score;
   gc();
+  // Keep the freshly allocated objects live across the collection, and make
+  // their post-GC value observable so the forced moving-minor probe measures
+  // relocation rather than collecting an already-dead batch.
+  total += keep[0].value - batch * 100;
 }
 
 console.log("default_copying:" + total);
@@ -1564,12 +1568,12 @@ run_target_collector_architecture_gates() {
     write_target_collector_gate_workloads "$workloads_dir"
 
     local workload_specs=(
-        "default_copying|4852|$workloads_dir/default_copying.ts"
-        "string_heavy|17028|$workloads_dir/string_heavy.ts"
-        "closure_heavy|243150|$workloads_dir/closure_heavy.ts"
+        "default_copying|4852|$workloads_dir/default_copying.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "string_heavy|17028|$workloads_dir/string_heavy.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "closure_heavy|243150|$workloads_dir/closure_heavy.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
         "async_promise_closures|18540|$workloads_dir/async_promise_closures.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
-        "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts"
-        "raw_numeric_layouts|71|benchmarks/compiler_output/fixtures/raw_numeric_layout_smoke.ts"
+        "large_object_barriers|36052|$workloads_dir/large_object_barriers.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
+        "raw_numeric_layouts|71|benchmarks/compiler_output/fixtures/raw_numeric_layout_smoke.ts|PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1"
     )
 
     local report_args=()

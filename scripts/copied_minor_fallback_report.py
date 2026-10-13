@@ -543,7 +543,13 @@ def aggregate_workload(
                     "error": "unknown copying_nursery.fallback_reason",
                 }
             )
-        else:
+        elif not (
+            cycle.get("collection_kind") == "full"
+            and fallback_reason == "not_attempted"
+        ):
+            # A full mark-sweep does not attempt a copying minor. Keep its
+            # telemetry in the trace, but don't report that expected sentinel
+            # as a copied-minor fallback.
             totals["fallback_reason_counts"][fallback_reason] += 1
 
         totals["conservative_pinned_bytes"] += non_negative_int(
@@ -641,7 +647,10 @@ def aggregate_workload(
 
         for field in COPYING_NURSERY_TOTALS:
             totals["copying_nursery"][field] += non_negative_int(copying_nursery, field)
-        if copying_nursery.get("eligible") is not True:
+        if (
+            cycle.get("collection_kind") != "full"
+            and copying_nursery.get("eligible") is not True
+        ):
             totals["copying_nursery"]["ineligible_cycles"] += 1
 
         layout_scans = nested_dict(cycle, "layout_scans")
