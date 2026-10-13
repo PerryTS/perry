@@ -854,8 +854,33 @@ pub(crate) fn try_lower_instance_method_call(
             };
             let shape_only_guard = typed_receiver_direct_name.is_none()
                 && !class_chain_has_field_named(ctx, &class_name, property);
+            let mut certificate_candidates = vec![(
+                *ctx.class_ids.get(&class_name).unwrap_or(&0),
+                fallback_fn.clone(),
+            )];
+            certificate_candidates.extend(
+                subclass_arms
+                    .iter()
+                    .map(|a| (a.class_id, a.target_fn.clone())),
+            );
+            // Match the dynamic consumer and the holder proof being replaced:
+            // an incomplete prototype never acquired a compiled fast arm.
+            let certificate_cased: Vec<bool> = std::iter::once(Some(class_name.as_str()))
+                .chain(subclass_arms.iter().map(|arm| {
+                    ctx.class_ids
+                        .iter()
+                        .find(|(_, id)| **id == arm.class_id)
+                        .map(|(name, _)| name.as_str())
+                }))
+                .map(|class| {
+                    class.is_some_and(|class| {
+                        crate::codegen::static_prototype::chain(ctx, class, property).is_some()
+                    })
+                })
+                .collect();
             let certified_static = shape_only_guard
                 && !subclass_arms.is_empty()
+                && certificate_cased.contains(&true)
                 && !fallback_fn.starts_with("perry_static_")
                 && !fallback_has_rest
                 && !fallback_has_synthetic_arguments
@@ -889,15 +914,6 @@ pub(crate) fn try_lower_instance_method_call(
                 let word = crate::lower_call::method_override::emit_inline_direct_method_word_probe(
                     ctx, &recv,
                 );
-                let mut candidates = vec![(
-                    *ctx.class_ids.get(&class_name).unwrap_or(&0),
-                    fallback_fn.clone(),
-                )];
-                candidates.extend(
-                    subclass_arms
-                        .iter()
-                        .map(|a| (a.class_id, a.target_fn.clone())),
-                );
                 let key = ctx.strings.intern(property);
                 let dispatch = ctx.strings.static_dispatch_global(key);
                 let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch);
@@ -905,8 +921,8 @@ pub(crate) fn try_lower_instance_method_call(
                     ctx,
                     &recv,
                     &method_id,
-                    &candidates,
-                    &vec![true; candidates.len()],
+                    &certificate_candidates,
+                    &certificate_cased,
                     &word,
                 );
                 let lookup = if static_split {

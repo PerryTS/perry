@@ -16590,7 +16590,19 @@ fn static_method_certificate_retains_canonical_layout_clone() {
     derived.fields.clear();
     derived.methods[0].id = 231;
     fixture.classes.push(derived);
-    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    let mut opts = empty_opts();
+    let incomplete = String::from_utf8(compile_module(&fixture, opts.clone()).unwrap()).unwrap();
+    let incomplete_caller = body_ir_section(&incomplete, "perry_fn_static_certificate_ts__probe");
+    assert!(
+        !incomplete_caller.contains("mcert."),
+        "incomplete prototypes acquired fast arms: {incomplete_caller}"
+    );
+    // Production compiles assign whole-program shapes before lowering sites.
+    let births = perry_codegen::module_birth_shapes(&fixture, opts.clone()).unwrap();
+    opts.static_shape_ids = perry_codegen::assign_static_shape_ids(births.iter().map(|b| &b.shape))
+        .into_iter()
+        .collect();
+    let ir = String::from_utf8(compile_module(&fixture, opts).unwrap()).unwrap();
     let caller = body_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
     assert!(caller.contains("@js_method_site_certify"), "{caller}");
     assert!(
