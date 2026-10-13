@@ -21,30 +21,93 @@
 //!       unwinder for undecodable frames (with a liveness counter), then
 //!       flip `js_throw`'s raise path.
 //!
-//! aarch64-only for now (the dev + CI arm platforms); other arches keep
-//! the system unwinder — same observable behavior, slower path.
+//! Targets: aarch64 (Mach-O compact unwind + DWARF, ELF DWARF) and x86_64
+//! ELF. The arch part is only the tracked register set and the
+//! capture/install asm; image discovery is per object format. Where no
+//! image is found (Intel macOS, iOS, Android, 32-bit, WASI) the walker
+//! reports unavailable and the system unwinder carries every throw — same
+//! observable behavior, slower path. Windows x64 runs the same algorithm
+//! over the OS decoder (`eh_windows.rs`, `try_fast_transport`).
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use gimli::{
     BaseAddresses, CfaRule, EhFrame, NativeEndian, RegisterRule, UnwindContext, UnwindSection,
 };
 
-/// Registers the walker tracks on aarch64: the callee-saved integer set
-/// (x19..x28), fp, lr, sp, and the callee-saved float halves d8..d15.
-///
-/// The float registers are never needed to *step* (no CFA rule routes
-/// through one), but they must be restored when we install a context
-/// ourselves — a handler frame holding a live `f64` in d8..d15 across the
-/// `try` would otherwise resume with a stale value. Silent numeric
-/// corruption, so they are tracked from the start rather than bolted on.
-pub(crate) const N_TRACKED: usize = 21; // x19..x28, fp, lr, sp, d8..d15
+#[cfg(not(target_arch = "x86_64"))]
+mod arch {
+    /// Registers the walker tracks on aarch64: the callee-saved integer set
+    /// (x19..x28), fp, lr, sp, and the callee-saved float halves d8..d15.
+    ///
+    /// The float registers are never needed to *step* (no CFA rule routes
+    /// through one), but they must be restored when we install a context
+    /// ourselves — a handler frame holding a live `f64` in d8..d15 across the
+    /// `try` would otherwise resume with a stale value. Silent numeric
+    /// corruption, so they are tracked from the start rather than bolted on.
+    /// Indices: 0..=9 → x19..x28, 10 → fp(x29), 11 → lr(x30), 12 → sp,
+    /// 13..=20 → d8..d15.
+    pub(crate) const N_TRACKED: usize = 21;
+    pub(crate) const FP: usize = 10;
+    pub(crate) const LR: usize = 11;
+    pub(crate) const SP: usize = 12;
+    pub(crate) const D0: usize = 13;
+    /// lr is a real register: a frame whose row does not reload it (a leaf)
+    /// leaves the caller's return address live in it.
+    pub(crate) const RA_IS_COLUMN: bool = false;
 
-/// Register context at a point in the walk. Indices: 0..=9 → x19..x28,
-/// 10 → fp(x29), 11 → lr(x30), 12 → sp, 13..=20 → d8..d15.
+    /// Map a DWARF register number (aarch64) to a tracked index.
+    /// X0..X30 = 0..30, SP = 31, V0..V31 = 64..95 (so d8 = 72).
+    pub(crate) fn dwarf_to_idx(reg: u16) -> Option<usize> {
+        match reg {
+            19..=28 => Some(reg as usize - 19),
+            29 => Some(FP),
+            30 => Some(LR),
+            31 => Some(SP),
+            72..=79 => Some(D0 + (reg as usize - 72)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod arch {
+    /// Registers the walker tracks on x86_64 SysV: the callee-saved set
+    /// (rbx, rbp, r12..r15; SysV has no callee-saved vector registers), rsp,
+    /// and the return-address column. Indices: 0 → rbx, 1 → rbp,
+    /// 2..=5 → r12..r15, 6 → rsp, 7 → return address.
+    pub(crate) const N_TRACKED: usize = 8;
+    pub(crate) const FP: usize = 1;
+    pub(crate) const LR: usize = 7;
+    pub(crate) const SP: usize = 6;
+    pub(crate) const D0: usize = 0; // no tracked float registers
+    /// The return address is a CFI column, not a register: every frame's row
+    /// must reload it (from CFA-8). It is cleared before the reloads, so a
+    /// row without that rule (the outermost frame's "undefined") ends the
+    /// walk at pc 0 instead of repeating the callee's pc.
+    pub(crate) const RA_IS_COLUMN: bool = true;
+
+    /// Map a DWARF register number (x86_64) to a tracked index.
+    /// rax 0, rdx 1, rcx 2, rbx 3, rsi 4, rdi 5, rbp 6, rsp 7, r8..r15 8..15,
+    /// return address 16.
+    pub(crate) fn dwarf_to_idx(reg: u16) -> Option<usize> {
+        match reg {
+            3 => Some(0),
+            6 => Some(FP),
+            12..=15 => Some(2 + (reg as usize - 12)),
+            7 => Some(SP),
+            16 => Some(LR),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) use arch::N_TRACKED;
+use arch::{dwarf_to_idx, D0, FP, LR, RA_IS_COLUMN, SP};
+
+/// Register context at a point in the walk (indices: see `arch`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WalkRegs {
     pub regs: [u64; N_TRACKED],
@@ -56,48 +119,30 @@ pub(crate) struct WalkRegs {
 /// Anything beyond this from the starting SP is a misdecode, not a frame.
 const MAX_STACK_SPAN: u64 = 64 * 1024 * 1024;
 
-const FP: usize = 10;
-const LR: usize = 11;
-const SP: usize = 12;
-const D0: usize = 13;
-
-/// Map a DWARF register number (aarch64) to a tracked index.
-/// X0..X30 = 0..30, SP = 31, V0..V31 = 64..95 (so d8 = 72).
-fn dwarf_to_idx(reg: u16) -> Option<usize> {
-    match reg {
-        19..=28 => Some(reg as usize - 19),
-        29 => Some(FP),
-        30 => Some(LR),
-        31 => Some(SP),
-        72..=79 => Some(D0 + (reg as usize - 72)),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Context capture (aarch64).
+// Context capture and install.
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 mod capture {
     /// Layout must match the store order in `perry_eh_capture_context`
-    /// and the load order in `perry_eh_install_context`: x19..x28, fp, lr,
-    /// sp, d8..d15 (21 slots — see `N_TRACKED`).
+    /// and the load order in `perry_eh_install_context`: the tracked set in
+    /// `arch` index order (`N_TRACKED` slots).
     #[repr(C)]
     pub struct RawCtx {
-        pub x: [u64; 21],
+        pub x: [u64; super::N_TRACKED],
     }
 
     unsafe extern "C" {
-        /// Stores the tracked register set into `out`. Returns lr (the
-        /// capture call site's return address) so the walk starts at our
-        /// own caller.
+        /// Stores the tracked register set of its CALLER into `out` (it is a
+        /// leaf without a frame). Returns the return address (the capture
+        /// call site in the caller) so the walk starts in the caller.
         pub fn perry_eh_capture_context(out: *mut RawCtx) -> u64;
 
         /// Install `ctx` and jump to `pad`: restores the callee-saved
-        /// integer and float registers, sets sp, passes the exception
-        /// object in x0 and a zero selector in x1 (what a `landingpad`
-        /// reads), then branches. Never returns.
+        /// registers, sets sp, passes the exception object and a zero
+        /// selector in the two registers a `landingpad` reads, then
+        /// branches. Never returns.
         pub fn perry_eh_install_context(ctx: *const RawCtx, pad: u64, exc: u64) -> !;
     }
 
@@ -120,6 +165,7 @@ mod capture {
         };
     }
 
+    #[cfg(target_arch = "aarch64")]
     core::arch::global_asm!(
         ".p2align 2",
         concat!(".globl ", eh_sym!("perry_eh_capture_context")),
@@ -164,13 +210,57 @@ mod capture {
         "mov x1, #0",  // landingpad's {_, i32 selector}
         "br x10",
     );
+
+    // x86_64 SysV. Capture: rdi = out; on entry [rsp] is the return address
+    // into the caller and the caller's rsp after the call is rsp + 8. The
+    // callee-saved registers still hold the caller's values (this is a leaf
+    // that touches none of them).
+    // Install: rdi = ctx, rsi = pad, rdx = exception object. The landing pad
+    // reads its {ptr, i32} pair from rax/rdx (eh.rs UNWIND_DATA_REG). rsp
+    // moves last, after every load through rdi.
+    #[cfg(target_arch = "x86_64")]
+    core::arch::global_asm!(
+        ".p2align 4",
+        concat!(".globl ", eh_sym!("perry_eh_capture_context")),
+        concat!(eh_sym!("perry_eh_capture_context"), ":"),
+        "mov [rdi], rbx",
+        "mov [rdi + 8], rbp",
+        "mov [rdi + 16], r12",
+        "mov [rdi + 24], r13",
+        "mov [rdi + 32], r14",
+        "mov [rdi + 40], r15",
+        "lea rax, [rsp + 8]",
+        "mov [rdi + 48], rax",
+        "mov rax, [rsp]",
+        "mov [rdi + 56], rax",
+        "ret",
+        ".p2align 4",
+        concat!(".globl ", eh_sym!("perry_eh_install_context")),
+        concat!(eh_sym!("perry_eh_install_context"), ":"),
+        "mov rcx, rsi", // target pad
+        "mov rax, rdx", // landingpad's {ptr, _}
+        "mov rbx, [rdi]",
+        "mov rbp, [rdi + 8]",
+        "mov r12, [rdi + 16]",
+        "mov r13, [rdi + 24]",
+        "mov r14, [rdi + 32]",
+        "mov r15, [rdi + 40]",
+        "mov rsp, [rdi + 48]",
+        "xor edx, edx", // landingpad's {_, i32 selector}
+        "jmp rcx",
+    );
 }
 
-/// Capture the register context of OUR CALLER: the walk starts at the
-/// function that invoked this one (its pc = our return address, its sp =
-/// sp after our frame is popped — we have no frame, the asm is a leaf).
-#[cfg(target_arch = "aarch64")]
-#[inline(never)]
+/// Capture the register context of the CALLING function at this point: the
+/// asm is a frameless leaf, so the walk starts in the caller's own frame
+/// (pc = the capture call site's return address, sp = the caller's sp).
+///
+/// Always inlined: the walk reads the saved registers of every frame it
+/// steps through, starting with the one that captured. That frame must
+/// still be live while the walk runs, so the capture cannot sit in a helper
+/// frame that has already returned (its slots would be reused by the walk).
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+#[inline(always)]
 pub(crate) fn capture_here() -> WalkRegs {
     let mut raw = capture::RawCtx { x: [0; N_TRACKED] };
     let ret_addr = unsafe { capture::perry_eh_capture_context(&mut raw) };
@@ -208,6 +298,12 @@ struct EhFrameImage {
     /// Runtime addresses of the indirect personality slots in compact-unwind
     /// index order (encoding values use one-based indices).
     personality_slots: Vec<u64>,
+    /// ELF: the image's `.eh_frame_hdr` (PT_GNU_EH_FRAME), whose sorted
+    /// binary-search table is the FDE index — no walk over every FDE at
+    /// startup (`fde_index` stays empty).
+    hdr: Option<gimli::ParsedEhFrameHdr<gimli::EndianSlice<'static, NativeEndian>>>,
+    /// Runtime address of `.eh_frame_hdr` (0 without one).
+    hdr_addr: u64,
 }
 
 // arm64 compact-unwind encoding (mach-o/compact_unwind_encoding.h).
@@ -440,8 +536,13 @@ mod unwind_info_tests {
     }
 }
 
+/// Mach-O (arm64 macOS). The compact-unwind decoding below is arm64's
+/// encoding, so Intel macOS reports no images (system unwinder).
 #[cfg(target_os = "macos")]
 fn find_eh_frame_images() -> Vec<EhFrameImage> {
+    if cfg!(not(target_arch = "aarch64")) {
+        return Vec::new();
+    }
     use core::ffi::{c_char, c_ulong};
     unsafe extern "C" {
         fn _dyld_image_count() -> u32;
@@ -501,16 +602,100 @@ fn find_eh_frame_images() -> Vec<EhFrameImage> {
             compact_index,
             lsda_index,
             personality_slots,
+            hdr: None,
+            hdr_addr: 0,
         });
     }
     images
 }
 
-#[cfg(not(target_os = "macos"))]
+/// ELF (Linux): every loaded object with a PT_GNU_EH_FRAME segment. The
+/// `.eh_frame_hdr` names `.eh_frame`; its length is bounded by the end of
+/// the PT_LOAD segment holding it (the section ends in a zero terminator,
+/// and FDEs are only ever read at offsets the header table names).
+#[cfg(target_os = "linux")]
 fn find_eh_frame_images() -> Vec<EhFrameImage> {
-    // Linux: dl_iterate_phdr + PT_GNU_EH_FRAME. Lands with the Linux CI
-    // arm; until then the walker reports unavailable and the system
-    // unwinder carries all throws.
+    unsafe extern "C" fn each(
+        info: *mut libc::dl_phdr_info,
+        _size: libc::size_t,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        let images = unsafe { &mut *(data as *mut Vec<EhFrameImage>) };
+        let info = unsafe { &*info };
+        if info.dlpi_phdr.is_null() || info.dlpi_phnum == 0 {
+            return 0;
+        }
+        let base = info.dlpi_addr as u64;
+        let phdrs =
+            unsafe { core::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum as usize) };
+        let mut hdr_seg = None;
+        let mut text = (u64::MAX, 0u64);
+        for ph in phdrs {
+            let lo = base.wrapping_add(ph.p_vaddr as u64);
+            let hi = lo.wrapping_add(ph.p_memsz as u64);
+            if ph.p_type == libc::PT_GNU_EH_FRAME {
+                hdr_seg = Some((lo, ph.p_memsz as u64));
+            } else if ph.p_type == libc::PT_LOAD && ph.p_flags & libc::PF_X != 0 {
+                text = (text.0.min(lo), text.1.max(hi));
+            }
+        }
+        let Some((hdr_addr, hdr_len)) = hdr_seg else {
+            return 0;
+        };
+        if text.0 >= text.1 || hdr_len == 0 {
+            return 0;
+        }
+        let hdr_bytes: &'static [u8] =
+            unsafe { core::slice::from_raw_parts(hdr_addr as *const u8, hdr_len as usize) };
+        let hdr_bases = BaseAddresses::default().set_eh_frame_hdr(hdr_addr);
+        let Ok(parsed) = gimli::EhFrameHdr::new(hdr_bytes, NativeEndian).parse(&hdr_bases, 8)
+        else {
+            return 0;
+        };
+        let gimli::Pointer::Direct(eh_frame_addr) = parsed.eh_frame_ptr() else {
+            return 0;
+        };
+        if parsed.table().is_none() {
+            return 0;
+        }
+        // The read-only PT_LOAD that holds .eh_frame bounds the slice.
+        let Some(load_end) = phdrs.iter().find_map(|ph| {
+            let lo = base.wrapping_add(ph.p_vaddr as u64);
+            let hi = lo.wrapping_add(ph.p_memsz as u64);
+            (ph.p_type == libc::PT_LOAD && eh_frame_addr >= lo && eh_frame_addr < hi).then_some(hi)
+        }) else {
+            return 0;
+        };
+        let bytes: &'static [u8] = unsafe {
+            core::slice::from_raw_parts(
+                eh_frame_addr as *const u8,
+                (load_end - eh_frame_addr) as usize,
+            )
+        };
+        images.push(EhFrameImage {
+            eh_frame_addr,
+            bytes,
+            text_addr: text.0,
+            text_end: text.1,
+            fde_index: Vec::new(),
+            image_base: base,
+            compact_index: Vec::new(),
+            lsda_index: Vec::new(),
+            personality_slots: Vec::new(),
+            hdr: Some(parsed),
+            hdr_addr,
+        });
+        0
+    }
+    let mut images: Vec<EhFrameImage> = Vec::new();
+    unsafe { libc::dl_iterate_phdr(Some(each), &mut images as *mut _ as *mut libc::c_void) };
+    images
+}
+
+/// No supported image format: the walker reports unavailable and the system
+/// unwinder carries every throw.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn find_eh_frame_images() -> Vec<EhFrameImage> {
     Vec::new()
 }
 
@@ -527,6 +712,32 @@ pub(crate) struct StepRow {
     cfa_reg: usize,
     cfa_off: i64,
     reloads: Vec<(usize, i64)>,
+    /// `DW_CFA_GNU_args_size` at this pc: bytes of outgoing arguments the
+    /// caller pushed for this call. A landing pad in this frame expects
+    /// them popped, so the installed sp is the callee's CFA plus this (what
+    /// libgcc's `uw_install_context` does). Always 0 on aarch64.
+    args_size: u64,
+}
+
+/// Everything the walk needs at one call site (a return address minus 1),
+/// decoded once and cached: how to step out of the frame, and whether the
+/// frame is a Perry handler for this call site.
+#[derive(Clone, Debug)]
+pub(crate) struct Site {
+    row: Option<StepRow>,
+    handler: Handler,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Handler {
+    /// Not a Perry frame, or no landing pad covers the call site.
+    None,
+    /// A Perry personality frame whose LSDA maps the call site to `pad`.
+    /// `func_start` identifies the function (worker-base handoff check).
+    Pad { pad: u64, func_start: u64 },
+    /// A Perry frame whose LSDA could not be parsed: the walk declines, and
+    /// the system unwinder reports it exactly as it does today.
+    Undecodable,
 }
 
 /// Diff-mode decode diagnostics; always returns None.
@@ -545,7 +756,7 @@ struct WalkerImage {
 
 pub(crate) struct Walker {
     images: Vec<WalkerImage>,
-    rows: HashMap<u64, Option<StepRow>>,
+    sites: ahash::AHashMap<u64, Site>,
 }
 
 static WALKER: OnceLock<Option<Mutex<Walker>>> = OnceLock::new();
@@ -560,6 +771,17 @@ fn walker() -> Option<&'static Mutex<Walker>> {
                     .set_eh_frame(image.eh_frame_addr)
                     .set_text(image.text_addr);
                 // Index every FDE once: (start, end, offset), sorted by start.
+                // ELF images index through .eh_frame_hdr, whose table
+                // entries are relative to the header itself.
+                if image.hdr.is_some() {
+                    let bases = bases.set_eh_frame_hdr(image.hdr_addr);
+                    images.push(WalkerImage {
+                        image,
+                        eh_frame,
+                        bases,
+                    });
+                    continue;
+                }
                 let mut entries = eh_frame.entries(&bases);
                 let mut index = Vec::new();
                 while let Ok(Some(entry)) = entries.next() {
@@ -586,7 +808,7 @@ fn walker() -> Option<&'static Mutex<Walker>> {
             }
             Some(Mutex::new(Walker {
                 images,
-                rows: HashMap::new(),
+                sites: ahash::AHashMap::new(),
             }))
         })
         .as_ref()
@@ -599,18 +821,24 @@ impl Walker {
             .find(|image| pc >= image.image.text_addr && pc < image.image.text_end)
     }
 
-    /// Decode (or fetch cached) the step row covering `pc`.
-    fn row_for(&mut self, pc: u64) -> Option<StepRow> {
-        if let Some(cached) = self.rows.get(&pc) {
-            return cached.clone();
-        }
-        let row = self.decode_row(pc);
-        self.rows.insert(pc, row.clone());
-        row
-    }
-
-    fn decode_row(&self, pc: u64) -> Option<StepRow> {
-        self.image_for(pc)?.decode_row(pc)
+    /// Decode (or fetch cached) everything known about call site `site`.
+    fn site(&mut self, site: u64) -> &Site {
+        let images = &self.images;
+        self.sites.entry(site).or_insert_with(|| {
+            match images
+                .iter()
+                .find(|image| site >= image.image.text_addr && site < image.image.text_end)
+            {
+                Some(image) => Site {
+                    row: image.decode_row(site),
+                    handler: image.handler_for(site),
+                },
+                None => Site {
+                    row: diag_decline(site, "no image covers pc"),
+                    handler: Handler::None,
+                },
+            }
+        })
     }
 }
 
@@ -652,6 +880,7 @@ impl WalkerImage {
                         cfa_reg: FP,
                         cfa_off: 16,
                         reloads,
+                        args_size: 0,
                     })
                 }
                 CU_MODE_FRAMELESS => {
@@ -680,6 +909,7 @@ impl WalkerImage {
                         cfa_reg: SP,
                         cfa_off: stack,
                         reloads,
+                        args_size: 0,
                     })
                 }
                 CU_MODE_DWARF => {
@@ -689,7 +919,18 @@ impl WalkerImage {
                 _ => diag_decline(pc, "compact mode 0 (no unwind info)"),
             };
         }
-        // Non-macOS (or no __unwind_info): linear FDE index.
+        if let Some(hdr) = self.image.hdr.as_ref() {
+            let Some(table) = hdr.table() else {
+                return diag_decline(pc, "no .eh_frame_hdr table");
+            };
+            let Ok(fde) =
+                table.fde_for_address(&self.eh_frame, &self.bases, pc, EhFrame::cie_from_offset)
+            else {
+                return diag_decline(pc, "no FDE covers pc");
+            };
+            return self.decode_fde_row(pc, &fde);
+        }
+        // No __unwind_info and no .eh_frame_hdr: linear FDE index.
         let idx = &self.image.fde_index;
         let pos = idx.partition_point(|e| e.0 <= pc);
         if pos == 0 {
@@ -709,6 +950,14 @@ impl WalkerImage {
         else {
             return diag_decline(pc, "FDE parse failed");
         };
+        self.decode_fde_row(pc, &fde)
+    }
+
+    fn decode_fde_row(
+        &self,
+        pc: u64,
+        fde: &gimli::FrameDescriptionEntry<gimli::EndianSlice<'static, NativeEndian>>,
+    ) -> Option<StepRow> {
         let mut ctx = UnwindContext::new();
         let Ok(row) = fde.unwind_info_for_address(&self.eh_frame, &self.bases, &mut ctx, pc) else {
             return diag_decline(pc, "no unwind row for pc");
@@ -737,6 +986,7 @@ impl WalkerImage {
             cfa_reg,
             cfa_off,
             reloads,
+            args_size: row.saved_args_size(),
         })
     }
 }
@@ -747,49 +997,63 @@ impl Walker {
     pub(crate) fn step(&mut self, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs> {
         // The stored pc is a return address: the relevant row is the one
         // covering the call instruction.
-        let row = self.row_for(regs.pc.wrapping_sub(1))?;
-        let base = regs.regs[row.cfa_reg];
-        let cfa = (base as i64).checked_add(row.cfa_off)? as u64;
-
-        // FAIL-SAFE, NOT FAIL-DANGEROUS. A misdecoded row yields a bogus
-        // CFA, and every reload below is a raw dereference — an unchecked
-        // walk turns a decoding gap into a wild read (observed: this walker
-        // segfaulted stepping libtest's frames, whose shapes the compiled-
-        // program path never produces). Declining costs the speedup for one
-        // throw; the system unwinder then carries it with identical
-        // semantics. So: the CFA must move monotonically UP a plausible
-        // stack, and every slot we read must lie inside the region between
-        // the walk's starting SP and that ceiling.
-        if cfa <= regs.regs[SP] || cfa <= stack_low {
-            return None;
-        }
-        let ceiling = stack_low.checked_add(MAX_STACK_SPAN)?;
-        if cfa > ceiling {
-            return None;
-        }
-
-        let mut next = *regs;
-        for &(idx, off) in &row.reloads {
-            let addr = (cfa as i64).checked_add(off)? as u64;
-            if addr < stack_low || addr >= ceiling || addr % 8 != 0 {
-                return None;
-            }
-            next.regs[idx] = unsafe { core::ptr::read(addr as *const u64) };
-        }
-        next.regs[SP] = cfa;
-        next.pc = next.regs[LR];
-        Some(next)
+        let row = self.site(regs.pc.wrapping_sub(1)).row.as_ref()?;
+        step_with(row, regs, stack_low)
     }
+}
+
+/// The CFA of the frame `regs` describes, under `row` (its row at the call
+/// site).
+fn frame_cfa(row: &StepRow, regs: &WalkRegs) -> Option<u64> {
+    let base = regs.regs[row.cfa_reg];
+    Some((base as i64).checked_add(row.cfa_off)? as u64)
+}
+
+fn step_with(row: &StepRow, regs: &WalkRegs, stack_low: u64) -> Option<WalkRegs> {
+    let cfa = frame_cfa(row, regs)?;
+
+    // FAIL-SAFE, NOT FAIL-DANGEROUS. A misdecoded row yields a bogus
+    // CFA, and every reload below is a raw dereference — an unchecked
+    // walk turns a decoding gap into a wild read (observed: this walker
+    // segfaulted stepping libtest's frames, whose shapes the compiled-
+    // program path never produces). Declining costs the speedup for one
+    // throw; the system unwinder then carries it with identical
+    // semantics. So: the CFA must move monotonically UP a plausible
+    // stack, and every slot we read must lie inside the region between
+    // the walk's starting SP and that ceiling.
+    if cfa <= regs.regs[SP] || cfa <= stack_low {
+        return None;
+    }
+    let ceiling = stack_low.checked_add(MAX_STACK_SPAN)?;
+    if cfa > ceiling {
+        return None;
+    }
+
+    let mut next = *regs;
+    if RA_IS_COLUMN {
+        next.regs[LR] = 0;
+    }
+    for &(idx, off) in &row.reloads {
+        let addr = (cfa as i64).checked_add(off)? as u64;
+        if addr < stack_low || addr >= ceiling || addr % 8 != 0 {
+            return None;
+        }
+        next.regs[idx] = unsafe { core::ptr::read(addr as *const u64) };
+    }
+    next.regs[SP] = cfa;
+    next.pc = next.regs[LR];
+    Some(next)
 }
 
 /// Walk from the current call site upward, collecting up to `max` frame
 /// PCs (return addresses). Returns None if the walker is unavailable on
 /// this platform/build.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+#[inline(never)]
 pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
+    let mut regs = capture_here();
     let w = walker()?;
     let mut guard = w.lock().ok()?;
-    let mut regs = capture_here();
     let stack_low = regs.regs[SP];
     let mut pcs = Vec::with_capacity(max.min(64));
     while pcs.len() < max {
@@ -808,7 +1072,7 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
     Some(pcs)
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
     None
 }
@@ -847,14 +1111,30 @@ thread_local! {
         const { core::cell::Cell::new(None) };
 }
 
-impl Walker {
-    /// LSDA pointer + function start for the FDE covering `pc`, if any.
-    fn lsda_for(&self, pc: u64) -> Option<(u64, u64)> {
-        self.image_for(pc)?.lsda_for(pc)
-    }
-}
-
 impl WalkerImage {
+    /// The Perry handler verdict for call site `site` (a return address
+    /// minus 1): the landing pad the frame's LSDA maps it to, if the frame
+    /// carries Perry's personality.
+    fn handler_for(&self, site: u64) -> Handler {
+        let Some((lsda, func_start)) = self.lsda_for(site) else {
+            return Handler::None;
+        };
+        match unsafe {
+            crate::eh_lsda::find_landing_pad_in_lsda(
+                lsda as *const u8,
+                site as usize,
+                func_start as usize,
+            )
+        } {
+            Ok(Some(pad)) => Handler::Pad {
+                pad: pad as u64,
+                func_start,
+            },
+            Ok(None) => Handler::None,
+            Err(()) => Handler::Undecodable,
+        }
+    }
+
     fn is_perry_personality(&self, encoding: u32) -> bool {
         let index = ((encoding & CU_PERSONALITY_MASK) >> CU_PERSONALITY_SHIFT) as usize;
         let Some(&slot) = index
@@ -898,19 +1178,27 @@ impl WalkerImage {
             }
             return Some((lsda, fstart));
         }
-        let idx = &self.image.fde_index;
-        let pos = idx.partition_point(|e| e.0 <= pc);
-        if pos == 0 {
-            return None;
-        }
-        let (start, end, offset) = idx[pos - 1];
-        if pc < start || pc >= end {
-            return None;
-        }
-        let fde = self
-            .eh_frame
-            .fde_from_offset(&self.bases, offset, EhFrame::cie_from_offset)
-            .ok()?;
+        let fde = match self.image.hdr.as_ref() {
+            Some(hdr) => hdr
+                .table()?
+                .fde_for_address(&self.eh_frame, &self.bases, pc, EhFrame::cie_from_offset)
+                .ok()?,
+            None => {
+                let idx = &self.image.fde_index;
+                let pos = idx.partition_point(|e| e.0 <= pc);
+                if pos == 0 {
+                    return None;
+                }
+                let (start, end, offset) = idx[pos - 1];
+                if pc < start || pc >= end {
+                    return None;
+                }
+                self.eh_frame
+                    .fde_from_offset(&self.bases, offset, EhFrame::cie_from_offset)
+                    .ok()?
+            }
+        };
+        let start = fde.initial_address();
         let personality = match fde.personality()? {
             gimli::Pointer::Direct(address) => address as usize,
             gimli::Pointer::Indirect(slot) => unsafe { core::ptr::read(slot as *const usize) },
@@ -925,36 +1213,59 @@ impl WalkerImage {
     }
 }
 
-/// Walk from `start` and find the throw's landing: the first frame whose
-/// LSDA maps its call site to a landing pad. Returns (pad pc, the register
-/// context to resume that frame with).
+/// The handler a walk found: its landing pad and the register context to
+/// enter it with (sp already adjusted for the call site's args_size).
+struct Landing {
+    pad: u64,
+    regs: WalkRegs,
+    /// The handler frame's sp at the call site (its callee's CFA), before
+    /// the args_size adjustment: what the personality's `_Unwind_GetCFA`
+    /// reports for the frame under both libgcc and Apple's libunwind (diff
+    /// mode compares it).
+    call_sp: u64,
+}
+
+/// Walk from `start` and find the throw's landing: the first Perry frame
+/// whose LSDA maps its call site to a landing pad — the frame the
+/// personality would pick in the system unwinder's search phase, including
+/// its worker-base handoff rule.
 ///
 /// The caller passes the starting context so the walk begins at ITS frame
-/// — `capture_here()` must be inlined into the caller's body, not this
-/// one. The walker mutex is released before returning, which matters for
-/// the install path: jumping away while holding it would strand the guard
-/// and deadlock every later throw.
-#[cfg(target_arch = "aarch64")]
-fn find_handler(start: WalkRegs) -> Option<(u64, WalkRegs)> {
+/// (`capture_here()` is inlined into the caller), which stays live while
+/// the walk reads its saved registers. The walker mutex is released before
+/// returning, which matters for the install path: jumping away while
+/// holding it would strand the guard and deadlock every later throw.
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+fn find_handler(start: WalkRegs) -> Option<Landing> {
     let w = walker()?;
     let mut guard = w.lock().ok()?;
+    let handoff = crate::exception::worker_base_handoff_pending();
     let stack_low = start.regs[SP];
     let mut regs = start;
     for _ in 0..4096 {
         // The stored pc is a return address; the call site is pc-1.
-        let site = regs.pc.wrapping_sub(1);
-        if let Some((lsda, func_start)) = guard.lsda_for(site) {
-            if let Ok(Some(pad)) = unsafe {
-                crate::eh_lsda::find_landing_pad_in_lsda(
-                    lsda as *const u8,
-                    site as usize,
-                    func_start as usize,
-                )
-            } {
-                return Some((pad as u64, regs));
+        let site = guard.site(regs.pc.wrapping_sub(1));
+        match site.handler {
+            Handler::Pad { pad, func_start }
+                if !handoff || func_start as usize == crate::exception::worker_base_shim_addr() =>
+            {
+                // The pad's frame state: its callee-saved registers as the
+                // steps restored them, sp = the callee's CFA plus the call's
+                // pushed-argument bytes.
+                let row = site.row.as_ref()?;
+                let call_sp = regs.regs[SP];
+                let mut regs = regs;
+                regs.regs[SP] = call_sp.checked_add(row.args_size)?;
+                return Some(Landing { pad, regs, call_sp });
             }
+            Handler::Undecodable => return None,
+            _ => {}
         }
-        match guard.step(&regs, stack_low) {
+        let next = site
+            .row
+            .as_ref()
+            .and_then(|row| step_with(row, &regs, stack_low));
+        match next {
             Some(next) => regs = next,
             None => {
                 if diff_mode() {
@@ -984,16 +1295,18 @@ fn find_handler(start: WalkRegs) -> Option<(u64, WalkRegs)> {
     None
 }
 
-/// Diff-mode prediction: (pad, CFA) for the throw about to be raised.
-#[cfg(target_arch = "aarch64")]
+/// Diff-mode prediction: (pad, frame identity) for the throw about to be
+/// raised. The identity is what the personality's `_Unwind_GetCFA` returns
+/// for the handler frame (see [`Landing::call_sp`]).
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[inline(never)]
 fn predict_landing() -> Option<(u64, u64)> {
     let start = capture_here();
-    let (pad, regs) = find_handler(start)?;
-    Some((pad, regs.regs[SP]))
+    let landing = find_handler(start)?;
+    Some((landing.pad, landing.call_sp))
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 fn predict_landing() -> Option<(u64, u64)> {
     None
 }
@@ -1026,12 +1339,14 @@ fn fast_transport_enabled() -> bool {
 /// On success this NEVER RETURNS: it restores the handler frame's
 /// callee-saved registers and stack pointer and branches to its landing
 /// pad — the same state transition `_URC_INSTALL_CONTEXT` performs, minus
-/// the search phase and minus re-decoding every frame.
+/// the search phase, minus re-decoding every frame, and minus the cleanup
+/// phase's visits to the frames in between (whose cleanups, under the
+/// panic=unwind test harness, are Rust's abort-on-unwind guards).
 ///
 /// Returns (normally) when the walk could not carry the throw, in which
 /// case the caller raises through the system unwinder. Correctness is
 /// identical on both paths; only speed differs.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[inline(never)]
 pub(crate) fn try_fast_transport(exception_object: u64) {
     use std::sync::atomic::Ordering::Relaxed;
@@ -1045,16 +1360,18 @@ pub(crate) fn try_fast_transport(exception_object: u64) {
     }
     let start = capture_here();
     // The walker mutex is released inside `find_handler`, before we jump.
-    let Some((pad, regs)) = find_handler(start) else {
+    let Some(landing) = find_handler(start) else {
         FALLBACKS.fetch_add(1, Relaxed);
         return;
     };
     FAST_TRANSPORTS.fetch_add(1, Relaxed);
-    let ctx = capture::RawCtx { x: regs.regs };
-    unsafe { capture::perry_eh_install_context(&ctx, pad, exception_object) }
+    let ctx = capture::RawCtx {
+        x: landing.regs.regs,
+    };
+    unsafe { capture::perry_eh_install_context(&ctx, landing.pad, exception_object) }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub(crate) fn try_fast_transport(_exception_object: u64) {
     FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -1124,7 +1441,16 @@ pub(crate) fn verify_prediction(actual_pad: u64, actual_cfa: u64) {
     DIFF_VERIFIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[cfg(all(test, target_arch = "aarch64", target_os = "macos"))]
+#[cfg(all(
+    test,
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
 mod tests {
     use super::*;
 
@@ -1210,7 +1536,7 @@ mod tests {
             "chains diverge beyond the caller frame: {diff:?}\na: {a:x?}\nb: {b:x?}"
         );
         let w = walker().unwrap();
-        let cached = w.lock().unwrap().rows.len();
+        let cached = w.lock().unwrap().sites.len();
         assert!(cached >= a.len() - 1, "cache unpopulated: {cached}");
     }
 }

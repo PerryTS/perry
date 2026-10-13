@@ -216,6 +216,150 @@ pub unsafe extern "system" fn perry_eh_personality(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Single-phase transport (the same algorithm as `eh_walker.rs` on Itanium
+// targets, over the OS decoder).
+// ---------------------------------------------------------------------------
+
+/// x64 `CONTEXT` (winnt.h): 1232 bytes, 16-byte aligned. Only rsp/rip are
+/// read or written here; the rest is restored verbatim by
+/// `RtlRestoreContext`, which is why it must be the whole, real layout
+/// (`RtlVirtualUnwind` keeps xmm6..xmm15 in the tail up to date).
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct Context {
+    p_home: [u64; 6],
+    context_flags: u32,
+    mx_csr: u32,
+    seg: [u16; 6],
+    e_flags: u32,
+    dr: [u64; 6],
+    gpr: [u64; 4], // rax rcx rdx rbx
+    rsp: u64,
+    gpr2: [u64; 11], // rbp rsi rdi r8..r15
+    rip: u64,
+    tail: [u8; 512 + 26 * 16 + 6 * 8],
+}
+
+const _: () = assert!(core::mem::size_of::<Context>() == 1232);
+const _: () = assert!(core::mem::offset_of!(Context, rsp) == 0x98);
+const _: () = assert!(core::mem::offset_of!(Context, rip) == 0xF8);
+
+const UNW_FLAG_EHANDLER: u32 = 1;
+
+unsafe extern "system" {
+    fn RtlCaptureContext(context: *mut Context);
+    fn RtlLookupFunctionEntry(
+        control_pc: u64,
+        image_base: *mut u64,
+        history_table: *mut c_void,
+    ) -> *const RuntimeFunction;
+    fn RtlVirtualUnwind(
+        handler_type: u32,
+        image_base: u64,
+        control_pc: u64,
+        function_entry: *const RuntimeFunction,
+        context: *mut Context,
+        handler_data: *mut *mut c_void,
+        establisher_frame: *mut u64,
+        context_pointers: *mut c_void,
+    ) -> *mut c_void;
+    fn RtlRestoreContext(context: *mut Context, exception_record: *mut ExceptionRecord) -> !;
+    fn GetCurrentThreadStackLimits(low_limit: *mut usize, high_limit: *mut usize);
+}
+
+/// Throws carried by the single-phase transport / handed to `RaiseException`.
+pub(crate) static FAST_TRANSPORTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `PERRY_EH_WALKER=off|0|system`: every throw takes `RaiseException`.
+fn fast_transport_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ON, || {
+        !matches!(
+            std::env::var("PERRY_EH_WALKER").as_deref(),
+            Ok("off") | Ok("0") | Ok("system")
+        )
+    })
+}
+
+/// The single-phase transport for the throw in progress: walk outward with
+/// `RtlLookupFunctionEntry` + `RtlVirtualUnwind`, and at the first frame
+/// whose language handler is [`perry_eh_personality`] and whose LSDA maps
+/// the call site to a landing pad (the frame the personality would accept,
+/// handoff rule included), resume that frame at the pad with
+/// `RtlRestoreContext`. The context is the frame's own state at its call
+/// site, nonvolatile registers (integer and xmm6..15) as the virtual unwind
+/// restored them: what `RtlUnwindEx` would hand the pad, minus the visits
+/// to the frames in between (no termination handlers run, as with
+/// `RaiseException` under panic=abort, where Rust frames have none).
+///
+/// Returns when the walk declines (no function entry, a non-rising sp, an
+/// unparsable LSDA, or the transport disabled); the caller then raises.
+#[inline(never)]
+pub(crate) fn try_fast_transport() {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !fast_transport_enabled() {
+        FALLBACKS.fetch_add(1, Relaxed);
+        return;
+    }
+    let handoff = crate::exception::worker_base_handoff_pending();
+    let (mut low, mut high) = (0usize, 0usize);
+    unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
+    let mut context: Context = unsafe { core::mem::zeroed() };
+    unsafe { RtlCaptureContext(&mut context) };
+    for _ in 0..4096 {
+        let mut image_base = 0u64;
+        let entry =
+            unsafe { RtlLookupFunctionEntry(context.rip, &mut image_base, core::ptr::null_mut()) };
+        if entry.is_null() {
+            break;
+        }
+        // The frame's own state at its call site, before stepping out of it.
+        let frame = context;
+        let mut handler_data: *mut c_void = core::ptr::null_mut();
+        let mut establisher = 0u64;
+        let handler = unsafe {
+            RtlVirtualUnwind(
+                UNW_FLAG_EHANDLER,
+                image_base,
+                context.rip,
+                entry,
+                &mut context,
+                &mut handler_data,
+                &mut establisher,
+                core::ptr::null_mut(),
+            )
+        };
+        if handler as usize == perry_eh_personality as *const () as usize && !handler_data.is_null()
+        {
+            let func_start = image_base.wrapping_add(unsafe { (*entry).begin_address } as u64);
+            if !handoff || func_start as usize == crate::exception::worker_base_shim_addr() {
+                // Return address minus one, as the personality biases it.
+                let ip = (frame.rip as usize).wrapping_sub(1);
+                match unsafe {
+                    find_landing_pad_in_lsda(handler_data as *const u8, ip, func_start as usize)
+                } {
+                    Ok(Some(pad)) => {
+                        FAST_TRANSPORTS.fetch_add(1, Relaxed);
+                        let mut target = frame;
+                        target.rip = pad as u64;
+                        unsafe { RtlRestoreContext(&mut target, core::ptr::null_mut()) }
+                    }
+                    Ok(None) => {}
+                    Err(()) => break,
+                }
+            }
+        }
+        let sp = context.rsp as usize;
+        if context.rip == 0 || context.rsp <= frame.rsp || sp < low || sp >= high || sp & 7 != 0 {
+            break;
+        }
+    }
+    FALLBACKS.fetch_add(1, Relaxed);
+}
+
 fn eh_trace_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *crate::once_init::get_or_init(&ON, || std::env::var_os("PERRY_EH_TRACE").is_some())

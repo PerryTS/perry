@@ -534,8 +534,10 @@ pub(crate) fn hand_to_worker_base(value: f64) {
             (&(*s).savepoints)[depth].assume_init_read().restore();
             (*s).to_worker_base = true;
         });
-        // The system unwinder only: the owned walker does not consult the
-        // personality, so it would stop at the innermost pad.
+        // The single-phase transport applies the personality's handoff rule
+        // (only the base shim's pad), so it carries this throw too; it falls
+        // back to the system unwinder exactly as `js_throw` does.
+        crate::eh::try_fast_transport();
         let reason = crate::eh::raise_perry_exception();
         eprintln!("perry: FATAL: worker base handoff found no base trap (reason={reason})");
         std::process::abort();
@@ -700,21 +702,12 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // throw point and the handler frame (e.g. a runtime rebuilt without
         // -C force-unwind-tables). That is a build/configuration defect, not a
         // JS error — fail loudly instead of masking it as an uncaught throw.
-        // Owned single-phase transport: walks to the handler using cached
-        // CFI and installs its register context directly. Never returns on
+        // Single-phase transport (every native target): walk to the handler
+        // frame and install its register context directly. Never returns on
         // success. Declines (undecodable frame, disabled, or verification
-        // mode) fall through to the system unwinder below — same semantics,
+        // mode) fall through to the two-phase raise below — same semantics,
         // slower.
-        //
-        // Not on Windows: `eh_walker` is Itanium-unwind machinery and the module
-        // is `#[cfg(not(windows))]`; `crate::eh` there is `eh_windows.rs`, whose
-        // `raise_perry_exception` below is the whole transport. These two calls
-        // landing unguarded is what broke the Windows build of this crate (#7354).
-        #[cfg(not(windows))]
-        {
-            crate::eh_walker::predict_before_raise();
-            crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
-        }
+        crate::eh::try_fast_transport();
         let reason = crate::eh::raise_perry_exception();
         eprintln!(
             "perry: FATAL: exception transport failed (reason={reason}): a try \
@@ -1413,11 +1406,17 @@ mod tests {
         assert_eq!(catch_js_throw(|| -> u8 { js_throw(2.0) }), Err(2.0));
     }
 
-    /// The aarch64 owned walker recognizes the shim as a Perry handler, so a
+    /// The owned walker recognizes the shim as a Perry handler, so a
     /// throw into a runtime trap takes the single-phase transport instead of
     /// falling back (or worse, skipping the shim for an outer pad).
     #[test]
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     fn the_fast_walker_carries_a_throw_into_a_trap() {
         use std::sync::atomic::Ordering::Relaxed;
         // Warm the walker's caches and images once.

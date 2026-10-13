@@ -201,6 +201,16 @@ pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
     }
 }
 
+/// The single-phase transport for the throw in progress (`crate::eh_walker`):
+/// walk to the handler frame and enter its landing pad directly. Returns
+/// only when the walk declined; the caller then raises two-phase
+/// ([`raise_perry_exception`]). In `PERRY_EH_WALKER=diff` mode it records
+/// the prediction the personality checks and always declines.
+pub(crate) fn try_fast_transport() {
+    crate::eh_walker::predict_before_raise();
+    crate::eh_walker::try_fast_transport(exception_object_addr());
+}
+
 // ---------------------------------------------------------------------------
 // Personality routine.
 // ---------------------------------------------------------------------------
