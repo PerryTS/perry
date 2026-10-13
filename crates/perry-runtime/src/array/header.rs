@@ -1072,7 +1072,7 @@ pub(super) unsafe fn set_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
     }
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn clear_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
     if let Some(header) = array_gc_header(arr) {
         let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
@@ -1737,6 +1737,19 @@ pub extern "C" fn js_array_clear_numeric_layout(arr: *mut ArrayHeader) {
     }
 }
 
+/// The first non-Number write into a raw-f64 array whose header the caller
+/// just probed: clear both raw bits in place. Out of line so the common exits
+/// of the note (Number, or bits already clear) keep a frameless prologue.
+///
+/// # Safety
+/// `arr` is a live, non-forwarded `GC_TYPE_ARRAY` head (the caller's probe).
+#[inline(never)]
+unsafe fn demote_probed_raw_f64_array(arr: *mut ArrayHeader) {
+    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*header)._reserved &= !(crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES);
+    crate::typed_feedback::invalidate_representation_change(arr as usize);
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits: u64) {
     // A Number never downgrades the raw-f64 layout: nothing to clear, so do
@@ -1744,20 +1757,29 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
     if value_bits_are_numeric(value_bits) {
         return;
     }
-    // Exact, non-forwarded ordinary Array whose raw-f64 bits are already
-    // clear: the note is a no-op. Answer from the magnitude-checked live
-    // header probe (the same discipline as the generated guards) instead of
-    // the tracked-allocation resolver. Forwarding stubs and every other brand
-    // keep the complete resolver below.
+    // Exact, non-forwarded ordinary Array: the magnitude-checked live header
+    // probe (the same discipline as the generated guards) answers without the
+    // tracked-allocation resolver. Raw bits already clear: the note is a
+    // no-op. Raw bit set: this is the first non-Number write, and clearing the
+    // two bits in the header is the whole demotion. Forwarding stubs and every
+    // other brand keep the complete resolver below.
     let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
-    let already_clear = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
-        .is_some_and(|header| {
+    let probed = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        .filter(|header| {
             header.obj_type == crate::gc::GC_TYPE_ARRAY
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && header._reserved & raw_bits == 0
-        });
-    if already_clear {
-        return;
+        })
+        .map(|header| header._reserved & raw_bits != 0);
+    match probed {
+        Some(false) => return,
+        Some(true) => {
+            // SAFETY: the probe just validated this live, non-forwarded
+            // array header; this is the same header store the
+            // resolver path performs once it has returned this head.
+            unsafe { demote_probed_raw_f64_array(arr) };
+            return;
+        }
+        None => {}
     }
     let arr = clean_arr_ptr_mut(arr);
     unsafe {
