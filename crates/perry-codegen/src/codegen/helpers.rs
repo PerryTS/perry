@@ -1853,3 +1853,10 @@ pub(crate) fn body_needs_method_owner(body: &[perry_hir::Stmt]) -> bool {
             )
         })
 }
+
+/// A once-evaluated class has one lexical home: its direct body and callable
+/// entry can share that body. Only generators (which retain the callable in
+/// their resume state) and per-evaluation homes need an explicit owner ABI.
+pub(crate) fn body_needs_explicit_method_owner(body: &[perry_hir::Stmt], fresh: bool) -> bool {
+    body_has_fixed_generator_state(body) || (fresh && body_needs_method_owner(body))
+}

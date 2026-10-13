@@ -12,14 +12,29 @@
 /// Convert a method's retained lexical class owner to its home object.
 /// The caller selects instance versus static; the receiver never participates.
 #[no_mangle]
-pub unsafe extern "C" fn js_class_method_home(owner: f64, is_static: i32) -> f64 {
+pub unsafe extern "C" fn js_class_method_home(mut owner: f64, is_static: i32) -> f64 {
+    // The explicit owner ABI accepts the selected callable or its lexical
+    // class. Constructor/class shape identity distinguishes the two; method
+    // objects retain their class in capture zero. No receiver/name lookup.
+    let value = crate::value::JSValue::from_bits(owner.to_bits());
+    let mut constructor = super::class_value::class_value_id(owner);
+    if constructor.is_none()
+        && value.is_pointer()
+        && !super::class_registry::is_class_object_value(owner)
+    {
+        let ptr = value.as_pointer::<crate::closure::ClosureHeader>();
+        if crate::closure::is_closure_ptr(ptr as usize) {
+            owner = crate::closure::js_closure_get_capture_f64(ptr, 0);
+            constructor = super::class_value::class_value_id(owner);
+        }
+    }
     if is_static != 0 {
         return owner;
     }
     if let Some(cid) = super::class_prototype_ref_id(owner) {
         return super::class_registry::class_decl_prototype_value(cid);
     }
-    if let Some(cid) = super::class_value::class_value_id(owner) {
+    if let Some(cid) = constructor {
         return super::class_registry::class_decl_prototype_value(cid);
     }
     let object =

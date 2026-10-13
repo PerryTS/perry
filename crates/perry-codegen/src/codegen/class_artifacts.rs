@@ -85,6 +85,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
     // this_box, arg0, arg1, ...) -> double`. Methods are emitted as
     // standalone LLVM functions; the dispatch in `lower_call` calls
     // them directly.
+    let fresh = super::fresh_class_templates::fresh_class_templates(hir);
     let classes_started = Instant::now();
     let class_progress_step = (hir.classes.len() / 20).max(1);
     for (class_index, class) in hir.classes.iter().enumerate() {
@@ -795,8 +796,9 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 )
             })?;
         }
-        // Only a generator's small birth factory needs the actual callable.
-        // The existing private resume body is emitted once, shared by entries.
+        // Emit an owner body only when the callable can name a distinct home
+        // or must retain its identity in generator state. Declarations share
+        // their direct body with the callable entry.
         for (method, is_static) in class
             .methods
             .iter()
@@ -808,7 +810,12 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     .iter()
                     .map(|m| (&m.function, m.is_static)),
             )
-            .filter(|(f, _)| super::helpers::body_needs_method_owner(&f.body))
+            .filter(|(f, _)| {
+                super::helpers::body_needs_explicit_method_owner(
+                    &f.body,
+                    fresh.contains(&class.name),
+                )
+            })
         {
             if is_static {
                 compile_static_method(
@@ -863,6 +870,31 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                     true,
                 )?;
+            }
+            if fresh.contains(&class.name)
+                && !super::helpers::body_has_fixed_generator_state(&method.body)
+            {
+                let public = if is_static {
+                    super::helpers::scoped_static_method_name(
+                        module_prefix,
+                        class.id,
+                        &class.name,
+                        &method.name,
+                    )
+                } else {
+                    method_names
+                        .get(&(class.name.clone(), method.name.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            format!(
+                                "perry_method_{}__{}__{}",
+                                module_prefix,
+                                super::helpers::sanitize_member(&class.name),
+                                super::helpers::sanitize_member(&method.name)
+                            )
+                        })
+                };
+                super::shared_class_method_bodies::share(llmod, &public, class_ids[&class.name]);
             }
         }
         let done = class_index + 1;

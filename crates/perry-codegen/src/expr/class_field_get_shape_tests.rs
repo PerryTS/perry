@@ -264,3 +264,40 @@ fn constructor_store_class_field_read_takes_the_word() {
     .expect("LLVM IR should be UTF-8");
     assert_shape_site(&probe_bodies(&ir), "constructor-store field", false);
 }
+
+#[test]
+fn memo_hits_share_a_managed_receiver_handle() {
+    let mut m = probe_module(Type::Any);
+    let get = Expr::PropertyGet {
+        byte_offset: 0,
+        object: Box::new(Expr::LocalGet(PARAM_ID)),
+        property: "x".into(),
+    };
+    m.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: perry_hir::BinaryOp::Add,
+        left: Box::new(get.clone()),
+        right: Box::new(get),
+    }))];
+    let ir =
+        String::from_utf8(compile_module(&m, super::class_field_barrier_tests::ir_opts()).unwrap())
+            .unwrap();
+    let body = probe_bodies(&ir);
+    assert!(
+        body.contains("pget.class.memo_clear"),
+        "fixture must reuse the proof: {body}"
+    );
+    if crate::codegen::helpers::native_stack_roots_enabled() {
+        assert!(
+            body.contains("getelementptr i8, ptr addrspace(1)"),
+            "memo hits must address the managed handle: {body}"
+        );
+        assert!(body.contains("load ptr addrspace(1)"));
+        #[cfg(feature = "llvm-inprocess")]
+        crate::inprocess::statepoint_rewritten_ir(
+            &ir,
+            &crate::codegen::default_target_triple(),
+            "class_memo_handle",
+        )
+        .expect("the managed handle must survive RS4GC verification");
+    }
+}

@@ -139,6 +139,7 @@ unsafe fn rewritable_operands(inst: LLVMValueRef) -> std::ops::Range<u32> {
         | LLVMOpcode::LLVMOr
         | LLVMOpcode::LLVMXor
         | LLVMOpcode::LLVMICmp => 0..2,
+        LLVMOpcode::LLVMGetElementPtr => 1..LLVMGetNumOperands(inst) as u32,
         LLVMOpcode::LLVMSelect => 1..3,
         LLVMOpcode::LLVMStore => 0..1,
         LLVMOpcode::LLVMCall | LLVMOpcode::LLVMInvoke => call_arguments(inst),
@@ -260,6 +261,21 @@ mod tests {
         assert!(
             asm.contains(&format!(".hidden\t{TABLE_SYMBOL}")),
             "the table binds inside the image (hidden):\n{asm}"
+        );
+    }
+
+    #[test]
+    fn pointer_offsets_use_the_same_nanbox_operand_table() {
+        let asm = assembly(
+            "define i64 @f(ptr %boxed) \"perry-nanbox-operands\" {\nentry:\n  %handle = getelementptr i8, ptr %boxed, i64 -9222527611924643840\n  %bits = call i64 asm \"\", \"=r,0\"(ptr %handle) \"gc-leaf-function\" memory(none)\n  ret i64 %bits\n}\n",
+        );
+        assert!(
+            !asm.contains("movabs"),
+            "a pointer offset must not materialize an immediate: {asm}"
+        );
+        assert!(
+            asm.contains(TABLE_SYMBOL),
+            "the offset must use the shared operand table: {asm}"
         );
     }
 

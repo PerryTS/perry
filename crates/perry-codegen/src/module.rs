@@ -383,6 +383,20 @@ impl LlModule {
         self.functions.push(func);
     }
 
+    /// Replace a lowered implementation with an ABI adapter, retaining the
+    /// module-owned function-info and call-convention authorities.
+    pub(crate) fn replace_defined_function(&mut self, func: LlFunction) {
+        let i = self
+            .functions
+            .iter()
+            .position(|f| f.name == func.name)
+            .expect("defined body");
+        func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
+        func.set_fn_infos(Rc::clone(&self.fn_infos));
+        func.set_null_guard_global(&self.null_guard_global());
+        self.functions[i] = func;
+    }
+
     /// Record a fact about `body`, a JS body this module defines, in its
     /// `JsFunctionInfo` (`crate::fn_info`).
     pub(crate) fn note_fn_info(

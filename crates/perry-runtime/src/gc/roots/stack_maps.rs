@@ -407,7 +407,7 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
 /// Upper bound on how far a derived pointer may sit from its base before the
 /// rewrite refuses to touch it. LLVM only pairs a derived pointer with the
 /// base it was actually derived from, so a delta beyond any plausible object
-/// means the map and this frame disagree — leave the slot alone rather than
+/// in either direction means the map and this frame disagree — leave the slot alone rather than
 /// manufacture an address. 64 MiB is far above the largest movable object
 /// (`MAX_YOUNG_MOVE_BYTES` is 1 MiB) without being "any bits at all".
 const MAX_DERIVED_DELTA: usize = 64 << 20;
@@ -577,7 +577,7 @@ unsafe fn rewrite_derived_slot(derived_addr: usize, base_addr: usize, old_base_w
         return;
     };
     let delta = old_derived.addr().wrapping_sub(old_base.addr());
-    if delta > MAX_DERIVED_DELTA {
+    if delta > MAX_DERIVED_DELTA && delta.wrapping_neg() > MAX_DERIVED_DELTA {
         return;
     }
     *(derived_addr as *mut u64) = old_derived.encode(new_base.addr().wrapping_add(delta));
@@ -1780,3 +1780,53 @@ mod decode_tests;
 mod walker_agreement;
 
 pub(crate) mod census_rows;
+
+#[cfg(test)]
+mod tagged_derived_tests {
+    use super::*;
+
+    #[test]
+    fn tagged_base_relocates_a_raw_receiver_handle() {
+        let old = 0x4000_0000u64;
+        let new = 0x6000_0000u64;
+        let tag = crate::value::POINTER_TAG;
+        for offset in [0usize, 8, MAX_DERIVED_DELTA] {
+            let mut base = tag | new;
+            let mut derived = old.wrapping_add(offset as u64);
+            unsafe {
+                rewrite_derived_slot(
+                    &mut derived as *mut u64 as usize,
+                    &mut base as *mut u64 as usize,
+                    tag | old,
+                );
+            }
+            assert_eq!(derived, new.wrapping_add(offset as u64));
+        }
+        for offset in [8usize, 2 << 20, MAX_DERIVED_DELTA] {
+            let mut base = tag | new;
+            let mut derived = old.wrapping_sub(offset as u64);
+            unsafe {
+                rewrite_derived_slot(
+                    &mut derived as *mut u64 as usize,
+                    &mut base as *mut u64 as usize,
+                    tag | old,
+                );
+            }
+            assert_eq!(derived, new.wrapping_sub(offset as u64));
+        }
+        let mut base = tag | new;
+        let mut derived = old.wrapping_add((MAX_DERIVED_DELTA + 1) as u64);
+        let unchanged = derived;
+        unsafe {
+            rewrite_derived_slot(
+                &mut derived as *mut u64 as usize,
+                &mut base as *mut u64 as usize,
+                tag | old,
+            );
+        }
+        assert_eq!(
+            derived, unchanged,
+            "out-of-contract offsets must still be rejected"
+        );
+    }
+}

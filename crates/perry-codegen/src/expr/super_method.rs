@@ -19,17 +19,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let owner = if let Some(slot) = ctx.current_closure_slot.clone() {
                 let callee = ctx.block().load(I64, &slot);
-                ctx.block().call(
-                    DOUBLE,
-                    "js_closure_get_capture_f64",
-                    &[(I64, &callee), (I32, "0")],
-                )
+                super::nanbox_pointer_inline(ctx.block(), &callee)
             } else if let Some(callee) = ctx.current_closure_ptr.clone() {
-                ctx.block().call(
-                    DOUBLE,
-                    "js_closure_get_capture_f64",
-                    &[(I64, &callee), (I32, "0")],
-                )
+                super::nanbox_pointer_inline(ctx.block(), &callee)
             } else {
                 let cid =
                     ctx.class_ids.get(class_name).copied().ok_or_else(|| {

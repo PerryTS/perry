@@ -353,8 +353,6 @@ pub(crate) fn lower_class_field_property_get(
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-
     let token_idx = ctx.new_block("pget.class.token");
     let hit_idx = ctx.new_block("pget.class.hit");
     let miss_idx = ctx.new_block("pget.class.miss");
@@ -365,14 +363,33 @@ pub(crate) fn lower_class_field_property_get(
     let merge_label = ctx.block_label(merge_idx);
 
     let memo = crate::expr::class_guard_memo::memo_for(ctx, object);
-    if let Some(crate::expr::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
+    let recv = if memo
+        .as_ref()
+        .and_then(|memo| memo.handle.as_ref())
+        .is_none()
+    {
+        Some(crate::expr::receiver_range::emit_fused_receiver_test(
+            ctx.block(),
+            &obj_bits,
+        ))
+    } else {
+        None
+    };
+    if let Some(memo) = memo.as_ref().filter(|memo| memo.reuse) {
         let site_idx = ctx.new_block("pget.class.memo_clear");
         let site_label = ctx.block_label(site_idx);
-        let flag = ctx.block().load(I8, flag_slot);
+        let flag = ctx.block().load(I8, &memo.flag);
         let proven = ctx.block().icmp_ne(I8, &flag, "0");
         ctx.block().cond_br(&proven, &hit_label, &site_label);
         ctx.current_block = site_idx;
     }
+    let recv = recv.unwrap_or_else(|| {
+        memo.as_ref()
+            .map(|memo| memo.receiver_test(ctx.block(), &obj_bits))
+            .unwrap_or_else(|| {
+                crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits)
+            })
+    });
     ctx.block()
         .cond_br(&recv.is_object_pointer, &token_label, &miss_label);
 
@@ -392,27 +409,26 @@ pub(crate) fn lower_class_field_property_get(
         true,
     );
     let proven = crate::typed_shape::emit_compatible_shape_eq(ctx.block(), &sid, &expected, &[]);
-    match &memo {
-        Some(crate::expr::class_guard_memo::Memo::Set(slots)) => {
-            let set_idx = ctx.new_block("pget.class.memo_set");
-            let set_label = ctx.block_label(set_idx);
-            ctx.block().cond_br(&proven, &set_label, &miss_label);
-            ctx.current_block = set_idx;
-            for slot in slots {
-                ctx.block().store(I8, "1", slot);
-            }
-            ctx.block().br(&hit_label);
-        }
-        _ => ctx.block().cond_br(&proven, &hit_label, &miss_label),
+    if let Some(memo) = memo.as_ref().filter(|memo| !memo.reuse) {
+        let set_idx = ctx.new_block("pget.class.memo_set");
+        let set_label = ctx.block_label(set_idx);
+        ctx.block().cond_br(&proven, &set_label, &miss_label);
+        ctx.current_block = set_idx;
+        ctx.block().store(I8, "1", &memo.flag);
+        ctx.block().br(&hit_label);
+    } else {
+        ctx.block().cond_br(&proven, &hit_label, &miss_label);
     }
 
     ctx.current_block = hit_idx;
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
-        ctx.block(),
-        &recv.biased,
-        header + i64::from(predicted.slot) * 8,
-    );
+    let offset = header + i64::from(predicted.slot) * 8;
+    let slot_ptr = memo
+        .as_ref()
+        .and_then(|memo| memo.field_ptr(ctx.block(), offset))
+        .unwrap_or_else(|| {
+            crate::expr::receiver_range::emit_field_ptr(ctx.block(), &recv.biased, offset)
+        });
     let val_hit = ctx.block().load(DOUBLE, &slot_ptr);
     let hit_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);

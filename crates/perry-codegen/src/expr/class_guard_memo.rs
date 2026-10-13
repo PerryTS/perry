@@ -27,6 +27,18 @@
 //! nested statement list, a closure) ends the run. A flag is set only by a
 //! passing compare of its own run and cleared by every call, so a site that
 //! finds it set is proven whatever path reached it.
+//!
+//! Native runs also share the receiver handle as a `ptr addrspace(1)`.
+//! The pointer remains in that domain from its first successful receiver
+//! test through its last slot load; mem2reg promotes the home and RS4GC
+//! computes its live set at every collecting call and emits `gc.relocate`.
+//! Calls revoke the shape proof, not the pointer's liveness. The full site
+//! after a call derives its receiver afresh and replaces the managed handle
+//! before publishing a new proof. The handle derives from a tagged receiver
+//! root; its decoded offset is minus the handle floor. RS4GC preserves that
+//! base/derived pair and the collector applies the same movement to both.
+//! No biased integer crosses a statepoint,
+//! and no runtime root, scanner, or shadow slot is added.
 use super::FnCtx;
 use perry_hir::{Expr, Stmt};
 use std::collections::BTreeMap;
@@ -43,16 +55,77 @@ pub(crate) struct Window {
 struct Receiver {
     shape: String,
     shape_set: bool,
+    handle: Option<String>,
 }
 
 /// What a predicted read site of a run receiver does with the run's flag.
-pub(crate) enum Memo {
-    /// The first site needing this proof: the full site, whose passing compare
-    /// sets these flags.
-    Set(Vec<String>),
-    /// An earlier site already sets this flag: test it first, and run the
-    /// whole site when it is clear.
-    Reuse(String),
+pub(crate) struct Memo {
+    pub(crate) flag: String,
+    pub(crate) reuse: bool,
+    /// A native managed pointer, continuously live throughout this run.
+    pub(crate) handle: Option<String>,
+}
+
+impl Memo {
+    pub(crate) fn publish_receiver(&self, blk: &mut crate::block::LlBlock, bits: &str) {
+        if let Some(slot) = &self.handle {
+            // Native base roots are tagged JSValues. The actual handle is
+            // derived from that base; after decoding tags its relocation
+            // offset is minus the handle floor, under the bounded signed
+            // base/derived GC contract.
+            let base = blk.fresh_reg();
+            blk.emit_raw(format!("{base} = inttoptr i64 {bits} to ptr addrspace(1)"));
+            let handle = blk.fresh_reg();
+            blk.emit_raw(format!(
+                "{handle} = getelementptr i8, ptr addrspace(1) {base}, i64 {}",
+                (super::receiver_range::RECEIVER_BIAS as i64).wrapping_neg()
+            ));
+            blk.store("ptr addrspace(1)", &handle, slot);
+        }
+    }
+
+    fn handle_bits(&self, blk: &mut crate::block::LlBlock) -> Option<String> {
+        let slot = self.handle.as_ref()?;
+        let handle = blk.load("ptr addrspace(1)", slot);
+        let bits = blk.fresh_reg();
+        // The managed input is continuously live through the run. RS4GC
+        // rewrites it before CSE shares this pure identity on call-free hit
+        // paths. No integer result is re-rooted, so there is no lifetime hole.
+        blk.emit_raw(format!("{bits} = call i64 asm \"\", \"=r,0\"(ptr addrspace(1) {handle}) \"gc-leaf-function\" memory(none)"));
+        Some(bits)
+    }
+
+    pub(crate) fn field_ptr(&self, blk: &mut crate::block::LlBlock, offset: i64) -> Option<String> {
+        let offset = offset + super::receiver_range::HANDLE_FLOOR as i64;
+        let bits = self.handle_bits(blk)?;
+        let base = blk.inttoptr(crate::types::I64, &bits);
+        Some(blk.gep(
+            crate::types::I8,
+            &base,
+            &[(crate::types::I64, &offset.to_string())],
+        ))
+    }
+
+    pub(crate) fn receiver_test(
+        &self,
+        blk: &mut crate::block::LlBlock,
+        bits: &str,
+    ) -> super::receiver_range::FusedReceiver {
+        if self.handle.is_none() {
+            return super::receiver_range::emit_fused_receiver_test(blk, bits);
+        }
+        self.publish_receiver(blk, bits);
+        let biased = self.handle_bits(blk).unwrap();
+        let is_object_pointer = blk.icmp_ult(
+            crate::types::I64,
+            &biased,
+            super::receiver_range::RECEIVER_SPAN_LITERAL,
+        );
+        super::receiver_range::FusedReceiver {
+            biased,
+            is_object_pointer,
+        }
+    }
 }
 
 pub(crate) fn memo_for(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Option<Memo> {
@@ -64,12 +137,13 @@ pub(crate) fn memo_for(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Option<Memo> {
         return None;
     };
     let r = window.slots.get_mut(id)?;
-    Some(if r.shape_set {
-        Memo::Reuse(r.shape.clone())
-    } else {
-        r.shape_set = true;
-        Memo::Set(vec![r.shape.clone()])
-    })
+    let memo = Memo {
+        flag: r.shape.clone(),
+        reuse: r.shape_set,
+        handle: r.handle.clone(),
+    };
+    r.shape_set = true;
+    Some(memo)
 }
 
 /// A receiver whose field accesses take the declared-class guard: a local
@@ -188,11 +262,22 @@ pub(crate) fn before_stmt(ctx: &mut FnCtx<'_>, stmts: &[Stmt], i: usize) {
             .entry_allocas_push_store(crate::types::I8, "0", &shape);
         ctx.block().store(crate::types::I8, "0", &shape);
         ctx.func.reg_counter().push_guard_memo_slot(shape.clone());
+        // Keep the handle as a managed derivation of a tagged receiver root.
+        // mem2reg + RS4GC carry its base/derived relocation
+        // across any miss call. There is no root lifetime hole inside a run;
+        // unlike boxed root reloads this does not require identity laundering.
+        let handle = crate::codegen::helpers::native_stack_roots_enabled().then(|| {
+            let slot = ctx.func.alloca_entry("ptr addrspace(1)");
+            ctx.func
+                .entry_allocas_push_store("ptr addrspace(1)", "null", &slot);
+            slot
+        });
         slots.insert(
             id,
             Receiver {
                 shape,
                 shape_set: false,
+                handle,
             },
         );
     }
@@ -219,5 +304,66 @@ pub(crate) fn after_stmt(ctx: &mut FnCtx<'_>) {
 pub(crate) fn close(ctx: &mut FnCtx<'_>) {
     if ctx.class_guard_window.take().is_some() {
         ctx.func.reg_counter().clear_guard_memo_slots();
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+mod tests {
+    use super::*;
+    use crate::types::{I64, VOID};
+
+    #[test]
+    fn shared_handle_is_relocated_across_a_collecting_call() {
+        let _native = crate::testing::NativeRootsPin::native();
+        let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
+        module.declare_function("js_gc", VOID, &[]);
+        let f = module.define_function("memo_gc", I64, vec![(I64, "%handle".into())]);
+        f.enable_shadow_frame(1);
+        let slot = f.alloca_entry("ptr addrspace(1)");
+        f.entry_allocas_push_store("ptr addrspace(1)", "null", &slot);
+        let memo = Memo {
+            flag: String::new(),
+            reuse: false,
+            handle: Some(slot),
+        };
+        let b = f.create_block("entry");
+        memo.publish_receiver(b, "%handle");
+        b.call_void("js_gc", &[]);
+        let ptr = memo.field_ptr(b, 32).unwrap();
+        let value = b.load(I64, &ptr);
+        b.ret(I64, &value);
+        let ir = module.to_ir();
+        let rewritten =
+            crate::inprocess::statepoint_rewritten_ir(&ir, "x86_64-unknown-linux-gnu", "memo_gc")
+                .expect("managed receiver must survive the statepoint verifier");
+        assert!(
+            rewritten
+                .lines()
+                .any(|line| line.contains("call ")
+                    && line.contains("@llvm.experimental.gc.relocate")),
+            "a handle used after collection must be relocated: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("\"gc-live\"(ptr addrspace(1)"),
+            "the shared handle must be in the collecting call's live set: {rewritten}"
+        );
+        // Negative control: the same emitter's integer/plain-pointer form
+        // has no managed operand for the collecting call to relocate.
+        let control = ir
+            .replace("ptr addrspace(1)", "ptr")
+            .replace("addrspacecast ptr", "bitcast ptr");
+        let unrooted = crate::inprocess::statepoint_rewritten_ir(
+            &control,
+            "x86_64-unknown-linux-gnu",
+            "memo_gc_negative_control",
+        )
+        .expect("negative-control IR must remain valid");
+        assert!(
+            !unrooted
+                .lines()
+                .any(|line| line.contains("call ")
+                    && line.contains("@llvm.experimental.gc.relocate")),
+            "the negative control unexpectedly retained a managed root: {unrooted}"
+        );
     }
 }

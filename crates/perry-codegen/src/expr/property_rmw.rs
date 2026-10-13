@@ -185,25 +185,39 @@ fn inline_number_site(
     let slow_label = ctx.block_label(slow);
     let join_label = ctx.block_label(join);
     let bits = ctx.block().bitcast_double_to_i64(receiver);
-    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
     let memo = predicted
         .as_ref()
         .and_then(|_| super::class_guard_memo::memo_for(ctx, object));
-    if let Some(super::class_guard_memo::Memo::Reuse(flag_slot)) = &memo {
+    let recv = if memo
+        .as_ref()
+        .and_then(|memo| memo.handle.as_ref())
+        .is_none()
+    {
+        Some(super::receiver_range::emit_fused_receiver_test(
+            ctx.block(),
+            &bits,
+        ))
+    } else {
+        None
+    };
+    if let Some(memo) = memo.as_ref().filter(|memo| memo.reuse) {
         let site = ctx.new_block("property_rmw.memo_clear");
         let site_label = ctx.block_label(site);
-        let flag = ctx.block().load(crate::types::I8, flag_slot);
+        let flag = ctx.block().load(crate::types::I8, &memo.flag);
         let proven = ctx.block().icmp_ne(crate::types::I8, &flag, "0");
         ctx.block().cond_br(&proven, &fast_label, &site_label);
         ctx.current_block = site;
     }
+    let recv = recv.unwrap_or_else(|| {
+        memo.as_ref()
+            .map(|memo| memo.receiver_test(ctx.block(), &bits))
+            .unwrap_or_else(|| super::receiver_range::emit_fused_receiver_test(ctx.block(), &bits))
+    });
     ctx.block()
         .cond_br(&recv.is_object_pointer, &token_label, &slow_label);
 
     ctx.current_block = token;
-    let handle = super::receiver_range::emit_handle(ctx.block(), &recv.biased);
-    let sid_addr = ctx.block().add(I64, &handle, "4");
-    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
+    let sid_ptr = super::receiver_range::emit_field_ptr(ctx.block(), &recv.biased, 4);
     let sid = ctx.block().load(I32, &sid_ptr);
     let word = match predicted.as_ref() {
         Some((p, _)) => {
@@ -220,18 +234,15 @@ fn inline_number_site(
                 &expected,
                 &[p.slot],
             );
-            match &memo {
-                Some(super::class_guard_memo::Memo::Set(slots)) => {
-                    let set = ctx.new_block("property_rmw.memo_set");
-                    let set_label = ctx.block_label(set);
-                    ctx.block().cond_br(&proven, &set_label, &slow_label);
-                    ctx.current_block = set;
-                    for slot in slots {
-                        ctx.block().store(crate::types::I8, "1", slot);
-                    }
-                    ctx.block().br(&fast_label);
-                }
-                _ => ctx.block().cond_br(&proven, &fast_label, &slow_label),
+            if let Some(memo) = memo.as_ref().filter(|memo| !memo.reuse) {
+                let set = ctx.new_block("property_rmw.memo_set");
+                let set_label = ctx.block_label(set);
+                ctx.block().cond_br(&proven, &set_label, &slow_label);
+                ctx.current_block = set;
+                ctx.block().store(crate::types::I8, "1", &memo.flag);
+                ctx.block().br(&fast_label);
+            } else {
+                ctx.block().cond_br(&proven, &fast_label, &slow_label);
             }
             None
         }
@@ -251,7 +262,15 @@ fn inline_number_site(
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
     // The handle again, from the receiver bits: the memo's flag edge reaches
     // this block without the token block.
-    let fast_handle = super::receiver_range::emit_handle(ctx.block(), &recv.biased);
+    let fast_handle = if memo
+        .as_ref()
+        .and_then(|memo| memo.handle.as_ref())
+        .is_some()
+    {
+        String::new()
+    } else {
+        super::receiver_range::emit_handle(ctx.block(), &recv.biased)
+    };
     let (slot, numeric) = match (&word, predicted.as_ref()) {
         (Some(word), _) => {
             let index = ctx.block().lshr(I64, word, "32");
@@ -271,9 +290,14 @@ fn inline_number_site(
             ((slot, old), Some(numeric))
         }
         (None, Some((p, f64_lane))) => {
-            let offset = (header + u64::from(p.slot) * 8).to_string();
-            let addr = ctx.block().add(I64, &fast_handle, &offset);
-            let slot = ctx.block().inttoptr(I64, &addr);
+            let offset = (header + u64::from(p.slot) * 8) as i64;
+            let slot = memo
+                .as_ref()
+                .and_then(|memo| memo.field_ptr(ctx.block(), offset))
+                .unwrap_or_else(|| {
+                    let addr = ctx.block().add(I64, &fast_handle, &offset.to_string());
+                    ctx.block().inttoptr(I64, &addr)
+                });
             let old = ctx.block().load(DOUBLE, &slot);
             // An `F64` lane of the compared ShapeId holds a Number.
             let numeric = (!f64_lane).then(|| {

@@ -218,10 +218,11 @@ pub(super) fn emit_class_method_entry(
 }
 
 /// Source flags of a class member, without another persistent metadata table.
-pub(super) fn source_is_fixed_generator(
+pub(super) fn source_needs_owner(
     classes: &[(u32, &perry_hir::Class)],
     cid: u32,
     id: u32,
+    fresh: bool,
 ) -> bool {
     classes
         .iter()
@@ -232,7 +233,10 @@ pub(super) fn source_is_fixed_generator(
                 .iter()
                 .chain(class.static_methods.iter())
                 .chain(class.computed_members.iter().map(|m| &m.function))
-                .any(|f| f.id == id && crate::codegen::helpers::body_needs_method_owner(&f.body))
+                .any(|f| {
+                    f.id == id
+                        && crate::codegen::helpers::body_needs_explicit_method_owner(&f.body, fresh)
+                })
         })
 }
 
@@ -280,6 +284,27 @@ mod tests {
     }
 
     #[test]
+    fn declaration_super_home_shares_the_direct_body_but_fresh_home_needs_owner() {
+        let body = vec![perry_hir::Stmt::Let {
+            id: 1,
+            name: "home".into(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: Some(perry_hir::Expr::ClassMethodHome {
+                class_name: "C".into(),
+                is_static: false,
+            }),
+        }];
+        assert!(crate::codegen::helpers::body_needs_method_owner(&body));
+        assert!(!crate::codegen::helpers::body_needs_explicit_method_owner(
+            &body, false
+        ));
+        assert!(crate::codegen::helpers::body_needs_explicit_method_owner(
+            &body, true
+        ));
+    }
+
+    #[test]
     fn declaration_entries_forward_the_receiver_without_a_home_scope() {
         let ir = entry(false);
         assert!(ir.contains("define double @method_body__eclo"));
@@ -305,7 +330,11 @@ pub(super) fn emit_computed_generator_entries(
 ) {
     for &(cid, class) in classes {
         for m in class.computed_members.iter().filter(|m| {
-            !m.is_static && crate::codegen::helpers::body_needs_method_owner(&m.function.body)
+            !m.is_static
+                && crate::codegen::helpers::body_needs_explicit_method_owner(
+                    &m.function.body,
+                    fresh.contains(&cid),
+                )
         }) {
             let f = &m.function;
             let llvm_name = format!(

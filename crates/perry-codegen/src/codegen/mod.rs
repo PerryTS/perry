@@ -184,6 +184,7 @@ mod artifacts;
 pub(crate) mod boxed_locals;
 mod cjs_exports;
 mod class_artifacts;
+mod shared_class_method_bodies;
 pub(crate) mod class_hierarchy;
 #[cfg(test)]
 mod clone_suffix_tests;

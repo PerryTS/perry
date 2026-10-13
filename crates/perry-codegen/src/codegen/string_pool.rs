@@ -1127,7 +1127,10 @@ pub(super) fn emit_string_pool(
                     .any(|p| p.is_rest && p.arguments_object.is_none()),
                 has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
                 home: fresh_class_templates.contains(class_name),
-                generator_owner: super::helpers::body_needs_method_owner(&f.body),
+                generator_owner: super::helpers::body_needs_explicit_method_owner(
+                    &f.body,
+                    fresh_class_templates.contains(class_name),
+                ),
                 is_generator: super::helpers::body_has_fixed_generator_state(&f.body),
             });
         }
@@ -1294,10 +1297,11 @@ pub(super) fn emit_string_pool(
                 cid,
                 definition_order,
             ),
-            generator_owner: method_entries::source_is_fixed_generator(
+            generator_owner: method_entries::source_needs_owner(
                 &local_classes,
                 cid,
                 definition_order,
+                home,
             ),
         });
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
@@ -1405,10 +1409,11 @@ pub(super) fn emit_string_pool(
                     cid,
                     definition_order,
                 ),
-                generator_owner: method_entries::source_is_fixed_generator(
+                generator_owner: method_entries::source_needs_owner(
                     &local_classes,
                     cid,
                     definition_order,
+                    fresh_cids.contains(&cid),
                 ),
             },
         );
