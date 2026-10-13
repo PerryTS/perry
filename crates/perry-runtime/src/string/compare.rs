@@ -171,11 +171,7 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
         let data_b = string_data(b);
         let slice_a = std::slice::from_raw_parts(data_a, blen_a as usize);
         let slice_b = std::slice::from_raw_parts(data_b, blen_b as usize);
-        if slice_a == slice_b {
-            1
-        } else {
-            0
-        }
+        if slice_a == slice_b { 1 } else { 0 }
     }
 }
 
@@ -771,7 +767,7 @@ fn locale_compare_canonical(
     }
     #[cfg(feature = "string-normalize")]
     {
-        use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
+        use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
         // Non-ASCII text is still usually *already* NFC — precomposed letters,
         // CJK and emoji all are; only combining marks and decomposable
         // singletons are not. The quick check is a table lookup per scalar and
@@ -1114,17 +1110,29 @@ pub extern "C" fn js_string_locale_compare_opts(
     b: *const StringHeader,
     options: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a_handle = scope.root_string_ptr(a);
+    let b_handle = scope.root_string_ptr(b);
+    let options_handle = scope.root_nanbox_f64(options);
+    // Creating the key can allocate. Root all incoming values first, then
+    // reload the options receiver before generic Get, which may invoke a
+    // getter and collect as well.
+    let numeric_key =
+        scope.root_string_ptr(crate::string::js_string_from_bytes(b"numeric".as_ptr(), 7));
     let numeric = {
+        let options = options_handle.get_nanbox_f64();
         let ptr =
             crate::value::js_nanbox_get_pointer(options) as *const crate::object::ObjectHeader;
         if ptr.is_null() || (ptr as usize) < 0x10000 {
             false
         } else {
-            let key = crate::string::js_string_from_bytes(b"numeric".as_ptr(), 7);
+            let key = numeric_key.get_raw_const_ptr::<StringHeader>();
             let v = crate::object::js_object_get_field_by_name_f64(ptr, key);
             crate::value::js_is_truthy(v) != 0
         }
     };
+    let a = a_handle.get_raw_const_ptr::<StringHeader>();
+    let b = b_handle.get_raw_const_ptr::<StringHeader>();
     if !numeric {
         return js_string_locale_compare(a, b);
     }
@@ -1530,6 +1538,73 @@ mod numeric_collation_tests {
     }
 }
 
+#[cfg(test)]
+mod locale_compare_moving_roots_tests {
+    use super::*;
+
+    extern "C" fn numeric_true_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        crate::gc::gc_collect_minor();
+        f64::from_bits(crate::value::TAG_TRUE)
+    }
+
+    #[test]
+    fn moving_locale_compare_options_getter_reloads_strings_and_options() {
+        let _gc = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a = scope.root_string_ptr(crate::string::js_string_from_str("file2"));
+        let b = scope.root_string_ptr(crate::string::js_string_from_str("file10"));
+        let options_ptr = crate::object::js_object_alloc(0, 0);
+        let options = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(options_ptr as i64));
+        let getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(numeric_true_getter, 0),
+            0,
+        ) as i64);
+        let key = crate::string::js_string_from_bytes(b"numeric".as_ptr(), 7);
+        crate::object::js_object_define_getter(
+            options.get_nanbox_f64(),
+            f64::from_bits(crate::value::JSValue::string_ptr(key).bits()),
+            getter,
+        );
+
+        let a_before = a.get_raw_const_ptr::<StringHeader>() as usize;
+        let b_before = b.get_raw_const_ptr::<StringHeader>() as usize;
+        let options_before = crate::value::js_nanbox_get_pointer(options.get_nanbox_f64()) as usize;
+        let result = js_string_locale_compare_opts(
+            a.get_raw_const_ptr::<StringHeader>(),
+            b.get_raw_const_ptr::<StringHeader>(),
+            options.get_nanbox_f64(),
+        );
+
+        assert_eq!(result, -1.0);
+        assert_ne!(
+            a_before,
+            a.get_raw_const_ptr::<StringHeader>() as usize,
+            "the getter's forced moving minor must relocate the first string"
+        );
+        assert_ne!(
+            b_before,
+            b.get_raw_const_ptr::<StringHeader>() as usize,
+            "the getter's forced moving minor must relocate the second string"
+        );
+        assert_ne!(
+            options_before,
+            crate::value::js_nanbox_get_pointer(options.get_nanbox_f64()) as usize,
+            "the getter's forced moving minor must relocate its options receiver"
+        );
+    }
+}
+
 /// #10094: the primary collation pass stopped materializing two lowercased
 /// `String`s per comparison. These tests pin the two properties that makes
 /// safe — the ordering is byte-for-byte what the allocating formulation
@@ -1893,7 +1968,7 @@ mod locale_collation_tests {
 mod tests_sso_helpers {
     use super::*;
     use crate::value::SHORT_STRING_MAX_LEN;
-    use crate::{js_string_from_bytes, JSValue};
+    use crate::{JSValue, js_string_from_bytes};
 
     /// #1781: a STRING_TAG heap key and a SHORT_STRING_TAG inline key
     /// with the same bytes must both match an incoming heap key.

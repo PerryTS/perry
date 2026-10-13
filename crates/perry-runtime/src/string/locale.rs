@@ -86,7 +86,9 @@ fn validate_language_tag(tag: &str) -> Result<String, ()> {
 /// locale). An array yields the FIRST element's primary subtag (BestAvailable
 /// is approximated as "first listed").
 fn resolve_primary_locale(locales: f64) -> Option<String> {
-    let v = JSValue::from_bits(locales.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let locales_handle = scope.root_nanbox_f64(locales);
+    let v = JSValue::from_bits(locales_handle.get_nanbox_u64());
     if v.is_undefined() || v.is_null() {
         return None;
     }
@@ -101,11 +103,19 @@ fn resolve_primary_locale(locales: f64) -> Option<String> {
                 (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
             };
         if is_array {
-            let arr = ptr as *const crate::array::ArrayHeader;
-            let len = crate::array::js_array_length(arr);
+            let len = crate::array::js_array_length(ptr as *const crate::array::ArrayHeader);
             let mut first: Option<String> = None;
             for i in 0..len {
+                // Indexed access can invoke an accessor and collect. Reload
+                // the array through its rooted NaN-boxed handle each time.
+                let current = JSValue::from_bits(locales_handle.get_nanbox_u64());
+                let arr = current.as_pointer::<crate::array::ArrayHeader>();
                 let elem = crate::array::js_array_get(arr, i);
+                // Keep an accessor result live while extracting its locale
+                // text; future coercion of an object-valued locale can also
+                // execute user code.
+                let elem_handle = scope.root_nanbox_f64(f64::from_bits(elem.bits()));
+                let elem = JSValue::from_bits(elem_handle.get_nanbox_u64());
                 if let Some(tag) = jsvalue_to_locale_string(elem) {
                     match validate_language_tag(&tag) {
                         Ok(primary) => {
@@ -363,7 +373,11 @@ pub extern "C" fn js_string_to_locale_lower_case(
     s: *const StringHeader,
     locales: f64,
 ) -> *mut StringHeader {
-    let primary = resolve_primary_locale(locales);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let string_handle = scope.root_string_ptr(s);
+    let locales_handle = scope.root_nanbox_f64(locales);
+    let primary = resolve_primary_locale(locales_handle.get_nanbox_f64());
+    let s = string_handle.get_raw_const_ptr::<StringHeader>();
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
@@ -384,7 +398,11 @@ pub extern "C" fn js_string_to_locale_upper_case(
     s: *const StringHeader,
     locales: f64,
 ) -> *mut StringHeader {
-    let primary = resolve_primary_locale(locales);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let string_handle = scope.root_string_ptr(s);
+    let locales_handle = scope.root_nanbox_f64(locales);
+    let primary = resolve_primary_locale(locales_handle.get_nanbox_f64());
+    let s = string_handle.get_raw_const_ptr::<StringHeader>();
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
@@ -507,5 +525,118 @@ mod tests {
         // Capital I/J are NOT soft-dotted → dot survives.
         assert_eq!(lithuanian_upper("I\u{0307}"), "I\u{0307}");
         assert_eq!(lithuanian_upper("J\u{0307}"), "J\u{0307}");
+    }
+
+    extern "C" fn locale_tr_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        crate::gc::gc_collect_minor();
+        let value = js_string_from_bytes(b"tr".as_ptr(), 2);
+        f64::from_bits(JSValue::string_ptr(value).bits())
+    }
+
+    extern "C" fn locale_en_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        crate::gc::gc_collect_minor();
+        let value = js_string_from_bytes(b"en".as_ptr(), 2);
+        f64::from_bits(JSValue::string_ptr(value).bits())
+    }
+
+    #[test]
+    fn moving_locale_case_conversion_roots_strings_and_reloads_getter_array() {
+        let _gc = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let lower = scope.root_string_ptr(js_string_from_str("I-long-string-for-moving"));
+        let mut array = crate::array::js_array_alloc(2);
+        array = crate::array::js_array_push(array, JSValue::undefined());
+        array = crate::array::js_array_push(array, JSValue::undefined());
+        let locales = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(array as i64));
+
+        let tr_getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(locale_tr_getter, 0),
+            0,
+        ) as i64);
+        let en_getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(locale_en_getter, 0),
+            0,
+        ) as i64);
+        for (key, getter) in [(b"0".as_slice(), tr_getter), (b"1".as_slice(), en_getter)] {
+            let key = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            crate::object::js_object_define_getter(
+                locales.get_nanbox_f64(),
+                f64::from_bits(JSValue::string_ptr(key).bits()),
+                getter,
+            );
+        }
+
+        let locales_before = crate::value::js_nanbox_get_pointer(locales.get_nanbox_f64()) as usize;
+        let lower_before = lower.get_raw_const_ptr::<StringHeader>() as usize;
+        let lower_result = scope.root_string_ptr(js_string_to_locale_lower_case(
+            lower.get_raw_const_ptr::<StringHeader>(),
+            locales.get_nanbox_f64(),
+        ));
+        assert_ne!(
+            lower_before,
+            lower.get_raw_const_ptr::<StringHeader>() as usize,
+            "the getter's forced moving minor must relocate the receiver"
+        );
+        assert_eq!(
+            string_as_str(lower_result.get_raw_const_ptr()),
+            "ı-long-string-for-moving"
+        );
+        assert_ne!(
+            locales_before,
+            crate::value::js_nanbox_get_pointer(locales.get_nanbox_f64()) as usize,
+            "the getter's forced moving minor must relocate the locale array"
+        );
+
+        // Allocate this receiver after the first collection so the second
+        // getter also runs while it is young and movable.
+        let upper = scope.root_string_ptr(js_string_from_str("i-long-string-for-moving"));
+        let en_array = crate::array::js_array_alloc(1);
+        let en_array = crate::array::js_array_push(en_array, JSValue::undefined());
+        let en_locales = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(en_array as i64));
+        let en_getter = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+            crate::fn_info!(locale_en_getter, 0),
+            0,
+        ) as i64);
+        let en_key = js_string_from_bytes(b"0".as_ptr(), 1);
+        crate::object::js_object_define_getter(
+            en_locales.get_nanbox_f64(),
+            f64::from_bits(JSValue::string_ptr(en_key).bits()),
+            en_getter,
+        );
+        let en_array_before =
+            crate::value::js_nanbox_get_pointer(en_locales.get_nanbox_f64()) as usize;
+        let upper_before = upper.get_raw_const_ptr::<StringHeader>() as usize;
+        let upper_result = scope.root_string_ptr(js_string_to_locale_upper_case(
+            upper.get_raw_const_ptr::<StringHeader>(),
+            en_locales.get_nanbox_f64(),
+        ));
+        assert_ne!(
+            upper_before,
+            upper.get_raw_const_ptr::<StringHeader>() as usize,
+            "the getter's forced moving minor must relocate the receiver"
+        );
+        assert_eq!(
+            string_as_str(upper_result.get_raw_const_ptr()),
+            "I-LONG-STRING-FOR-MOVING"
+        );
+        assert_ne!(
+            en_array_before,
+            crate::value::js_nanbox_get_pointer(en_locales.get_nanbox_f64()) as usize,
+            "the English index getter's forced moving minor must relocate its locale array"
+        );
     }
 }
