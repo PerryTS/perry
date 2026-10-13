@@ -72,12 +72,11 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
     // each use rather than held as raw addresses across a collection point.
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let proto = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
-        0x7FFF_FF33,
-        1,
-        b"constructor\0".as_ptr(),
-        b"constructor\0".len() as u32,
-    ));
+    let proto = scope.root_raw_mut_ptr(unsafe {
+        super::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
+            super::runtime_layouts::LEGACY_STREAM_PROTO
+        ))
+    });
     proto.with_mut_ptr::<ObjectHeader, _>(|p| {
         js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
     });
@@ -167,22 +166,24 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
 }
 
 pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: &str) {
-    let shape_id = match name {
-        "Readable" => 0x7FFF_FF34,
-        "Writable" => 0x7FFF_FF35,
-        "Duplex" => 0x7FFF_FF36,
-        "Transform" => 0x7FFF_FF37,
-        "PassThrough" => 0x7FFF_FF38,
-        _ => return,
-    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let proto = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
-        shape_id,
-        1,
-        b"constructor\0".as_ptr(),
-        b"constructor\0".len() as u32,
-    ));
+    let layout = match name {
+        "Duplex" => Some(std::ptr::addr_of!(super::runtime_layouts::DUPLEX_PROTO)),
+        "Transform" => Some(std::ptr::addr_of!(super::runtime_layouts::TRANSFORM_PROTO)),
+        "PassThrough" => Some(std::ptr::addr_of!(
+            super::runtime_layouts::PASSTHROUGH_PROTO
+        )),
+        _ => None,
+    };
+    let proto = scope.root_raw_mut_ptr(match layout {
+        Some(desc) => unsafe { super::layout_desc::perry_alloc_layout(desc) },
+        None => match name {
+            "Readable" => js_object_alloc_with_shape(0x7FFF_FF34, 1, b"constructor\0".as_ptr(), 12),
+            "Writable" => js_object_alloc_with_shape(0x7FFF_FF35, 1, b"constructor\0".as_ptr(), 12),
+            _ => return,
+        },
+    });
     proto.with_mut_ptr(|p| {
         js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
     });

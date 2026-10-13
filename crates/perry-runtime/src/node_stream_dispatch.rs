@@ -159,14 +159,15 @@ pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) 
     let proto = scope.root_raw_mut_ptr(proto);
     let methods = super::emitter_methods();
     let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
-    for (name, func) in methods {
+    for (index, (name, func)) in methods.into_iter().enumerate() {
         if name == "addListener" {
             if let Some(val) = &on_method {
-                let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
                 proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                    key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                        js_object_set_field_by_name(proto, key, val.get_nanbox_f64())
-                    })
+                    crate::object::js_object_set_field(
+                        proto,
+                        index as u32 + 1,
+                        JSValue::from_bits(val.get_nanbox_u64()),
+                    )
                 });
                 continue;
             }
@@ -179,11 +180,12 @@ pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) 
         if name == "on" {
             on_method = Some(val);
         }
-        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_set_field_by_name(proto, key, val.get_nanbox_f64())
-            })
+            crate::object::js_object_set_field(
+                proto,
+                index as u32 + 1,
+                JSValue::from_bits(val.get_nanbox_u64()),
+            )
         });
     }
 }
@@ -238,7 +240,7 @@ pub(crate) fn install_event_emitter_prototype(proto: *mut ObjectHeader) {
             .find(|(method, _)| *method == name)
             .map(|(_, value)| value.get_nanbox_f64())
     };
-    for (name, source) in [
+    for (index, (_name, source)) in [
         ("setMaxListeners", "setMaxListeners"),
         ("getMaxListeners", "getMaxListeners"),
         ("emit", "emit"),
@@ -254,16 +256,20 @@ pub(crate) fn install_event_emitter_prototype(proto: *mut ObjectHeader) {
         ("rawListeners", "rawListeners"),
         ("listenerCount", "listenerCount"),
         ("eventNames", "eventNames"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let Some(value) = value_of(source) else {
             continue;
         };
         let value = scope.root_nanbox_f64(value);
-        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
-            })
+            crate::object::js_object_set_field(
+                proto,
+                index as u32 + 4,
+                JSValue::from_bits(value.get_nanbox_u64()),
+            )
         });
     }
 }
@@ -372,32 +378,29 @@ extern "C" fn ns_ee_async_resource_getter(
 pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let install_method = |name: &'static str, function: *const crate::closure::JsFunctionInfo| {
-        let closure = js_closure_alloc(function, 1);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        let closure = scope.root_raw_mut_ptr(closure);
-        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                closure.with_const_ptr::<ClosureHeader, _>(|closure| {
-                    js_object_set_field_by_name(
-                        proto,
-                        key,
-                        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
-                    );
-                });
-            });
+    for (index, function) in [
+        &NS_EE_ASYNC_RESOURCE_EMIT_REST,
+        &NS_EE_ASYNC_RESOURCE_DESTROY,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let closure = scope.root_raw_mut_ptr(js_closure_alloc(function, 1));
+        closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
+            crate::closure::js_closure_set_capture_ptr(
+                closure,
+                0,
+                crate::value::TAG_UNDEFINED as i64,
+            )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            crate::object::set_builtin_property_attrs(
-                proto as usize,
-                name.to_string(),
-                crate::object::PropertyAttrs::new(true, false, true),
-            );
+            crate::object::js_object_set_field(
+                proto,
+                index as u32 + 1,
+                JSValue::pointer(closure.get_raw_mut_ptr::<ClosureHeader>().cast()),
+            )
         });
-    };
-    install_method("emit", &NS_EE_ASYNC_RESOURCE_EMIT_REST);
-    install_method("emitDestroy", &NS_EE_ASYNC_RESOURCE_DESTROY);
+    }
 
     for (name, operation) in [
         ("asyncId", 0_i64),
@@ -411,19 +414,9 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
         let closure = scope.root_raw_mut_ptr(closure);
-        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_set_field_by_name(
-                    proto,
-                    key,
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                );
-            });
-        });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             closure.with_const_ptr::<ClosureHeader, _>(|closure| {
-                crate::object::set_builtin_accessor_descriptor(
+                crate::object::install_fresh_accessor_property(
                     proto as usize,
                     name.to_string(),
                     crate::object::AccessorDescriptor {

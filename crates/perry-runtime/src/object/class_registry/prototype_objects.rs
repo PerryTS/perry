@@ -20,35 +20,42 @@ pub(crate) fn ensure_function_prototype_object(func_value: f64) -> *mut ObjectHe
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let func_handle = scope.root_nanbox_f64(func_value);
-    let inline_slots = match super::super::nm_ee_ops() {
-        Some(ops) => unsafe { (ops.ee_prototype_inline_slots)(func_handle.get_nanbox_f64()) },
-        None => 0,
+    let layout = match super::super::nm_ee_ops() {
+        Some(ops) => unsafe { (ops.ee_prototype_layout)(func_handle.get_nanbox_f64()) },
+        None => std::ptr::null(),
     };
-    // Born old and never-move (O3), so a site may admit this holder at once.
-    // Stationary is not rooted: only the function property and actual
-    // inheriting objects keep this prototype alive.
-    let proto = crate::object::object_alloc_prototype_old(0, inline_slots);
+    let proto = if layout.is_null() {
+        crate::object::object_alloc_prototype_old(0, 0)
+    } else {
+        unsafe { crate::object::layout_desc::perry_alloc_layout(layout) }
+    };
     if proto.is_null() {
         return proto;
     }
     let proto_handle = scope.root_raw_mut_ptr(proto);
 
-    let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        b"constructor".as_ptr(),
-        "constructor".len() as u32,
-    ));
-    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        constructor_key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(proto, key, func_handle.get_nanbox_f64())
-        })
-    });
-    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        set_builtin_property_attrs(
-            proto as usize,
-            "constructor".to_string(),
-            PropertyAttrs::new(true, false, true),
-        )
-    });
+    if !layout.is_null() {
+        proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            js_object_set_field(proto, 0, JSValue::from_bits(func_handle.get_nanbox_u64()))
+        });
+    } else {
+        let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            b"constructor".as_ptr(),
+            "constructor".len() as u32,
+        ));
+        proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            constructor_key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(proto, key, func_handle.get_nanbox_f64())
+            })
+        });
+        proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            set_builtin_property_attrs(
+                proto as usize,
+                "constructor".to_string(),
+                PropertyAttrs::new(true, false, true),
+            )
+        });
+    }
 
     if let Some(object_proto_bits) = global_object_prototype_bits() {
         let object_proto = scope.root_nanbox_u64(object_proto_bits);
@@ -967,24 +974,23 @@ unsafe fn proto_chain_symbol_slot_inner(
     None
 }
 
-/// `EventEmitter.prototype` holds `constructor`, node's three instance-state
-/// defaults and fifteen methods; `EventEmitterAsyncResource.prototype` holds
-/// `constructor` and five own members. Room for those plus slack keeps every
-/// one an inline slot, so a method call's site memo can name it.
-const EVENT_EMITTER_PROTOTYPE_INLINE_SLOTS: u32 = 24;
-const EVENT_EMITTER_ASYNC_RESOURCE_PROTOTYPE_INLINE_SLOTS: u32 = 8;
-
-/// See `NmEeOps::ee_prototype_inline_slots`.
-pub(crate) unsafe fn nm_ee_prototype_inline_slots(func_value: f64) -> u32 {
+/// Static layout of a bound events constructor's canonical prototype.
+pub(crate) unsafe fn nm_ee_prototype_layout(
+    func_value: f64,
+) -> *const super::super::layout_desc::PerryLayoutDesc {
     match super::super::native_module::bound_native_callable_module_and_method(func_value) {
         Some((module, method)) if module.trim_start_matches("node:") == "events" => {
             match method.as_str() {
-                "EventEmitter" => EVENT_EMITTER_PROTOTYPE_INLINE_SLOTS,
-                "EventEmitterAsyncResource" => EVENT_EMITTER_ASYNC_RESOURCE_PROTOTYPE_INLINE_SLOTS,
-                _ => 0,
+                "EventEmitter" => {
+                    std::ptr::addr_of!(super::super::runtime_layouts::EVENT_EMITTER_PROTO)
+                }
+                "EventEmitterAsyncResource" => {
+                    std::ptr::addr_of!(super::super::runtime_layouts::EE_ASYNC_RESOURCE_PROTO)
+                }
+                _ => std::ptr::null(),
             }
         }
-        _ => 0,
+        _ => std::ptr::null(),
     }
 }
 

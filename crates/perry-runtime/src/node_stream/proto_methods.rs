@@ -68,7 +68,7 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
             .collect(),
     };
     let mut on_value: Option<crate::gc::RuntimeHandle<'_>> = None;
-    for (name, info) in methods {
+    for (index, (name, info)) in methods.into_iter().enumerate() {
         // `addListener` IS `on` (node's alias), so both names hold one value.
         let value = match (name, &on_value) {
             ("addListener", Some(on)) => scope.root_nanbox_f64(on.get_nanbox_f64()),
@@ -85,12 +85,22 @@ pub(crate) fn install_stream_prototype_methods(proto: *mut ObjectHeader, kind: S
         if name == "on" {
             on_value = Some(scope.root_nanbox_f64(value.get_nanbox_f64()));
         }
-        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                crate::object::js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
-            })
-        });
+        if matches!(kind, StreamProto::Duplex | StreamProto::Transform) {
+            proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                crate::object::js_object_set_field(
+                    proto,
+                    index as u32 + 1,
+                    crate::JSValue::from_bits(value.get_nanbox_u64()),
+                )
+            });
+        } else {
+            let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+            proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    crate::object::js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
+                })
+            });
+        }
     }
     install_stream_property_accessors(proto.get_raw_mut_ptr::<ObjectHeader>(), kind);
     let proto_value = proto
@@ -321,13 +331,17 @@ fn install_stream_property_accessors(proto: *mut ObjectHeader, kind: StreamProto
             } else {
                 TAG_UNDEFINED
             };
-            let key = scope
-                .root_string_ptr(crate::string::intern_ascii_literal(name.as_bytes()) as *mut _);
-            unsafe {
-                crate::object::ensure_key_in_keys_array(
-                    proto.get_raw_mut_ptr::<ObjectHeader>(),
-                    key.get_raw_const_ptr::<crate::StringHeader>(),
-                );
+            if matches!(kind, StreamProto::Readable | StreamProto::Writable) {
+                let key =
+                    scope.root_string_ptr(
+                        crate::string::intern_ascii_literal(name.as_bytes()) as *mut _
+                    );
+                unsafe {
+                    crate::object::ensure_key_in_keys_array(
+                        proto.get_raw_mut_ptr::<ObjectHeader>(),
+                        key.get_raw_const_ptr::<crate::StringHeader>(),
+                    );
+                }
             }
             crate::object::install_fresh_accessor_property(
                 proto.get_raw_mut_ptr::<ObjectHeader>() as usize,

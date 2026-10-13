@@ -1100,3 +1100,6 @@ pub(crate) static mut IMMEDIATE: PerryLayoutDesc = PerryLayoutDesc {
 };
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
+
+mod stream_prototypes;
+pub(crate) use stream_prototypes::*;

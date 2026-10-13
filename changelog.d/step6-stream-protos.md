@@ -1,0 +1,1 @@
+Declare fixed string-only stream prototype layouts. Remove packed prototype births, dynamic key appends and EventEmitter prototype width reservations while preserving rooted prototype identities and accessor pairs.

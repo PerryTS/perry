@@ -767,21 +767,17 @@ pub(crate) fn init_event_emitter_state_with_presence(
 pub(crate) fn install_event_emitter_prototype_state(proto: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
-    set_named(
-        proto.get_nanbox_f64(),
-        crate::runtime_state_key!(EVENTS_KEY),
-        undefined_value(),
-    );
-    set_named(
-        proto.get_nanbox_f64(),
-        crate::runtime_state_key!(EVENTS_COUNT_KEY),
-        0.0,
-    );
-    set_named(
-        proto.get_nanbox_f64(),
-        crate::runtime_state_key!(MAX_LISTENERS_KEY),
-        undefined_value(),
-    );
+    for (index, value) in [undefined_value(), 0.0, undefined_value()]
+        .into_iter()
+        .enumerate()
+    {
+        crate::object::js_object_set_field(
+            crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64())
+                as *mut crate::object::ObjectHeader,
+            index as u32 + 1,
+            crate::JSValue::from_bits(value.to_bits()),
+        );
+    }
 }
 
 /// Call `target[name](...args)` with `this = target`, as node's emitter does

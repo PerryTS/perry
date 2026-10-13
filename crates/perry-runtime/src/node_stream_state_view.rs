@@ -258,7 +258,12 @@ fn state_proto(kind: usize) -> f64 {
     } else {
         WRITABLE_FIELDS
     };
-    let proto_obj = crate::object::js_object_alloc(0, fields.len() as u32);
+    let proto_desc = if kind == READABLE_KIND {
+        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO)
+    } else {
+        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO)
+    };
+    let proto_obj = unsafe { crate::object::layout_desc::perry_alloc_layout(proto_desc) };
     let proto_bits = crate::value::js_nanbox_pointer(proto_obj as i64).to_bits();
     // Publish before the accessor installs allocate: from here on the cache
     // slot is the root, and every use below re-reads it.
@@ -280,15 +285,6 @@ fn state_proto(kind: usize) -> f64 {
             1,
         ));
         setter.with_mut_ptr(|s| js_closure_set_capture_f64(s, 0, id));
-        let key = scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(
-            name.as_ptr(),
-            name.len() as u32,
-        ));
-        unsafe {
-            key.with_mut_ptr(|key: *mut crate::StringHeader| {
-                crate::object::ensure_key_in_keys_array(current_proto(), key)
-            });
-        }
         let get_bits = getter.with_mut_ptr(|g: *mut ClosureHeader| {
             crate::value::js_nanbox_pointer(g as i64).to_bits()
         });
@@ -468,4 +464,49 @@ pub(super) fn install_writable_state_view(stream: f64) {
 /// or not `emitClose` lets the event itself out.
 pub(super) fn note_close_emitted(stream: f64) {
     set_hidden_value(stream, STREAM_CLOSE_EMITTED_KEY, bool_bits(true));
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn static_layout_state_prototypes_keep_the_declared_shape_and_pairs() {
+        crate::gc::initialize_runtime_fixture();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        for (kind, desc, fields) in [
+            (
+                READABLE_KIND,
+                std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO),
+                READABLE_FIELDS,
+            ),
+            (
+                WRITABLE_KIND,
+                std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO),
+                WRITABLE_FIELDS,
+            ),
+        ] {
+            let proto = scope.root_nanbox_f64(state_proto(kind));
+            assert_eq!(proto.get_nanbox_u64(), state_proto(kind).to_bits());
+            let ptr =
+                crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as *mut ObjectHeader;
+            unsafe {
+                assert_eq!(
+                    (*ptr).parent_class_id,
+                    (*desc).layout_id,
+                    "accessor installation must not mint another shape"
+                );
+                assert_eq!(crate::object::object_inline_capacity(ptr), 16);
+            }
+            for name in fields {
+                let attrs = crate::object::get_property_attrs(ptr as usize, name).unwrap();
+                assert_eq!(attrs.bits, PropertyAttrs::new(true, false, true).bits);
+                let accessor = crate::object::get_accessor_descriptor(ptr as usize, name).unwrap();
+                assert_ne!(accessor.get, TAG_UNDEFINED);
+                assert_ne!(accessor.set, TAG_UNDEFINED);
+            }
+            crate::gc::js_gc_collect();
+            assert_eq!(proto.get_nanbox_u64(), state_proto(kind).to_bits());
+        }
+    }
 }
