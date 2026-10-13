@@ -21,6 +21,7 @@ mod build_cache;
 mod bundle_apple;
 mod bundle_ios;
 mod bundle_macos;
+mod compile_env;
 mod defines;
 pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s

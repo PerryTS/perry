@@ -197,7 +197,7 @@ for (const { segment } of segmenter.segment("ab")) {
     assert_eq!(run_binary(&output), "a\nb\n");
 
     // This must reach codegen and produce a distinct object. Sabotage:
-    // removing PERRY_SEGVIEW from BUILD_CACHE_ENV_VARS makes it an erroneous
+    // removing PERRY_SEGVIEW from COMPILE_ENV_VARS makes it an erroneous
     // whole-build cache hit, so the assertions below fail before codegen.
     let enabled = compile_json_with_env(project, &entry, &output, &[("PERRY_SEGVIEW", "1")]);
     assert_linked(&enabled);

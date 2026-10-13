@@ -6,311 +6,21 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use super::compile_env::{compile_env_value, COMPILE_ENV_VARS};
+
 use super::{
     optimized_libs::{gc_instruments_requested, gc_trace_requested, hot_diag_requested},
     BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats,
 };
 
-const BUILD_CACHE_MANIFEST_VERSION: u32 = 2;
-
-const BUILD_CACHE_ENV_VARS: &[&str] = &[
-    "PATH",
-    "LIB",
-    "LIBPATH",
-    "LIBRARY_PATH",
-    "LD_LIBRARY_PATH",
-    "DYLD_LIBRARY_PATH",
-    "SDKROOT",
-    "PKG_CONFIG_PATH",
-    "PKG_CONFIG_LIBDIR",
-    "PKG_CONFIG_SYSROOT_DIR",
-    "PERRY_LINUX_SYSROOT",
-    "PERRY_WINDOWS_SYSROOT",
-    "PERRY_IOS_SYSROOT",
-    "PERRY_MACOS_SYSROOT",
-    "PERRY_TVOS_SYSROOT",
-    "PERRY_VISIONOS_SYSROOT",
-    "ANDROID_NDK_HOME",
-    "OHOS_SDK_HOME",
-    "HARMONYOS_SDK_HOME",
-    "PERRY_DEBUG_INIT",
-    "PERRY_DEBUG_SYMBOLS",
-    "PERRY_FUNCTION_SOURCE",
-    "PERRY_LLVM_CLANG",
-    // exp/llvm-inprocess: selects the in-process LLVM backend for .ll -> .o;
-    // a different backend means different object bytes.
-    "PERRY_LLVM_INPROCESS",
-    "PERRY_WRITE_BARRIERS",
-    // #9342 kill switch: `PERRY_U8_INLINE_READ=0` removes the inline u8-read
-    // lane from the emitted code, so an object built with the lane must not be
-    // served from cache to a build that turned it off (and vice versa).
-    "PERRY_U8_INLINE_READ",
-    // B4 byte-access sabotages (`owner_call_edge`, `spec_owner`, `spec_extent`,
-    // `asm_memory_effect`) remove proof edges or memory effects from the
-    // emitted code. A sabotaged object must never be served to a normal build.
-    "PERRY_B4_SABOTAGE",
-    // `-Os` vs `-O3` for every native module.
-    "PERRY_LL_SIZE_OPT",
-    // Explicit application-module LLVM optimization level. This overrides the
-    // normal `PERRY_LL_SIZE_OPT` selection and changes every emitted object.
-    "PERRY_LL_OPT_LEVEL",
-    // The post-RS4GC per-function instruction budget (#8583/#8679): a function
-    // one setting re-lowers must not be served from a build another kept on
-    // statepoints.
-    "PERRY_LL_RS4GC_MAX_INSTRS",
-    // #8883: the alloca-walk budget above which a function is stamped
-    // `disable-tail-calls` before the optimizer. It changes the generated
-    // code of the functions it trips on, so it is a cache input.
-    // A unit over this post-optimization per-function ceiling uses LLVM's O0
-    // machine pipeline for bounded ISel/regalloc. That changes object bytes,
-    // so both the build and object caches must distinguish its settings.
-    // #10884 step 4b kill switch: `PERRY_REGION_READS=0` makes the region
-    // slice(s) decline, so every guarded run lowers as individual reads instead
-    // of one shape compare plus a slot load. Different emitted code, so an
-    // object built with regions must not be served to a build without them.
-    "PERRY_REGION_READS",
-    // #10884 step 4b loop regions (#11650). `PERRY_REGIONS=0|off|false`
-    // disables loop regions altogether (the A/B arm), so the same loop lowers
-    // as versioned-guard code or as plain per-access code.
-    "PERRY_REGIONS",
-    // `PERRY_REGION_NODES_PER_BARE=<n>` moves the size limit `pays` applies to
-    // a region candidate, so it decides which loops are versioned.
-    "PERRY_REGION_NODES_PER_BARE",
-    // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
-    // stored, which drops the spill-reading copies from the emitted loop.
-    "PERRY_REGION_SPILL",
-    // `PERRY_REGION_ELEMENTS=0|off|false` drops the element-receiver loads from
-    // a region, and `PERRY_REGION_JOINT=0|off|false` plans a body region's
-    // binding alone. Either setting emits a different loop.
-    "PERRY_REGION_ELEMENTS",
-    "PERRY_REGION_JOINT",
-    // `PERRY_NUMBER_LOCAL_LOOP=0|off|false` keeps every loop on the ordinary
-    // lowering, without the Number-versioned clone.
-    "PERRY_NUMBER_LOCAL_LOOP",
-    // `PERRY_REGION_VIEWS=0` drops typed-array view receivers from a region,
-    // so the loop keeps its per-access length checks.
-    "PERRY_REGION_VIEWS",
-    // #9071: gates resolving a loop-called immutable callee binding once at
-    // body entry instead of per call — the two settings emit different call
-    // sequences, so a cached object from one must not serve the other.
-    "PERRY_CALLEE_BINDING_RESOLUTION",
-    // #9105: gates devirtualizing calls to single-binding closure locals —
-    // off, the map is empty and every binding takes the entry-resolved
-    // indirect path, so the two settings emit different call sequences.
-    "PERRY_CALL_DEVIRT",
-    // #9124: gates deciding the monomorphic method case with the inline
-    // shape probe instead of the typed-feedback runtime guard — the two
-    // settings emit different call sequences, so a cached object from one
-    // must not serve the other.
-    "PERRY_METHOD_INLINE_PROBE",
-    // #9149: gates hoisting a loop-invariant property-array receiver out of
-    // counted for-loops — on and off emit different loop bodies, so a cached
-    // object from one must not serve the other.
-    "PERRY_LOOP_PROPERTY_HOIST",
-    // #9154: gates keeping the packed fast path across break/continue/return —
-    // on and off emit different loop exits, so a cached object from one must
-    // not serve the other.
-    "PERRY_PACKED_LOOP_ABRUPT",
-    // #9159: gates admitting the guarded fadd for two-leaf dynamic `+` — on
-    // and off emit different add sequences, so a cached object from one must
-    // not serve the other.
-    "PERRY_DYNAMIC_ADD_PAIR_GUARD",
-    // #9166: gates the guarded inline path for `-`, `*` and `/` — on and off
-    // emit different arithmetic sequences, so a cached object from one must
-    // not serve the other.
-    "PERRY_GUARDED_ARITH",
-    // #9122: gates the shape-cache path for object literals whose methods
-    // capture `this` — on and off emit different literal-birth sequences,
-    // so a cached object from one must not serve the other.
-    "PERRY_OBJECT_LITERAL_SHAPE_METHODS",
-    // #9060: gates whether a reduce accumulator earns the stable-packed fast
-    // clone's numeric proof — with it on, `s += arr[i]` lowers to an inline
-    // fadd instead of `js_dynamic_string_or_number_add`, so the two settings
-    // emit different code and must not share a cached object.
-    "PERRY_PACKED_LOOP_NUMERIC_ACCUMULATOR",
-    // #9026: gates the once-per-closure-entry resolution of read-only boxed
-    // capture cells — flipping it changes every closure body that qualifies.
-    "PERRY_BOX_CAPTURE_ENTRY_CELLS",
-    // #9514: gates the per-site concat cache. `PERRY_CONCAT_SITE_CACHE=0`
-    // removes the lane at build time, so a qualifying `"literal" + value`
-    // site lowers to a different sequence with it on and off and a cached
-    // object from one setting must not serve the other.
-    "PERRY_CONCAT_SITE_CACHE",
-    // #11354: a `PERRY_RECV_ROUTE_COUNT=1` build emits a route-count call at
-    // every fused receiver compare, so it changes the emitted IR.
-    "PERRY_RECV_ROUTE_COUNT",
-    // The guarded-preinline IR-size ceiling: functions on either side of the
-    // budget inline differently, so a run with a raised ceiling must not be
-    // served objects a default run produced (same rule as the RS4GC budget
-    // above).
-    "PERRY_GUARDED_PREINLINE_MAX_IR_BYTES",
-    // #11360: a `PERRY_STORE_CENSUS=1` build emits a counter increment on
-    // every censused store route, so it changes the emitted IR.
-    "PERRY_STORE_CENSUS",
-    // #11489: `PERRY_METHOD_SITE=0` keeps the old method dispatcher, and
-    // `PERRY_AGENT_PTR_ACCESS=call` forces the call-based agent block access;
-    // both change the emitted IR.
-    "PERRY_METHOD_SITE",
-    // Step 5C marks executable body infos for ConstFn shape admission.
-    "PERRY_CONSTFN_SHAPE",
-    "PERRY_AGENT_PTR_ACCESS",
-    // #8583: the relocation estimate above which a function spills its GC roots
-    // to a shadow frame. It changes which functions carry statepoints, so it
-    // changes the generated code and must be a cache input.
-    // #8583: selects the descriptor-backed lowering for large constant arrays.
-    // The two paths emit different IR and therefore require distinct cache keys.
-    "PERRY_GC_SAFEPOINT_ONLY",
-    "PERRY_DISABLE_BUFFER_FAST_PATH",
-    "PERRY_VERIFY_NATIVE_REGIONS",
-    // #6125: the resolved CPU baseline (promoted from --march / perry.toml
-    // [build] by promote_cpu_baseline_env before this probe runs). Flipping
-    // it must invalidate the build-level no-op check, not just per-object
-    // cache entries.
-    "PERRY_TARGET_CPU",
-    "PERRY_NO_AUTO_OPTIMIZE",
-    "PERRY_NO_REEXPORT_PRUNE",
-    "PERRY_DISABLE_WELL_KNOWN",
-    "PERRY_FORCE_WELL_KNOWN",
-    // Both switches change native-vs-JavaScript module routing and therefore
-    // the linked artifact, not merely diagnostics.
-    "PERRY_ALLOW_PERRY_FEATURES",
-    "PERRY_REQUIRE_FAITHFUL_BINDINGS",
-    // #7183 — audited, not patched one-by-one. #6394's rule is that the object
-    // cache keys EVERY codegen env var; #7161 made
-    // `PERRY_GC_MOVING_LOOP_POLLS` a compile-time gate (codegen emits or omits
-    // `js_gc_loop_safepoint`) without adding it here, and an audit of
-    // `perry-codegen`'s `env::var("PERRY_*")` reads found 35 in the same state.
-    // Each of these changes the EMITTED CODE, so a build-level no-op probe that
-    // ignores them is one `-o` collision away from handing back a binary built
-    // under a different configuration. `moving_loop_polls` is the one that must
-    // not go dark: it is the only configuration exercising the evacuating minor
-    // end to end.
-    //
-    // Adding a key can only make the probe MORE conservative, so the bias here
-    // is inclusion; the deliberate exclusions are listed in
-    // `codegen_env_vars_are_build_cache_inputs` below.
-    "PERRY_GC_MOVING_LOOP_POLLS",
-    "PERRY_CANONICAL_I32_LOCALS",
-    "PERRY_CANONICAL_STR_LOCALS",
-    "PERRY_CONCAT_SITE_CACHE",
-    "PERRY_CODEGEN_UNITS",
-    "PERRY_CODEGEN_UNIT_BYTES",
-    "PERRY_CODEGEN_UNIT_SIZE",
-    // Enables per-site concatenation tables and changes the emitted calls.
-    "PERRY_CONCAT_SITE_CACHE",
-    "PERRY_ENTRY_SYMBOL",
-    "PERRY_FULL_OUTLINE_IC",
-    "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
-    "PERRY_INLINE_HOT_SMALL",
-    "PERRY_INLINE_HOT_SMALL_CAP",
-    "PERRY_INLINE_HOT_SMALL_MAX_SITES",
-    "PERRY_INLINE_HOT_SMALL_THRESHOLD",
-    "PERRY_INLINE_NONBIGINT_BITWISE",
-    "PERRY_INT_VALUED_LOCALS",
-    "PERRY_JSCVT",
-    "PERRY_LD",
-    "PERRY_LLVM_LIB",
-    "PERRY_LLVM_OPT",
-    "PERRY_OUTLINE_METHOD_DISPATCH",
-    // Entry-function outlining changes the emitted function graph; the chunk
-    // size changes the split points, so both belong in the cache key.
-    "PERRY_OUTLINE_ENTRY",
-    "PERRY_OUTLINE_ENTRY_CHUNK_STMTS",
-    "PERRY_PTR_NUMARRAY_LOCALS",
-    "PERRY_PTR_SHAPE_LOCALS",
-    "PERRY_PTR_SHAPE_THIS",
-    // #9893: selects the segment-view lowering, which rewrites qualifying
-    // for-of loops to call the `js_segments_view_*` runtime entry points.
-    "PERRY_SEGVIEW",
-    "PERRY_SPECIALIZED_ABI",
-    "PERRY_SPECIALIZED_ABI_MAX",
-    "PERRY_SPEC_PRESERVE_NONE",
-    "PERRY_STATIC_STRING_LOWERING",
-    "PERRY_STRING_INIT_CHUNK_SIZE",
-    "PERRY_TA_PARAM_F64_READ",
-    // #8692: disables guarded direct Uint32Array read-modify-write lowering;
-    // toggling it changes the generated CFG and helper calls.
-    "PERRY_TYPED_ARRAY_RMW",
-    "PERRY_WATCHOS_ARM64_32",
-    // #8105 — number-by-construction locals (see the collector of the same
-    // name); `=0` empties the fact and changes every affected function's IR.
-    "PERRY_NUMBER_BY_CONSTRUCTION",
-    // #8583 follow-up gate: `=0/off/false` reverts every large constant array
-    // literal from the const-descriptor path to procedural construction —
-    // different emitted IR for the same source.
-    "PERRY_CONST_ARRAY_DESCRIPTOR",
-    // #12577: certified-method negative controls change the emitted proof;
-    // capture-cell assertions emit checks at closure birth.
-    "PERRY_METHOD_CERT_SABOTAGE",
-    "PERRY_ASSERT_CAPTURE_CELLS",
-    // #11915: contract mode emits `js_builtin_proto_contract_check` at every
-    // direct arm a `Pristine` proof admitted (`perry-codegen` builtin_proto).
-    "PERRY_CHECK_CONTRACTS",
-];
-
-/// #7183: codegen env vars that deliberately do NOT key the build cache.
-///
-/// Each either produces a side artifact without changing the emitted object, or
-/// varies per-invocation for reasons unrelated to output — keying on those
-/// would thrash the cache rather than protect it. Anything not listed here must
-/// be a build-cache input; `codegen_env_vars_are_build_cache_inputs` enforces
-/// that, so a new compile-time gate cannot repeat #7161's omission silently.
-#[cfg(test)]
-const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
-    // Only compiled in perry-codegen's unit tests (#[cfg(test)]), never in
-    // the CLI's codegen dependency, so it cannot change a cached object.
-    "PERRY_TYPED_ELEMENT_SABOTAGE",
-    // Diagnostics: emit an extra file / extra stderr, same object bytes.
-    "PERRY_SAVE_LL",
-    "PERRY_LLVM_DIFF_DIR",
-    "PERRY_REPSEL_DEBUG",
-    "PERRY_STATEPOINT_REPORT",
-    // #10884 step 4b census: `PERRY_REGION_DIAG=1` runs `statement_run_census`
-    // over the HIR and prints the counts from `ModuleDiag::drop`. The census
-    // result is read in exactly one place -- that `eprintln!` -- and nothing in
-    // lowering consults it, so the emitted object is byte-identical with the
-    // report on and off.
-    "PERRY_REGION_DIAG",
-    // Writes malformed dialect IR for diagnostics without changing emitted code.
-    // `opt_report`'s own module doc states the contract this exclusion rests
-    // on: "Observational only. Nothing in this module is read by codegen …
-    // the returned fact sets are bit-identical with the report on and off,
-    // which the CLI's byte-identical-object test asserts." Found by the test
-    // below rather than by the audit that preceded it, which is the point of
-    // having the test.
-    "PERRY_OPT_REPORT",
-    // Parallelism only — partitioning is keyed by PERRY_CODEGEN_UNIT_SIZE /
-    // PERRY_CODEGEN_UNIT_BYTES / PERRY_CODEGEN_UNITS, which ARE inputs; the
-    // job count just decides how many threads chew through the same units.
-    "PERRY_CODEGEN_UNIT_JOBS",
-    // Human-facing telemetry only; never changes IR or object bytes.
-    "PERRY_CODEGEN_PROGRESS",
-    "PERRY_CODEGEN_UNIT_TIMINGS",
-    // `packed_loop_reject` prints the admission chain's declining condition and
-    // returns `None` either way — the rejection is what the caller already got
-    // without the flag, so the emitted code is identical. An input, rather than
-    // an exclusion, would make every trace run miss the cache for nothing.
-    // #10743 added the positive twin, `range_loop_trace`, on the same terms: it
-    // prints which admission a matched loop took and returns nothing, so the
-    // emitted object is byte-identical with the flag on and off.
-    "PERRY_PACKED_LOOP_TRACE",
-    // Entry outlining report output is observational only.
-    "PERRY_OUTLINE_ENTRY_REPORT",
-    // Segment-view diagnostics only scan the final HIR and print counters;
-    // their checks inside the rewrite guard `eprintln!` calls only.
-    "PERRY_SEGVIEW_DIAG",
-    // Only read on an already-fatal dialect-construction failure (a unit that
-    // never parses); it writes a diagnostic IR dump to `<dir>/<name>.ll` for
-    // triage and cannot affect the bytes of any build that actually succeeds.
-    "PERRY_DIALECT_DUMP",
-];
+const BUILD_CACHE_MANIFEST_VERSION: u32 = 3;
 
 #[cfg(test)]
 mod tests {
     use super::{
         absolute_identity, current_env, current_perry_fingerprint, file_fingerprint,
-        file_fingerprint_from_str, BuildCacheManifest, BuildCacheProbe, BUILD_CACHE_ENV_EXCLUSIONS,
-        BUILD_CACHE_ENV_VARS, BUILD_CACHE_MANIFEST_VERSION,
+        file_fingerprint_from_str, BuildCacheManifest, BuildCacheProbe,
+        BUILD_CACHE_MANIFEST_VERSION, COMPILE_ENV_VARS,
     };
 
     #[test]
@@ -499,89 +209,8 @@ mod tests {
             "PERRY_ALLOW_PERRY_FEATURES",
             "PERRY_REQUIRE_FAITHFUL_BINDINGS",
         ] {
-            assert!(BUILD_CACHE_ENV_VARS.contains(&name), "missing {name}");
+            assert!(COMPILE_ENV_VARS.contains(&name), "missing {name}");
         }
-    }
-
-    /// #7183 / #6394: every `PERRY_*` env var codegen reads is either a
-    /// build-cache input or an explicit, justified exclusion.
-    ///
-    /// This exists because the list rotted once already and did so silently:
-    /// #7161 turned `PERRY_GC_MOVING_LOOP_POLLS` into a compile-time gate and
-    /// nothing noticed it was missing here. A list maintained by hand against a
-    /// growing set of gates will rot again; scanning the source makes the next
-    /// omission a red test instead of a stale comment.
-    #[test]
-    fn codegen_env_vars_are_build_cache_inputs() {
-        use std::collections::BTreeSet;
-
-        let codegen_src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("crates/ reachable from CARGO_MANIFEST_DIR")
-            .join("perry-codegen")
-            .join("src");
-        assert!(codegen_src.is_dir(), "{} missing", codegen_src.display());
-
-        let mut found: BTreeSet<String> = BTreeSet::new();
-        let mut stack = vec![codegen_src];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).expect("readable dir") {
-                let path = entry.expect("dir entry").path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                    continue;
-                }
-                let text = std::fs::read_to_string(&path).expect("readable source");
-                // `env::var("PERRY_…")` in either spelling. Deliberately literal:
-                // a computed name would not be auditable from here anyway, and
-                // there are none today.
-                for (idx, _) in text.match_indices("env::var(\"PERRY_") {
-                    let rest = &text[idx + "env::var(\"".len()..];
-                    if let Some(end) = rest.find('"') {
-                        found.insert(rest[..end].to_string());
-                    }
-                }
-            }
-        }
-        assert!(
-            found.len() > 20,
-            "scan found only {} vars — the matcher is probably broken, which \
-             would make this test vacuous",
-            found.len()
-        );
-
-        let missing: Vec<&String> = found
-            .iter()
-            .filter(|name| {
-                !BUILD_CACHE_ENV_VARS.contains(&name.as_str())
-                    && !BUILD_CACHE_ENV_EXCLUSIONS.contains(&name.as_str())
-            })
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "these codegen env vars key neither the build cache nor an \
-             exclusion (#6394's rule): {missing:?}.\n\
-             Edit crates/perry/src/commands/compile/build_cache.rs:\n\
-             - Add switches that change emitted code at `const BUILD_CACHE_ENV_VARS`.\n\
-             - Otherwise add them at `const BUILD_CACHE_ENV_EXCLUSIONS`, with a \
-             reason they cannot change emitted code.\n\
-             Unregistered switches can reuse objects compiled with a different setting.\n\
-             Verify with: cargo test -p perry codegen_env_vars_are_build_cache_inputs"
-        );
-
-        // A stale exclusion is also a defect: it claims a var exists and is
-        // deliberately unkeyed, when codegen may no longer read it at all.
-        let stale: Vec<&&str> = BUILD_CACHE_ENV_EXCLUSIONS
-            .iter()
-            .filter(|name| !found.contains(&(**name).to_string()))
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "these exclusions name vars codegen no longer reads: {stale:?}"
-        );
     }
 }
 
@@ -1211,11 +840,11 @@ fn default_output_path(args: &CompileArgs) -> PathBuf {
 }
 
 fn current_env() -> Vec<EnvFingerprint> {
-    let mut env: Vec<EnvFingerprint> = BUILD_CACHE_ENV_VARS
+    let mut env: Vec<EnvFingerprint> = COMPILE_ENV_VARS
         .iter()
         .map(|name| EnvFingerprint {
             name: (*name).to_string(),
-            value: std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
+            value: compile_env_value(name),
         })
         .collect();
     env.extend(runtime_feature_fingerprint(

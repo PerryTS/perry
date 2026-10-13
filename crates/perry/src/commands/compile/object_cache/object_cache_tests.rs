@@ -747,69 +747,7 @@ fn key_changes_with_codegen_env_vars() {
     // helper calls, or a skipped verifier.
     //
     let opts = empty_opts();
-    for var in [
-        "PERRY_DEBUG_SYMBOLS",
-        "PERRY_FUNCTION_SOURCE",
-        "PERRY_LLVM_CLANG",
-        "PERRY_LLVM_INPROCESS",
-        "PERRY_WRITE_BARRIERS",
-        "PERRY_LL_SIZE_OPT",
-        "PERRY_LL_OPT_LEVEL",
-        "PERRY_LL_RS4GC_MAX_INSTRS",
-        "PERRY_GC_SAFEPOINT_ONLY",
-        "PERRY_DISABLE_BUFFER_FAST_PATH",
-        "PERRY_VERIFY_NATIVE_REGIONS",
-        "PERRY_TARGET_CPU",
-        // Codegen tuning/emission toggles (#6394).
-        "PERRY_TYPED_FEEDBACK",
-        "PERRY_TYPED_FEEDBACK_TRACE",
-        "PERRY_CONCAT_SITE_CACHE",
-        "PERRY_FULL_OUTLINE_IC",
-        "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
-        "PERRY_OUTLINE_METHOD_DISPATCH",
-        "PERRY_CONSTFN_SHAPE",
-        "PERRY_INLINE_NEW",
-        "PERRY_INLINE_CTOR",
-        "PERRY_STRING_INIT_CHUNK_SIZE",
-        "PERRY_ENTRY_SYMBOL",
-        "PERRY_CODEGEN_UNITS",
-        "PERRY_CODEGEN_UNIT_BYTES",
-        "PERRY_CODEGEN_UNIT_SIZE",
-        "PERRY_GC_MOVING_LOOP_POLLS",
-        // Inline-hot-small (#6850 follow-up).
-        "PERRY_INLINE_HOT_SMALL",
-        "PERRY_INLINE_HOT_SMALL_CAP",
-        "PERRY_INLINE_HOT_SMALL_THRESHOLD",
-        "PERRY_INLINE_HOT_SMALL_MAX_SITES",
-        // Non-BigInt inline bitwise fast path.
-        "PERRY_INLINE_NONBIGINT_BITWISE",
-        // Inline checked-f64 typed-array-param read.
-        "PERRY_TA_PARAM_F64_READ",
-        // Native-i32 residency for int-typed-array-seeded locals.
-        "PERRY_INT_VALUED_LOCALS",
-        // Representation-selection Phase 1: canonical unboxed i32 locals.
-        "PERRY_CANONICAL_I32_LOCALS",
-        // Representation-selection Phase 3a: canonical string locals.
-        "PERRY_CANONICAL_STR_LOCALS",
-        // #7128: string fast paths keyed on a value's static string type,
-        // split off the Phase 3a knob so that knob isolates its own rep.
-        "PERRY_STATIC_STRING_LOWERING",
-        // Representation-selection Phase 2: specialized calling convention.
-        "PERRY_SPECIALIZED_ABI",
-        "PERRY_SPECIALIZED_ABI_MAX",
-        // Representation-selection Phase 3b: shape-proven Ptr<Shape> locals.
-        "PERRY_PTR_SHAPE_LOCALS",
-        "PERRY_PTR_SHAPE_THIS",
-        // Representation-selection Phase 4a.3: Ptr<NumArray> locals.
-        "PERRY_PTR_NUMARRAY_LOCALS",
-        // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
-        "PERRY_JSCVT",
-        // #10884 / #11650 loop regions: the kill switch and three tuning knobs.
-        "PERRY_REGION_READS",
-        "PERRY_REGIONS",
-        "PERRY_REGION_NODES_PER_BARE",
-        "PERRY_REGION_SPILL",
-    ] {
+    for &var in COMPILE_ENV_VARS {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.
         let k_unset = compute_object_cache_key_with_env(&opts, 1, "0.5.156", |_| None);
@@ -825,7 +763,7 @@ fn key_changes_with_codegen_env_vars() {
 }
 
 #[test]
-fn debug_init_only_invalidates_the_entry_object() {
+fn debug_init_participates_in_every_object_key() {
     let key = |opts: &CompileOptions, enabled: bool| {
         compute_object_cache_key_with_env(opts, 1, "0.5.156", |name| {
             (enabled && name == "PERRY_DEBUG_INIT").then(|| "1".to_string())
@@ -837,7 +775,7 @@ fn debug_init_only_invalidates_the_entry_object() {
     assert_ne!(key(&entry_opts, false), key(&entry_opts, true));
 
     let dependency_opts = empty_opts();
-    assert_eq!(key(&dependency_opts, false), key(&dependency_opts, true));
+    assert_ne!(key(&dependency_opts, false), key(&dependency_opts, true));
 }
 
 /// #6439: the FFI manifest must survive a store→lookup round trip, or a
@@ -1398,4 +1336,21 @@ fn key_changes_with_non_unicode_contract_mode() {
         String::from_utf8_lossy(&out.stdout).contains("1 passed"),
         "child test did not run: {out:?}"
     );
+}
+
+#[test]
+fn every_compile_env_var_distinguishes_absent_empty_and_values() {
+    let opts = empty_opts();
+    for &var in COMPILE_ENV_VARS {
+        let key = |value: Option<&str>| {
+            compute_object_cache_key_with_env(&opts, 1, "test", |name| {
+                (name == var).then(|| value.map(str::to_owned)).flatten()
+            })
+        };
+        let keys: std::collections::HashSet<_> = [None, Some(""), Some("0"), Some("1")]
+            .into_iter()
+            .map(key)
+            .collect();
+        assert_eq!(keys.len(), 4, "lossy environment key for {var}");
+    }
 }
