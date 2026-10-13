@@ -201,7 +201,7 @@ fn same_call_returned_array_uses_array_length_store_and_evaluates_receiver_once(
     );
     assert_eq!(
         outside_learned_arms(&clear_ir)
-            .matches("@perry_method_call_return_array_put_value_ts__Store__getData")
+            .matches("call double @perry_method_call_return_array_put_value_ts__Store__getData(")
             .count(),
         1,
         "the duplicated PutValue target/receiver trees represent one source evaluation:\n{clear_ir}"
