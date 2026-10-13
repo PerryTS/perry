@@ -754,6 +754,11 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             if crate::expr::wpfacts_access::proves_raw_f64(ctx, e) {
                 return true;
             }
+            // Object model step 1: a present literal-family key every store
+            // of which writes a Number.
+            if crate::expr::family_slot::present_number(ctx, e) {
+                return true;
+            }
             // #11759 (c′): the receiver is the guarded `new` of a repeatable
             // class declaration, an instance of SOME evaluation of the
             // template. Which fields hold a Number on every reachable store

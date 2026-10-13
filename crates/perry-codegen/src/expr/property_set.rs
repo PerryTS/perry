@@ -504,6 +504,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     })
                 });
             }
+            // Object model step 1: adding a literal family's key is a store.
+            if let Some(site) = super::family_slot::site(ctx, object, property, true) {
+                return super::family_slot::lower_set(
+                    ctx,
+                    &site,
+                    object,
+                    property,
+                    value,
+                    assignment_strict,
+                );
+            }
             // Step 4b: a planned-bare store inside a region's F-body.
             if let Some(v) =
                 crate::stmt::region_loop::try_lower_bare_put(ctx, expr, object, property, value)?

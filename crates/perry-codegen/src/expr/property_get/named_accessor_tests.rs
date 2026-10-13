@@ -225,6 +225,7 @@ fn getter_number_contract_requires_reachable_numeric_stores() {
     m.classes[0].getters[0].1.return_type = Type::Number;
     let classes = m.classes.iter().map(|c| (c.name.clone(), c)).collect();
     let mut fact = crate::collectors::PtrShapeLocal {
+        family: None,
         class_name: "Meter".into(),
         numeric_fields: HashSet::from(["x".into()]),
         report_name: None,

@@ -13,7 +13,8 @@
 //! The record types below mirror the runtime's `#[repr(C)]` structs, whose
 //! sizes and offsets the runtime pins with const asserts.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 
 use perry_hir::{Expr, Module as HirModule, Stmt};
 
@@ -29,6 +30,108 @@ pub const KEY_TY: &str = "{ ptr, i32, i8, [3 x i8] }";
 pub const ATOM_TY: &str = "{ i64, ptr }";
 /// Byte offset of `layout_id` in a descriptor.
 pub const DESC_LAYOUT_ID_OFFSET: u32 = 12;
+
+/// `PerryLayoutDesc.layout_id` of a layout objects carry (the runtime's
+/// `LAYOUT_ID_CARRIED`): registered at startup. Every other descriptor is
+/// static data and is emitted with 0.
+const LAYOUT_ID_CARRIED: u32 = u32::MAX;
+
+/// Object model step 1 (§3.2): a literal family's first key added after
+/// birth. The family is born with a slot for it (`slot`, after the birth
+/// keys), and a store through a receiver codegen ties to the family writes
+/// that slot and the layout word of the family state that holds it.
+///
+/// Coexistence: the shape table takes presence from a shape's key list, so
+/// "the key is present" is a layout of its own (`desc_global`, registered at
+/// startup) until holes in slots are the presence authority (steps 4 and 5).
+#[derive(Clone, Debug)]
+pub(crate) struct FamilyAdd {
+    pub key: String,
+    pub slot: u32,
+    /// The descriptor of the state "birth keys + `key`".
+    pub desc_global: String,
+    /// The family's birth key count and birth rep.
+    pub birth_keys: u32,
+    pub birth_rep: u64,
+}
+
+/// One carried family state to emit: its keys in slot order.
+#[derive(Clone, Debug)]
+pub(crate) struct FamilyLayout {
+    pub desc_global: String,
+    pub keys: Vec<String>,
+    pub slot_count: u32,
+    pub rep: u64,
+}
+
+#[derive(Default)]
+struct ModuleFamilies {
+    adds: HashMap<String, FamilyAdd>,
+    layouts: Vec<FamilyLayout>,
+    /// Reads of a family key that are Numbers by construction (expression
+    /// addresses of this module's HIR): present on an exact family object,
+    /// and every store of the key on that local writes a Number.
+    numeric_reads: std::collections::HashSet<usize>,
+}
+
+thread_local! {
+    /// The module being compiled on this thread (codegen of one module runs
+    /// on one thread, as `static_constfn`'s module tables do).
+    static MODULE_FAMILIES: RefCell<ModuleFamilies> = RefCell::new(ModuleFamilies::default());
+}
+
+/// Install the module's literal families (`codegen/mod.rs`), replacing the
+/// previous module's.
+pub(crate) fn set_module_families(adds: HashMap<String, FamilyAdd>, layouts: Vec<FamilyLayout>) {
+    MODULE_FAMILIES.with(|m| {
+        *m.borrow_mut() = ModuleFamilies {
+            adds,
+            layouts,
+            numeric_reads: Default::default(),
+        }
+    });
+}
+
+/// Record reads of a family key proven Numbers (`collectors/ptr_shape.rs`).
+pub(crate) fn note_family_numeric_reads(reads: impl IntoIterator<Item = usize>) {
+    MODULE_FAMILIES.with(|m| m.borrow_mut().numeric_reads.extend(reads));
+}
+
+/// Whether the read at `addr` is a family key proven a Number.
+pub(crate) fn family_numeric_read(addr: usize) -> bool {
+    MODULE_FAMILIES.with(|m| m.borrow().numeric_reads.contains(&addr))
+}
+
+/// The family add of class `class_name` when `key` is it.
+pub(crate) fn family_add(class_name: &str, key: &str) -> Option<FamilyAdd> {
+    MODULE_FAMILIES.with(|m| {
+        m.borrow()
+            .adds
+            .get(class_name)
+            .filter(|add| add.key == key)
+            .cloned()
+    })
+}
+
+/// The i32 alias of a carried descriptor's `layout_id` word.
+pub(crate) fn layout_id_global(desc_global: &str) -> String {
+    format!("{desc_global}_id")
+}
+
+/// `(birth key count, birth rep)` of class `class_name`'s literal family.
+pub(crate) fn family_birth_rep(class_name: &str) -> Option<(u32, u64)> {
+    MODULE_FAMILIES.with(|m| {
+        m.borrow()
+            .adds
+            .get(class_name)
+            .map(|add| (add.birth_keys, add.birth_rep))
+    })
+}
+
+/// Whether `key` spells an atom (the descriptor emitter's test).
+pub(crate) fn key_is_atom(key: &str) -> bool {
+    !key.is_empty() && key.len() <= ATOM_MAX_BYTES
+}
 
 /// Longest key spelling that is an atom (the runtime's `INTERN_MAX_BYTE_LEN`).
 const ATOM_MAX_BYTES: usize = 64;
@@ -234,6 +337,16 @@ fn module_literals(hir: &HirModule) -> Vec<Vec<String>> {
     out
 }
 
+/// Whether this compile emits layout descriptors at all (executables only:
+/// atoms point at image strings, which only executables carry).
+/// `PERRY_LAYOUT_DESCS=0` disables emission and with it every family.
+pub(crate) fn layouts_enabled(output_type: &str, target_triple: &str) -> bool {
+    output_type != "dylib"
+        && output_type != "staticlib"
+        && !target_triple.contains("wasm")
+        && std::env::var("PERRY_LAYOUT_DESCS").as_deref() != Ok("0")
+}
+
 /// Emit the module's layout descriptors (executables only: atoms point at
 /// image strings, which only executables carry). Returns how many.
 pub(crate) fn emit_module_layouts(
@@ -243,11 +356,7 @@ pub(crate) fn emit_module_layouts(
     module_prefix: &str,
     output_type: &str,
 ) -> usize {
-    if output_type == "dylib" || output_type == "staticlib" || llmod.target_triple.contains("wasm")
-    {
-        return 0;
-    }
-    if std::env::var("PERRY_LAYOUT_DESCS").as_deref() == Ok("0") {
+    if !layouts_enabled(output_type, &llmod.target_triple) {
         return 0;
     }
     let mut atoms: BTreeMap<String, String> = BTreeMap::new();
@@ -258,6 +367,38 @@ pub(crate) fn emit_module_layouts(
         ".perrylay$m",
     );
     let mut n = 0usize;
+    // Step 1: the carried family states first (generated code references
+    // them by name), then every literal family as static data.
+    let carried: Vec<FamilyLayout> = MODULE_FAMILIES.with(|m| m.borrow().layouts.clone());
+    for (ordinal, fam) in carried.iter().enumerate() {
+        let mut atom_names = Vec::with_capacity(fam.keys.len());
+        for k in &fam.keys {
+            atom_names.push(
+                atom(llmod, strings, &mut atoms, k)
+                    .expect("a family key is an atom (`key_is_atom`)"),
+            );
+        }
+        let family = (fnv1a(format!("{}#fam{ordinal}", hir.name).as_bytes()) as u32) & 0x7FFF_FFFF;
+        emit_descriptor(
+            llmod,
+            &sect,
+            &fam.desc_global,
+            &format!("{}_fam", fam.desc_global),
+            &fam.keys,
+            &atom_names,
+            family,
+            fam.slot_count,
+            fam.rep,
+            LAYOUT_ID_CARRIED,
+        );
+        // The id word on its own, so a function loads it once at entry.
+        llmod.add_raw_global(format!(
+            "@{} = internal alias i32, getelementptr (i8, ptr @{}, i64 {DESC_LAYOUT_ID_OFFSET})",
+            layout_id_global(&fam.desc_global),
+            fam.desc_global
+        ));
+        n += 1;
+    }
     'family: for (ordinal, keys) in module_literals(hir).into_iter().enumerate() {
         let mut atom_names = Vec::with_capacity(keys.len());
         for k in &keys {
@@ -266,6 +407,41 @@ pub(crate) fn emit_module_layouts(
                 None => continue 'family,
             }
         }
+        let family = (fnv1a(format!("{}#{ordinal}", hir.name).as_bytes()) as u32) & 0x7FFF_FFFF;
+        let desc_name = format!("perry_layout_{module_prefix}_{n}");
+        let count = keys.len() as u32;
+        emit_descriptor(
+            llmod,
+            &sect,
+            &desc_name,
+            &format!("{module_prefix}_{n}"),
+            &keys,
+            &atom_names,
+            family,
+            count,
+            0,
+            0,
+        );
+        n += 1;
+    }
+    n
+}
+
+/// Emit one descriptor (its key sequence, slot = position, and key index).
+#[allow(clippy::too_many_arguments)]
+fn emit_descriptor(
+    llmod: &mut LlModule,
+    sect: &str,
+    desc_name: &str,
+    suffix: &str,
+    keys: &[String],
+    atom_names: &[String],
+    family: u32,
+    slot_count: u32,
+    rep: u64,
+    layout_id: u32,
+) {
+    {
         let count = keys.len();
         let cap = (count * 2).next_power_of_two().max(2);
         let mut index = vec![u32::MAX; cap];
@@ -276,10 +452,8 @@ pub(crate) fn emit_module_layouts(
             }
             index[at] = pos as u32;
         }
-        let family = (fnv1a(format!("{}#{ordinal}", hir.name).as_bytes()) as u32) & 0x7FFF_FFFF;
-        let keys_name = format!("perry_layout_keys_{module_prefix}_{n}");
-        let index_name = format!("perry_layout_index_{module_prefix}_{n}");
-        let desc_name = format!("perry_layout_{module_prefix}_{n}");
+        let keys_name = format!("perry_layout_keys_{suffix}");
+        let index_name = format!("perry_layout_index_{suffix}");
         let key_items: Vec<String> = atom_names
             .iter()
             .enumerate()
@@ -297,10 +471,10 @@ pub(crate) fn emit_module_layouts(
             index_items.join(", ")
         ));
         llmod.add_raw_global(format!(
-            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {count}, i32 0, i64 0, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name} }}, section \"{sect}\", align 8",
+            "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, i64 0, ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name} }}, section \"{sect}\", align 8",
+            layout_id as i32,
+            rep as i64,
             cap - 1
         ));
-        n += 1;
     }
-    n
 }

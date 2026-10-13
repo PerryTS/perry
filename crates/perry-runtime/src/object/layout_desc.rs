@@ -8,12 +8,21 @@
 //!
 //! 1. pre-seeds the agent's atom table with every static atom, so a key built
 //!    from data interns to the same string object as the program's literal;
-//! 2. registers every descriptor, in section order, into the existing shape
-//!    table under `LAYOUT_BASE + index`, so a static layout IS a ShapeId and
-//!    every shape reader keeps working (coexistence). Identical facts share
-//!    one id: a by-facts hit (an earlier descriptor, or a hash-band static
-//!    seed) keeps the existing id. The id the descriptor resolved to is
-//!    written into `desc.layout_id`; generated code loads it from there.
+//! 2. registers every CARRIED descriptor (one that generated code births or
+//!    stamps; codegen emits its `layout_id` as [`LAYOUT_ID_CARRIED`]), in
+//!    section order, into the existing shape table under
+//!    `LAYOUT_BASE + index`, so a carried layout IS a ShapeId and every shape
+//!    reader keeps working (coexistence). Identical facts share one id: a
+//!    by-facts hit (an earlier descriptor, or a hash-band static seed) keeps
+//!    the existing id. The id the descriptor resolved to is written into
+//!    `desc.layout_id`; generated code loads it from there.
+//!
+//! A descriptor no object carries (`layout_id` 0) is static data only: the
+//! key-index probe reads it in place and the shape table never sees it. The
+//! choice is the compiler's and is fixed in the binary; nothing is decided at
+//! first use. Step 0 registered all of them, which cost fastify 8.2M
+//! instructions at startup (1,292 canonical key lists and mints) for layouts
+//! no object carried.
 //!
 //! The layout word is `ObjectHeader.parent_class_id`: the LayoutId is the
 //! full ShapeId value, and bit 30 ([`LAYOUT_SHADOW_BIT`]) is the shadow bit,
@@ -71,8 +80,9 @@ pub struct PerryLayoutDesc {
     pub kind: u8,
     pub integrity: u8,
     pub slot_count: u32,
-    /// Written by [`register_static_layouts`]; 0 until then, and 0 for a
-    /// descriptor this runtime cannot register.
+    /// Emitted as [`LAYOUT_ID_CARRIED`] for a layout objects carry (then
+    /// written by [`register_static_layouts`], 0 if this runtime cannot
+    /// register it) and as 0 for static data no object carries.
     pub layout_id: u32,
     pub rep: u64,
     pub proto: usize,
@@ -90,6 +100,11 @@ const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, keys) == 32);
 const _: () = assert!(std::mem::offset_of!(PerryLayoutDesc, index) == 48);
 const _: () = assert!(std::mem::size_of::<PerryLayoutKey>() == 16);
 const _: () = assert!(std::mem::size_of::<StaticAtom>() == 16);
+
+/// `PerryLayoutDesc.layout_id` as emitted for a layout some object carries:
+/// [`register_static_layouts`] replaces it with the registered id. Every other
+/// descriptor is emitted with 0 and stays 0.
+pub const LAYOUT_ID_CARRIED: u32 = u32::MAX;
 
 /// A section sentinel's family: not a layout.
 const SENTINEL_FAMILY: u32 = u32::MAX;
@@ -275,8 +290,14 @@ pub(crate) fn register_static_layouts() {
             {
                 continue;
             }
+            // Ids are section positions, so every agent assigns the same one.
             let id = LAYOUT_BASE + index;
             index += 1;
+            // Carried: the emitted sentinel (first agent) or the id an earlier
+            // agent wrote. Uncarried descriptors stay 0 and are never minted.
+            if (*desc).layout_id == 0 {
+                continue;
+            }
             let got = register_one(desc, id);
             // Every agent writes the same id (same seeds, same order).
             (*(std::ptr::addr_of_mut!((*desc).layout_id) as *const std::sync::atomic::AtomicU32))

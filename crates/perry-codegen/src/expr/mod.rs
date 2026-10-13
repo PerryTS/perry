@@ -86,6 +86,7 @@ mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
+pub(crate) mod family_slot;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
@@ -2982,6 +2983,12 @@ impl<'a> FnCtx<'a> {
     /// analysis actually produced, as opposed to permission for an unguarded
     /// access. Used for reporting and for class provenance in a separately
     /// shape-guarded region; never grants native-slot or numeric permission.
+    /// The `Ptr<Shape>` class of a local whatever the lowering context
+    /// (planning a region decides before the context is set).
+    pub(crate) fn ptr_shape_class_of_local(&self, id: u32) -> Option<&str> {
+        self.ptr_shape_local_fact(id).map(|f| f.class_name.as_str())
+    }
+
     fn ptr_shape_fact_ignoring_context(
         &self,
         e: &perry_hir::Expr,

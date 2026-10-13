@@ -678,6 +678,7 @@ fn method_proven_this_impl(
     }
 
     Some(PtrShapeLocal {
+        family: None,
         class_name: class.name.clone(),
         // See the module doc: never claimed for a proven `this`.
         numeric_fields: HashSet::new(),
@@ -822,6 +823,7 @@ mod tests {
     #[test]
     fn clone_symbols_are_unforgeable_and_unregistered_pairs_prune() {
         let fact = || PtrShapeLocal {
+            family: None,
             class_name: "C".to_string(),
             numeric_fields: HashSet::new(),
             report_name: None,

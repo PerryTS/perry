@@ -71,6 +71,15 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // Object model step 1: a literal family's added key, one slot load.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Some(site) = super::family_slot::site(ctx, object, property, false) {
+            return super::family_slot::lower_get(ctx, &site, expr, object, property);
+        }
+    }
     if let Some(v) = crate::stmt::region_read_stmts::lower_keyed_get(ctx, expr)? {
         return Ok(v);
     }

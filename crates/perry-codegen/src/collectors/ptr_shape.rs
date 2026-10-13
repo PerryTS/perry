@@ -184,6 +184,26 @@ pub struct PtrShapeLocal {
     /// "some local was consumed" but never "`totals` was **not**", and naming
     /// the value is the entire point of the distinction.
     pub report_name: Option<String>,
+    /// Object model step 1: what this local's proof says about its literal
+    /// family's added key (`layout_desc::FamilyAdd`), when it uses it.
+    pub family: Option<std::sync::Arc<FamilyProof>>,
+}
+
+/// A `Ptr<Shape>` local's family-add facts (`expr/family_slot.rs`).
+#[derive(Debug, Default)]
+pub struct FamilyProof {
+    /// Every layout word the object can carry is the family's birth state or
+    /// the state holding the added key: born of a `new` whose raw-f64 lanes
+    /// receive plain finite constants, and no declared-field store, method
+    /// call or accessor can reach it. A store then writes the slot and the
+    /// state word with no compare.
+    pub exact: bool,
+    /// Every store of the added key on this local writes a Number by
+    /// construction (with `exact` and a present read: a JsNumber).
+    pub numeric: bool,
+    /// Reads of the added key that a store of it dominates (expression
+    /// addresses): the key is present there.
+    pub present_reads: HashSet<usize>,
 }
 
 /// Compile-time visibility: one stderr line per shape-proven local, plus a
@@ -457,6 +477,10 @@ fn collect_shape_proven_ptr_locals_impl(
         element_pushes: HashMap::new(),
         const_local_inits: HashMap::new(),
         disq_reasons: HashMap::new(),
+        family_stores: HashMap::new(),
+        family_reads: HashSet::new(),
+        family_present: HashMap::new(),
+        family_frames: Vec::new(),
         field_reads: HashSet::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
         return_seeded,
@@ -477,6 +501,9 @@ fn collect_shape_proven_ptr_locals_impl(
         disq_reasons,
         field_reads,
         lineage_seeded,
+        family_stores,
+        family_reads,
+        family_present,
         ..
     } = walk;
     // #7770: locals whose every write is number-producing by construction —
@@ -631,6 +658,7 @@ fn collect_shape_proven_ptr_locals_impl(
             // A field-representation fact of the template, never a layout or
             // dispatch fact of one class object: see [`ShapeProof::lineage`].
             let fact = PtrShapeLocal {
+                family: None,
                 class_name: class_name.clone(),
                 numeric_fields,
                 report_name: None,
@@ -642,7 +670,39 @@ fn collect_shape_proven_ptr_locals_impl(
             }
             continue;
         }
+        let family = (family_stores.contains_key(id) || family_reads.contains(id)).then(|| {
+            let stores = family_stores.get(id).map(Vec::as_slice).unwrap_or(&[]);
+            let exact = !return_seeded.contains(id)
+                && !field_stores.contains_key(id)
+                && !method_calls.contains_key(id)
+                && family_birth_is_exact(class_name, new_args.get(id).copied());
+            let numeric = !stores.is_empty()
+                && stores.iter().all(|v| {
+                    expr_numeric_by_construction(
+                        v,
+                        &ParamEnv::None,
+                        &members,
+                        &HashSet::new(),
+                        not_bigint_locals,
+                        &const_local_inits,
+                        &numeric_locals,
+                        &HashSet::new(),
+                        0,
+                    )
+                });
+            let present_reads = if exact {
+                family_present.get(id).cloned().unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
+            std::sync::Arc::new(FamilyProof {
+                exact,
+                numeric,
+                present_reads,
+            })
+        });
         let fact = PtrShapeLocal {
+            family,
             class_name: class_name.clone(),
             numeric_fields,
             // Only when the report is on; an ordinary build allocates nothing.
@@ -753,11 +813,40 @@ fn collect_shape_proven_ptr_locals_impl(
             .is_some_and(|members| members.iter().all(|member| out.contains_key(member)))
     });
     let element_fields = element_facts.proven_array_numeric_fields(&group_numeric);
+    // Object model step 1: the surviving proofs' Number-valued family reads.
+    for fact in out.values() {
+        if let Some(family) = fact.family.as_ref().filter(|f| f.exact && f.numeric) {
+            crate::layout_desc::note_family_numeric_reads(family.present_reads.iter().copied());
+        }
+    }
     ShapeProof {
         exact: out,
         element_fields,
         lineage,
     }
+}
+
+/// Object model step 1: a direct literal birth whose layout word is the
+/// family's birth state: every raw-f64 lane of the family's birth receives a
+/// finite numeric constant, so the birth never takes the downgrading
+/// constructor path.
+fn family_birth_is_exact(class_name: &str, args: Option<&[Expr]>) -> bool {
+    let (Some(args), Some(rep)) = (args, crate::layout_desc::family_birth_rep(class_name)) else {
+        return false;
+    };
+    let (key_count, rep) = rep;
+    if args.len() != key_count as usize {
+        return false;
+    }
+    args.iter().enumerate().all(|(i, a)| {
+        let lane = if i < 32 { (rep >> (2 * i)) & 3 } else { 0 };
+        lane != 1
+            || match a {
+                Expr::Number(n) => n.is_finite(),
+                Expr::Integer(_) => true,
+                _ => false,
+            }
+    })
 }
 
 #[path = "ptr_shape_aliases.rs"]
@@ -949,6 +1038,15 @@ struct UseWalk<'a> {
     /// disqualified it. Purely observational — `disqualified` is the set the
     /// proof consults; this only records why.
     disq_reasons: HashMap<u32, ShapeDenial>,
+    /// Object model step 1: root -> the values its family-add stores write.
+    family_stores: HashMap<u32, Vec<&'a Expr>>,
+    /// Roots with any family-add read.
+    family_reads: HashSet<u32>,
+    /// Family-add reads a store of the key dominates (expression addresses).
+    family_present: HashMap<u32, HashSet<usize>>,
+    /// One frame per enclosing statement list: the roots whose family key a
+    /// completed earlier statement of that list stored.
+    family_frames: Vec<HashSet<u32>>,
     /// `--opt-report` (#10793): roots with a declared-field READ. The other
     /// four access shapes already land in `field_stores`/`method_calls`, so
     /// together they decide `report::note_no_access_site`.
@@ -1036,10 +1134,69 @@ impl<'a> UseWalk<'a> {
             .any(|c| c.fields.iter().any(|f| f.name == property))
     }
 
+    /// Object model step 1: `property` is the first key the root's literal
+    /// family adds after birth (`layout_desc::FamilyAdd`). Its uses are not
+    /// a shape change this proof must forbid: the family is born with its
+    /// slot and the birth keys keep theirs. An access compares the layout
+    /// word against the two family states unless [`FamilyProof::exact`]
+    /// proves the word is one of them (`expr/family_slot.rs`). Element
+    /// groups and callback parameters share their objects with siblings, so
+    /// they keep the old rule.
+    fn family_add_use(&self, root: u32, property: &str) -> bool {
+        self.purpose == CollectionPurpose::UnguardedRepresentation
+            && !self.element_seeded.contains(&root)
+            && self.element_facts.member_group_root(root).is_none()
+            && !self
+                .element_facts
+                .callback_param_seeds()
+                .any(|(id, _)| id == root)
+            && self.candidates.get(&root).is_some_and(|class_name| {
+                crate::layout_desc::family_add(class_name, property).is_some()
+            })
+    }
+
     fn walk_stmts(&mut self, stmts: &'a [Stmt]) {
+        self.family_frames.push(HashSet::new());
         for s in stmts {
             self.walk_stmt(s);
+            // A completed `o.k = v;` statement dominates every later
+            // statement of this list and everything nested in them.
+            if let Some(root) = self.family_store_stmt_root(s) {
+                if let Some(frame) = self.family_frames.last_mut() {
+                    frame.insert(root);
+                }
+            }
         }
+        self.family_frames.pop();
+    }
+
+    /// The root of `s` when it is exactly a family-add store statement.
+    fn family_store_stmt_root(&self, s: &Stmt) -> Option<u32> {
+        let Stmt::Expr(e) = s else {
+            return None;
+        };
+        let (object, property) = match e {
+            Expr::PropertySet {
+                object, property, ..
+            } => (object.as_ref(), property.as_str()),
+            Expr::PutValueSet {
+                target,
+                key,
+                receiver,
+                ..
+            } => match (target.as_ref(), receiver.as_ref(), key.as_ref()) {
+                (Expr::LocalGet(a), Expr::LocalGet(b), Expr::String(k)) if a == b => {
+                    (target.as_ref(), k.as_str())
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Expr::LocalGet(id) = object else {
+            return None;
+        };
+        let root = self.tracked_root(*id)?;
+        self.family_add_use(root, property).then_some(root)
     }
 
     fn walk_stmt(&mut self, s: &'a Stmt) {
@@ -1266,7 +1423,17 @@ impl<'a> UseWalk<'a> {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
                         self.note_field_read(root);
-                        if !self.candidate_chain_has_field(root, property) {
+                        if self.family_add_use(root, property)
+                            && !self.candidate_chain_has_field(root, property)
+                        {
+                            self.family_reads.insert(root);
+                            if self.family_frames.iter().any(|f| f.contains(&root)) {
+                                self.family_present
+                                    .entry(root)
+                                    .or_default()
+                                    .insert(e as *const Expr as usize);
+                            }
+                        } else if !self.candidate_chain_has_field(root, property) {
                             self.note_accessor(root, property, false);
                         }
                         return;
@@ -1284,7 +1451,10 @@ impl<'a> UseWalk<'a> {
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
-                        if !self.candidate_chain_has_field(root, property) {
+                        if self.family_add_use(root, property) {
+                            // A family-slot store: not a declared field.
+                            self.family_stores.entry(root).or_default().push(value);
+                        } else if !self.candidate_chain_has_field(root, property) {
                             self.note_accessor(root, property, true);
                         } else {
                             self.field_stores
@@ -1332,7 +1502,10 @@ impl<'a> UseWalk<'a> {
                 {
                     if id == rid {
                         if let Some(root) = self.tracked_root(*id) {
-                            if !self.candidate_chain_has_field(root, property) {
+                            if self.family_add_use(root, property) {
+                                // A family-slot store: not a declared field.
+                                self.family_stores.entry(root).or_default().push(value);
+                            } else if !self.candidate_chain_has_field(root, property) {
                                 self.note_accessor(root, property, true);
                             } else {
                                 self.field_stores
@@ -1584,7 +1757,8 @@ use this_flow::ThisStoreRecord;
 #[path = "ptr_shape_numeric.rs"]
 mod numeric;
 use numeric::{
-    collect_numeric_by_construction_locals, prove_group_numeric_fields, prove_numeric_fields,
+    collect_numeric_by_construction_locals, expr_numeric_by_construction,
+    prove_group_numeric_fields, prove_numeric_fields, ParamEnv,
 };
 pub(crate) use numeric::{
     collect_numeric_by_construction_locals_in_region, region_number_flow_reads,

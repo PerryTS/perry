@@ -120,6 +120,7 @@ pub(crate) fn method_proven_shape_args(
             param_index,
             param_id: param.id,
             fact: PtrShapeLocal {
+                family: None,
                 class_name,
                 // An exact shape proves offsets, not the representation of a
                 // caller-owned field value.

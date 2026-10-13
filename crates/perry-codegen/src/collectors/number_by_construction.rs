@@ -841,6 +841,7 @@ mod shape_input_tests {
             (
                 10,
                 PtrShapeLocal {
+                    family: None,
                     class_name: "First".to_string(),
                     numeric_fields: HashSet::from(["shared".to_string(), "first_only".to_string()]),
                     report_name: None,
@@ -849,6 +850,7 @@ mod shape_input_tests {
             (
                 11,
                 PtrShapeLocal {
+                    family: None,
                     class_name: "Second".to_string(),
                     numeric_fields: HashSet::from(["shared".to_string()]),
                     report_name: None,

@@ -1452,6 +1452,16 @@ fn plan_once<'p, 'a>(
         if !cands.contains(&r) {
             continue;
         }
+        // Object model step 1: a literal family's added key has a slot the
+        // compiler names; its access is not a region key.
+        if let Recv::Local(id) = r {
+            if ctx
+                .ptr_shape_class_of_local(id)
+                .is_some_and(|class| crate::layout_desc::family_add(class, &k).is_some())
+            {
+                continue;
+            }
+        }
         // A learned word addresses MAX_KEYS keys; a receiver whose class
         // the compiler names takes its slots from the static birth shape
         // (checked against the keys at the end of the plan).

@@ -486,6 +486,9 @@ fn compile_module_impl(
     births: Option<&mut Vec<ModuleBirth>>,
 ) -> Result<Vec<u8>> {
     let collect_births = births.is_some();
+    // No family facts of a previous module on this thread reach this one's
+    // early analyses; this module's are installed once its births are known.
+    crate::layout_desc::set_module_families(Default::default(), Vec::new());
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
     // The driver supplies whole-program ownership in opts. Direct callers
@@ -2278,6 +2281,7 @@ fn compile_module_impl(
             pshape_methods.insert(
                 (effective_name.clone(), method.clone()),
                 crate::collectors::PtrShapeLocal {
+                    family: None,
                     class_name: effective_name.clone(),
                     numeric_fields: std::collections::HashSet::new(),
                     report_name: crate::opt_report::enabled()
@@ -2546,6 +2550,93 @@ fn compile_module_impl(
         }
         reps
     };
+    // Object model step 1: literal families born with the slot of their first
+    // added key (the capacity `anon_key_adds` reserves becomes a layout
+    // slot), and the carried descriptor of the state holding it.
+    {
+        let mut adds = std::collections::HashMap::new();
+        let mut layouts: Vec<crate::layout_desc::FamilyLayout> = Vec::new();
+        if crate::layout_desc::layouts_enabled(&opts.output_type, &triple) {
+            let mut by_global: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let mut names: Vec<&String> = anon_key_adds.keys().collect();
+            names.sort();
+            for class_name in names {
+                let added = &anon_key_adds[class_name];
+                let (Some(first), Some(class), Some(keys_global)) = (
+                    added.iter().next(),
+                    class_table.get(class_name),
+                    class_keys_globals_map.get(class_name),
+                ) else {
+                    continue;
+                };
+                if !class_name.starts_with("__AnonShape_")
+                    || imported_stub_names.contains(class_name.as_str())
+                    || class.extends_name.is_some()
+                {
+                    continue;
+                }
+                let Some(&key_count) = class_field_counts_map.get(class_name) else {
+                    continue;
+                };
+                let Some(&(_, _, birth_live)) = class_header_image_inits.get(keys_global) else {
+                    continue;
+                };
+                let rep = class_birth_reps_map.get(keys_global).copied().unwrap_or(0);
+                let base: Vec<String> = class.fields.iter().map(|f| f.name.clone()).collect();
+                // Every lane a plain Any or F64 lane: a ConstFn or deprecated
+                // lane is a different family state.
+                let plain_rep = (0..32).all(|lane| matches!((rep >> (2 * lane)) & 3, 0 | 1));
+                let named_elsewhere = base.iter().any(|k| k == first)
+                    || class.methods.iter().any(|m| &m.name == first)
+                    || class
+                        .getters
+                        .iter()
+                        .chain(&class.setters)
+                        .any(|(k, _)| k == first);
+                if base.len() as u32 != key_count
+                    || birth_live <= key_count
+                    || !plain_rep
+                    || named_elsewhere
+                    || first == "__proto__"
+                    || !crate::layout_desc::key_is_atom(first)
+                    || !base.iter().all(|k| crate::layout_desc::key_is_atom(k))
+                {
+                    continue;
+                }
+                let suffix = keys_global
+                    .strip_prefix("perry_class_keys_")
+                    .unwrap_or(keys_global);
+                let desc_global = format!("perry_layout_fam_{suffix}");
+                if let std::collections::hash_map::Entry::Vacant(v) =
+                    by_global.entry(keys_global.clone())
+                {
+                    v.insert(first.clone());
+                    let mut keys = base.clone();
+                    keys.push(first.clone());
+                    layouts.push(crate::layout_desc::FamilyLayout {
+                        desc_global: desc_global.clone(),
+                        keys,
+                        slot_count: birth_live,
+                        rep,
+                    });
+                } else if by_global[keys_global] != *first {
+                    continue;
+                }
+                adds.insert(
+                    class_name.clone(),
+                    crate::layout_desc::FamilyAdd {
+                        key: first.clone(),
+                        slot: key_count,
+                        desc_global,
+                        birth_keys: key_count,
+                        birth_rep: rep,
+                    },
+                );
+            }
+        }
+        crate::layout_desc::set_module_families(adds, layouts);
+    }
     // Step 5C: a literal's method slot holding a module function's value is a
     // ConstFn lane too; births and lowering read the same admitted set.
     static_constfn::set_module_function_values(hir, &module_prefix);

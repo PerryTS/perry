@@ -900,6 +900,13 @@ fn expr_numeric_by_construction_with_region(
         | Expr::MathMaxSpread(_)
         | Expr::DateNow
         | Expr::PerformanceNow => true,
+        // Object model step 1: a present literal-family key whose every
+        // store writes a Number (`collectors/ptr_shape.rs`).
+        Expr::PropertyGet { .. }
+            if crate::layout_desc::family_numeric_read(e as *const Expr as usize) =>
+        {
+            true
+        }
         // A proven-numeric field of the SAME object (fixpoint edge): `this`
         // inside the candidate's ctor/method contexts (a non-None param env),
         // or a tracked member local in function scope. A same-named field of
